@@ -997,6 +997,7 @@ def test_compiler_shares_descriptor_population_bounds_with_direct_admission(
             " {username}",
         ),
     ],
+    ids=["large-pool-value", "many-closing-braces", "partial-placeholder"],
 )
 def test_scoped_materialization_never_rescans_replacement_boundaries(
     template_tail: str,

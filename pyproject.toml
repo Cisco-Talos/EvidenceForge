@@ -43,6 +43,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "cryptography>=50.0.0",
     "psutil>=7.0.0",
+    "tzdata>=2026.4 ; sys_platform == 'win32'",
 ]
 
 [project.scripts]

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 83
+current_revision: 84
 history_start_revision: 1
-behavior_surface_sha256: e5490d09b83f7a4f3e6b64454bab2c41e67131481a643292145d0ffb0ca25a9f
+behavior_surface_sha256: 056a6164066af1d47c960eba0159781e0ae9fcecf960ace4e0416e46f58f4ffa
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -756,3 +756,10 @@ changes:
       - host-filesystem
     formats: []
     summary: Adapt Windows temporary-file wrappers while preserving the existing POSIX stream implementation and generated evidence
+  - revision: 84
+    id: native-windows-sorted-export-flush
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Use writable file-flush handles on Windows while preserving the read-only POSIX publication implementation

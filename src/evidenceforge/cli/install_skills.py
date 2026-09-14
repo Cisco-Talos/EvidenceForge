@@ -200,6 +200,9 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
     # map directly to target paths.
     for md_file in sorted(skills_dir.rglob("*.md")):
         rel_path = str(md_file.relative_to(skills_dir))
+        if os.name == "nt":
+            # Manifest keys are portable references, not host filesystem paths.
+            rel_path = md_file.relative_to(skills_dir).as_posix()
         manifest[rel_path] = md_file
 
     # Persona YAML files are NOT installed here. Skills that need persona

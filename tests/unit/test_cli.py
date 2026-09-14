@@ -95,7 +95,7 @@ def _configure_mock_generation(
         for relative_path, contents in generated_files.items():
             destination = ground_truth_dir / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(contents, encoding="utf-8")
+            destination.write_text(contents, encoding="utf-8", newline="\n")
 
     engine.generate.side_effect = fake_generate
     mock_engine_class.return_value = engine
@@ -2233,7 +2233,10 @@ output:
 
         def boom_rename(self, target):
             nonlocal fault_reached
-            if self.name == OUTPUT_TARGET_FILENAME and ".eforge-generation/staged" in str(self):
+            if (
+                self.name == OUTPUT_TARGET_FILENAME
+                and ".eforge-generation/staged" in self.as_posix()
+            ):
                 fault_reached = True
                 raise RuntimeError("injected swap failure")
             return real_rename(self, target)
@@ -2362,7 +2365,7 @@ output:
                 self_path.name == "data"
                 and target.name == "data"
                 and "rollback" not in str(self_path)
-                and ".eforge-generation/staged" in str(self_path)
+                and ".eforge-generation/staged" in self_path.as_posix()
             ):
                 # Fail when installing staged data/ → live data/
                 fault_reached = True
@@ -2419,7 +2422,7 @@ output:
                 fault_reached = True
                 raise OSError("Simulated disk error during GT install")
             result = original_rename(self_path, target)
-            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in self_path.as_posix():
                 data_installed.append(True)
             return result
 
@@ -2489,7 +2492,7 @@ output:
 
         def _interrupt_on_data_install(self_path, target):
             nonlocal fault_reached
-            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in self_path.as_posix():
                 fault_reached = True
                 raise KeyboardInterrupt()
             return original_rename(self_path, target)

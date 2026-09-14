@@ -126,3 +126,23 @@ The next isolated component is a Windows-only local-NTFS handle/ACL module, with
 regressions for ownership, binary I/O, directory pinning, atomic replacement, junction rejection,
 and duplicate-versus-reopened handle identity. It is not connected to production callers yet;
 native CI must validate these operations before the journal integration is considered usable.
+
+### First full Windows execution inventory
+
+Run `34850219906` collected the entire suite successfully and finished with **468 failed,
+8,163 passed, 29 skipped, 2,019 deselected, 7 errors** in 928.26 seconds. Linux and lint passed.
+The complete Windows log must be obtained with `gh api --allow-escape-sequences
+repos/Cisco-Talos/EvidenceForge/actions/jobs/103995977404/logs`; `gh run view --log` omitted the
+tail of the long test step in this run. Local analysis: `/tmp/eforge-windows-iteration1-clean.log`.
+
+Failure groups include 297 bad-descriptor errors at the sorted writer's read-only file fsync,
+POSIX-only Windows/Sysmon/Snort journals, anonymous Syslog storage, protected pack directory I/O,
+Windows separators in skill/config manifests, missing Windows timezone data, and platform-specific
+test assumptions (fixture newlines, terminal glyphs, native directory descriptors, POSIX mode
+checks, a pytest parameter ID exceeding Windows' environment-variable length limit).
+
+The next repair uses a writable flush handle only on Windows, normalizes Windows skill manifest
+keys, adds `tzdata` only for win32, and fixes deterministic fixture bytes/path-based fault injection
+and excessively long test IDs. A temporary Windows-only native-filesystem preflight step shortens
+feedback on the adapter; remove it after the full Windows routine gate is green. Existing Linux
+CI commands remain unchanged. No emitter journal has yet been redirected to the new adapter.
