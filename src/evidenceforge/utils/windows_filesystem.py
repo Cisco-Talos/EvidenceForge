@@ -10,7 +10,9 @@ from __future__ import annotations
 import ctypes
 import msvcrt
 import os
+import secrets
 import stat
+import tempfile
 from ctypes import wintypes
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -22,6 +24,7 @@ _FILE_READ_ATTRIBUTES = 0x80
 _FILE_DIRECTORY_FILE = 0x1
 _FILE_NON_DIRECTORY_FILE = 0x40
 _FILE_SYNCHRONOUS_IO_NONALERT = 0x20
+_FILE_DELETE_ON_CLOSE = 0x1000
 _FILE_OPEN_REPARSE_POINT = 0x00200000
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _FILE_ATTRIBUTE_DIRECTORY = 0x10
@@ -157,6 +160,24 @@ _nt_set_information = _bind(
         wintypes.ULONG,
         ctypes.c_int,
     ],
+)
+_nt_query_information = _bind(
+    _ntdll,
+    "NtQueryInformationFile",
+    ctypes.c_int32,
+    [
+        wintypes.HANDLE,
+        ctypes.POINTER(_IoStatusBlock),
+        wintypes.LPVOID,
+        wintypes.ULONG,
+        ctypes.c_int,
+    ],
+)
+_reopen_file = _bind(
+    _kernel,
+    "ReOpenFile",
+    wintypes.HANDLE,
+    [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD],
 )
 _close_handle = _bind(_kernel, "CloseHandle", wintypes.BOOL, [wintypes.HANDLE])
 _get_info = _bind(
@@ -334,7 +355,8 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
             principal = _sid(pointer.value + _AllowedAce.SidStart.offset)
             if principal not in trusted and ace.Mask & mutation:
                 raise PermissionError(
-                    "Windows protected storage allows another principal to mutate it"
+                    "Windows protected storage allows another principal to mutate it: "
+                    f"SID={principal}, mask=0x{ace.Mask:08x}, ancestry={ancestry}"
                 )
     finally:
         _local_free(security)
@@ -357,9 +379,10 @@ def _open_native(
     *,
     root: int | None,
     flags: int,
-    directory: bool,
+    directory: bool | None,
     private: bool = False,
     extra_access: int = 0,
+    temporary: bool = False,
 ) -> int:
     if root is not None:
         _component(name)
@@ -373,6 +396,8 @@ def _open_native(
         ctypes.sizeof(_ObjectAttributes), root, ctypes.pointer(unicode_name), 0x40, security, None
     )
     access = _READ_CONTROL | _SYNCHRONIZE | _FILE_READ_ATTRIBUTES | extra_access
+    if temporary:
+        access |= _DELETE
     if directory:
         access |= 0x21  # FILE_LIST_DIRECTORY | FILE_TRAVERSE
     else:
@@ -385,7 +410,10 @@ def _open_native(
     if flags & os.O_TRUNC:
         disposition = _FILE_OVERWRITE_IF if flags & os.O_CREAT else _FILE_OVERWRITE
     options = _FILE_OPEN_REPARSE_POINT | _FILE_SYNCHRONOUS_IO_NONALERT
-    options |= _FILE_DIRECTORY_FILE if directory else _FILE_NON_DIRECTORY_FILE
+    if temporary:
+        options |= _FILE_DELETE_ON_CLOSE
+    if directory is not None:
+        options |= _FILE_DIRECTORY_FILE if directory else _FILE_NON_DIRECTORY_FILE
     handle = wintypes.HANDLE()
     status = _IoStatusBlock()
     try:
@@ -474,9 +502,9 @@ def mkdir_child(parent: int, name: str, mode: int = 0o700) -> None:
     os.close(descriptor)
 
 
-def child_stat(parent: int, name: str, *, directory: bool = False) -> os.stat_result:
+def child_stat(parent: int, name: str, *, directory: bool | None = False) -> os.stat_result:
     """Inspect an opened child rather than a pathname susceptible to substitution."""
-    descriptor = open_child(parent, name, os.O_RDONLY, directory=directory)
+    descriptor = _open_native(name, root=_handle(parent), flags=os.O_RDONLY, directory=directory)
     try:
         return os.fstat(descriptor)
     finally:
@@ -550,7 +578,13 @@ def remove_child(
 
 
 def replace_child(
-    source_parent: int, source: str, target_parent: int, target: str, *, replace: bool = True
+    source_parent: int,
+    source: str,
+    target_parent: int,
+    target: str,
+    *,
+    replace: bool = True,
+    directory: bool = False,
 ) -> None:
     """Atomically publish a file using retained source and destination directory handles."""
     _component(target)
@@ -558,7 +592,7 @@ def replace_child(
         source,
         root=_handle(source_parent),
         flags=os.O_RDONLY,
-        directory=False,
+        directory=directory,
         extra_access=_DELETE,
     )
     try:
@@ -581,3 +615,99 @@ def replace_child(
             raise ctypes.WinError(_nt_error(result))
     finally:
         os.close(descriptor)
+
+
+def open_file(path: Path, flags: int, mode: int = 0o600) -> int:
+    """Open a regular binary file through a pinned, no-follow absolute parent."""
+    absolute = Path(os.path.abspath(path))
+    parent = open_directory(absolute.parent)
+    try:
+        return open_child(parent, absolute.name, flags, mode)
+    finally:
+        os.close(parent)
+
+
+def directory_entries(path: Path) -> list[tuple[str, os.stat_result]]:
+    """Inventory children through one pinned directory without following reparse points."""
+    parent = open_directory(path)
+    try:
+        return [
+            (name, child_stat(parent, name, directory=None))
+            for name in sorted(list_directory(parent))
+        ]
+    finally:
+        os.close(parent)
+
+
+def publish_new_directory(source: Path, target: Path) -> None:
+    """Atomically rename a staged directory only if its sibling target is absent."""
+    source = Path(os.path.abspath(source))
+    target = Path(os.path.abspath(target))
+    if source.parent != target.parent:
+        raise ValueError("Windows staged directory publication requires sibling paths")
+    parent = open_directory(source.parent)
+    try:
+        replace_child(parent, source.name, parent, target.name, replace=False, directory=True)
+    finally:
+        os.close(parent)
+
+
+def temporary_descriptor() -> int:
+    """Create private delete-on-close storage, retained by all duplicated handles.
+
+    Windows keeps a private directory entry until the final handle closes. The
+    kernel owns cleanup even after a process crash; callers never reopen its path.
+    """
+    parent = open_directory(Path(tempfile.gettempdir()))
+    try:
+        for _attempt in range(128):
+            try:
+                return _open_native(
+                    f".eforge-private-{secrets.token_hex(16)}",
+                    root=_handle(parent),
+                    flags=os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                    directory=False,
+                    private=True,
+                    temporary=True,
+                )
+            except FileExistsError:
+                continue
+        raise FileExistsError("Unable to allocate private Windows temporary storage")
+    finally:
+        os.close(parent)
+
+
+def require_temporary(descriptor: int) -> None:
+    """Verify real native cleanup ownership, single-link type, and the private ACL."""
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise PermissionError("Windows temporary storage is not one private regular file")
+    mode = wintypes.ULONG()
+    status = _IoStatusBlock()
+    result = _nt_query_information(
+        _handle(descriptor), ctypes.byref(status), ctypes.byref(mode), ctypes.sizeof(mode), 16
+    )
+    if result < 0:
+        raise ctypes.WinError(_nt_error(result))
+    if not mode.value & _FILE_DELETE_ON_CLOSE or os.get_inheritable(descriptor):
+        raise PermissionError("Windows temporary storage lost its delete-on-close ownership")
+    require_private(descriptor)
+
+
+def pread(descriptor: int, count: int, offset: int) -> bytes:
+    """Read via the retained object with a separate file pointer, never via its path."""
+    if count < 0 or offset < 0:
+        raise ValueError("Windows positioned read requires nonnegative count and offset")
+    handle = _reopen_file(_handle(descriptor), 0x80000000, 0x7, 0)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        reader = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        _close_handle(handle)
+        raise
+    try:
+        os.lseek(reader, offset, os.SEEK_SET)
+        return os.read(reader, count)
+    finally:
+        os.close(reader)

@@ -44,6 +44,8 @@ def validate_ancestry(path: Path) -> None:
         descriptor = filesystem.open_directory(current)
         try:
             filesystem.require_private(descriptor, ancestry=True)
+        except PermissionError as error:
+            raise PermissionError(f"Windows spool ancestor {current}: {error}") from error
         finally:
             os.close(descriptor)
         if current == current.parent:

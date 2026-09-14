@@ -194,3 +194,59 @@ def test_native_source_journal_keeps_schema_and_removes_private_workspace(
         assert list(spool.iterdir()) == []
     finally:
         emitter.close()
+
+
+def test_native_temporary_storage_survives_duplication_and_positioned_reads() -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    descriptor = filesystem.temporary_descriptor()
+    duplicate = None
+    try:
+        filesystem.require_temporary(descriptor)
+        os.write(descriptor, b"first\r\nsecond\n\x1a\x00\xff")
+        duplicate = os.dup(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        filesystem.require_temporary(duplicate)
+        os.lseek(duplicate, 3, os.SEEK_SET)
+        assert filesystem.pread(duplicate, 7, 0) == b"first\r\n"
+        assert os.lseek(duplicate, 0, os.SEEK_CUR) == 3
+        assert os.read(duplicate, 2) == b"st"
+        assert filesystem.pread(duplicate, 8, 4096) == b""
+    finally:
+        for retained in (duplicate, descriptor):
+            if retained is not None:
+                os.close(retained)
+
+
+def test_native_directory_publication_is_exclusive(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    (source / "evidence").write_bytes(b"original")
+    filesystem.publish_new_directory(source, target)
+    assert not source.exists()
+    assert (target / "evidence").read_bytes() == b"original"
+    source.mkdir()
+    (source / "other").write_bytes(b"preserve")
+    with pytest.raises(FileExistsError):
+        filesystem.publish_new_directory(source, target)
+    assert (target / "evidence").read_bytes() == b"original"
+    assert (source / "other").read_bytes() == b"preserve"
+
+
+def test_native_directory_pin_prevents_ancestor_rename(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    ancestor = tmp_path / "ancestor"
+    leaf = ancestor / "parent" / "leaf"
+    leaf.mkdir(parents=True)
+    descriptor = filesystem.open_directory(leaf)
+    try:
+        with pytest.raises(PermissionError):
+            ancestor.rename(tmp_path / "moved")
+        assert leaf.is_dir()
+    finally:
+        os.close(descriptor)
