@@ -61,3 +61,44 @@ will be removed to make the groundwork appear compatible.
   opens it for writing as required by file-buffer flushing.
 - Windows CI disables checkout CRLF conversion to preserve source/config bytes used by the
   generation behavior fingerprint.
+
+## macOS acceptance and follow-up
+
+- Full routine suite on Python 3.12.9/macOS: **8,635 passed, 27 skipped, 2,019 deselected**
+  in 339.98 seconds. The corrected checkpoint smoke test passes in this run.
+- Four targeted slow tests pass in 106.22 seconds: cooperative planned suspension and three
+  fresh-process interrupted/moved checkpoint recovery cases.
+- Six host-platform I/O/process regressions pass after the writable-file sync refinement.
+- Ruff lint/format and the generation behavior manifest check against origin/dev pass.
+- Draft PR: https://github.com/Cisco-Talos/EvidenceForge/pull/419
+- Initial CI run: https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34844565216
+  (`ca146454b169e1198695dc1fbf77d0ec31c2eee0`). Lint passed; Linux/Windows test jobs started.
+- The separate implementation plan is [native-windows-filesystem.md](../design/native-windows-filesystem.md).
+  TODO contains one durable follow-up item. Backend implementation and dev protection enforcement
+  are intentionally not part of this narrowed draft-groundwork scope.
+
+## Native Windows CI baseline
+
+The initial Windows job (`103977253267`, Python 3.12.10) failed during collection after successful
+checkout and dependency installation: 2,372 items collected with 257 errors (105 deselected).
+237 errors stem from `syslog.py:467`: `_make_security_registry` accesses `stream_type.fileno`, but
+Windows TemporaryFile returns `_TemporaryFileWrapper`, whose class has no such attribute.
+20 additional import errors follow partial package initialization. No Windows tests executed.
+This directly confirms the protected-stream backend/import boundary, beyond the reported fsync
+problem; fixing that implementation remains in the separately approved backend plan. The draft
+must remain unmerged. Linux CI is still running at this point.
+
+## Hosted baseline complete
+
+Initial CI at code commit `ca146454` completed:
+
+- Linux/Python 3.12: **8,635 passed, 27 skipped, 2,019 deselected**, 858.52 seconds.
+  The checkpoint smoke test explicitly passed.
+- Native Windows/Python 3.12.10: **257 collection errors** at the protected Syslog temporary-stream
+  registry boundary described above. No tests executed; not a passing Windows compatibility gate.
+- Lint: passed. Required CI: failed because the Windows matrix entry failed, proving that the
+  aggregate preserves enforcement instead of masking Windows errors.
+
+The final handoff commit changes only TODO/worklog/design documentation; no tested runtime,
+workflow, or test code changes after `ca146454`. Its normal CI rerun may be pending at handoff.
+No merge, release, package version bump, or repository-protection changes were made.

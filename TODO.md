@@ -58,6 +58,13 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P2** Complete native Windows protected filesystem support and activate the passing Windows
+  routine CI gate. Groundwork in draft PR #419 adds native Windows CI and a real short checkpoint
+  smoke test; output journals still require POSIX capabilities. Implement equivalent native handle,
+  ACL, identity, and publication contracts before removing those guards or claiming Windows support.
+  See the [backend plan](docs/design/native-windows-filesystem.md) and
+  [groundwork worklog](docs/worklog/2026-09-14-windows-ci-checkpoints.md).
+
 - [x] **P1** Add source-instance-aware evidence reachability validation so impossible persistent
   SMB output selections fail before generation, invisible authored behavior produces actionable
   warnings, and runtime `--formats` narrowing rechecks the same canonical contracts. See the
