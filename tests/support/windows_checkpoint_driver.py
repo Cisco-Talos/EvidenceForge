@@ -14,8 +14,9 @@ def main() -> None:
     parser.add_argument("root", type=Path)
     parser.add_argument("trace", type=Path)
     parser.add_argument("--restore", action="store_true")
-    arguments, cli = parser.parse_known_args()
-    assert cli[0] == "--"
+    separator = sys.argv.index("--")
+    arguments = parser.parse_args(sys.argv[1:separator])
+    cli = sys.argv[separator + 1 :]
     assert os.name == "nt"
     assert "PYTEST_CURRENT_TEST" in os.environ
 
@@ -33,7 +34,7 @@ def main() -> None:
 
     from evidenceforge.cli.commands import main as cli_main
 
-    sys.argv = ["eforge", *cli[1:]]
+    sys.argv = ["eforge", *cli]
     with trace_checkpoint_io(arguments.root, arguments.trace, on_event=stop):
         cli_main()
     raise AssertionError("CLI completed without reaching the requested test interruption")

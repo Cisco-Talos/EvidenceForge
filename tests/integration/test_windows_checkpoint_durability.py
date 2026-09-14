@@ -62,7 +62,12 @@ def _assert_recovery(image: CrashImage, root: Path) -> int | None:
 
 @pytest.fixture
 def publication_trace(tmp_path: Path) -> list[StorageEvent]:
-    from evidenceforge.generation.checkpoints.control import mark_suspended, new_suspension_request
+    from evidenceforge.generation.checkpoints.control import (
+        _atomic_create,
+        _canonical_json,
+        mark_suspended,
+        new_suspension_request,
+    )
 
     root = tmp_path / "native"
     root.mkdir()
@@ -97,7 +102,9 @@ def publication_trace(tmp_path: Path) -> list[StorageEvent]:
                 heads=(HeadDraft(owner="engine", schema_version="1", payload=b"head"),),
             )
             inherited = manifest.segment_catalogs
-        mark_suspended(store, request=new_suspension_request(), cursor=manifest.cursor)
+        request = new_suspension_request()
+        assert _atomic_create(store.workspace / "suspend-request.json", _canonical_json(request))
+        mark_suspended(store, request=request, cursor=manifest.cursor)
         store.collect_garbage()
     return events
 
@@ -138,6 +145,8 @@ def test_every_publication_boundary_survives_modeled_power_loss(
             verified.add(digest)
             counts[profile] = counts.get(profile, 0) + 1
     assert model.acknowledged_sequence == 2
+    assert "run/.eforge-generation/suspend-request.json" not in model.crash().files
+    assert "run/.eforge-generation/suspended.json" in model.crash().files
     assert sum(counts.values()) > 20
     (tmp_path / "matrix-summary.json").write_text(
         json.dumps({"cuts": len(publication_trace) + 1, "distinct_images": counts}),

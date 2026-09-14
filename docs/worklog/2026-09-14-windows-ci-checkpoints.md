@@ -314,3 +314,20 @@ crash-image tests are being added next. This entry is progress, not acceptance.
 - The next iteration also invalidates cached object/catalog durability proofs
   when Windows GC removes an object. No package version or checkpoint schema
   changes; generation behavior revision 89 declares host-filesystem-only impact.
+
+### First complete inventory and second native gate
+
+- Full Windows at ebdb1611 finished: 6 failed, 8,663 passed, 30 skipped,
+  2,019 deselected (1,364.48s, within the existing 25-minute job timeout).
+  Five failures were the existing-reader replacement issue; the sixth was
+  bypassing the shared partial-write fault seam. The store now retains that
+  owning write helper while selecting native Windows publication underneath it.
+  Linux passed 8,639 tests, 60 skipped, 2,019 deselected (752.20s).
+- Commit 70fc28ea, run 34887518070: all 13 native I/O contracts passed. The
+  every-boundary storage model and both deliberately broken protocol controls
+  passed. The real CLI test stopped at its driver's argument parsing before
+  generation; the driver now splits its arguments explicitly at the separator.
+- Review found that plain deletion of a consumed suspension request could
+  resurrect it in a simulated crash. Windows now consumes control names by
+  write-through rename before reclaiming tombstones. POSIX unlink behavior is
+  unchanged. The model fixture now publishes and consumes an actual request.

@@ -85,6 +85,8 @@ close before replacing the file they authenticated. An uncertain index publicati
 further publication and reclamation on that store. Recovery retention and garbage collection
 use the recovery index, and removing an object invalidates its cached durability proof.
 Suspension records and restored append spools use the same Windows publication primitives.
+Consumed control names are retired by write-through rename before deleting their tombstones,
+so a lost cleanup deletion cannot resurrect an already-consumed suspension request.
 
 The POSIX directory-sync helper remains a no-op on Windows; it is not the checkpoint's
 namespace barrier. The native NTFS write-through rename is that barrier. This interpretation

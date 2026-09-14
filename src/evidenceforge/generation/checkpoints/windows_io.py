@@ -107,6 +107,16 @@ class WindowsCheckpointIO:
         finally:
             os.close(parent)
 
+    def remove_record(self, path: Path) -> None:
+        """Durably consume a control name before reclaiming its private tombstone."""
+        self.require_healthy()
+        retired = path.with_name(f".{path.name}.removed-{uuid.uuid4().hex}")
+        try:
+            self._rename(path, retired, replace=False, directory=False)
+        except FileNotFoundError:
+            return
+        self.unlink(retired)
+
     def mkdir(
         self,
         path: Path,

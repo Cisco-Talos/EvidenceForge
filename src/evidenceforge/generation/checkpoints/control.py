@@ -170,7 +170,7 @@ def _unlink_control(path: Path) -> None:
     if os.name == "nt":
         from .windows_io import WindowsCheckpointIO
 
-        WindowsCheckpointIO().unlink(path)
+        WindowsCheckpointIO().remove_record(path)
         return
     path.unlink(missing_ok=True)
 
