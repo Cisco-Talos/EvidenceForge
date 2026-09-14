@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 42
+current_revision: 81
 history_start_revision: 1
-behavior_surface_sha256: "6ed79f5fc695e1a385379427e6c4601cd2dcd4cd674546ba73621f6ed87f2caa"
+behavior_surface_sha256: d812799a7e7f1f69a13d4103b00060e0644087186563eb516d8ed9c58bc1a5ec
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -465,3 +465,280 @@ changes:
       - ecar
       - syslog
     summary: Serializes concurrent sudo TTY bootstrap claims, preserves one controlling terminal per live session, and sizes delayed SSH logout windows from the repaired visible session duration.
+  - revision: 43
+    id: shared-shell-history-eligibility-policy
+    impact: none
+    domains:
+      - shell-history-policy
+    formats: []
+    summary: Shares unchanged account eligibility between scenario validation and shell-history generation.
+  - revision: 44
+    id: shared-uniform-timing-constructor
+    impact: none
+    domains:
+      - canonical-timing
+    formats: []
+    summary: Shares the unchanged mixture-based uniform timing constructor across DHCP, file transfers, and OCSP.
+  - revision: 45
+    id: explicit-checkpoint-scratch-resource-ownership
+    impact: none
+    domains:
+      - checkpoint-verification-cleanup
+    formats: []
+    summary: Discards checkpoint scratch workers and declared resource slots without inspecting arbitrary object graphs or finalizing sources.
+  - revision: 46
+    id: typed-storyline-family-handlers
+    impact: none
+    domains:
+      - storyline-dispatch
+    formats: []
+    summary: Extracts unchanged typed event execution bodies into explicit family handlers sharing the existing per-event context and runtime owners.
+  - revision: 47
+    id: shared-windows-provider-source-journal
+    impact: none
+    domains:
+      - source-finalization
+      - emitter-spool
+    formats: [windows, sysmon]
+    summary: Composes identical protected spool and finalization operations over existing Windows and Sysmon owner state while retaining provider entrypoints and checkpoint representations.
+  - revision: 48
+    id: process-network-execution-ownership-cleanup
+    impact: none
+    domains:
+      - process-execution
+      - network-transaction
+    formats: []
+    summary: Moves unchanged protocol helpers and process execution into explicit services and decomposes network planning while retaining original transaction authority and recovery boundaries.
+  - revision: 49
+    id: linux-foreground-ownership-until-modeled-release
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - linux-shell-scheduling
+    formats: []
+    summary: Keeps unbounded Linux foreground ownership until modeled release, rejects overlapping sequential work, and honors early termination without collection-end reservations. Corrects revision 48's deadline lookup and preservation claim.
+  - revision: 50
+    id: asa-binding-retirement-gc-reentrancy
+    impact: none
+    domains:
+      - emitter-resource-retirement
+    formats: [cisco_asa]
+    summary: Allows same-thread weak-reference retirement during ASA constructor binding under cyclic garbage collection, preserving rendering and checkpoint representation while removing a standard-suite deadlock.
+  - revision: 51
+    id: shared-edr-shell-history-eligibility
+    impact: none
+    domains:
+      - shell-history-policy
+    formats: [ecar, bash_history]
+    summary: Uses the shared case-insensitive noninteractive-account predicate for EDR shell-history file artifacts, preserving surrounding selection and random-number consumption.
+  - revision: 52
+    id: shared-storyline-process-session-resolution
+    impact: none
+    domains: [process-session-lifecycle, storyline-dispatch]
+    formats: []
+    summary: Shares session classification, reuse, creation and recording between typed processes and command spills, retaining the typed no-planner fallback and exact random-number consumption.
+  - revision: 53
+    id: one-way-storyline-handler-helper-dependencies
+    impact: none
+    domains: [storyline-dispatch, process-normalization, protocol-evidence, periodic-timing]
+    formats: []
+    summary: Moves shared IDS, HTTP sizing, process parsing and periodic timing helpers to focused owners imported directly by handlers and coordination, retaining compatibility aliases and random-number consumption.
+  - revision: 54
+    id: composed-network-stage-inputs
+    impact: none
+    domains: [network-transaction, protocol-evidence, lifecycle-publication]
+    formats: []
+    summary: Carries stable request facts, endpoint identity, protocol inputs and publication groups by reference through the same six phases, retaining phase-local drafts and all existing commit and recovery boundaries.
+  - revision: 55
+    id: shared-process-command-normalization
+    impact: none
+    domains: [process-execution, process-preflight]
+    formats: []
+    summary: Uses one pure image, command and executable normalization function for process preflight and execution, preserving actor revalidation, timing differences and all random draws.
+  - revision: 56
+    id: shared-process-reuse-selection
+    impact: none
+    domains: [process-execution, process-preflight, endpoint-effects]
+    formats: []
+    summary: Shares process-reuse precedence between bounded preflight and execution and centralizes completion bookkeeping while retaining visibility rejection, optional-effect auditing and existing activity-update order.
+  - revision: 57
+    id: explicit-process-execution-stages
+    impact: none
+    domains: [process-execution, endpoint-effects, lifecycle-publication]
+    formats: []
+    summary: Separates actor and parent resolution, launch and root planning, evidence preparation, publication and bookkeeping, preserving early reuse exits and the existing State, artifact and timing commit boundaries.
+  - revision: 58
+    id: explicit-process-owner-capabilities
+    impact: none
+    domains: [process-execution, process-preflight, process-lifecycle, endpoint-effects, source-timing]
+    formats: []
+    summary: Moves process identity, parent, reuse, timing, lifecycle and evidence operations behind explicit owner bindings. Generator entrypoints forward to ephemeral services bound to current State, caches, timing and publication authorities.
+  - revision: 59
+    id: composed-platform-process-parents
+    impact: none
+    domains: [process-parent-selection, process-preflight]
+    formats: []
+    summary: Separates Windows and Linux parent operations and shared history/query helpers while preserving selection order, ancestry materialization, RNG draws and current runtime ownership.
+  - revision: 60
+    id: direct-internal-process-parent-ownership
+    impact: none
+    domains:
+      - process-parent-selection
+      - process-preflight
+    formats: []
+    summary: Routes the frozen 35 internal parent-helper calls directly through freshly bound parent owners, preserving compatibility adapters, arguments and operation boundaries.
+  - revision: 61
+    id: explicit-process-preflight-ownership
+    impact: none
+    domains:
+      - process-preflight
+      - process-runtime-artifacts
+    formats: []
+    summary: Moves bounded source admission, effect planning, lifetime previews and uncommitted artifact cleanup into an ephemeral planner bound to current owners, preserving scoped draws, preparation order, failure scopes and public hooks.
+  - revision: 62
+    id: staged-process-preflight-reservations
+    impact: none
+    domains:
+      - process-preflight
+      - process-runtime-artifacts
+    formats: []
+    summary: Separates effect selection, allocation-free validation, endpoint reservations, lifetime admission and root-binary reservation while preserving order, one preparation-local reservation list, exception scopes and prepared results.
+  - revision: 63
+    id: document-process-reservation-cleanup-scopes
+    impact: none
+    domains:
+      - process-preflight
+    formats: []
+    summary: Explain preparation-local token ownership and distinct endpoint and later-failure cleanup scopes.
+  - revision: 64
+    id: share-operation-local-fingerprint-payload
+    impact: none
+    domains:
+      - checkpoint-provenance
+    formats: []
+    summary: Derive exact build identity and component diagnostics from one local payload without changing hashing or resume classification.
+  - revision: 65
+    id: separate-per-host-baseline-activities
+    impact: none
+    domains:
+      - baseline-system-traffic
+    formats: []
+    summary: Extract ordered per-host DNS NTP DHCP authentication process registry and shell activities while retaining host skips RNG order and shared runtime owners.
+  - revision: 66
+    id: separate-cross-host-baseline-passes
+    impact: none
+    domains:
+      - baseline-system-traffic
+    formats: []
+    summary: Separate RDP placement service and directory authentication Linux syslog ICMP and IDS passes while preserving host and RNG order renewal ownership and terminal admission.
+  - revision: 67
+    id: share-live-and-prepared-clock-wander-calculations
+    impact: none
+    domains:
+      - source-timing
+    formats: []
+    summary: Share exact wander interpolation and knot sampling accounting while retaining live and prepared cache audit and transaction ownership.
+  - revision: 68
+    id: share-registry-admission-gates-and-stable-lock-acquisition
+    impact: none
+    domains:
+      - runtime-registries
+    formats: []
+    summary: Consolidate writer-preferred mutation watermark admission and identity-deduplicated stable lock acquisition while retaining independent registry gates and checkpoint reconstruction.
+  - revision: 69
+    id: separate-ordered-process-storyline-companions
+    impact: none
+    domains:
+      - storyline-process-evidence
+    formats: []
+    summary: Extract redirected file HTTP database and SCP companions while retaining root identity foreground admission RNG order source visibility and lifecycle scheduling in the typed process handler.
+  - revision: 70
+    id: separate-cli-generation-preparation-and-reporting
+    impact: none
+    domains:
+      - cli-generation
+    formats: []
+    summary: Separate option and input preparation scenario and format checks resume policy and published-output reporting while preserving prompt diagnostics lock ownership publication and error exits.
+  - revision: 71
+    id: share-cli-staging-cleanup-and-recovery-reporting
+    impact: none
+    domains:
+      - cli-generation
+    formats: []
+    summary: Share only identical temporary staging disposal and recovery guidance while retaining migration restoration persistent workspace ownership distinct suspension interruption and failure exits and publication boundaries.
+  - revision: 72
+    id: separate-configuration-shapes-and-ordered-family-validation
+    impact: none
+    domains:
+      - configuration-validation
+    formats: []
+    summary: Separate static overlay shapes and focused system process access syslog and network validators while preserving provider phases deferred schema ordering diagnostics malformed-input handling and weight accumulation order.
+  - revision: 73
+    id: cleanup-network-request-resolution
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Extract endpoint protocol and command discovery decisions without moving prerequisite execution or root ownership
+  - revision: 74
+    id: cleanup-network-transport-accounting
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Extract ICMP explicit and sampled transport accounting while preserving tuple timing and prepared RNG ownership
+  - revision: 75
+    id: cleanup-network-protocol-evidence
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Extract DNS proxy HTTP and NTP evidence preparation and preserve final interval reconciliation before tuple reservation
+  - revision: 76
+    id: cleanup-persistent-smb-action-root
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Separate persistent SMB file recipe preparation and canonical root execution without changing continuation phases or cleanup scope
+  - revision: 77
+    id: cleanup-persistent-smb-source-preparation
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Separate persistent SMB source construction timing certification and state finalization using existing exact preparation records
+  - revision: 78
+    id: cleanup-persistent-smb-publication
+    impact: none
+    domains:
+      - network
+    formats: []
+    summary: Share exact SMB member commit and publication recovery while retaining distinct fresh and resumed certification paths
+  - revision: 79
+    id: baseline-host-specific-resolver-health
+    impact: localized
+    domains:
+      - linux-resolver-health
+      - baseline-generation
+    formats: []
+    summary: Bind ambient resolver health messages to each Linux host's selected DNS pool; retain recorded recovery pairs and allow downstream deterministic draws to reflect corrected pool sizes
+  - revision: 80
+    id: kerberos-packet-admission-processing-budget
+    impact: localized
+    domains:
+      - kerberos-authentication
+      - network-transport
+      - source-timing
+    formats:
+      - windows_event_security
+    summary: Reserve source-local processing space before responder Kerberos WFP admission and keep single and paired KDC audit ordering inside the unchanged canonical transport interval
+  - revision: 81
+    id: completed-frontier-identity-retention
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - periodic-generation
+      - ssh-session-lifecycle
+    formats: []
+    summary: Retire ended identities only at the sealed engine frontier, preserve exact SSH source instances through deferred close and PID reuse, and omit unauthenticated source-process placeholders

@@ -49,7 +49,7 @@ from copy import copy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from itertools import islice
-from threading import Condition, Lock, RLock, get_ident
+from threading import RLock, get_ident
 from typing import cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
@@ -87,6 +87,7 @@ from evidenceforge.generation.indexes import (
     IndexMetrics,
     ReferenceLeaseIndex,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _ArtifactRegistryGate
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -2724,53 +2725,6 @@ class LocalArtifactPreparedGroupCommit:
 
     def _close(self) -> None:
         self._active = False
-
-
-class _ArtifactRegistryGate:
-    """Allow disjoint shard mutations while giving watermarks exclusive admission."""
-
-    __slots__ = ("_condition", "_readers", "_waiting_writers", "_writer")
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter a shared mutation section with watermark preference."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._readers -= 1
-                if self._readers == 0:
-                    self._condition.notify_all()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Enter the exclusive watermark section."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 def _semantic_artifact_digest(value: str, prefix: str) -> bytes | None:

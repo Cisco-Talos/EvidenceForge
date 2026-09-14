@@ -30,6 +30,9 @@ import pytest
 
 from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions import DnsLookupActionBundle, DnsLookupRequest
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import (
     EXTERNAL_IPS,
     REVERSE_DNS,
@@ -369,6 +372,7 @@ class TestDnsQueryTypeSemantics:
 
         monkeypatch.setattr(rng, "random", _fixed_random)
         monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: rng)
 
         activity_gen._emit_dns_lookup(
             src_ip="10.0.10.1",

@@ -1,0 +1,462 @@
+{
+  "after": {
+    "_execute_persistent_windows": {
+      "branches": 35,
+      "calls": 110,
+      "lines": 539
+    },
+    "_resume_persistent_smb_source_prepared": {
+      "branches": 20,
+      "calls": 49,
+      "lines": 198
+    }
+  },
+  "allocation_changes": "The existing local event, truth, common-context, carrier and member-spec buffers are returned by reference in three short-lived tuples. No copied evidence records or persistent context object; existing source-shell and preparation types remain unchanged. Two nested digest function objects become direct static methods. Existing finalization recovery has one implementation instead of two.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_execute_persistent_windows": {
+      "branches": 54,
+      "calls": 245,
+      "lines": 1060
+    },
+    "_resume_persistent_smb_source_prepared": {
+      "branches": 23,
+      "calls": 53,
+      "lines": 215
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item9b-report.json",
+    "sha256": "4c83181609c4bfb0696a011425560726736406d72353dfa9901f6a8fa8ca5f77"
+  },
+  "coordinators": [
+    "_execute_persistent_windows",
+    "_resume_persistent_smb_source_prepared"
+  ],
+  "description": "Operation events, session events, projection/timing preparation and fresh-attempt certification now have named operations consuming existing authenticated preparation records. The main coordinator falls from 1,060 to 539 lines. One 24-line finalization operation replaces the identical fresh/resumed materialize-recover-retry blocks; callers retain their original authentication and close-rebinding checks. Existing retry certification remains separate because it can adopt retained certifications or timing commits. Digest functions preserve their exact serialization. No authentication or mutation was moved across a phase boundary.",
+  "failures": [],
+  "gates": {
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item9b-focused.log",
+      "sha256": "c639cfe55333ed30cadcf8b25fbf5b4a529281f32dda0dd8b03cb5e1be2ee44e",
+      "summary": "====================== 36 passed, 29 deselected in 17.88s ======================"
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item9b-matrix.log",
+      "sha256": "d11b8a32cc50b8e58039d06228f428ac53fdaa5c34a52522c65761ec541ebd0e",
+      "summary": ""
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item9b-slow.log",
+      "sha256": "1b5a3cef24a954700d4f04c9c6c533fa19e493518789690d1fa3a37c83a6ef9b",
+      "summary": "================= 37 passed, 7 deselected in 74.37s (0:01:14) =================="
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item9b-standard.log",
+      "sha256": "acc5747c817867ac1a3881cd99eb6d228dc0fc681ea309a354905886e3f0c2ca",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 295.80s (0:04:55) ========="
+    }
+  },
+  "item": "9b",
+  "logs": [
+    "focused",
+    "slow",
+    "standard",
+    "matrix"
+  ],
+  "manifest": "passed vs 2b1b7e5e",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 11382862,
+      "allocation_sample_retained_blocks": 67503,
+      "allocation_sample_retained_bytes": 5798391,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.53126900002826,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1851762890338826,
+      "process_max_rss": 172244992,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.550887666991912,
+        2.5263664999511093,
+        2.5657882910454646,
+        2.528590959031135,
+        2.5575588329229504,
+        2.51905008405447,
+        2.53126900002826
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11382373,
+      "allocation_sample_retained_blocks": 67867,
+      "allocation_sample_retained_bytes": 5816084,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.543795624980703,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1793400265883223,
+      "process_max_rss": 174538752,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.543795624980703,
+        2.545096707995981,
+        2.5794095410965383,
+        2.5430359999882057,
+        2.5502497090492398,
+        2.5391527500469238,
+        2.541166124981828
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11388362,
+      "allocation_sample_retained_blocks": 67593,
+      "allocation_sample_retained_bytes": 5802476,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.537786416010931,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1821325786413532,
+      "process_max_rss": 173490176,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.537786416010931,
+        2.522116250009276,
+        2.5682765420060605,
+        2.526972791994922,
+        2.520897916983813,
+        2.552933292114176,
+        2.5555428749648854
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "smb"
+    },
+    {
+      "allocation_sample_peak_bytes": 11391516,
+      "allocation_sample_retained_blocks": 67784,
+      "allocation_sample_retained_bytes": 5811684,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.537108250078745,
+      "operations_per_sample": 3,
+      "operations_per_second": 1.1824485612337936,
+      "process_max_rss": 173752320,
+      "result": {
+        "completed_at": "2024-01-15T10:17:59.980000+00:00",
+        "files": {
+          "FS-01.example.com/ecar.json": "788fe4bcef84e97f62931cdada0abfbe70f608881f589f70b9462282bc010cff",
+          "FS-01.example.com/windows_event_security.xml": "ec3356c58bd12b4d27665c6068d727084e9f08e992b00e7fbf1bb76787544a85",
+          "SMBCLIENT-09.example.com/ecar.json": "66af52ba2a94108c743044e888b9231e611e669d65ce186c9c5f58b2f19947e0",
+          "core-zeek/conn.json": "835e033f5e64c1f480394863e2a000655901778e0177080abfeb6d4f22793eb6",
+          "core-zeek/files.json": "c81624b75ab11ee671b7f2ffc3474f787bfb8e859613ed932e7c0eec3d54acd0",
+          "core-zeek/smb_files.json": "dda84159172b81d9b843a3bd6c2c0ff7fba49ac044f4dbcc7c292b6ed0b00c09",
+          "core-zeek/smb_mapping.json": "02dd003816fd29607f037c470e051c4e9236d3822ce66ae13dfe03401e6c1acb"
+        },
+        "operations": [
+          {
+            "content_version": 1,
+            "file_id": "file-de8c938e06319ebe",
+            "fuid": "F0xUzq7A1ZWZWQHZhD",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Archive\\budget-review.csv",
+            "share": "FS-01.finance",
+            "size_bytes": 56615
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-6b8b10a9c1c48cc5",
+            "fuid": "FnwCMdKq7o1REK52KX",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2024\\quarterly-forecast.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 518531
+          },
+          {
+            "content_version": 1,
+            "file_id": "file-ff3d68586b059e49",
+            "fuid": "F9vQp8ppugh6Zjya8a",
+            "operation": "read",
+            "outcome": "success",
+            "path": "Exports\\2025\\renewal-tracker-v2.docx",
+            "share": "FS-01.finance",
+            "size_bytes": 77180
+          }
+        ],
+        "retained": {
+          "smb_connection_finalization_receipts": 0,
+          "smb_connection_finalization_results": 0,
+          "smb_connection_pin_acknowledging": 0,
+          "smb_connection_pin_install_receipts": 0,
+          "smb_connection_pin_protected_sessions": 0,
+          "smb_connection_pin_reserved_bytes": 0,
+          "smb_connection_pin_retained_bytes": 0,
+          "smb_connection_pin_session_owners": 0,
+          "smb_connection_pins_active": 0,
+          "smb_connection_pins_terminal": 0,
+          "smb_file_mutation_acknowledging": 0,
+          "smb_file_mutation_cancelling": 0,
+          "smb_file_mutation_capabilities": 0,
+          "smb_file_mutation_commit_receipts": 0,
+          "smb_file_mutation_commit_results": 0,
+          "smb_file_mutation_file_owners": 0,
+          "smb_file_mutation_journal_entries": 0,
+          "smb_file_mutation_journal_locators": 0,
+          "smb_file_mutation_journals": 0,
+          "smb_file_mutation_operation_indexes": 0,
+          "smb_file_mutation_path_owners": 0,
+          "smb_file_mutation_result_locators": 0,
+          "smb_file_mutation_retained_bytes": 0
+        },
+        "rng_sha256": "5a3532f9fecc36136083568fd05abda842e0b81647173ed116c9061895979b6b"
+      },
+      "seconds": [
+        2.557735542068258,
+        2.5381177079398185,
+        2.528327166917734,
+        2.5177651669364423,
+        2.541721040965058,
+        2.519486540928483,
+        2.537108250078745
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "smb"
+    }
+  ],
+  "performance_runs": [
+    "baseline-smb-a",
+    "smb-a",
+    "baseline-smb-b",
+    "smb-b"
+  ],
+  "previous": "2b1b7e5e",
+  "representative_paths": [
+    "root_committed -> operation/session source drafts -> prepared timing/projections -> source_building -> source_prepared",
+    "fresh source_prepared -> materialize/adopt State -> authenticate/rebind -> fresh certification with exact timing adoption/rollback",
+    "retained source_prepared -> entry owner authentication -> shared State finalization -> existing retained certification adoption"
+  ],
+  "revision": 77,
+  "ruff": "both passed",
+  "slug": "smb-source-preparation",
+  "source": "src/evidenceforge/generation/actions/smb_activity.py",
+  "title": "SMB source construction and certification"
+}

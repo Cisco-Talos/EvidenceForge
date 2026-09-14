@@ -1,0 +1,308 @@
+{
+  "after": {
+    "_plan_network_transport": {
+      "branches": 75,
+      "calls": 144,
+      "lines": 801
+    }
+  },
+  "allocation_changes": "At most one selected accounting-result tuple plus the existing staged ICMP point; no new RNG or durable context. Composed stage records and forwarding between stages are unchanged.",
+  "baseline": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "_plan_network_transport": {
+      "branches": 109,
+      "calls": 186,
+      "lines": 962
+    }
+  },
+  "byte_cases": 44,
+  "byte_report": {
+    "path": "/private/tmp/eforge-cleanup-evidence/pass4-item8b-report.json",
+    "sha256": "f533727dbf38b27a0516c056ebbb69750cd61c2d4b498cebf47ef6b477a22174"
+  },
+  "coordinators": [
+    "_plan_network_transport"
+  ],
+  "description": "ICMP echo payload/duration, explicit TCP/UDP states, sampled UDP states, sampled TCP states and ICMP observation spacing now have five focused operations. Identity allocation, preparation entry, packet accounting, process/session caps and tuple ownership remain at their original execution points. The ICMP spacing helper receives the exact existing preparation and window bound; it acquires no independent state or cancellation authority. The static prepared-region regression now follows direct helper calls transitively, preventing extracted code from hiding publication, owner RNG or unstaged timing operations.",
+  "failures": [
+    "The first two targeted slow runs reported the old 194-selector assertion after one four-call function was split into two two-call helpers. The first edit missed the assertion variable name; the assertion was then corrected to 195 without changing the 358-call ceiling. Both failed logs are preserved as item8b-slow-initial.log and item8b-slow-second.log. The accepted rerun passed all 14 selected slow tests.",
+    "Ruff corrected import ordering before acceptance. No production output gate failed."
+  ],
+  "gates": {
+    "focused": {
+      "log": "/private/tmp/eforge-pass4-item8b-focused.log",
+      "sha256": "65895d9a53c24377770395f00bd423a2aa915f3710a1a2bc03690edb41aa20db",
+      "summary": "============================== 48 passed in 2.08s =============================="
+    },
+    "matrix": {
+      "log": "/private/tmp/eforge-pass4-item8b-matrix.log",
+      "sha256": "d11b8a32cc50b8e58039d06228f428ac53fdaa5c34a52522c65761ec541ebd0e",
+      "summary": ""
+    },
+    "slow": {
+      "log": "/private/tmp/eforge-pass4-item8b-slow.log",
+      "sha256": "547a9c6f856b6f5e6e963cc15918f84c4fa8b2bf0f202727f055912718c47c2d",
+      "summary": "====================== 14 passed, 33 deselected in 22.42s ======================"
+    },
+    "standard": {
+      "log": "/private/tmp/eforge-pass4-item8b-standard.log",
+      "sha256": "3cb7e65f4d0b7155f4edb20785c0e8e840981bc7c4f12652b8b172b260903c31",
+      "summary": "======== 8550 passed, 27 skipped, 2011 deselected in 295.89s (0:04:55) ========="
+    }
+  },
+  "item": "8b",
+  "logs": [
+    "focused",
+    "slow",
+    "standard",
+    "matrix"
+  ],
+  "manifest": "passed vs 9db12667",
+  "new_durable_state": 0,
+  "new_rng_streams": 0,
+  "performance": [
+    {
+      "allocation_sample_peak_bytes": 3387842,
+      "allocation_sample_retained_blocks": 3606,
+      "allocation_sample_retained_bytes": 294272,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.11945841601118445,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.96891074841466,
+      "process_max_rss": 140345344,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11719541705679148,
+        0.12014333298429847,
+        0.13877720793243498,
+        0.11749083292670548,
+        0.13834925007540733,
+        0.11945841601118445,
+        0.11939033307135105
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3388385,
+      "allocation_sample_retained_blocks": 3601,
+      "allocation_sample_retained_bytes": 293802,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12098745803814381,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.12255625271368,
+      "process_max_rss": 140066816,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11862874997314066,
+        0.12098745803814381,
+        0.1407856250880286,
+        0.12152779195457697,
+        0.14011279097758234,
+        0.11936233390588313,
+        0.11905387509614229
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3388206,
+      "allocation_sample_retained_blocks": 3621,
+      "allocation_sample_retained_bytes": 294941,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.11966245900839567,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.85471839951667,
+      "process_max_rss": 142344192,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11851616599597037,
+        0.11959274997934699,
+        0.1420735000865534,
+        0.11863308399915695,
+        0.13923158403486013,
+        0.12035945791285485,
+        0.11966245900839567
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "network"
+    },
+    {
+      "allocation_sample_peak_bytes": 3387742,
+      "allocation_sample_retained_blocks": 3618,
+      "allocation_sample_retained_bytes": 294731,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 0.12042374990414828,
+      "operations_per_sample": 8,
+      "operations_per_second": 66.43207844272935,
+      "process_max_rss": 140050432,
+      "result": {
+        "dns": {
+          "GROUND_TRUTH.json": "8df1284219c4ee82e8ca6aada2caeeb705a0fcc13618aed03257f6b06867248b",
+          "LINUX-01/ecar.json": "c3077abdf3270aa8d5cdc1e9f1431412a7193314ccea5e658d3094fb876f0b3f"
+        },
+        "icmp_echo": {
+          "GROUND_TRUTH.json": "59a39cf20125d79887c652cb6d93c1f0b36b6d18d715ef82d43b8e3224b46064",
+          "LINUX-01/ecar.json": "cb55c83d24a110b6530dd6df503acf044f498617a24aa22172666d7b69d77c6c"
+        },
+        "icmp_missing": {
+          "GROUND_TRUTH.json": "3a93fc720d43dc8de85b9d2cd5b83a9d89ab5fe7942e4231816eef461165053a",
+          "LINUX-01/ecar.json": "3313cbd40c2b3d54ea41fc619b4fde7f24721fd9396cd75be0b73d309e040d46"
+        },
+        "invalid": {
+          "GROUND_TRUTH.json": "0bc6bb0dee6e1251bfd40dd80029887753e7d50c29c69daabe6fffb647a2fe22"
+        },
+        "kerberos": {
+          "GROUND_TRUTH.json": "7ada9c12504c92c73c66fe60bf08e9c698e16d702e3ed9fafe0c72917a542e75",
+          "LINUX-01/ecar.json": "6de60b461f73202dba355262f085409a4bd860f30ea1415b841eadc2215d862a"
+        },
+        "ntp": {
+          "GROUND_TRUTH.json": "68e7007c46f6b5d4050e41acb059476a58b6eb0fd031fdd9de96aea71bd7c131",
+          "LINUX-01/ecar.json": "a96b5f56f058fc79a9b443e7e0f3821ea983f27e3aa1629d9c797de35fd4dffa"
+        },
+        "syslog": {
+          "GROUND_TRUTH.json": "e4f4bc599c663fa5c078451fbdc22cbbbab3330e57255bf6ff86f0dfb596f610",
+          "LINUX-01/ecar.json": "62ee9a882f5671ccd97e62cdec297992b899ac769ba0af8ba9f32b2ca3241eb7"
+        },
+        "tcp_reset": {
+          "GROUND_TRUTH.json": "43248ccbe471f145640cb832af9a49f765bfe96657903c6eb7f50fe5cf4c14c1",
+          "LINUX-01/ecar.json": "44d802023b04950108fbe5f9e36cb43c464c8debbdd6f97da2db5b45981e62b2"
+        }
+      },
+      "seconds": [
+        0.11957754194736481,
+        0.12033391604200006,
+        0.1418935830006376,
+        0.12042374990414828,
+        0.14248983305878937,
+        0.120218834024854,
+        0.12180729198735207
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "network"
+    }
+  ],
+  "performance_runs": [
+    "baseline-network-a",
+    "network-a",
+    "baseline-network-b",
+    "network-b"
+  ],
+  "previous": "9db12667",
+  "retained_state": "All synchronization, timing, RNG, reservation and commit owners remain unchanged.",
+  "revision": 74,
+  "rng_inventory": {
+    "calls_after": 358,
+    "calls_before": 358,
+    "selectors_after": 195,
+    "selectors_before": 194
+  },
+  "ruff": "both passed",
+  "slug": "network-transport",
+  "source": "src/evidenceforge/generation/actions/network_transaction_planner.py",
+  "title": "protocol-specific transport accounting"
+}

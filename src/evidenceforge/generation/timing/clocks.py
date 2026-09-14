@@ -161,6 +161,50 @@ def _cached_wander_knot(
     )
 
 
+def _interpolate_wander_microseconds(
+    elapsed_seconds: float,
+    *,
+    key: SourceClockKey,
+    spec: ClockWanderSpec,
+    sample_knot: Callable[[SourceClockKey, ClockWanderSpec, int], float],
+) -> float:
+    """Share exact live/prepared arithmetic without taking cache or audit ownership.
+
+    Both adjacent knots are sampled even at an exact boundary: their logical
+    audit counts must not depend on interpolation weights or cache hits.
+    Negative elapsed times use floor, preserving the knot's semantic ordinal.
+    See test_simplification_clock_characterization.py for boundary and claim parity.
+    """
+    interval_seconds = spec.knot_interval.total_seconds()
+    left_ordinal = math.floor(elapsed_seconds / interval_seconds)
+    fraction = (elapsed_seconds - left_ordinal * interval_seconds) / interval_seconds
+    smooth_fraction = fraction * fraction * (3.0 - 2.0 * fraction)
+    left = sample_knot(key, spec, left_ordinal)
+    right = sample_knot(key, spec, left_ordinal + 1)
+    return left + (right - left) * smooth_fraction
+
+
+def _sample_wander_knot(
+    sampler: TimingSampler,
+    key: SourceClockKey,
+    spec: ClockWanderSpec,
+    ordinal: int,
+) -> float:
+    """Read a recomputable knot and charge its logical sample to the existing owner."""
+    value = _cached_wander_knot(
+        sampler.namespace,
+        sampler.generation_seed,
+        key,
+        spec,
+        ordinal,
+    )
+    sampler.record_logical_sample(
+        spec.knot_distribution_microseconds,
+        relationship_key="clock.wander_microseconds",
+    )
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class SourceClockState:
     """Stable per-clock parameters derived from a source-clock specification."""
@@ -454,13 +498,9 @@ class SourceClockRegistry:
     ) -> float:
         """Interpolate deterministic adjacent clock-wander knots."""
 
-        interval_seconds = spec.knot_interval.total_seconds()
-        left_ordinal = math.floor(elapsed_seconds / interval_seconds)
-        fraction = (elapsed_seconds - left_ordinal * interval_seconds) / interval_seconds
-        smooth_fraction = fraction * fraction * (3.0 - 2.0 * fraction)
-        left = self._wander_knot(key, spec, left_ordinal)
-        right = self._wander_knot(key, spec, left_ordinal + 1)
-        return left + (right - left) * smooth_fraction
+        return _interpolate_wander_microseconds(
+            elapsed_seconds, key=key, spec=spec, sample_knot=self._wander_knot
+        )
 
     def _wander_knot(
         self,
@@ -470,18 +510,7 @@ class SourceClockRegistry:
     ) -> float:
         """Return one stateless wander-knot value."""
 
-        value = _cached_wander_knot(
-            self._sampler.namespace,
-            self._sampler.generation_seed,
-            key,
-            spec,
-            ordinal,
-        )
-        self._sampler.record_logical_sample(
-            spec.knot_distribution_microseconds,
-            relationship_key="clock.wander_microseconds",
-        )
-        return value
+        return _sample_wander_knot(self._sampler, key, spec, ordinal)
 
     @staticmethod
     def _scope(key: SourceClockKey, *, ordinal: int = 0) -> TimingScope:
@@ -764,13 +793,9 @@ class SourceClockRegistryPreparation:
         key: SourceClockKey,
         spec: ClockWanderSpec,
     ) -> float:
-        interval_seconds = spec.knot_interval.total_seconds()
-        left_ordinal = math.floor(elapsed_seconds / interval_seconds)
-        fraction = (elapsed_seconds - left_ordinal * interval_seconds) / interval_seconds
-        smooth_fraction = fraction * fraction * (3.0 - 2.0 * fraction)
-        left = self._wander_knot(key, spec, left_ordinal)
-        right = self._wander_knot(key, spec, left_ordinal + 1)
-        return left + (right - left) * smooth_fraction
+        return _interpolate_wander_microseconds(
+            elapsed_seconds, key=key, spec=spec, sample_knot=self._wander_knot
+        )
 
     def _wander_knot(
         self,
@@ -778,18 +803,7 @@ class SourceClockRegistryPreparation:
         spec: ClockWanderSpec,
         ordinal: int,
     ) -> float:
-        value = _cached_wander_knot(
-            self._sampler.namespace,
-            self._sampler.generation_seed,
-            key,
-            spec,
-            ordinal,
-        )
-        self._sampler.record_logical_sample(
-            spec.knot_distribution_microseconds,
-            relationship_key="clock.wander_microseconds",
-        )
-        return value
+        return _sample_wander_knot(self._sampler, key, spec, ordinal)
 
     def overlay_digest(self) -> str:
         """Return a stable digest of compact clock-cache state and counters."""

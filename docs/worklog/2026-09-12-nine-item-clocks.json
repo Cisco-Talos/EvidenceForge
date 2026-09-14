@@ -1,0 +1,406 @@
+{
+  "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "behavior_revision": 67,
+  "byte_comparisons": {
+    "cases": 38,
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item3-report.json",
+    "sha256": "9e5b457bb0b91466ba903b32273dba73c22a14ca2ef947a5d08a3231a5e527c8"
+  },
+  "failures": [],
+  "focused_tests": {
+    "passed": 52,
+    "seconds": 4.64
+  },
+  "item": 3,
+  "logs": {
+    "/private/tmp/eforge-pass4-item3-focused.log": "5b2f2629434e1e2d2cb43672f98b7b3d8745d71115d1593249d1dcc0c7d3f6ba",
+    "/private/tmp/eforge-pass4-item3-pre-extraction.log": "ec257b63c48b821315f5a19c9df380aad1ccedcc5ec50a3fb7ec318743e73312",
+    "/private/tmp/eforge-pass4-item3-slow.log": "d6806ff4946799daf2f4c8c4f9f9d11d399585a8a0f01696ed5e987e2963be5f",
+    "/private/tmp/eforge-pass4-item3-standard.log": "05c19067d68609b5fde79b3d44de1a8ec9fac1f4e567b763ab323d110a299cb3"
+  },
+  "manifest": "passed against 211446d7",
+  "performance_alternating_runs": {
+    "clocks": [
+      {
+        "allocation_sample_peak_bytes": 8078,
+        "allocation_sample_retained_blocks": 57,
+        "allocation_sample_retained_bytes": 3214,
+        "median_seconds": 0.04941737500485033,
+        "operations_per_sample": 2048,
+        "operations_per_second": 41442.91354607541,
+        "process_max_rss": 128204800,
+        "result": {
+          "census": {
+            "backing_entries": 4,
+            "cache_hit_count": 0,
+            "cache_miss_count": 2048,
+            "capacity": 4,
+            "estimated_bytes": 0,
+            "eviction_count": 2044,
+            "high_water_mark": 4,
+            "live_entries": 4,
+            "lookup_count": 2048
+          },
+          "values_sha256": "17b7f83e0032930a7ed837e457179cc83cb34bbad8a4f6c956d814dd3525db31"
+        },
+        "seconds": [
+          0.04999366693664342,
+          0.04941737500485033,
+          0.04957004194147885,
+          0.04968629195354879,
+          0.04844504198990762,
+          0.048263957956805825,
+          0.04898154200054705
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 8628,
+        "allocation_sample_retained_blocks": 68,
+        "allocation_sample_retained_bytes": 3764,
+        "median_seconds": 0.05087350006215274,
+        "operations_per_sample": 2048,
+        "operations_per_second": 40256.71513652363,
+        "process_max_rss": 131022848,
+        "result": {
+          "census": {
+            "backing_entries": 4,
+            "cache_hit_count": 0,
+            "cache_miss_count": 2048,
+            "capacity": 4,
+            "estimated_bytes": 0,
+            "eviction_count": 2044,
+            "high_water_mark": 4,
+            "live_entries": 4,
+            "lookup_count": 2048
+          },
+          "values_sha256": "17b7f83e0032930a7ed837e457179cc83cb34bbad8a4f6c956d814dd3525db31"
+        },
+        "seconds": [
+          0.05040529102552682,
+          0.050593583029694855,
+          0.05095262499526143,
+          0.05087350006215274,
+          0.05097812495660037,
+          0.050352957914583385,
+          0.050888209021650255
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 8728,
+        "allocation_sample_retained_blocks": 70,
+        "allocation_sample_retained_bytes": 3864,
+        "median_seconds": 0.050947041949257255,
+        "operations_per_sample": 2048,
+        "operations_per_second": 40198.60470093215,
+        "process_max_rss": 130973696,
+        "result": {
+          "census": {
+            "backing_entries": 4,
+            "cache_hit_count": 0,
+            "cache_miss_count": 2048,
+            "capacity": 4,
+            "estimated_bytes": 0,
+            "eviction_count": 2044,
+            "high_water_mark": 4,
+            "live_entries": 4,
+            "lookup_count": 2048
+          },
+          "values_sha256": "17b7f83e0032930a7ed837e457179cc83cb34bbad8a4f6c956d814dd3525db31"
+        },
+        "seconds": [
+          0.051127125043421984,
+          0.050919042085297406,
+          0.050849667051807046,
+          0.051233959035016596,
+          0.050947041949257255,
+          0.051397165982052684,
+          0.05050858296453953
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 8828,
+        "allocation_sample_retained_blocks": 72,
+        "allocation_sample_retained_bytes": 3964,
+        "median_seconds": 0.051005082903429866,
+        "operations_per_sample": 2048,
+        "operations_per_second": 40152.86091932381,
+        "process_max_rss": 131039232,
+        "result": {
+          "census": {
+            "backing_entries": 4,
+            "cache_hit_count": 0,
+            "cache_miss_count": 2048,
+            "capacity": 4,
+            "estimated_bytes": 0,
+            "eviction_count": 2044,
+            "high_water_mark": 4,
+            "live_entries": 4,
+            "lookup_count": 2048
+          },
+          "values_sha256": "17b7f83e0032930a7ed837e457179cc83cb34bbad8a4f6c956d814dd3525db31"
+        },
+        "seconds": [
+          0.05215324996970594,
+          0.05053433298598975,
+          0.05050224997103214,
+          0.05071579199284315,
+          0.0511784590780735,
+          0.051005082903429866,
+          0.051482541020959616
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "clocks"
+      }
+    ],
+    "prepared-clocks": [
+      {
+        "allocation_sample_peak_bytes": 16953,
+        "allocation_sample_retained_blocks": 204,
+        "allocation_sample_retained_bytes": 11690,
+        "median_seconds": 0.05266679101623595,
+        "operations_per_sample": 2048,
+        "operations_per_second": 38885.984136923194,
+        "process_max_rss": 128106496,
+        "result": {
+          "census": {
+            "audit": {
+              "distribution_keys_live": 2,
+              "estimated_bytes": 0,
+              "estimated_index_bytes": 0,
+              "fallback_count": 0,
+              "relationship_slots_capacity": 16384,
+              "relationship_slots_estimated_bytes": 0,
+              "relationship_slots_live": 3,
+              "repair_count": 0,
+              "sample_count": 6144,
+              "saturation_count": 0
+            },
+            "clocks": {
+              "backing_entries": 4,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1536,
+              "capacity": 4,
+              "estimated_bytes": 0,
+              "eviction_count": 1532,
+              "high_water_mark": 4,
+              "live_entries": 4,
+              "lookup_count": 1536
+            },
+            "estimated_bytes": 0,
+            "estimated_index_bytes": 0
+          },
+          "values_sha256": "ab4ed72f628374931a5930820f9c686b4152c25502d3081e2b86628fdf08b11f"
+        },
+        "seconds": [
+          0.05257954203989357,
+          0.052457166952081025,
+          0.05265179101843387,
+          0.053277916042134166,
+          0.05266679101623595,
+          0.05273391702212393,
+          0.05273462494369596
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "prepared-clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 16953,
+        "allocation_sample_retained_blocks": 205,
+        "allocation_sample_retained_bytes": 11740,
+        "median_seconds": 0.0539537500590086,
+        "operations_per_sample": 2048,
+        "operations_per_second": 37958.43658244563,
+        "process_max_rss": 131235840,
+        "result": {
+          "census": {
+            "audit": {
+              "distribution_keys_live": 2,
+              "estimated_bytes": 0,
+              "estimated_index_bytes": 0,
+              "fallback_count": 0,
+              "relationship_slots_capacity": 16384,
+              "relationship_slots_estimated_bytes": 0,
+              "relationship_slots_live": 3,
+              "repair_count": 0,
+              "sample_count": 6144,
+              "saturation_count": 0
+            },
+            "clocks": {
+              "backing_entries": 4,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1536,
+              "capacity": 4,
+              "estimated_bytes": 0,
+              "eviction_count": 1532,
+              "high_water_mark": 4,
+              "live_entries": 4,
+              "lookup_count": 1536
+            },
+            "estimated_bytes": 0,
+            "estimated_index_bytes": 0
+          },
+          "values_sha256": "ab4ed72f628374931a5930820f9c686b4152c25502d3081e2b86628fdf08b11f"
+        },
+        "seconds": [
+          0.053948250017128885,
+          0.053977583069354296,
+          0.05314933299086988,
+          0.05392883298918605,
+          0.05413587507791817,
+          0.05407158308662474,
+          0.0539537500590086
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "prepared-clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 16853,
+        "allocation_sample_retained_blocks": 202,
+        "allocation_sample_retained_bytes": 11590,
+        "median_seconds": 0.053621332976035774,
+        "operations_per_sample": 2048,
+        "operations_per_second": 38193.753984357005,
+        "process_max_rss": 128335872,
+        "result": {
+          "census": {
+            "audit": {
+              "distribution_keys_live": 2,
+              "estimated_bytes": 0,
+              "estimated_index_bytes": 0,
+              "fallback_count": 0,
+              "relationship_slots_capacity": 16384,
+              "relationship_slots_estimated_bytes": 0,
+              "relationship_slots_live": 3,
+              "repair_count": 0,
+              "sample_count": 6144,
+              "saturation_count": 0
+            },
+            "clocks": {
+              "backing_entries": 4,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1536,
+              "capacity": 4,
+              "estimated_bytes": 0,
+              "eviction_count": 1532,
+              "high_water_mark": 4,
+              "live_entries": 4,
+              "lookup_count": 1536
+            },
+            "estimated_bytes": 0,
+            "estimated_index_bytes": 0
+          },
+          "values_sha256": "ab4ed72f628374931a5930820f9c686b4152c25502d3081e2b86628fdf08b11f"
+        },
+        "seconds": [
+          0.05409958399832249,
+          0.054092915961518884,
+          0.05377762496937066,
+          0.05338029202539474,
+          0.05342004192061722,
+          0.053621332976035774,
+          0.05357512494083494
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "prepared-clocks"
+      },
+      {
+        "allocation_sample_peak_bytes": 16803,
+        "allocation_sample_retained_blocks": 202,
+        "allocation_sample_retained_bytes": 11590,
+        "median_seconds": 0.05462104198522866,
+        "operations_per_sample": 2048,
+        "operations_per_second": 37494.70763582004,
+        "process_max_rss": 131121152,
+        "result": {
+          "census": {
+            "audit": {
+              "distribution_keys_live": 2,
+              "estimated_bytes": 0,
+              "estimated_index_bytes": 0,
+              "fallback_count": 0,
+              "relationship_slots_capacity": 16384,
+              "relationship_slots_estimated_bytes": 0,
+              "relationship_slots_live": 3,
+              "repair_count": 0,
+              "sample_count": 6144,
+              "saturation_count": 0
+            },
+            "clocks": {
+              "backing_entries": 4,
+              "cache_hit_count": 0,
+              "cache_miss_count": 1536,
+              "capacity": 4,
+              "estimated_bytes": 0,
+              "eviction_count": 1532,
+              "high_water_mark": 4,
+              "live_entries": 4,
+              "lookup_count": 1536
+            },
+            "estimated_bytes": 0,
+            "estimated_index_bytes": 0
+          },
+          "values_sha256": "ab4ed72f628374931a5930820f9c686b4152c25502d3081e2b86628fdf08b11f"
+        },
+        "seconds": [
+          0.05462104198522866,
+          0.054216291988268495,
+          0.05380912497639656,
+          0.054638665984384716,
+          0.05459612503182143,
+          0.05480762501247227,
+          0.05494845798239112
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "prepared-clocks"
+      }
+    ]
+  },
+  "preceding_commit": "211446d7",
+  "ruff_check": "passed",
+  "ruff_format_check": "passed",
+  "slow_tests": {
+    "passed": 12,
+    "seconds": 6.21
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8523,
+    "seconds": 298.41,
+    "skipped": 27
+  },
+  "structure": {
+    "knot_sampling_and_accounting_implementations": {
+      "after": 1,
+      "before": 2
+    },
+    "live_and_prepared_cache_owners": "unchanged",
+    "new_rngs": 0,
+    "new_runtime_owners": 0,
+    "prepared_workload": {
+      "cancellations": 4,
+      "commits": 12,
+      "preparations": 16,
+      "projections": 2048
+    },
+    "retained_method_entrypoints": 4,
+    "transient_bound_knot_callable_per_projection": 1,
+    "wander_interpolation_implementations": {
+      "after": 1,
+      "before": 2
+    }
+  }
+}

@@ -22,6 +22,9 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.proxy import ProxyTransactionPlan
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionActionBundle,
     NetworkConnectionIdentityCapture,
@@ -5763,6 +5766,7 @@ class TestExplicitProxyVisibility:
                 return values[0]
 
         monkeypatch.setattr(generator_module, "_get_rng", lambda: FixedRng())
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: FixedRng())
         monkeypatch.setattr(generator_module, "pick_proxy_domain_user_agent", lambda *a, **k: None)
 
         proxy_context = generator._build_proxy_context(
@@ -5824,6 +5828,7 @@ class TestExplicitProxyVisibility:
                 return low
 
         monkeypatch.setattr(generator_module, "_get_rng", lambda: FixedRng())
+        monkeypatch.setattr(network_planner_module, "_get_rng", lambda: FixedRng())
         monkeypatch.setattr(generator_module, "pick_proxy_domain_user_agent", lambda *a, **k: None)
 
         proxy_context = generator._build_proxy_context(

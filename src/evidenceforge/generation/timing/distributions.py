@@ -580,3 +580,22 @@ class TimingSampler:
         raise TimingDistributionError(
             f"unsupported timing distribution type: {type(distribution).__name__}"
         )
+
+
+def uniform_distribution(minimum: float, maximum: float) -> DistributionSpec:
+    """Return a continuous-uniform law using supported timing primitives."""
+
+    if minimum == maximum:
+        return ConstantDistribution(minimum)
+    return MixtureDistribution(
+        (
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=minimum, maximum=maximum),
+            ),
+            WeightedDistribution(
+                1.0,
+                TriangularDistribution(minimum=minimum, mode=maximum, maximum=maximum),
+            ),
+        )
+    )

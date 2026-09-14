@@ -28,6 +28,7 @@ from evidenceforge.generation.timing.distributions import (
     TruncatedLognormalDistribution,
     TruncatedNormalDistribution,
     WeightedDistribution,
+    uniform_distribution,
     validate_distribution_spec,
 )
 from evidenceforge.generation.timing.runtime import (
@@ -66,5 +67,6 @@ __all__ = [
     "TruncatedLognormalDistribution",
     "TruncatedNormalDistribution",
     "WeightedDistribution",
+    "uniform_distribution",
     "validate_distribution_spec",
 ]

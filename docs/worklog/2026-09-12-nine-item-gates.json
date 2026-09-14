@@ -1,0 +1,379 @@
+{
+  "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "baseline_duplication_proof": {
+    "commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+    "gate_owners": {
+      "application_channels": {
+        "class": "_MutationGate",
+        "lines": 53,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "enter_mutation": "f3d87175aacd61e91847a3b7f7e4cf7822db0a314a08f34c2adb8f9f27982291",
+          "exit_mutation": "12d704cf7c8274443184605b7854ad38dc20471d3b7dfc9d136026ee54256b9a",
+          "mutation": "2376575d68c6f73546ddf7788756fc2d7bcaa317aca6c41f0207c1e9fc220d9d",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "deployment_registry": {
+        "class": "_ArtifactRegistryGate",
+        "lines": 45,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "http_channels": {
+        "class": "_HttpMutationGate",
+        "lines": 43,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "lifecycle_registry": {
+        "class": "_MutationGate",
+        "lines": 43,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "proxy_channels": {
+        "class": "_SidecarMutationGate",
+        "lines": 43,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "rdp_sessions": {
+        "class": "_MutationGate",
+        "lines": 43,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "smb_channels": {
+        "class": "_SmbMutationGate",
+        "lines": 53,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "enter_mutation": "f3d87175aacd61e91847a3b7f7e4cf7822db0a314a08f34c2adb8f9f27982291",
+          "exit_mutation": "12d704cf7c8274443184605b7854ad38dc20471d3b7dfc9d136026ee54256b9a",
+          "mutation": "2376575d68c6f73546ddf7788756fc2d7bcaa317aca6c41f0207c1e9fc220d9d",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      },
+      "ssh_channels": {
+        "class": "_MutationGate",
+        "lines": 43,
+        "methods": {
+          "__init__": "74ea699934dcdf99645ad122ca1e940e4eec54b6775818bddfbf610e257d8192",
+          "mutation": "02d3507f3dffe0df27b46d9a2ba0538b76b10a86bbe8b2e7436c7fdbd9cbd6f2",
+          "watermark": "704665ce3a6d048165b2bd30b642edbe41c934fe9f64dc3cf45c440db87061c7"
+        }
+      }
+    },
+    "stable_lock_owners": {
+      "application_channels": {
+        "body_sha256": "6989236d84e72c8b7dbde0b451363c3597dfb49d52497eaef237696323b5528a",
+        "function": "_acquire_stable_locks"
+      },
+      "rdp_sessions": {
+        "body_sha256": "6989236d84e72c8b7dbde0b451363c3597dfb49d52497eaef237696323b5528a",
+        "function": "_acquire_stable_locks"
+      },
+      "ssh_channels": {
+        "body_sha256": "6989236d84e72c8b7dbde0b451363c3597dfb49d52497eaef237696323b5528a",
+        "function": "_stable_locks"
+      }
+    }
+  },
+  "behavior_revision": 68,
+  "byte_comparisons": {
+    "cases": 38,
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item4-report.json",
+    "sha256": "458bdf92666780208e1baad22abcf7a327105fb0ac9295e77b2dddda1fc2d8cc"
+  },
+  "characterization_tests": {
+    "passed": 31,
+    "seconds": 1.01
+  },
+  "failures": [
+    "Initial slow keyword selection matched zero tests (exit 5); corrected collection and explicit slow owner/watermark runs passed.",
+    "New test imports initially failed the full Ruff import-order check; fixed and repeated successfully."
+  ],
+  "focused_tests": {
+    "deselected": 11,
+    "passed": 482,
+    "seconds": 17.07
+  },
+  "item": 4,
+  "logs": {
+    "/private/tmp/eforge-pass4-item4-characterization.log": "8418d6bb928e6273e26c5e2da6a88f98320a8ca554883f5a3bdcf274b23b4691",
+    "/private/tmp/eforge-pass4-item4-focused.log": "094a55fb743d593d51d4ad103f948a8bcdeec0e586525603ee02b3a6d7de3633",
+    "/private/tmp/eforge-pass4-item4-pre-extraction.log": "4eb9f1fea968e8b2cfa862b41bf3d1baa1b75faf9fb6174aa384f249c3c9e85c",
+    "/private/tmp/eforge-pass4-item4-slow-registry.log": "d61f61a378fa682e70d14e820dc4b3c890dcba583470fba576a66b174034f3e2",
+    "/private/tmp/eforge-pass4-item4-slow-watermark.log": "e0312cc741164618db9a413d10226f8cf211e3da5b54b9f8b296849854121590",
+    "/private/tmp/eforge-pass4-item4-slow.log": "08f45ef8a1230e6073b7a58a6b8d14ab351ddd36c5802bcb404b95002f1367a1",
+    "/private/tmp/eforge-pass4-item4-standard.log": "398b36f30af024a0ce2d5d2acb03221bdad07d1cf4da33e0f11144afc2c00325"
+  },
+  "manifest": "passed against bdbc8f93",
+  "performance_alternating_runs": {
+    "gates": [
+      {
+        "allocation_sample_peak_bytes": 2600,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.0051516249077394605,
+        "operations_per_sample": 10000,
+        "operations_per_second": 1941135.1135011134,
+        "process_max_rss": 128057344,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.005270999972708523,
+          0.004945999942719936,
+          0.00508066697511822,
+          0.005091457976959646,
+          0.005229584057815373,
+          0.0052313749911263585,
+          0.0051516249077394605
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "gates"
+      },
+      {
+        "allocation_sample_peak_bytes": 2432,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.00531429098919034,
+        "operations_per_sample": 10000,
+        "operations_per_second": 1881718.5623332893,
+        "process_max_rss": 130809856,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.00531429098919034,
+          0.005342749995179474,
+          0.005318125011399388,
+          0.0052911670645698905,
+          0.005336500005796552,
+          0.005290583008900285,
+          0.005203291075304151
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "gates"
+      },
+      {
+        "allocation_sample_peak_bytes": 2600,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.005198625032790005,
+        "operations_per_sample": 10000,
+        "operations_per_second": 1923585.5513574493,
+        "process_max_rss": 128122880,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.005201542051509023,
+          0.005199125036597252,
+          0.005229415954090655,
+          0.005184374982491136,
+          0.005194582976400852,
+          0.0051789580611512065,
+          0.005198625032790005
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "gates"
+      },
+      {
+        "allocation_sample_peak_bytes": 2432,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.005158166983164847,
+        "operations_per_sample": 10000,
+        "operations_per_second": 1938673.1822831365,
+        "process_max_rss": 131350528,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.005169374984689057,
+          0.005203459062613547,
+          0.005220249993726611,
+          0.005126541946083307,
+          0.005158166983164847,
+          0.005150082986801863,
+          0.005038167000748217
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "gates"
+      }
+    ],
+    "gates-context": [
+      {
+        "allocation_sample_peak_bytes": 2600,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.010067082941532135,
+        "operations_per_sample": 10000,
+        "operations_per_second": 993336.40718749,
+        "process_max_rss": 128024576,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.010158499935641885,
+          0.010274167056195438,
+          0.010261333081871271,
+          0.010067082941532135,
+          0.009836000041104853,
+          0.009918916039168835,
+          0.009903083089739084
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "gates-context"
+      },
+      {
+        "allocation_sample_peak_bytes": 2432,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.010362333036027849,
+        "operations_per_sample": 10000,
+        "operations_per_second": 965033.6430253605,
+        "process_max_rss": 130711552,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.010390500072389841,
+          0.010265165939927101,
+          0.010419041034765542,
+          0.010411499999463558,
+          0.010362333036027849,
+          0.010345707996748388,
+          0.010226583108305931
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "gates-context"
+      },
+      {
+        "allocation_sample_peak_bytes": 2600,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.01007499999832362,
+        "operations_per_sample": 10000,
+        "operations_per_second": 992555.8314306602,
+        "process_max_rss": 128040960,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.010034332983195782,
+          0.01007499999832362,
+          0.01023195800371468,
+          0.011203499976545572,
+          0.010038917069323361,
+          0.010111166979186237,
+          0.010003917035646737
+        ],
+        "source": "/private/tmp/eforge-cleanup-nine-baseline",
+        "warmups": 2,
+        "workload": "gates-context"
+      },
+      {
+        "allocation_sample_peak_bytes": 2432,
+        "allocation_sample_retained_blocks": 10,
+        "allocation_sample_retained_bytes": 360,
+        "median_seconds": 0.010459582903422415,
+        "operations_per_sample": 10000,
+        "operations_per_second": 956061.067858448,
+        "process_max_rss": 131153920,
+        "result": {
+          "readers": 0,
+          "writer": false
+        },
+        "seconds": [
+          0.010534791043028235,
+          0.010459582903422415,
+          0.01042208296712488,
+          0.01077316701412201,
+          0.010554000036790967,
+          0.010436790995299816,
+          0.010295625077560544
+        ],
+        "source": "/Users/bianco/projects/EvidenceForge",
+        "warmups": 2,
+        "workload": "gates-context"
+      }
+    ]
+  },
+  "preceding_commit": "bdbc8f93",
+  "ruff_check": "passed after test import correction",
+  "ruff_format_check": "passed",
+  "slow_registry_tests": {
+    "deselected": 113,
+    "passed": 10,
+    "seconds": 6.88
+  },
+  "slow_watermark_tests": {
+    "deselected": 201,
+    "passed": 9,
+    "seconds": 2.08
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8534,
+    "seconds": 297.57,
+    "skipped": 27
+  },
+  "structure": {
+    "gate_implementations": {
+      "after": 1,
+      "before": 8
+    },
+    "gate_state_fields": [
+      "_condition",
+      "_readers",
+      "_writer",
+      "_waiting_writers"
+    ],
+    "independent_registry_gate_construction_sites": {
+      "after": 8,
+      "before": 8
+    },
+    "manual_entrypoints": "preserved",
+    "new_persistent_owners": 0,
+    "registry_specific_lock_selection": "unchanged",
+    "stable_lock_body_unchanged": true,
+    "stable_lock_implementations": {
+      "after": 1,
+      "before": 3
+    },
+    "state_storage": "Existing artifact-gate slotted layout shared by all eight; checkpoint fields classify gates as rebuilt.",
+    "watermark_body_unchanged": true
+  }
+}

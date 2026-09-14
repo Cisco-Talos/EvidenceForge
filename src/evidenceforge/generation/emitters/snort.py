@@ -61,6 +61,7 @@ from evidenceforge.generation.emitters.base import (
     register_exact_publication_participant,
     stage_exact_publication_row,
 )
+from evidenceforge.generation.emitters.verification_resources import VerificationResources
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.ids_filtering import IdsAlertCandidate, IdsAlertFilterEngine
 
@@ -409,6 +410,10 @@ class _PrivateJournalDirectory:
     """Retry-owned protected SQLite directory outside public output paths."""
 
     def __init__(self, *, base_dir: Path) -> None:
+        self._verification_resources = VerificationResources(self)
+        self._verification_resources.register(
+            "descriptor", "_parent_descriptor", "_directory_descriptor"
+        )
         self._base_dir = _lexical_absolute(base_dir)
         self.path: Path | None = None
         self._parent_descriptor: int | None = None
@@ -867,6 +872,9 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._terminal_cleanup_thread: int | None = None
         self._next_epoch = 1
         super().__init__(*args, **kwargs)
+        self._verification_resources.register("connection", "_spool_connection")
+        self._verification_resources.register("descriptor", "_journal_directory_descriptor")
+        self._verification_resources.register("child", "_journal_owner")
         self._canonical_template = (
             _sha256(self.format_def.output.template.encode("utf-8"))
             == _CANONICAL_SNORT_TEMPLATE_SHA256

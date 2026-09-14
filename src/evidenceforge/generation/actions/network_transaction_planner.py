@@ -25,19 +25,121 @@
 from __future__ import annotations
 
 import copy
+import logging
 import math
+import random
+import re
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
+from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DnsContext,
+    FileContext,
+    HttpContext,
+    NetworkTransactionDraft,
+    ProcessContext,
+)
+from evidenceforge.events.contracts import (
+    EffectOccurrenceKind,
+    OccurrenceRole,
+    OwnedEffectOccurrencePlan,
+    SemanticOccurrenceKey,
+)
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+)
+from evidenceforge.events.lifecycle import (
+    ActionLifecycleContext,
+)
+from evidenceforge.generation.actions import (
+    NetworkConnectionRequest,
+    http_response_parent_duration_floor,
+)
+from evidenceforge.generation.actions.network_connection import (
+    DeferredSessionNetworkAuthority,
+)
 from evidenceforge.generation.actions.network_identity import (
     _network_transport_occurrence_stable_id,
     _trusted_network_request_stable_id,
 )
+from evidenceforge.generation.activity.helpers import (
+    _get_os_category,
+    _get_rng,
+)
+from evidenceforge.generation.activity.network import (
+    REVERSE_DNS,
+    _generate_internal_hostname,
+    _generate_random_hostname,
+    _is_private_ip,
+)
+from evidenceforge.generation.activity.network_common import (
+    _extract_ssh_attempted_username,
+    _get_http_status,
+    _is_invalid_network_connection,
+    _is_modeled_local_ip,
+    _zeek_conn_observation_time,
+    get_timing_window,
+)
+from evidenceforge.generation.activity.network_dns import (
+    _dns_base_ttl,
+    _dns_is_internal_name,
+    _dns_observation_cache_key,
+    _dns_payload_accounting,
+)
+from evidenceforge.generation.activity.network_http import (
+    _apply_plaintext_http_policy,
+    _attach_http_file_transfers,
+    _http_context_flow_body_len,
+    _http_context_from_process_command,
+    _http_flow_payload_bytes,
+    _is_tool_http_user_agent,
+    _normalize_http_context_for_source_native_response,
+    _source_native_http_referrer,
+)
+from evidenceforge.generation.activity.network_ntp import (
+    _NTP_STRATUM_TIMING,
+    _ntp_observed_response_fields,
+    _ntp_parser_min_gap_seconds,
+    _ntp_payload_accounting,
+    _ntp_stratum_and_ref_id,
+    _select_public_ntp_ip,
+)
+from evidenceforge.generation.activity.network_proxy import (
+    _PROXY_CS_OVERHEAD,
+    _PROXY_SC_OVERHEAD,
+    _proxy_action_for_context,
+    _proxy_request_allows_cache_hit,
+    _proxy_time_taken_ms,
+)
+from evidenceforge.generation.activity.network_transport import (
+    _AUTO_WEIRD_ENABLED,
+    _TCP_CONN_ENTRIES,
+    _TCP_CONN_WEIGHTS,
+    _TCP_OVERHEAD_VALUES,
+    _TCP_OVERHEAD_WEIGHTS,
+    _UDP_CONN_ENTRIES,
+    _UDP_CONN_WEIGHTS,
+    _UDP_OVERHEAD_VALUES,
+    _UDP_OVERHEAD_WEIGHTS,
+    _align_tcp_network_payload_with_history,
+    _ephemeral_port,
+    _icmp_echo_duration,
+    _icmp_echo_payload_size,
+    _preserve_explicit_tcp_payload_overrides,
+    _tcp_ip_byte_count,
+    _tcp_packet_counts_from_payload_and_history,
+    _tcp_payload_bytes_consistent_with_history,
+    _tcp_success_history,
+)
 from evidenceforge.generation.http_channels import HttpChannelAffinity
+from evidenceforge.generation.lifecycle_authority import (
+    GeneratorLifecycleAuthority,
+)
 from evidenceforge.generation.network_runtime import (
     NetworkConnectionCommitResult,
     NetworkRuntimePointFamily,
@@ -52,6 +154,8 @@ from evidenceforge.generation.persistent_smb_continuation import (
 from evidenceforge.generation.state_manager import (
     ConnectionExistingSessionLifecycleDisposition,
     ConnectionMaterializationMode,
+    ProcessMaterializationPlan,
+    SessionMaterializationPlan,
 )
 from evidenceforge.generation.timing import (
     ClockWanderSpec,
@@ -66,13 +170,37 @@ from evidenceforge.generation.timing import (
     WeightedDistribution,
 )
 from evidenceforge.models.exceptions import EventContractError, StateError
+from evidenceforge.models.scenario import (
+    User,
+)
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
+from .network_execution_stages import (
+    CommittedNetworkPublication,
+    NetworkApplicationIntents,
+    NetworkProtocolEvidence,
+    NetworkPublicationInputs,
+    NetworkRequestFacts,
+    PlannedNetworkEvidence,
+    PlannedNetworkTransport,
+    PreparedNetworkPublication,
+    PreparedNetworkSources,
+    ResolvedNetworkEndpoints,
+    ResolvedNetworkRequest,
+)
+
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from evidenceforge.events.base import OccurrenceBuilder
-    from evidenceforge.generation.actions.network_connection import NetworkConnectionRequest
-    from evidenceforge.generation.activity.generator import ActivityGenerator
+    from evidenceforge.generation.actions.network_connection import (
+        NetworkConnectionExecutor,
+        NetworkConnectionRequest,
+    )
+    from evidenceforge.generation.network_runtime import NetworkTransactionPreparation
+    from evidenceforge.models.scenario import System
+    from evidenceforge.models.state import RunningProcess
 
 
 _ACTIVE_NETWORK_TIMING_RUNTIME: ContextVar[Any | None] = ContextVar(
@@ -612,7 +740,6 @@ class _PreparedNetworkBoundary:
             NetworkConnectionPublicationOutcome,
         )
         from evidenceforge.generation.lifecycle_authority import (
-            GeneratorLifecycleAuthority,
             LifecyclePreparedNetworkResult,
         )
 
@@ -744,7 +871,7 @@ class _PreparedNetworkBoundary:
     def begin(
         self,
         *,
-        executor: ActivityGenerator,
+        executor: NetworkConnectionExecutor,
         owner_rng: Any,
         stable_id: str,
         linearization_time: datetime,
@@ -888,15 +1015,14 @@ class _NetworkOccurrenceDraft:
     firewall: Any = None
     parent_action_group_id: str | None = None
 
-    def build_event(self, generator_module: ModuleType) -> OccurrenceBuilder:
+    def build_event(self) -> OccurrenceBuilder:
         """Construct the canonical event only after the transaction is frozen."""
 
         if self.network is None or self.network.transaction is None:
             raise ValueError("Cannot construct a network event before transaction finalization")
-        from evidenceforge.events.lifecycle import ActionLifecycleContext
 
         transaction = self.network.transaction
-        return generator_module.OccurrenceBuilder(
+        return OccurrenceBuilder(
             timestamp=self.timestamp,
             event_type="connection",
             src_host=self.src_host,
@@ -946,7 +1072,7 @@ class _HttpMultipartEndpointReadPlan:
 class NetworkTransactionPlanner:
     """Expand one network intent into a finalized canonical transaction."""
 
-    def __init__(self, executor: ActivityGenerator) -> None:
+    def __init__(self, executor: NetworkConnectionExecutor) -> None:
         self._executor = executor
         self._active_request: NetworkConnectionRequest | None = None
         self._active_request_stable_id = ""
@@ -966,25 +1092,17 @@ class NetworkTransactionPlanner:
         """
 
         from evidenceforge.events.base import OccurrenceBuilder
-        from evidenceforge.events.contexts import AuthContext, ProcessContext
+        from evidenceforge.events.contexts import ProcessContext
         from evidenceforge.events.contracts import (
             EventKind,
-            OccurrenceRole,
-            SemanticOccurrenceKey,
         )
-        from evidenceforge.events.identity import EventIdentityPlan
         from evidenceforge.events.lifecycle import ActionLifecycleContext
-        from evidenceforge.generation.actions.network_connection import (
-            DeferredSessionNetworkAuthority,
-        )
         from evidenceforge.generation.deferred_session_composition import DeferredSessionKind
         from evidenceforge.generation.deferred_session_preseal import (
             DeferredSessionDependentOccurrenceSpec,
         )
         from evidenceforge.generation.state_manager import (
             ConnectionExistingSessionPatch,
-            ProcessMaterializationPlan,
-            SessionMaterializationPlan,
         )
         from evidenceforge.generation.windows_tokens import windows_process_token_profile
 
@@ -1215,9 +1333,7 @@ class NetworkTransactionPlanner:
     ) -> bool:
         """Stage one resolver observation and report an overlapping visible TTL window."""
 
-        from evidenceforge.generation.activity import generator as generator_module
-
-        cache_key = generator_module._dns_observation_cache_key(src_ip, resolver_ip, dns)
+        cache_key = _dns_observation_cache_key(src_ip, resolver_ip, dns)
         if cache_key is None or not self._executor._dns_observation_time_is_visible(time):
             return False
         start = time.timestamp()
@@ -1781,7 +1897,6 @@ class NetworkTransactionPlanner:
     def _reconcile_application_payload(
         self,
         event: _NetworkOccurrenceDraft,
-        generator_module: ModuleType,
     ) -> bool:
         """Fit canonical application objects and framing inside transport payload."""
 
@@ -1792,7 +1907,7 @@ class NetworkTransactionPlanner:
         orig_floor = 0
         resp_floor = 0
         if event.http is not None:
-            http_orig, http_resp = generator_module._http_flow_payload_bytes(event.http)
+            http_orig, http_resp = _http_flow_payload_bytes(event.http)
             orig_floor = max(orig_floor, http_orig)
             resp_floor = max(resp_floor, http_resp)
 
@@ -1828,27 +1943,25 @@ class NetworkTransactionPlanner:
         if (network.orig_bytes, network.resp_bytes) == previous:
             return False
 
-        accounting_rng = generator_module.random.Random(
+        accounting_rng = random.Random(
             _stable_seed(
                 "network_application_payload_accounting:"
                 f"{network.src_ip}:{network.src_port}:{network.dst_ip}:{network.dst_port}:"
                 f"{network.protocol}:{network.zeek_uid}"
             )
         )
-        network.orig_pkts, network.resp_pkts = (
-            generator_module._tcp_packet_counts_from_payload_and_history(
-                network.orig_bytes,
-                network.resp_bytes,
-                network.history,
-                accounting_rng,
-            )
+        network.orig_pkts, network.resp_pkts = _tcp_packet_counts_from_payload_and_history(
+            network.orig_bytes,
+            network.resp_bytes,
+            network.history,
+            accounting_rng,
         )
-        network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+        network.orig_ip_bytes = _tcp_ip_byte_count(
             network.orig_bytes,
             network.orig_pkts,
             accounting_rng,
         )
-        network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+        network.resp_ip_bytes = _tcp_ip_byte_count(
             network.resp_bytes,
             network.resp_pkts,
             accounting_rng,
@@ -1872,11 +1985,9 @@ class NetworkTransactionPlanner:
             return None
 
         from evidenceforge.events.base import OccurrenceBuilder
-        from evidenceforge.events.contexts import AuthContext, FileContext, ProcessContext
+        from evidenceforge.events.contexts import ProcessContext
         from evidenceforge.events.contracts import (
-            EffectOccurrenceKind,
             EffectOccurrenceOwner,
-            OwnedEffectOccurrencePlan,
         )
         from evidenceforge.generation.state_manager import ProcessActivityPatch
 
@@ -2329,18 +2440,328 @@ class NetworkTransactionPlanner:
         return result
 
     def _execute(
-        self,
-        request: NetworkConnectionRequest,
-        boundary: _PreparedNetworkBoundary,
+        self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
     ) -> str:
-        """Plan and publish one canonical network transaction."""
+        """Run six ordered stages without transferring transaction ownership to helpers.
+
+        Resolution may independently commit DNS/client-process prerequisites or
+        delegate a proxy/retained-SMB operation. A string ends this root: a UID
+        reports delegation/recovery; an empty string reports rejection or source
+        suppression. It does not prove that prerequisites were rolled back.
+
+        Transport opens the prepared RNG/timing/state scope. Evidence mutates
+        only its occurrence draft; publication preparation authenticates those
+        exact facts. Commit precedes source publication. Only the outer boundary
+        owns claims, cancellation, timing seals and uncertain-commit recovery.
+        Stage helpers must not acquire another transaction authority.
+
+        Contracts: test_network_stages_share_facts_and_exact_publication_inputs,
+        test_network_stage_failure_keeps_commit_and_cancellation_distinct, and
+        test_committed_dns_prerequisite_survives_later_root_rejection_without_orphan_claim
+        in tests/unit/test_network_prepared_runtime_integration.py.
+        """
+        resolved = self._resolve_network_request(request, boundary)
+        if isinstance(resolved, str):
+            return resolved
+        transport = self._plan_network_transport(request, boundary, resolved)
+        if isinstance(transport, str):
+            return transport
+        evidence = self._plan_network_protocol_evidence(request, boundary, transport)
+        if isinstance(evidence, str):
+            return evidence
+        prepared = self._prepare_network_publication(request, boundary, evidence)
+        if isinstance(prepared, str):
+            return prepared
+        committed = self._commit_prepared_network(request, boundary, prepared)
+        if isinstance(committed, str):
+            return committed
+        return self._publish_committed_network(request, boundary, committed)
+
+    def _resolve_kerberos_transport(
+        self, request: NetworkConnectionRequest, conn_state: str | None
+    ) -> tuple[str, int | None, int | None, str | None, str | None]:
+        """Shape discovery from request-scoped seeds; defer duration to root preparation."""
+        proto, service, dst_port = request.proto, request.service, request.dst_port
+        src_ip, dst_ip, time = request.src_ip, request.dst_ip, request.time
+        src_port, pid = request.src_port, request.pid
+        orig_bytes, resp_bytes = request.orig_bytes, request.resp_bytes
+        deferred_kerberos_duration_proto = None
+        if service == "kerberos" and dst_port == 88 and proto == "tcp":
+            from evidenceforge.generation.activity.kerberos_realism import (
+                pick_kerberos_transport,
+            )
+
+            proto = pick_kerberos_transport(
+                random.Random(
+                    _stable_seed(
+                        "kerberos_transport:"
+                        f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                    )
+                )
+            )
+        if service == "kerberos" and dst_port == 88 and proto == "tcp":
+            deferred_kerberos_duration_proto = "tcp"
+        if service == "kerberos" and dst_port == 88 and proto == "udp":
+            udp_kerberos_rng = random.Random(
+                _stable_seed(
+                    "kerberos_udp_shape:"
+                    f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                )
+            )
+            deferred_kerberos_duration_proto = "udp"
+            orig_bytes = min(
+                max(orig_bytes or udp_kerberos_rng.randint(180, 900), 160),
+                udp_kerberos_rng.randint(700, 1300),
+            )
+            resp_bytes = min(
+                max(resp_bytes or udp_kerberos_rng.randint(120, 1200), 80),
+                udp_kerberos_rng.randint(600, 1400),
+            )
+            if conn_state not in {None, "SF", "S0", "REJ", "OTH"}:
+                conn_state = "SF" if resp_bytes else "S0"
+
+        return proto, orig_bytes, resp_bytes, conn_state, deferred_kerberos_duration_proto
+
+    @staticmethod
+    def _is_ownerless_linux_server_request(
+        source_system: System | None, pid: int, proto: str, dst_port: int
+    ) -> bool:
+        """Keep role-level server traffic unattributed when no process owner is known."""
+        source_roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
+        source_type = (
+            str(getattr(source_system, "type", "") or "").lower()
+            if source_system is not None
+            else ""
+        )
+        linux_server_without_owner = (
+            pid <= 0
+            and source_system is not None
+            and _get_os_category(source_system.os) == "linux"
+            and (
+                source_type in {"server", "domain_controller"}
+                or bool(
+                    source_roles
+                    & {
+                        "app_server",
+                        "database",
+                        "dns_server",
+                        "file_server",
+                        "forward_proxy",
+                        "log_server",
+                        "mail_server",
+                        "monitoring",
+                        "web_server",
+                    }
+                )
+            )
+            and proto == "tcp"
+            and dst_port in {80, 443}
+        )
+        return linux_server_without_owner
+
+    def _resolve_explicit_network_endpoint(
+        self,
+        *,
+        hostname: str,
+        dst_ip: str,
+        src_ip: str,
+        source_system: System | None,
+        emit_dns: bool,
+    ) -> str:
+        """Honor scenario identity and stable fallback before registry destination lookup."""
+        executor = self._executor
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        src_host = source_system.hostname if source_system else src_ip
+        resolver = getattr(executor, "_network_resolver", None)
+        resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
+        if (
+            resolved is not None
+            and resolved.source == "scenario_identity"
+            and resolved.ip
+            and dst_ip != resolved.ip
+        ):
+            dst_ip = resolved.ip
+        elif resolved is not None and resolved.source == "stable_fallback":
+            pass
+        else:
+            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+            domain_ips = get_domain_ips(hostname)
+            if domain_ips and dst_ip not in domain_ips:
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+
+        return dst_ip
+
+    def _resolve_network_source_process(
+        self,
+        *,
+        resolved_source_system: System,
+        pid: int,
+        time: datetime,
+        dst_ip: str,
+        dst_port: int,
+        caller_supplied_pid: bool,
+        suppress_source_pid_inference: bool,
+    ) -> tuple[int, RunningProcess | None, bool]:
+        """Reject stale attribution without replacing an invalid explicit caller PID.
+
+        Session and foreground lifetimes are queried from their existing owners;
+        this decision neither creates nor releases a process reservation.
+        """
+        executor = self._executor
+        resolved_process = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+        drop_explicit_pid_without_inference = False
+        if resolved_process and resolved_process.start_time and time < resolved_process.start_time:
+            logger.debug(
+                "Dropping future connection PID attribution: "
+                "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.start_time,
+                time,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif executor._process_termination_recorded(
+            resolved_source_system.hostname,
+            pid,
+            resolved_process.start_time if resolved_process is not None else None,
+        ):
+            logger.debug(
+                "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif (
+            (
+                owning_end_plan := executor.state_manager.process_session_end_plan(
+                    resolved_source_system.hostname, pid
+                )
+            )
+            is not None
+            and owning_end_plan.is_authoritative
+            and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
+        ):
+            logger.debug(
+                "Dropping connection PID after its owning session ended: "
+                "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                owning_end_plan.canonical_end,
+                time,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif (
+            resolved_process
+            and resolved_process.start_time
+            and executor._foreground_process_expired_for_attribution(
+                resolved_source_system,
+                resolved_process,
+                time,
+            )
+        ):
+            logger.debug(
+                "Dropping expired foreground process attribution: "
+                "host=%s pid=%s image=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                resolved_process.image,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            resolved_process = None
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        elif resolved_process is None and pid != 4:
+            logger.debug(
+                "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
+                resolved_source_system.hostname,
+                pid,
+                dst_ip,
+                dst_port,
+            )
+            pid = -1
+            drop_explicit_pid_without_inference = caller_supplied_pid
+        if drop_explicit_pid_without_inference:
+            suppress_source_pid_inference = True
+
+        return pid, resolved_process, suppress_source_pid_inference
+
+    def _resolve_command_http_request(
+        self, source_system: System, pid: int, resp_bytes: int | None
+    ) -> tuple[tuple[HttpContext, str, int, str, System | None] | None, bool]:
+        """Parse an existing command without owner RNG draws or endpoint allocation."""
+        executor = self._executor
+        proc = executor.state_manager.get_process(source_system.hostname, pid)
+        if proc is not None:
+            command_http = _http_context_from_process_command(
+                proc.image,
+                proc.command_line,
+                # Response sizing belongs to the prepared root. Parse the
+                # command without consuming the owner RNG, then fill an
+                # ordinary non-stable entity after boundary.begin().
+                response_body_len=resp_bytes or 0,
+            )
+            if command_http is not None:
+                command_http_context, command_host, command_port, command_service = command_http
+                command_http_needs_response_size = bool(
+                    not resp_bytes
+                    and command_http_context.method != "HEAD"
+                    and command_http_context.response_body_len <= 0
+                )
+                command_target = executor._system_for_hostname(command_host)
+                host_lower = command_host.lower().rstrip(".")
+                ad_domain_for_command = (
+                    str(
+                        getattr(executor, "_ad_domain", "") or "",
+                    )
+                    .lower()
+                    .rstrip(".")
+                )
+                command_is_unknown_internal = command_target is None and (
+                    host_lower.endswith(".local")
+                    or (ad_domain_for_command and host_lower.endswith(f".{ad_domain_for_command}"))
+                )
+                resolved = (
+                    (
+                        command_http_context,
+                        command_host,
+                        command_port,
+                        command_service,
+                        command_target,
+                    )
+                    if not command_is_unknown_internal
+                    else None
+                )
+                # The sizing flag was discovered before endpoint admission and
+                # remains true even when an unknown internal target is rejected.
+                return resolved, command_http_needs_response_size
+        return None, False
+
+    def _resolve_network_request(
+        self, request: NetworkConnectionRequest, boundary: _PreparedNetworkBoundary
+    ) -> ResolvedNetworkRequest | str:
+        """Resolve the request and existing owners before opening transaction preparation."""
         from evidenceforge.generation.actions.proxy_transaction import (
-            ExplicitProxyOpenPreparation,
             ExplicitProxyRequestPreparation,
             ProxyTransactionActionBundle,
             ProxyTransactionRequest,
         )
-        from evidenceforge.generation.activity import generator as generator_module
 
         executor = self._executor
         stable_id = self._active_request_stable_id
@@ -2464,10 +2885,8 @@ class NetworkTransactionPlanner:
         caller_supplied_pid = pid > 0
         caller_owned_pid = pid if caller_supplied_pid else None
 
-        from evidenceforge.events.contexts import NetworkTransactionDraft
-
         if http is not None:
-            http = generator_module._normalize_http_context_for_source_native_response(http)
+            http = _normalize_http_context_for_source_native_response(http)
 
         caller_provided_duration = duration is not None
         caller_provided_conn_state = conn_state is not None
@@ -2490,10 +2909,8 @@ class NetworkTransactionPlanner:
             the generator's owner RNG is never advanced by discovery alone.
             """
 
-            return generator_module.random.Random(
-                generator_module._stable_seed(
-                    f"network_discovery:{purpose}:{stable_id}:{src_ip}:{dst_ip}"
-                )
+            return random.Random(
+                _stable_seed(f"network_discovery:{purpose}:{stable_id}:{src_ip}:{dst_ip}")
             )
 
         if http is not None and proto == "tcp" and conn_state is None:
@@ -2502,39 +2919,9 @@ class NetworkTransactionPlanner:
         is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
         if source_system is None and hasattr(executor, "_ip_to_system"):
             source_system = executor._ip_to_system.get(src_ip)
-        if service == "kerberos" and dst_port == 88 and proto == "tcp":
-            from evidenceforge.generation.activity.kerberos_realism import (
-                pick_kerberos_transport,
-            )
-
-            proto = pick_kerberos_transport(
-                generator_module.random.Random(
-                    generator_module._stable_seed(
-                        "kerberos_transport:"
-                        f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
-                    )
-                )
-            )
-        if service == "kerberos" and dst_port == 88 and proto == "tcp":
-            deferred_kerberos_duration_proto = "tcp"
-        if service == "kerberos" and dst_port == 88 and proto == "udp":
-            udp_kerberos_rng = generator_module.random.Random(
-                generator_module._stable_seed(
-                    "kerberos_udp_shape:"
-                    f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
-                )
-            )
-            deferred_kerberos_duration_proto = "udp"
-            orig_bytes = min(
-                max(orig_bytes or udp_kerberos_rng.randint(180, 900), 160),
-                udp_kerberos_rng.randint(700, 1300),
-            )
-            resp_bytes = min(
-                max(resp_bytes or udp_kerberos_rng.randint(120, 1200), 80),
-                udp_kerberos_rng.randint(600, 1400),
-            )
-            if conn_state not in {None, "SF", "S0", "REJ", "OTH"}:
-                conn_state = "SF" if resp_bytes else "S0"
+        proto, orig_bytes, resp_bytes, conn_state, deferred_kerberos_duration_proto = (
+            self._resolve_kerberos_transport(request, conn_state)
+        )
 
         if (
             http is None
@@ -2543,47 +2930,24 @@ class NetworkTransactionPlanner:
             and proto == "tcp"
             and (dst_port in {80, 443, 8080} or service is None or service in {"http", "ssl"})
         ):
-            proc = executor.state_manager.get_process(source_system.hostname, pid)
-            if proc is not None:
-                command_http = generator_module._http_context_from_process_command(
-                    proc.image,
-                    proc.command_line,
-                    # Response sizing belongs to the prepared root. Parse the
-                    # command without consuming the owner RNG, then fill an
-                    # ordinary non-stable entity after boundary.begin().
-                    response_body_len=resp_bytes or 0,
-                )
-                if command_http is not None:
-                    command_http_context, command_host, command_port, command_service = command_http
-                    command_http_needs_response_size = bool(
-                        not resp_bytes
-                        and command_http_context.method != "HEAD"
-                        and command_http_context.response_body_len <= 0
-                    )
-                    command_target = executor._system_for_hostname(command_host)
-                    host_lower = command_host.lower().rstrip(".")
-                    ad_domain_for_command = (
-                        str(
-                            getattr(executor, "_ad_domain", "") or "",
-                        )
-                        .lower()
-                        .rstrip(".")
-                    )
-                    command_is_unknown_internal = command_target is None and (
-                        host_lower.endswith(".local")
-                        or (
-                            ad_domain_for_command
-                            and host_lower.endswith(f".{ad_domain_for_command}")
-                        )
-                    )
-                    if not command_is_unknown_internal:
-                        http = command_http_context
-                        hostname = command_host
-                        dst_port = command_port
-                        service = command_service
-                        if command_target is not None:
-                            dst_ip = command_target.ip
-                            emit_dns = True
+            command_http, command_http_needs_response_size = self._resolve_command_http_request(
+                source_system, pid, resp_bytes
+            )
+            if command_http is not None:
+                (
+                    command_http_context,
+                    command_host,
+                    command_port,
+                    command_service,
+                    command_target,
+                ) = command_http
+                http = command_http_context
+                hostname = command_host
+                dst_port = command_port
+                service = command_service
+                if command_target is not None:
+                    dst_ip = command_target.ip
+                    emit_dns = True
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -2596,19 +2960,12 @@ class NetworkTransactionPlanner:
         hostname_was_explicit = hostname not in (None, "")
         hostname_from_reverse_dns = False
         if hostname is None:
-            reverse_hostname = executor._scenario_fqdn_for_ip(
-                dst_ip
-            ) or generator_module.REVERSE_DNS.get(dst_ip)
+            reverse_hostname = executor._scenario_fqdn_for_ip(dst_ip) or REVERSE_DNS.get(dst_ip)
             if reverse_hostname is not None:
                 hostname = reverse_hostname
                 hostname_from_reverse_dns = True
-            elif (
-                emit_dns
-                and proto == "tcp"
-                and dst_port not in (53,)
-                and generator_module._is_private_ip(dst_ip)
-            ):
-                hostname = generator_module._generate_internal_hostname(
+            elif emit_dns and proto == "tcp" and dst_port not in (53,) and _is_private_ip(dst_ip):
+                hostname = _generate_internal_hostname(
                     independent_discovery_rng("internal-hostname"),
                     dst_ip,
                     getattr(executor, "_ad_domain", "corp.local"),
@@ -2616,8 +2973,8 @@ class NetworkTransactionPlanner:
             else:
                 hostname = None
         if hostname is None and emit_dns and proto == "tcp" and dst_port not in (53,):
-            if not generator_module._is_private_ip(dst_ip):
-                hostname = generator_module._generate_random_hostname(
+            if not _is_private_ip(dst_ip):
+                hostname = _generate_random_hostname(
                     independent_discovery_rng("public-hostname"), dst_ip
                 )
 
@@ -2640,28 +2997,13 @@ class NetworkTransactionPlanner:
             and not preserve_explicit_proxy_dst_ip
             and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
         ):
-            from evidenceforge.generation.activity.dns_registry import get_domain_ips
-
-            src_host = source_system.hostname if source_system else src_ip
-            resolver = getattr(executor, "_network_resolver", None)
-            resolved = resolver.resolve_host(hostname, src_host=src_host) if resolver else None
-            if (
-                resolved is not None
-                and resolved.source == "scenario_identity"
-                and resolved.ip
-                and dst_ip != resolved.ip
-            ):
-                dst_ip = resolved.ip
-            elif resolved is not None and resolved.source == "stable_fallback":
-                pass
-            else:
-                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-
-                domain_ips = get_domain_ips(hostname)
-                if domain_ips and dst_ip not in domain_ips:
-                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
-                elif not domain_ips and emit_dns and not generator_module._is_private_ip(dst_ip):
-                    dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            dst_ip = self._resolve_explicit_network_endpoint(
+                hostname=hostname,
+                dst_ip=dst_ip,
+                src_ip=src_ip,
+                source_system=source_system,
+                emit_dns=emit_dns,
+            )
 
         ad_domain = getattr(executor, "_ad_domain", "corp.local")
         hostname_is_external = (
@@ -2670,43 +3012,14 @@ class NetworkTransactionPlanner:
             and not hostname.endswith(f".{ad_domain}")
             and not hostname.endswith(".local")
         )
-        proxyable_external_destination = (
-            hostname_is_external or not generator_module._is_private_ip(dst_ip)
-        )
+        proxyable_external_destination = hostname_is_external or not _is_private_ip(dst_ip)
         # Role-level server traffic often knows that a request occurred without
         # knowing which local process owned it. Preserve that uncertainty rather
         # than turning a sampled HTTP User-Agent into a fabricated PID-1 child.
         # Explicit caller PIDs remain authoritative, and interactive workstation
         # traffic can still materialize a source-native browser/client process.
-        source_roles = {str(role).lower() for role in (getattr(source_system, "roles", None) or [])}
-        source_type = (
-            str(getattr(source_system, "type", "") or "").lower()
-            if source_system is not None
-            else ""
-        )
-        linux_server_without_owner = (
-            pid <= 0
-            and source_system is not None
-            and generator_module._get_os_category(source_system.os) == "linux"
-            and (
-                source_type in {"server", "domain_controller"}
-                or bool(
-                    source_roles
-                    & {
-                        "app_server",
-                        "database",
-                        "dns_server",
-                        "file_server",
-                        "forward_proxy",
-                        "log_server",
-                        "mail_server",
-                        "monitoring",
-                        "web_server",
-                    }
-                )
-            )
-            and proto == "tcp"
-            and dst_port in {80, 443}
+        linux_server_without_owner = self._is_ownerless_linux_server_request(
+            source_system, pid, proto, dst_port
         )
         if linux_server_without_owner:
             suppress_source_pid_inference = True
@@ -2736,12 +3049,12 @@ class NetworkTransactionPlanner:
             service = "http" if dst_port == 80 else "ssl"
         if proto == "udp" and dst_port == 123 and (service != "" or (resp_bytes or 0) > 0):
             service = "ntp"
-            if not generator_module._is_private_ip(dst_ip):
+            if not _is_private_ip(dst_ip):
                 from evidenceforge.generation.activity.network_params import public_ntp_ips
 
                 configured_ntp_ips = set(public_ntp_ips())
                 if configured_ntp_ips and dst_ip not in configured_ntp_ips:
-                    selected_ntp_ip = generator_module._select_public_ntp_ip(src_ip, dst_ip, time)
+                    selected_ntp_ip = _select_public_ntp_ip(src_ip, dst_ip, time)
                     if selected_ntp_ip:
                         dst_ip = selected_ntp_ip
 
@@ -2753,8 +3066,8 @@ class NetworkTransactionPlanner:
             and dns is None
             and http is None
             and not hostname_was_explicit
-            and generator_module._is_private_ip(src_ip)
-            and not generator_module._is_private_ip(dst_ip)
+            and _is_private_ip(src_ip)
+            and not _is_private_ip(dst_ip)
         ):
             hostname, dst_ip = executor._pick_profiled_tls_destination(
                 rng=independent_discovery_rng("profiled-tls-destination"),
@@ -2786,7 +3099,7 @@ class NetworkTransactionPlanner:
         )
 
         if http is not None and not preserve_http_outcome and not will_route_explicit_proxy:
-            http = generator_module._apply_plaintext_http_policy(
+            http = _apply_plaintext_http_policy(
                 http,
                 hostname=hostname,
                 dst_ip=dst_ip,
@@ -2845,8 +3158,8 @@ class NetworkTransactionPlanner:
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
         # Only internal hosts generate DNS lookups — external source IPs (e.g.,
         # attacker IPs in storylines) don't query the victim's internal resolver.
-        src_ip_is_local = generator_module._is_modeled_local_ip(executor, src_ip)
-        dst_ip_is_local = generator_module._is_modeled_local_ip(executor, dst_ip)
+        src_ip_is_local = _is_modeled_local_ip(executor, src_ip)
+        dst_ip_is_local = _is_modeled_local_ip(executor, dst_ip)
         force_visible_prereq_dns = (
             source_system is not None
             and "forward_proxy" in (source_system.roles or [])
@@ -2861,9 +3174,9 @@ class NetworkTransactionPlanner:
         local_only = src_ip == dst_ip
 
         # Validate connection is not fundamentally invalid (localhost, link-local, multicast)
-        is_invalid, reason = generator_module._is_invalid_network_connection(src_ip, dst_ip)
+        is_invalid, reason = _is_invalid_network_connection(src_ip, dst_ip)
         if is_invalid:
-            generator_module.logger.warning(
+            logger.warning(
                 "Skipping invalid network connection: %s:%s -> %s:%s proto=%s. "
                 "Reason: %s. Check that all systems have routable IPs in the scenario.",
                 src_ip,
@@ -2957,17 +3270,15 @@ class NetworkTransactionPlanner:
             )
             if http.trans_depth > 1:
                 requested_http_time = http.canonical_request_time or time
-                http_timing = generator_module.get_timing_window(
+                http_timing = get_timing_window(
                     "source.zeek_http_request",
                     default_min_ms=1,
                     default_max_ms=35,
                     default_position="after",
                     default_class="same_observation",
                 )
-                request_file_floor = generator_module.http_response_parent_duration_floor(
-                    http.request_body_len or 0
-                )
-                response_file_floor = generator_module.http_response_parent_duration_floor(
+                request_file_floor = http_response_parent_duration_floor(http.request_body_len or 0)
+                response_file_floor = http_response_parent_duration_floor(
                     http.response_body_len or 0
                 )
                 required_http_duration = max(
@@ -2993,13 +3304,13 @@ class NetworkTransactionPlanner:
                     reused_http_conn_id = reuse.conn_id
                     http_application_layer_only = True
                     preserve_start_time = True
-                    http = generator_module.replace(
+                    http = replace(
                         http,
                         trans_depth=reuse.trans_depth,
                         canonical_request_time=reuse.canonical_request_time,
                     )
                 if not http_application_layer_only:
-                    http = generator_module.replace(http, trans_depth=1)
+                    http = replace(http, trans_depth=1)
 
         # A reused HTTPS request is an application child of the immutable TLS
         # parent. TLS-specific planning below excludes the child, while HTTP
@@ -3012,7 +3323,7 @@ class NetworkTransactionPlanner:
                 kerberos_dc_hostname = str(getattr(kerberos_dc, "hostname", "") or "")
 
         source_os_category = (
-            generator_module._get_os_category(resolved_source_system.os)
+            _get_os_category(resolved_source_system.os)
             if resolved_source_system is not None
             else "windows"
         )
@@ -3050,99 +3361,17 @@ class NetworkTransactionPlanner:
                 duration = max(duration or 0.001, dns.rtt)
 
         if pid > 0 and resolved_source_system:
-            resolved_process = executor.state_manager.get_process(
-                resolved_source_system.hostname, pid
+            pid, resolved_process, suppress_source_pid_inference = (
+                self._resolve_network_source_process(
+                    resolved_source_system=resolved_source_system,
+                    pid=pid,
+                    time=time,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    caller_supplied_pid=caller_supplied_pid,
+                    suppress_source_pid_inference=suppress_source_pid_inference,
+                )
             )
-            drop_explicit_pid_without_inference = False
-            if (
-                resolved_process
-                and resolved_process.start_time
-                and time < resolved_process.start_time
-            ):
-                generator_module.logger.debug(
-                    "Dropping future connection PID attribution: "
-                    "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    resolved_process.start_time,
-                    time,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif executor._process_termination_recorded(
-                resolved_source_system.hostname,
-                pid,
-                resolved_process.start_time if resolved_process is not None else None,
-            ):
-                generator_module.logger.debug(
-                    "Dropping terminated process connection attribution: host=%s pid=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif (
-                (
-                    owning_end_plan := executor.state_manager.process_session_end_plan(
-                        resolved_source_system.hostname, pid
-                    )
-                )
-                is not None
-                and owning_end_plan.is_authoritative
-                and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
-            ):
-                generator_module.logger.debug(
-                    "Dropping connection PID after its owning session ended: "
-                    "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    owning_end_plan.canonical_end,
-                    time,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif (
-                resolved_process
-                and resolved_process.start_time
-                and executor._foreground_process_expired_for_attribution(
-                    resolved_source_system,
-                    resolved_process,
-                    time,
-                )
-            ):
-                generator_module.logger.debug(
-                    "Dropping expired foreground process attribution: "
-                    "host=%s pid=%s image=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    resolved_process.image,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                resolved_process = None
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            elif resolved_process is None and pid != 4:
-                generator_module.logger.debug(
-                    "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
-                    resolved_source_system.hostname,
-                    pid,
-                    dst_ip,
-                    dst_port,
-                )
-                pid = -1
-                drop_explicit_pid_without_inference = caller_supplied_pid
-            if drop_explicit_pid_without_inference:
-                suppress_source_pid_inference = True
 
         if (
             resolved_source_system is not None
@@ -3222,15 +3451,13 @@ class NetworkTransactionPlanner:
             and dst_port == 22
             and resolved_process is not None
         ):
-            ssh_attempted_username = generator_module._extract_ssh_attempted_username(
-                resolved_process.command_line
-            )
+            ssh_attempted_username = _extract_ssh_attempted_username(resolved_process.command_line)
 
         # Preserve the initiating application on the canonical DNS occurrence
         # after connection ownership has been resolved. The DNS bundle still
         # assigns resolver-service ownership to its separate UDP/53 transport.
         if force_visible_prereq_dns:
-            planned_query_time = time - generator_module.timedelta(seconds=2)
+            planned_query_time = time - timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
@@ -3273,7 +3500,7 @@ class NetworkTransactionPlanner:
             and src_ip_is_local
             and not suppress_prereq_dns
         ):
-            planned_query_time = time - generator_module.timedelta(seconds=2)
+            planned_query_time = time - timedelta(seconds=2)
             executor._emit_dns_lookup(
                 src_ip,
                 dst_ip,
@@ -3297,15 +3524,402 @@ class NetworkTransactionPlanner:
         if resolved_source_system:
             state_source_hostname = executor._build_host_context(resolved_source_system).fqdn
 
-        # Phase 1: Open the sole State/RNG/runtime/timing preparation. All explicit
-        # DNS, owner, and Kerberos prerequisites above are already committed.
-        owner_rng = generator_module._get_rng()
+        return ResolvedNetworkRequest(
+            facts=NetworkRequestFacts(
+                automatic_source_port=automatic_source_port,
+                caller_owned_pid=caller_owned_pid,
+                caller_provided_conn_state=caller_provided_conn_state,
+                caller_provided_duration=caller_provided_duration,
+                caller_provided_payload=caller_provided_payload,
+                command_http_needs_response_size=command_http_needs_response_size,
+                explicit_orig_bytes=explicit_orig_bytes,
+                explicit_resp_bytes=explicit_resp_bytes,
+                parent_action_group_id=parent_action_group_id,
+                preserve_explicit_payload=preserve_explicit_payload,
+                preserve_start_time=preserve_start_time,
+                suppress_application_side_effects=suppress_application_side_effects,
+                ssh_attempted_username=ssh_attempted_username,
+                kerberos_prerequisite_success=kerberos_prerequisite_success,
+                stable_id=stable_id,
+                local_only=local_only,
+                http_application_layer_only=http_application_layer_only,
+                is_fw_deny=is_fw_deny,
+                is_tcp_probe=is_tcp_probe,
+                dns_server_ips=dns_server_ips,
+                packet_overhead_bytes=packet_overhead_bytes,
+                deferred_kerberos_duration_proto=deferred_kerberos_duration_proto,
+                kerberos_dc_hostname=kerberos_dc_hostname,
+            ),
+            endpoints=ResolvedNetworkEndpoints(
+                dst_ip=dst_ip,
+                dst_port=dst_port,
+                hostname=hostname,
+                hostname_was_explicit=hostname_was_explicit,
+                resolved_source_system=resolved_source_system,
+                source_os_category=source_os_category,
+                source_system=source_system,
+                src_ip=src_ip,
+                src_port=src_port,
+                state_source_hostname=state_source_hostname,
+                state_source_system=state_source_system,
+                src_ip_is_local=src_ip_is_local,
+                dst_ip_is_local=dst_ip_is_local,
+                tls_hostname=tls_hostname,
+            ),
+            protocol=NetworkProtocolEvidence(
+                dns=dns,
+                email=email,
+                file_transfer=file_transfer,
+                file_transfers=file_transfers,
+                firewall=firewall,
+                http=http,
+                ntp_timing=ntp_timing,
+                ocsp=ocsp,
+                pe=pe,
+                proxy=proxy,
+                smtp=smtp,
+                x509=x509,
+                x509_chain=x509_chain,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                conn_state=conn_state,
+                proto=proto,
+                service=service,
+                ids_alerts=ids_alerts,
+            ),
+            applications=NetworkApplicationIntents(
+                persistent_smb_application_intent=persistent_smb_application_intent,
+                persistent_smb_intent=persistent_smb_intent,
+                persistent_smb_file_journal=persistent_smb_file_journal,
+                persistent_smb_terminal_authority=persistent_smb_terminal_authority,
+                persistent_smb_terminal_continuation=persistent_smb_terminal_continuation,
+                deferred_authority=deferred_authority,
+                http_channel_affinity=http_channel_affinity,
+            ),
+            explicit_proxy_request_preparation=explicit_proxy_request_preparation,
+            pid=pid,
+            process_image=process_image,
+            resolved_process=resolved_process,
+            responding_pid=responding_pid,
+            reused_http_conn_id=reused_http_conn_id,
+            reused_http_uid=reused_http_uid,
+            time=time,
+        )
+
+    def _plan_icmp_payload(
+        self,
+        *,
+        rng: random.Random,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        duration: float | None,
+        stable_id: str,
+        conn_id: str,
+    ) -> tuple[int, int, float | None]:
+        """Sample one echo payload and its existing scoped duration without allocating identity."""
+        if resp_bytes and resp_bytes > 0:
+            request_size = _icmp_echo_payload_size(rng, orig_bytes)
+            response_size = request_size
+            orig_bytes = request_size
+            resp_bytes = response_size
+            duration = _icmp_echo_duration(
+                rng,
+                duration,
+                timing_runtime=self._timing_runtime,
+                stable_id=f"{stable_id}:{conn_id}:icmp-echo-duration",
+            )
+        else:
+            orig_bytes = _icmp_echo_payload_size(rng, orig_bytes)
+            resp_bytes = 0
+            duration = _icmp_echo_duration(
+                rng,
+                duration,
+                timing_runtime=self._timing_runtime,
+                stable_id=f"{stable_id}:{conn_id}:icmp-no-response-duration",
+            )
+        return orig_bytes, resp_bytes, duration
+
+    def _plan_explicit_transport_state(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        proto: str,
+        service: str | None,
+        dst_port: int,
+        conn_state: str,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        rng: random.Random,
+    ) -> tuple[str, float | None, int | None, int | None]:
+        """Apply caller-selected state accounting while retaining eager RNG argument evaluation."""
+        # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
+        if proto == "udp":
+            history = {
+                "SF": "Dd" if resp_bytes else "D",
+                "S0": "D",
+                "REJ": "D",
+                "OTH": "D",
+            }.get(conn_state, "Dd" if resp_bytes else "D")
+        else:
+            if conn_state == "SF":
+                history = _tcp_success_history(rng)
+            else:
+                history = {
+                    "REJ": "Sr",
+                    "S0": "S",
+                    "OTH": rng.choice(("DAd", "DdA", "ADad")),
+                    "S2": "ShADadF",
+                    "S3": "ShADadf",
+                    "RSTO": "ShADaR",
+                    "RSTR": "ShADadr",
+                    "S1": "Sh",
+                }.get(conn_state, _tcp_success_history(rng))
+        if conn_state in ("S0", "REJ"):
+            duration = None
+            resp_bytes = 0
+            if service == "dns" and proto == "udp" and dst_port == 53:
+                orig_bytes = max(orig_bytes or 0, 40)
+            else:
+                orig_bytes = 0
+        elif conn_state in ("S2", "S3"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="explicit_half_close",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+        elif conn_state in ("RSTO", "RSTR"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="explicit_reset",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+        elif conn_state in ("S1", "SH", "SHR"):
+            # Handshake-only observations still own a finite physical
+            # interval even when the caller omits a duration.  Without a
+            # close time the lifecycle authority cannot publish the root.
+            orig_bytes = 0
+            resp_bytes = 0
+            duration = self._failed_transport_duration_seconds(
+                request,
+                state=conn_state,
+                duration=duration or 0.5,
+                sample_key="explicit_handshake",
+            )
+        return history, duration, orig_bytes, resp_bytes
+
+    @staticmethod
+    def _plan_sampled_udp_state(
+        *,
+        service: str | None,
+        resp_bytes: int | None,
+        duration: float | None,
+        rng: random.Random,
+    ) -> tuple[str, str, float | None, int | None]:
+        """Select UDP observation state, retaining service-specific response precedence."""
+        # DNS connections with responses must not be S0 (no-response)
+        if service == "kerberos" and resp_bytes and resp_bytes > 0:
+            conn_state, history = "SF", "Dd"
+        elif service == "dns" and resp_bytes and resp_bytes > 0:
+            # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
+            dns_roll = rng.random()
+            if dns_roll < 0.05:
+                conn_state, history = "SF", "DDd"  # Retransmitted query
+            elif dns_roll < 0.07:
+                conn_state, history = "SF", "Ddd"  # Multi-packet response
+            else:
+                conn_state, history = "SF", "Dd"
+        elif service == "ntp" and resp_bytes and resp_bytes > 0:
+            conn_state, history = "SF", "Dd"
+        else:
+            entry = rng.choices(
+                _UDP_CONN_ENTRIES,
+                weights=_UDP_CONN_WEIGHTS,
+                k=1,
+            )[0]
+            conn_state, _, history = entry
+        if conn_state == "S0":
+            duration = None
+            resp_bytes = 0
+        return conn_state, history, duration, resp_bytes
+
+    def _plan_sampled_tcp_state(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        caller_provided_payload: bool,
+        duration: float | None,
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        rng: random.Random,
+    ) -> tuple[str, str, float | None, int | None, int | None]:
+        """Choose an observation state and reconcile its payload and finite attempt interval."""
+        if duration is not None:
+            tcp_entries = _TCP_CONN_ENTRIES
+            tcp_weights = _TCP_CONN_WEIGHTS
+            if caller_provided_payload:
+                candidates = [
+                    entry
+                    for entry in _TCP_CONN_ENTRIES
+                    if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
+                ]
+                if candidates:
+                    tcp_entries = candidates
+                    tcp_weights = [entry[1] for entry in candidates]
+            entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
+            conn_state, _, history = entry
+            if conn_state == "OTH":
+                history = rng.choice(("DAd", "DdA", "ADad"))
+        else:
+            conn_state = "S0"
+            history = "S"
+        if conn_state in ("S0", "REJ"):
+            duration = None
+            resp_bytes = 0
+            # S0/REJ: Zeek orig_bytes/resp_bytes are payload (application
+            # data), not packet overhead.  No handshake completed → zero payload.
+            orig_bytes = 0
+        elif conn_state in ("S1", "SH", "SHR"):
+            # S1/SH/SHR = partial handshake, no application data transferred.
+            # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
+            # handshake-only states); IP-byte totals are computed from packet
+            # counts + header overhead downstream.
+            orig_bytes = 0
+            resp_bytes = 0
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_handshake",
+                )
+        elif conn_state in ("S2", "S3"):
+            # S2/S3 = half-closed: connection established, one side sent FIN
+            # but the other never replied. Some data transferred before close.
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_half_close",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
+        elif conn_state in ("RSTO", "RSTR"):
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_reset",
+                )
+            if resp_bytes:
+                resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
+        elif conn_state == "OTH":
+            # OTH/Cc = midstream capture fragment — minimal data visible
+            orig_bytes = rng.randint(0, 200)
+            resp_bytes = rng.randint(0, 200)
+            if duration is not None:
+                duration = self._failed_transport_duration_seconds(
+                    request,
+                    state=conn_state,
+                    duration=duration,
+                    sample_key="selected_midstream",
+                )
+        return conn_state, history, duration, orig_bytes, resp_bytes
+
+    @staticmethod
+    def _stage_icmp_observation_time(
+        *,
+        endpoints: ResolvedNetworkEndpoints,
+        src_port: int | None,
+        dst_port: int,
+        time: datetime,
+        duration: float | None,
+        network_preparation: NetworkTransactionPreparation,
+        window_end: datetime,
+    ) -> datetime:
+        """Stage tuple spacing on the supplied preparation; cancellation remains with its boundary."""
+        zeek_type = src_port if src_port else 8
+        zeek_code = dst_port if dst_port else 0
+        icmp_key = (endpoints.src_ip, zeek_type, endpoints.dst_ip, zeek_code)
+        requested_ts_us = int(round(time.timestamp() * 1_000_000))
+        next_ts_us = network_preparation.read_point(
+            NetworkRuntimePointFamily.ICMP_OBSERVATION,
+            icmp_key,
+            requested_ts_us,
+            at=ensure_utc(time),
+        )
+        adjusted_ts_us = max(requested_ts_us, int(next_ts_us))
+        gap_seed = _stable_seed(
+            f"icmp_observation_gap:{endpoints.src_ip}:{zeek_type}:{endpoints.dst_ip}:{zeek_code}:{adjusted_ts_us}"
+        )
+        interval_us = max(0, int(round((duration or 0.0) * 1_000_000)))
+        network_preparation.stage_point(
+            NetworkRuntimePointFamily.ICMP_OBSERVATION,
+            icmp_key,
+            adjusted_ts_us + interval_us + 7_000 + (gap_seed % 77_000),
+            expires_at=min(
+                window_end,
+                ensure_utc(time) + timedelta(days=1),
+            ),
+        )
+        if adjusted_ts_us != requested_ts_us:
+            time += timedelta(microseconds=adjusted_ts_us - requested_ts_us)
+        return time
+
+    def _plan_network_transport(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: ResolvedNetworkRequest,
+    ) -> PlannedNetworkTransport | str:
+        """Open preparation after resolution, then allocate identity and transport facts.
+
+        Prerequisites are already committed. All new root reservations and RNG
+        draws belong to the supplied boundary; protocol helpers may revise local
+        accounting but must not publish, cancel, or allocate a second root.
+        """
+        executor = self._executor
+        facts = stage_input.facts
+        endpoints = stage_input.endpoints
+        protocol_evidence = stage_input.protocol
+        applications = stage_input.applications
+        conn_state = protocol_evidence.conn_state
+        deferred_authority = applications.deferred_authority
+        dst_port = endpoints.dst_port
+        duration = protocol_evidence.duration
+        explicit_proxy_request_preparation = stage_input.explicit_proxy_request_preparation
+        http = protocol_evidence.http
+        ntp_timing = protocol_evidence.ntp_timing
+        orig_bytes = protocol_evidence.orig_bytes
+        pid = stage_input.pid
+        process_image = stage_input.process_image
+        proxy = protocol_evidence.proxy
+        resolved_process = stage_input.resolved_process
+        resp_bytes = protocol_evidence.resp_bytes
+        responding_pid = stage_input.responding_pid
+        reused_http_conn_id = stage_input.reused_http_conn_id
+        service = protocol_evidence.service
+        src_port = endpoints.src_port
+        time = stage_input.time
+
+        owner_rng = _get_rng()
         network_preparation = boundary.begin(
             executor=executor,
             owner_rng=owner_rng,
-            stable_id=stable_id,
+            stable_id=facts.stable_id,
             linearization_time=ensure_utc(time),
-            action_group_id=parent_action_group_id or stable_id,
+            action_group_id=facts.parent_action_group_id or facts.stable_id,
         )
         if deferred_authority is not None:
             deferred_authority = deferred_authority.prepare_timing_authority(
@@ -3341,12 +3955,12 @@ class NetworkTransactionPlanner:
         # cancel them with the network/timing preparation. The earlier DNS,
         # owner, and Kerberos audit/port work is intentionally independent and
         # may already have committed its own canonical prerequisite truth.
-        if command_http_needs_response_size and http is not None:
+        if facts.command_http_needs_response_size and http is not None:
             http = replace(http, response_body_len=rng.randint(500, 50000))
-        if deferred_kerberos_duration_proto is not None:
+        if facts.deferred_kerberos_duration_proto is not None:
             sampled_kerberos_duration = (
                 self._kerberos_tcp_duration_seconds(request)
-                if deferred_kerberos_duration_proto == "tcp"
+                if facts.deferred_kerberos_duration_proto == "tcp"
                 else self._kerberos_udp_duration_seconds(request)
             )
             duration = (
@@ -3354,47 +3968,57 @@ class NetworkTransactionPlanner:
                 if duration is not None
                 else sampled_kerberos_duration
             )
-        if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
+        if (
+            service == "dns"
+            and protocol_evidence.proto in ("udp", "tcp")
+            and dst_port == 53
+            and protocol_evidence.dns is not None
+        ):
             ad_domain = getattr(executor, "_ad_domain", "corp.local")
-            dns.AA = generator_module._dns_is_internal_name(dns.query or "", ad_domain)
-            if not is_fw_deny:
+            protocol_evidence.dns.AA = _dns_is_internal_name(
+                protocol_evidence.dns.query or "", ad_domain
+            )
+            if not facts.is_fw_deny:
                 dns_has_protocol_response = bool(
-                    dns.rtt is not None
-                    or dns.answers
-                    or dns.rcode.upper() in {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
-                    or dns.rcode_num in {0, 2, 3, 5}
+                    protocol_evidence.dns.rtt is not None
+                    or protocol_evidence.dns.answers
+                    or protocol_evidence.dns.rcode.upper()
+                    in {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+                    or protocol_evidence.dns.rcode_num in {0, 2, 3, 5}
                 )
-                if dns_has_protocol_response and dns.rtt is None:
-                    dns.rtt = self._dns_rtt_seconds(
+                if dns_has_protocol_response and protocol_evidence.dns.rtt is None:
+                    protocol_evidence.dns.rtt = self._dns_rtt_seconds(
                         request,
-                        is_public_resolver=not generator_module._is_private_ip(dst_ip),
+                        is_public_resolver=not _is_private_ip(endpoints.dst_ip),
                     )
-                duration, orig_bytes, resp_bytes = generator_module._dns_payload_accounting(
-                    dns=dns,
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
+                    dns=protocol_evidence.dns,
                     duration=duration,
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
                 )
-                if dns.rtt is not None:
-                    duration = self._dns_transport_duration_seconds(request, dns.rtt)
-        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
-            if hostname and resp_bytes is not None and resp_bytes > 0:
+                if protocol_evidence.dns.rtt is not None:
+                    duration = self._dns_transport_duration_seconds(
+                        request, protocol_evidence.dns.rtt
+                    )
+        elif service == "dns" and protocol_evidence.proto in ("udp", "tcp") and dst_port == 53:
+            if endpoints.hostname and resp_bytes is not None and resp_bytes > 0:
                 dns_query = (
-                    hostname
-                    or generator_module.REVERSE_DNS.get(dst_ip)
-                    or f"host-{dst_ip.replace('.', '-')}"
+                    endpoints.hostname
+                    or REVERSE_DNS.get(endpoints.dst_ip)
+                    or f"host-{endpoints.dst_ip.replace('.', '-')}"
                 )
-                fallback_dns = generator_module.DnsContext(
+                fallback_dns = DnsContext(
                     query=dns_query,
                     trans_id=0,
                     qtype=1,
                     query_type="A",
                     rcode="NOERROR",
                     rcode_num=0,
-                    answers=[dst_ip],
+                    answers=[endpoints.dst_ip],
                     rtt=duration,
                 )
-                duration, orig_bytes, resp_bytes = generator_module._dns_payload_accounting(
+                duration, orig_bytes, resp_bytes = _dns_payload_accounting(
                     dns=fallback_dns,
                     duration=duration,
                     orig_bytes=orig_bytes,
@@ -3417,15 +4041,19 @@ class NetworkTransactionPlanner:
                     resp_bytes = 0
                 else:
                     resp_bytes = min(max(resp_bytes, 70), 512)
-        if pid > 0 and resolved_source_system is not None and resolved_process is not None:
+        if (
+            pid > 0
+            and endpoints.resolved_source_system is not None
+            and resolved_process is not None
+        ):
             adjusted_time = executor._clamp_after_visible_process_create(
-                resolved_source_system,
+                endpoints.resolved_source_system,
                 pid,
                 time,
                 "source.windows_wfp_connection",
                 timing_runtime=self._timing_runtime,
             )
-            if preserve_start_time and adjusted_time > time:
+            if facts.preserve_start_time and adjusted_time > time:
                 # Higher-level action bundles already own this transport's phase
                 # anchor. A late endpoint process observation must not move the
                 # canonical connection behind a dependent sibling; retain the
@@ -3433,36 +4061,35 @@ class NetworkTransactionPlanner:
                 pid = -1
                 resolved_process = None
                 process_image = None
-                suppress_source_pid_inference = True
             else:
                 time = adjusted_time
         if src_port is None:
-            if kerberos_dc_hostname:
+            if facts.kerberos_dc_hostname:
                 src_port = executor._find_reserved_kerberos_source_port(
-                    src_ip,
-                    kerberos_dc_hostname,
+                    endpoints.src_ip,
+                    facts.kerberos_dc_hostname,
                     time,
-                    dst_ip=dst_ip,
+                    dst_ip=endpoints.dst_ip,
                 )
             # Preserve the former candidate-draw location for unrelated RNG
             # scopes. The runtime replaces this provisional value with the
             # atomically leased port after the interval is final.
             if src_port is None:
-                src_port = generator_module._ephemeral_port(rng, source_os_category)
+                src_port = _ephemeral_port(rng, endpoints.source_os_category)
 
         committed_suppressed = False
         if (
             service == "dns"
-            and proto in ("udp", "tcp")
+            and protocol_evidence.proto in ("udp", "tcp")
             and dst_port == 53
-            and dns is None
-            and hostname
+            and protocol_evidence.dns is None
+            and endpoints.hostname
         ):
             ad_domain = getattr(executor, "_ad_domain", "corp.local")
-            dns_cache_key = (src_ip, dst_ip, hostname, "A")
-            cache_ttl = generator_module._dns_base_ttl(
-                hostname,
-                generator_module._dns_is_internal_name(hostname, ad_domain),
+            dns_cache_key = (endpoints.src_ip, endpoints.dst_ip, endpoints.hostname, "A")
+            cache_ttl = _dns_base_ttl(
+                endpoints.hostname,
+                _dns_is_internal_name(endpoints.hostname, ad_domain),
             )
             cached = network_preparation.read_point(
                 NetworkRuntimePointFamily.DIRECT_DNS_TTL,
@@ -3487,7 +4114,7 @@ class NetworkTransactionPlanner:
         # without consuming a second allocator slot for an application child.
         if reused_http_conn_id:
             conn_id = reused_http_conn_id
-            uid = reused_http_uid
+            uid = stage_input.reused_http_uid
         else:
             identity = network_preparation.reserve_physical_identity()
             conn_id = identity.conn_id
@@ -3502,214 +4129,73 @@ class NetworkTransactionPlanner:
         canonical_terminal_duration = duration
 
         dns_has_response = (
-            proto == "udp"
+            protocol_evidence.proto == "udp"
             and service == "dns"
-            and dns is not None
+            and protocol_evidence.dns is not None
             and (
-                dns.rtt is not None
-                or bool(dns.answers)
-                or dns.rcode.upper() in {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+                protocol_evidence.dns.rtt is not None
+                or bool(protocol_evidence.dns.answers)
+                or protocol_evidence.dns.rcode.upper()
+                in {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
             )
         )
 
         # ICMP is connectionless — always OTH regardless of what the caller passed
-        if proto == "icmp":
+        if protocol_evidence.proto == "icmp":
             conn_state = "OTH"
             history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
-            if resp_bytes and resp_bytes > 0:
-                request_size = generator_module._icmp_echo_payload_size(rng, orig_bytes)
-                response_size = request_size
-                orig_bytes = request_size
-                resp_bytes = response_size
-                duration = generator_module._icmp_echo_duration(
-                    rng,
-                    duration,
-                    timing_runtime=self._timing_runtime,
-                    stable_id=f"{stable_id}:{conn_id}:icmp-echo-duration",
-                )
-            else:
-                orig_bytes = generator_module._icmp_echo_payload_size(rng, orig_bytes)
-                resp_bytes = 0
-                duration = generator_module._icmp_echo_duration(
-                    rng,
-                    duration,
-                    timing_runtime=self._timing_runtime,
-                    stable_id=f"{stable_id}:{conn_id}:icmp-no-response-duration",
-                )
+            orig_bytes, resp_bytes, duration = self._plan_icmp_payload(
+                rng=rng,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                stable_id=facts.stable_id,
+                conn_id=conn_id,
+            )
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
             orig_bytes = max(orig_bytes or 0, 28)
             resp_bytes = max(resp_bytes or 0, 40)
-            if dns.rtt is not None and (duration is None or duration < dns.rtt):
-                duration = dns.rtt
+            if protocol_evidence.dns.rtt is not None and (
+                duration is None or duration < protocol_evidence.dns.rtt
+            ):
+                duration = protocol_evidence.dns.rtt
         elif conn_state is not None:
-            # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
-            if proto == "udp":
-                history = {
-                    "SF": "Dd" if resp_bytes else "D",
-                    "S0": "D",
-                    "REJ": "D",
-                    "OTH": "D",
-                }.get(conn_state, "Dd" if resp_bytes else "D")
-            else:
-                if conn_state == "SF":
-                    history = generator_module._tcp_success_history(rng)
-                else:
-                    history = {
-                        "REJ": "Sr",
-                        "S0": "S",
-                        "OTH": rng.choice(("DAd", "DdA", "ADad")),
-                        "S2": "ShADadF",
-                        "S3": "ShADadf",
-                        "RSTO": "ShADaR",
-                        "RSTR": "ShADadr",
-                        "S1": "Sh",
-                    }.get(conn_state, generator_module._tcp_success_history(rng))
-            if conn_state in ("S0", "REJ"):
-                duration = None
-                resp_bytes = 0
-                if service == "dns" and proto == "udp" and dst_port == 53:
-                    orig_bytes = max(orig_bytes or 0, 40)
-                else:
-                    orig_bytes = 0
-            elif conn_state in ("S2", "S3"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="explicit_half_close",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
-            elif conn_state in ("RSTO", "RSTR"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="explicit_reset",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
-            elif conn_state in ("S1", "SH", "SHR"):
-                # Handshake-only observations still own a finite physical
-                # interval even when the caller omits a duration.  Without a
-                # close time the lifecycle authority cannot publish the root.
-                orig_bytes = 0
-                resp_bytes = 0
-                duration = self._failed_transport_duration_seconds(
-                    request,
-                    state=conn_state,
-                    duration=duration or 0.5,
-                    sample_key="explicit_handshake",
-                )
-        elif proto == "udp":
-            # DNS connections with responses must not be S0 (no-response)
-            if service == "kerberos" and resp_bytes and resp_bytes > 0:
-                conn_state, history = "SF", "Dd"
-            elif service == "dns" and resp_bytes and resp_bytes > 0:
-                # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
-                dns_roll = rng.random()
-                if dns_roll < 0.05:
-                    conn_state, history = "SF", "DDd"  # Retransmitted query
-                elif dns_roll < 0.07:
-                    conn_state, history = "SF", "Ddd"  # Multi-packet response
-                else:
-                    conn_state, history = "SF", "Dd"
-            elif service == "ntp" and resp_bytes and resp_bytes > 0:
-                conn_state, history = "SF", "Dd"
-            else:
-                entry = rng.choices(
-                    generator_module._UDP_CONN_ENTRIES,
-                    weights=generator_module._UDP_CONN_WEIGHTS,
-                    k=1,
-                )[0]
-                conn_state, _, history = entry
-            if conn_state == "S0":
-                duration = None
-                resp_bytes = 0
+            history, duration, orig_bytes, resp_bytes = self._plan_explicit_transport_state(
+                request,
+                proto=protocol_evidence.proto,
+                service=service,
+                dst_port=dst_port,
+                conn_state=conn_state,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                rng=rng,
+            )
+        elif protocol_evidence.proto == "udp":
+            conn_state, history, duration, resp_bytes = self._plan_sampled_udp_state(
+                service=service,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                rng=rng,
+            )
         else:
-            if duration is not None:
-                tcp_entries = generator_module._TCP_CONN_ENTRIES
-                tcp_weights = generator_module._TCP_CONN_WEIGHTS
-                if caller_provided_payload:
-                    candidates = [
-                        entry
-                        for entry in generator_module._TCP_CONN_ENTRIES
-                        if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
-                    ]
-                    if candidates:
-                        tcp_entries = candidates
-                        tcp_weights = [entry[1] for entry in candidates]
-                entry = rng.choices(tcp_entries, weights=tcp_weights, k=1)[0]
-                conn_state, _, history = entry
-                if conn_state == "OTH":
-                    history = rng.choice(("DAd", "DdA", "ADad"))
-            else:
-                conn_state = "S0"
-                history = "S"
-            if conn_state in ("S0", "REJ"):
-                duration = None
-                resp_bytes = 0
-                # S0/REJ: Zeek orig_bytes/resp_bytes are payload (application
-                # data), not packet overhead.  No handshake completed → zero payload.
-                orig_bytes = 0
-            elif conn_state in ("S1", "SH", "SHR"):
-                # S1/SH/SHR = partial handshake, no application data transferred.
-                # Zeek orig_bytes/resp_bytes are payload bytes (always 0 for
-                # handshake-only states); IP-byte totals are computed from packet
-                # counts + header overhead downstream.
-                orig_bytes = 0
-                resp_bytes = 0
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_handshake",
-                    )
-            elif conn_state in ("S2", "S3"):
-                # S2/S3 = half-closed: connection established, one side sent FIN
-                # but the other never replied. Some data transferred before close.
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_half_close",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.2, 0.7))
-            elif conn_state in ("RSTO", "RSTR"):
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_reset",
-                    )
-                if resp_bytes:
-                    resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
-            elif conn_state == "OTH":
-                # OTH/Cc = midstream capture fragment — minimal data visible
-                orig_bytes = rng.randint(0, 200)
-                resp_bytes = rng.randint(0, 200)
-                if duration is not None:
-                    duration = self._failed_transport_duration_seconds(
-                        request,
-                        state=conn_state,
-                        duration=duration,
-                        sample_key="selected_midstream",
-                    )
+            conn_state, history, duration, orig_bytes, resp_bytes = self._plan_sampled_tcp_state(
+                request,
+                caller_provided_payload=facts.caller_provided_payload,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                rng=rng,
+            )
 
         if (
-            not suppress_application_side_effects
-            and not http_application_layer_only
-            and proto == "tcp"
+            not facts.suppress_application_side_effects
+            and not facts.http_application_layer_only
+            and protocol_evidence.proto == "tcp"
             and dst_port == 443
             and conn_state == "SF"
         ):
@@ -3717,8 +4203,8 @@ class NetworkTransactionPlanner:
             # at least a ClientHello and server handshake payload at conn.log
             # accounting level, even when the logical request body is empty.
             if http is not None:
-                request_body_len = generator_module._http_context_flow_body_len(http, "request")
-                response_body_len = generator_module._http_context_flow_body_len(http, "response")
+                request_body_len = _http_context_flow_body_len(http, "request")
+                response_body_len = _http_context_flow_body_len(http, "response")
                 request_records = max(1, (request_body_len + 16_383) // 16_384)
                 response_records = max(1, (response_body_len + 16_383) // 16_384)
                 orig_bytes = (
@@ -3734,28 +4220,31 @@ class NetworkTransactionPlanner:
                 resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
             duration = self._completed_tls_duration_seconds(request, duration)
 
-        if not suppress_application_side_effects and http is not None and conn_state == "SF":
+        if not facts.suppress_application_side_effects and http is not None and conn_state == "SF":
             duration = self._completed_http_duration_seconds(request, duration)
 
         dns_owns_duration = (
             service == "dns"
-            and proto in {"udp", "tcp"}
+            and protocol_evidence.proto in {"udp", "tcp"}
             and dst_port == 53
-            and dns is not None
-            and dns.rtt is not None
+            and protocol_evidence.dns is not None
+            and protocol_evidence.dns.rtt is not None
         )
-        if not caller_provided_duration and not dns_owns_duration:
+        if not facts.caller_provided_duration and not dns_owns_duration:
             duration = self._generator_owned_duration_seconds(request, duration)
         kerberos_audit_count = 0
         if (
-            not suppress_application_side_effects
+            not facts.suppress_application_side_effects
             and service == "kerberos"
             and dst_port == 88
-            and proto in {"tcp", "udp"}
-            and kerberos_dc_hostname
+            and protocol_evidence.proto in {"tcp", "udp"}
+            and facts.kerberos_dc_hostname
             and src_port is not None
             and src_port > 0
-            and not (proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"})
+            and not (
+                protocol_evidence.proto == "tcp"
+                and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"}
+            )
         ):
             if request.kerberos_audit_mode in {"tgt", "tgs"}:
                 kerberos_audit_count = 1
@@ -3765,12 +4254,12 @@ class NetworkTransactionPlanner:
                 kerberos_audit_count = 0
             else:
                 kerberos_audit_count = executor._kerberos_audit_count_for_connection(
-                    src_ip,
-                    kerberos_dc_hostname,
+                    endpoints.src_ip,
+                    facts.kerberos_dc_hostname,
                     src_port,
                     time,
                 )
-            if kerberos_audit_count == 0 and kerberos_prerequisite_success:
+            if kerberos_audit_count == 0 and facts.kerberos_prerequisite_success:
                 # A successful internal KDC transport with no existing tuple
                 # companions will publish a TGT/TGS pair after the leased
                 # transport commits. Reserve packet shape for that canonical
@@ -3787,20 +4276,20 @@ class NetworkTransactionPlanner:
                     kerberos_audit_count,
                 )
                 duration = max(duration or 0.0, min_duration)
-                if proto == "udp":
+                if protocol_evidence.proto == "udp":
                     history = "Dd" * kerberos_audit_count
                 else:
-                    history = generator_module._tcp_success_history(rng)
+                    history = _tcp_success_history(rng)
 
-        if proto == "tcp":
-            orig_bytes, resp_bytes = generator_module._tcp_payload_bytes_consistent_with_history(
+        if protocol_evidence.proto == "tcp":
+            orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
                 orig_bytes,
                 resp_bytes,
                 history,
             )
 
         conn_state, history, duration, resp_bytes = _normalize_udp_syslog_flow(
-            proto=proto,
+            proto=protocol_evidence.proto,
             dst_port=dst_port,
             conn_state=conn_state,
             history=history,
@@ -3809,21 +4298,17 @@ class NetworkTransactionPlanner:
         )
 
         # Calculate packet counts — enforce consistency with history
-        if proto == "udp" and history:
-            orig_pkts = max(
-                history.count("D"), generator_module.math.ceil((orig_bytes or 0) / 1232)
-            )
-            resp_pkts = max(
-                history.count("d"), generator_module.math.ceil((resp_bytes or 0) / 1232)
-            )
+        if protocol_evidence.proto == "udp" and history:
+            orig_pkts = max(history.count("D"), math.ceil((orig_bytes or 0) / 1232))
+            resp_pkts = max(history.count("d"), math.ceil((resp_bytes or 0) / 1232))
             if orig_pkts > 0 and orig_bytes:
                 orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
                 resp_bytes = max(resp_bytes, resp_pkts * 28)
             elif resp_pkts == 0:
                 resp_bytes = 0
-        elif proto == "tcp" and history and history != "-":
-            orig_pkts, resp_pkts = generator_module._tcp_packet_counts_from_payload_and_history(
+        elif protocol_evidence.proto == "tcp" and history and history != "-":
+            orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
                 orig_bytes,
                 resp_bytes,
                 history,
@@ -3832,7 +4317,7 @@ class NetworkTransactionPlanner:
             if dst_port == 443 and conn_state == "SF":
                 orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
                 resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
-        elif proto == "icmp":
+        elif protocol_evidence.proto == "icmp":
             orig_pkts = 1
             resp_pkts = 1 if resp_bytes and resp_bytes > 0 else 0
         else:
@@ -3842,10 +4327,10 @@ class NetworkTransactionPlanner:
             orig_pkts = max(orig_pkts, kerberos_audit_count)
             resp_pkts = max(resp_pkts, kerberos_audit_count)
 
-        if proto == "udp" and dst_port == 123:
-            orig_bytes, resp_bytes, duration = generator_module._ntp_payload_accounting(
-                src_ip=src_ip,
-                dst_ip=dst_ip,
+        if protocol_evidence.proto == "udp" and dst_port == 123:
+            orig_bytes, resp_bytes, duration = _ntp_payload_accounting(
+                src_ip=endpoints.src_ip,
+                dst_ip=endpoints.dst_ip,
                 time=time,
                 conn_state=conn_state,
                 history=history,
@@ -3856,8 +4341,8 @@ class NetworkTransactionPlanner:
             orig_pkts = max(1, (history or "").count("D"))
             resp_pkts = (history or "").count("d") if (resp_bytes or 0) > 0 else 0
             if conn_state == "SF" and resp_pkts > 0 and (resp_bytes or 0) > 0:
-                ntp_stratum, _ntp_ref_id = generator_module._ntp_stratum_and_ref_id(dst_ip)
-                median_rtt_ms, rtt_sigma = generator_module._NTP_STRATUM_TIMING.get(
+                ntp_stratum, _ntp_ref_id = _ntp_stratum_and_ref_id(endpoints.dst_ip)
+                median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
                     ntp_stratum,
                     (10.0, 0.7),
                 )
@@ -3870,47 +4355,49 @@ class NetworkTransactionPlanner:
                 if duration is None or duration < ntp_transport_duration:
                     duration = ntp_transport_duration
 
-        if packet_overhead_bytes is not None:
-            overhead = packet_overhead_bytes
-        elif proto == "udp":
+        if facts.packet_overhead_bytes is not None:
+            overhead = facts.packet_overhead_bytes
+        elif protocol_evidence.proto == "udp":
             overhead = rng.choices(
-                generator_module._UDP_OVERHEAD_VALUES,
-                weights=generator_module._UDP_OVERHEAD_WEIGHTS,
+                _UDP_OVERHEAD_VALUES,
+                weights=_UDP_OVERHEAD_WEIGHTS,
                 k=1,
             )[0]
-        elif proto == "icmp":
+        elif protocol_evidence.proto == "icmp":
             overhead = 28
         else:
             overhead = rng.choices(
-                generator_module._TCP_OVERHEAD_VALUES,
-                weights=generator_module._TCP_OVERHEAD_WEIGHTS,
+                _TCP_OVERHEAD_VALUES,
+                weights=_TCP_OVERHEAD_WEIGHTS,
                 k=1,
             )[0]
         # Zeek count fields are source-observed IP payload totals. TCP gets
         # per-side header/control texture; UDP/ICMP keeps protocol-specific
         # fixed accounting for source-native packet sizes.
-        if proto == "tcp":
-            orig_ip_bytes = generator_module._tcp_ip_byte_count(
+        if protocol_evidence.proto == "tcp":
+            orig_ip_bytes = _tcp_ip_byte_count(
                 orig_bytes,
                 orig_pkts,
                 rng,
-                overhead_override=packet_overhead_bytes,
+                overhead_override=facts.packet_overhead_bytes,
             )
-            resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            resp_ip_bytes = _tcp_ip_byte_count(
                 resp_bytes,
                 resp_pkts,
                 rng,
-                overhead_override=packet_overhead_bytes,
+                overhead_override=facts.packet_overhead_bytes,
             )
         else:
             orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
             resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
 
-        ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
+        ip_proto = (
+            6 if protocol_evidence.proto == "tcp" else 17 if protocol_evidence.proto == "udp" else 1
+        )
 
         # Capture loss is source-observation truth, not a canonical connection property.
         missed_bytes = 0
-        if proto == "tcp" and duration and duration > 10.0:
+        if protocol_evidence.proto == "tcp" and duration and duration > 10.0:
             # Preserve this planner's RNG scope while source observation takes
             # ownership of the resulting loss; unrelated protocol choices must
             # not change merely because the fact moved to its canonical owner.
@@ -3918,48 +4405,31 @@ class NetworkTransactionPlanner:
             if capture_loss_shape_roll < 0.03:
                 rng.randint(500, 50000)
 
-        if not preserve_start_time:
-            time = generator_module._zeek_conn_observation_time(
+        if not facts.preserve_start_time:
+            time = _zeek_conn_observation_time(
                 time,
-                src_ip,
+                endpoints.src_ip,
                 src_port,
-                dst_ip,
+                endpoints.dst_ip,
                 dst_port,
-                proto,
+                protocol_evidence.proto,
                 service or "",
                 timing_runtime=self._timing_runtime,
             )
-        if proto == "icmp":
-            zeek_type = src_port if src_port else 8
-            zeek_code = dst_port if dst_port else 0
-            icmp_key = (src_ip, zeek_type, dst_ip, zeek_code)
-            requested_ts_us = int(round(time.timestamp() * 1_000_000))
-            next_ts_us = network_preparation.read_point(
-                NetworkRuntimePointFamily.ICMP_OBSERVATION,
-                icmp_key,
-                requested_ts_us,
-                at=ensure_utc(time),
+        if protocol_evidence.proto == "icmp":
+            time = self._stage_icmp_observation_time(
+                endpoints=endpoints,
+                src_port=src_port,
+                dst_port=dst_port,
+                time=time,
+                duration=duration,
+                network_preparation=network_preparation,
+                window_end=boundary.network_runtime.window_end,
             )
-            adjusted_ts_us = max(requested_ts_us, int(next_ts_us))
-            gap_seed = _stable_seed(
-                f"icmp_observation_gap:{src_ip}:{zeek_type}:{dst_ip}:{zeek_code}:{adjusted_ts_us}"
-            )
-            interval_us = max(0, int(round((duration or 0.0) * 1_000_000)))
-            network_preparation.stage_point(
-                NetworkRuntimePointFamily.ICMP_OBSERVATION,
-                icmp_key,
-                adjusted_ts_us + interval_us + 7_000 + (gap_seed % 77_000),
-                expires_at=min(
-                    boundary.network_runtime.window_end,
-                    ensure_utc(time) + timedelta(days=1),
-                ),
-            )
-            if adjusted_ts_us != requested_ts_us:
-                time += timedelta(microseconds=adjusted_ts_us - requested_ts_us)
         else:
-            if pid > 0 and resolved_source_system is not None:
+            if pid > 0 and endpoints.resolved_source_system is not None:
                 final_end_plan = executor.state_manager.process_session_end_plan(
-                    resolved_source_system.hostname,
+                    endpoints.resolved_source_system.hostname,
                     pid,
                 )
                 if (
@@ -3967,14 +4437,14 @@ class NetworkTransactionPlanner:
                     and final_end_plan.is_authoritative
                     and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
                 ):
-                    generator_module.logger.debug(
+                    logger.debug(
                         "Dropping connection PID after source timing crossed its session end: "
                         "host=%s pid=%s session_end=%s connection_time=%s dst=%s:%s",
-                        resolved_source_system.hostname,
+                        endpoints.resolved_source_system.hostname,
                         pid,
                         final_end_plan.canonical_end,
                         time,
-                        dst_ip,
+                        endpoints.dst_ip,
                         dst_port,
                     )
                     pid = -1
@@ -3983,9 +4453,9 @@ class NetworkTransactionPlanner:
             duration = self._cap_to_owning_session(
                 start=time,
                 duration=duration,
-                source_system=resolved_source_system,
+                source_system=endpoints.resolved_source_system,
                 pid=pid,
-                stable_id=stable_id,
+                stable_id=facts.stable_id,
             )
         # Port-based service correction (Zeek detects service from payload, not scenario labels)
         _PORT_SERVICE = {
@@ -4003,18 +4473,18 @@ class NetworkTransactionPlanner:
             service
             and dst_port in _PORT_SERVICE
             and service != _PORT_SERVICE[dst_port]
-            and not is_tcp_probe
+            and not facts.is_tcp_probe
         ):
             service = _PORT_SERVICE[dst_port]
         if (
-            proto == "tcp"
+            protocol_evidence.proto == "tcp"
             and conn_state in {"S0", "REJ", "S1", "SH", "SHR"}
             and service != "dns"
             and http is None
         ):
             service = ""
         if (
-            proto == "udp"
+            protocol_evidence.proto == "udp"
             and conn_state in {"S0", "REJ", "OTH"}
             and (orig_bytes or 0) == 0
             and (resp_bytes or 0) == 0
@@ -4027,26 +4497,28 @@ class NetworkTransactionPlanner:
         # finalized below.
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
-        if resolved_source_system:
-            src_host_ctx = executor._build_host_context(resolved_source_system)
+        if endpoints.resolved_source_system:
+            src_host_ctx = executor._build_host_context(endpoints.resolved_source_system)
 
         # Resolve destination system for dst_host
         dst_host_ctx = None
-        if hasattr(executor, "_ip_to_system") and dst_ip in executor._ip_to_system:
-            dst_host_ctx = executor._build_host_context(executor._ip_to_system[dst_ip])
+        if hasattr(executor, "_ip_to_system") and endpoints.dst_ip in executor._ip_to_system:
+            dst_host_ctx = executor._build_host_context(executor._ip_to_system[endpoints.dst_ip])
         elif executor.dispatcher and executor.dispatcher.visibility_engine:
-            real_dst_ip = executor.dispatcher.visibility_engine._vip_to_real_ip.get(dst_ip)
+            real_dst_ip = executor.dispatcher.visibility_engine._vip_to_real_ip.get(
+                endpoints.dst_ip
+            )
             if real_dst_ip and real_dst_ip in executor._ip_to_system:
                 dst_host_ctx = executor._build_host_context(executor._ip_to_system[real_dst_ip])
 
         # Resolve the canonical initiating process when its PID is known.
         process_ctx = None
-        if pid > 0 and resolved_source_system:
+        if pid > 0 and endpoints.resolved_source_system:
             running = resolved_process or executor.state_manager.get_process(
-                resolved_source_system.hostname, pid
+                endpoints.resolved_source_system.hostname, pid
             )
             if running is not None:
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=pid,
                     parent_pid=running.parent_pid,
                     image=running.image,
@@ -4055,11 +4527,11 @@ class NetworkTransactionPlanner:
                     logon_id=running.logon_id,
                     start_time=running.start_time,
                     parent_start_time=executor._lookup_parent_start_time(
-                        resolved_source_system.hostname, running.parent_pid
+                        endpoints.resolved_source_system.hostname, running.parent_pid
                     ),
                 )
             elif process_image:
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=pid,
                     parent_pid=0,
                     image=process_image,
@@ -4100,7 +4572,7 @@ class NetworkTransactionPlanner:
             target_system is not None
             and dst_host_ctx is not None
             and dst_host_ctx.os_category == "windows"
-            and persistent_smb_intent is None
+            and applications.persistent_smb_intent is None
             and responding_pid <= 0
         ):
             responding_pid = executor._resolve_windows_inbound_service_pid(
@@ -4112,7 +4584,7 @@ class NetworkTransactionPlanner:
             dst_host_ctx is not None
             and dst_host_ctx.os_category == "linux"
             and target_system is not None
-            and proto == "tcp"
+            and protocol_evidence.proto == "tcp"
             and dst_port == 22
             and conn_state == "SF"
             and (service in {"", "ssh"} or target_has_ssh)
@@ -4124,7 +4596,7 @@ class NetworkTransactionPlanner:
             and dst_host_ctx.os_category == "linux"
             and target_system is not None
             and target_has_smb
-            and proto == "tcp"
+            and protocol_evidence.proto == "tcp"
             and dst_port == 445
             and conn_state == "SF"
             and service in {"", "smb"}
@@ -4133,17 +4605,17 @@ class NetworkTransactionPlanner:
 
         event = _NetworkOccurrenceDraft(
             timestamp=time,
-            parent_action_group_id=parent_action_group_id,
+            parent_action_group_id=facts.parent_action_group_id,
             src_host=src_host_ctx,
             dst_host=dst_host_ctx,
-            local_only=local_only,
+            local_only=facts.local_only,
             process=process_ctx,
             network=NetworkTransactionDraft(
-                src_ip=src_ip,
+                src_ip=endpoints.src_ip,
                 src_port=src_port,
-                dst_ip=dst_ip,
+                dst_ip=endpoints.dst_ip,
                 dst_port=dst_port,
-                protocol=proto,
+                protocol=protocol_evidence.proto,
                 service=service or "",
                 zeek_uid=uid,
                 conn_id=conn_id,
@@ -4156,72 +4628,81 @@ class NetworkTransactionPlanner:
                 resp_ip_bytes=resp_ip_bytes,
                 conn_state=conn_state,
                 history=history,
-                local_orig=src_ip_is_local,
-                local_resp=dst_ip_is_local,
+                local_orig=endpoints.src_ip_is_local,
+                local_resp=endpoints.dst_ip_is_local,
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
                 responding_pid=responding_pid,
-                application_layer_only=http_application_layer_only,
+                application_layer_only=facts.http_application_layer_only,
             ),
         )
 
-        # Caller-provided context overrides
-        if ids_alerts:
-            event.ids_alerts = list(ids_alerts)
-        if email is not None:
-            event.email = email
-        if smtp is not None:
-            event.smtp = smtp
-        if request.ssl is not None and not http_application_layer_only:
-            event.ssl = request.ssl
-        if x509 is not None and not http_application_layer_only:
-            event.x509 = x509
-        if x509_chain and not http_application_layer_only:
-            event.x509_chain = list(x509_chain)
-        if request.tls_presentation is not None and not http_application_layer_only:
-            event.tls_presentation = request.tls_presentation
-            if not event.x509_chain:
-                event.x509_chain = executor._tls_certificate_planner.x509_contexts(
-                    request.tls_presentation
-                )
-            executor._tls_certificate_planner.validate_projection(
-                request.tls_presentation,
-                event.x509_chain,
-            )
-            event.x509 = event.x509_chain[0]
-            if event.ssl is not None:
-                event.ssl = replace(
-                    event.ssl,
-                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
-                )
-        if http is not None:
-            event.http = http
-        if file_transfer is not None:
-            event.file_transfer = file_transfer
-        if file_transfers:
-            event.file_transfers = list(file_transfers)
-        if pe is not None:
-            event.pe = pe
-        if request.pe_analyses:
-            event.pe_analyses = list(request.pe_analyses)
-        if ocsp is not None:
-            event.ocsp = ocsp
-        if request.ocsp_transaction is not None:
-            event.ocsp_transaction = request.ocsp_transaction
-        if proxy is not None:
-            event.proxy = proxy
-        if firewall is not None:
-            event.firewall = firewall
+        return PlannedNetworkTransport(
+            facts=facts,
+            endpoints=replace(
+                endpoints,
+                dst_port=dst_port,
+                src_port=src_port,
+                target_system=target_system,
+                dst_host_ctx=dst_host_ctx,
+            ),
+            protocol=replace(
+                protocol_evidence,
+                http=http,
+                ntp_timing=ntp_timing,
+                proxy=proxy,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                duration=duration,
+                conn_state=conn_state,
+                service=service,
+            ),
+            applications=(
+                applications
+                if deferred_authority is applications.deferred_authority
+                else replace(applications, deferred_authority=deferred_authority)
+            ),
+            canonical_terminal_duration=canonical_terminal_duration,
+            committed_suppressed=committed_suppressed,
+            event=event,
+            generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+            network_preparation=network_preparation,
+            overhead=overhead,
+            owner_rng=owner_rng,
+            prepare_generic_smb_responder=prepare_generic_smb_responder,
+            prepare_generic_ssh_responder=prepare_generic_ssh_responder,
+            prepared_responder=prepared_responder,
+            responding_pid=responding_pid,
+            rng=rng,
+            time=time,
+            uid=uid,
+        )
 
+    def _prepare_dns_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        event: _NetworkOccurrenceDraft,
+        facts: NetworkRequestFacts,
+        endpoints: ResolvedNetworkEndpoints,
+        protocol_evidence: NetworkProtocolEvidence,
+        network_preparation: NetworkTransactionPreparation,
+        rng: random.Random,
+        time: datetime,
+        overhead: int,
+        committed_suppressed: bool,
+    ) -> bool:
+        """Normalize the root-local DNS copy and stage cache observation, never publish it."""
+        executor = self._executor
         # DNS context for Zeek dns.log fan-out
-        if dns is not None:
-            event.dns = dns
+        if protocol_evidence.dns is not None:
+            event.dns = protocol_evidence.dns
             if (
                 event.firewall is not None
                 and event.firewall.action == "deny"
-                and proto in ("udp", "tcp")
-                and dst_port == 53
+                and protocol_evidence.proto in ("udp", "tcp")
+                and endpoints.dst_port == 53
             ):
                 event.dns.rcode = "NOERROR"
                 event.dns.rcode_num = 0
@@ -4229,7 +4710,7 @@ class NetworkTransactionPlanner:
                 event.dns.TTLs = []
                 event.dns.rtt = None
                 event.network.conn_state = "S0"
-                event.network.history = "D" if proto == "udp" else "S"
+                event.network.history = "D" if protocol_evidence.proto == "udp" else "S"
                 event.network.duration = None
                 event.network.resp_bytes = 0
                 event.network.resp_pkts = 0
@@ -4237,41 +4718,41 @@ class NetworkTransactionPlanner:
             else:
                 executor._normalize_dns_context_for_resolver(
                     event.dns,
-                    resolver_ip=dst_ip,
+                    resolver_ip=endpoints.dst_ip,
                     time=time,
                 )
                 if self._stage_dns_observation(
                     network_preparation,
-                    src_ip=src_ip,
-                    resolver_ip=dst_ip,
+                    src_ip=endpoints.src_ip,
+                    resolver_ip=endpoints.dst_ip,
                     dns=event.dns,
                     time=time,
                 ):
                     committed_suppressed = True
         elif (
-            service == "dns"
-            and proto in ("udp", "tcp")
-            and dst_port == 53
-            and hostname
-            and (hostname_was_explicit or dst_ip in dns_server_ips)
-            and not is_fw_deny
+            protocol_evidence.service == "dns"
+            and protocol_evidence.proto in ("udp", "tcp")
+            and endpoints.dst_port == 53
+            and endpoints.hostname
+            and (endpoints.hostname_was_explicit or endpoints.dst_ip in facts.dns_server_ips)
+            and not facts.is_fw_deny
         ):
             dns_query = (
-                hostname
-                or generator_module.REVERSE_DNS.get(dst_ip)
-                or f"host-{dst_ip.replace('.', '-')}"
+                endpoints.hostname
+                or REVERSE_DNS.get(endpoints.dst_ip)
+                or f"host-{endpoints.dst_ip.replace('.', '-')}"
             )
-            dns_is_internal = generator_module._dns_is_internal_name(
+            dns_is_internal = _dns_is_internal_name(
                 dns_query,
                 getattr(executor, "_ad_domain", ""),
             )
-            had_response_payload = bool(resp_bytes)
-            dns_answers = [dst_ip] if had_response_payload else []
+            had_response_payload = bool(protocol_evidence.resp_bytes)
+            dns_answers = [endpoints.dst_ip] if had_response_payload else []
             synthesized_rtt = self._dns_rtt_seconds(
                 request,
-                is_public_resolver=not generator_module._is_private_ip(dst_ip),
+                is_public_resolver=not _is_private_ip(endpoints.dst_ip),
             )
-            event.dns = generator_module.DnsContext(
+            event.dns = DnsContext(
                 query=dns_query,
                 trans_id=rng.randint(1, 65535),
                 qtype=1,
@@ -4280,12 +4761,12 @@ class NetworkTransactionPlanner:
                 rcode_num=0 if had_response_payload else 2,
                 answers=dns_answers,
                 TTLs=executor._dns_observed_ttls(
-                    resolver_ip=dst_ip,
+                    resolver_ip=endpoints.dst_ip,
                     query=dns_query,
                     qtype_name="A",
                     answers=dns_answers,
                     is_internal=dns_is_internal,
-                    base_ttl=generator_module._dns_base_ttl(dns_query, dns_is_internal),
+                    base_ttl=_dns_base_ttl(dns_query, dns_is_internal),
                     time=time,
                 ),
                 rtt=synthesized_rtt,
@@ -4293,8 +4774,8 @@ class NetworkTransactionPlanner:
             )
             if self._stage_dns_observation(
                 network_preparation,
-                src_ip=src_ip,
-                resolver_ip=dst_ip,
+                src_ip=endpoints.src_ip,
+                resolver_ip=endpoints.dst_ip,
                 dns=event.dns,
                 time=time,
             ):
@@ -4303,7 +4784,7 @@ class NetworkTransactionPlanner:
                 event.network.conn_state = "SF"
                 event.network.history = "Dd"
                 event.network.resp_bytes = rng.randint(80, 220)
-                if proto == "udp":
+                if protocol_evidence.proto == "udp":
                     event.network.orig_pkts = event.network.history.count("D")
                     event.network.resp_pkts = event.network.history.count("d")
                     event.network.orig_bytes = max(
@@ -4324,529 +4805,500 @@ class NetworkTransactionPlanner:
                 synthesized_rtt,
             )
 
-        # Proxy context: attach only for established outbound internet traffic.
-        # Forward proxies only see egress that completes (not blocked/denied flows).
-        if (
-            not local_only
-            and service in ("ssl", "http")
-            and dst_port in (80, 443)
-            and event.proxy is None
-            and not generator_module._is_private_ip(dst_ip)
-            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
-        ):
-            proxy_routes = getattr(executor, "_proxy_routes", {})
-            chain = proxy_routes.get(src_ip)
-            if chain:
-                from evidenceforge.events.contexts import ProxyContext
+        return committed_suppressed
 
-                proxy_sys = chain[0]
-                proxy_fqdn = getattr(proxy_sys, "hostname", "")
-                # Build proxy FQDN from hostname + domain
-                ad_domain = getattr(executor, "_ad_domain", "")
-                if ad_domain and "." not in proxy_fqdn:
-                    proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
-                # Hostname was resolved once at the top of generate_connection().
-                proxy_hostname = hostname
-                if proxy_hostname is None and dns is not None and dns.query:
-                    proxy_hostname = dns.query
-                if proxy_hostname is None:
-                    proxy_hostname = generator_module.REVERSE_DNS.get(dst_ip)
-                if proxy_hostname is None:
-                    proxy_hostname = generator_module._generate_random_hostname(rng, dst_ip)
-                # Suppressed hostname → use raw IP for proxy logging
-                if proxy_hostname == "":
-                    proxy_hostname = dst_ip
-                from evidenceforge.generation.activity.dns_registry import get_domain_tags
-                from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+    @staticmethod
+    def _proxy_request_presentation(
+        http: HttpContext | None,
+        *,
+        endpoints: ResolvedNetworkEndpoints,
+        proxy_hostname: str,
+        domain_tags: list[str],
+        rng: random.Random,
+    ) -> tuple[str, str, str, str | None, str, str]:
+        """Use supplied HTTP metadata or the same scheme-specific URI/referrer draws."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
-                domain_tags = get_domain_tags(proxy_hostname)
-                user_agent = ""
+        user_agent = ""
 
-                # When a pre-built HttpContext exists (from browsing session
-                # generator), derive proxy fields from it.  The proxy emitter
-                # handles CONNECT tunnel deduplication automatically.
-                if event.http is not None:
-                    from evidenceforge.generation.activity.http_content import (
-                        normalize_mime_type_for_path,
-                    )
-
-                    scheme = "https" if dst_port == 443 else "http"
-                    proxy_method = event.http.method
-                    url = f"{scheme}://{proxy_hostname}{event.http.uri}"
-                    if event.http.resp_mime_types or event.http.status_code == 304:
-                        proxy_content_type = normalize_mime_type_for_path(
-                            event.http.uri,
-                            (
-                                event.http.resp_mime_types[0]
-                                if event.http.resp_mime_types
-                                else "text/html"
-                            ),
-                        )
-                    else:
-                        proxy_content_type = "text/html"
-                    proxy_ua_override = None  # session UA is already on HttpContext
-                    user_agent = event.http.user_agent
-                    proxy_referrer = event.http.referrer
-                elif dst_port == 443:
-                    # Legacy single-connection HTTPS path
-                    _src_os = (
-                        generator_module._get_os_category(source_system.os)
-                        if source_system
-                        else None
-                    )
-                    (
-                        path,
-                        proxy_content_type,
-                        proxy_method,
-                        proxy_ua_override,
-                        referrer_policy,
-                    ) = pick_proxy_uri(
-                        rng,
-                        proxy_hostname,
-                        domain_tags,
-                        source_os=_src_os,
-                        source_system_type=getattr(source_system, "type", None),
-                        allow_canonical_protocol_templates=False,
-                    )
-                    url = f"https://{proxy_hostname}{path}"
-                    from evidenceforge.generation.activity.referrer import pick_referrer
-
-                    proxy_referrer = (
-                        ""
-                        if referrer_policy == "none"
-                        else pick_referrer(rng, proxy_hostname, context="general", port=443)
-                    )
-                else:
-                    _src_os = (
-                        generator_module._get_os_category(source_system.os)
-                        if source_system
-                        else None
-                    )
-                    (
-                        path,
-                        proxy_content_type,
-                        proxy_method,
-                        proxy_ua_override,
-                        referrer_policy,
-                    ) = pick_proxy_uri(
-                        rng,
-                        proxy_hostname,
-                        domain_tags,
-                        source_os=_src_os,
-                        source_system_type=getattr(source_system, "type", None),
-                        allow_canonical_protocol_templates=False,
-                    )
-                    url = f"http://{proxy_hostname}{path}"
-                    from evidenceforge.generation.activity.referrer import pick_referrer
-
-                    proxy_referrer = (
-                        ""
-                        if referrer_policy == "none"
-                        else pick_referrer(rng, proxy_hostname, context="general", port=80)
-                    )
-                from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
-
-                apply_domain_user_agent = event.http is None or (
-                    not generator_module._is_tool_http_user_agent(event.http.user_agent)
-                    and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
-                )
-                user_agent = executor._proxy_user_agent_for_context(
-                    rng,
-                    source_system,
-                    hostname=proxy_hostname,
-                    domain_tags=domain_tags,
-                    existing_user_agent=user_agent,
-                    override_user_agent=proxy_ua_override,
-                    apply_domain_override=apply_domain_user_agent,
-                    source_identity=src_ip,
-                )
-                proxy_referrer = generator_module._source_native_http_referrer(
-                    user_agent,
-                    proxy_referrer,
-                    request_scheme="https" if dst_port == 443 else "http",
-                    request_port=dst_port,
-                )
-                cache_roll = rng.random()
-                proxy_cacheable = generator_module._proxy_request_allows_cache_hit(
-                    method=proxy_method,
-                    url=url,
-                    content_type=proxy_content_type,
-                    domain_tags=domain_tags,
-                )
-                if event.http is not None:
-                    if event.http.status_code == 304:
-                        cache_result = "REVALIDATED"
-                    elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
-                        cache_result = "HIT"
-                    else:
-                        cache_result = "MISS"
-                elif proxy_cacheable and cache_roll < 0.30:
-                    cache_result = "HIT"
-                elif cache_roll < 0.91:
-                    cache_result = "MISS"
-                elif cache_roll < 0.945:
-                    cache_result = "DENIED"
-                elif cache_roll < 0.975:
-                    cache_result = "AUTH_REQUIRED"
-                else:
-                    cache_result = "GATEWAY_ERROR"
-                # Proxy sc_bytes/cs_bytes are source-side accounting fields:
-                # payload plus HTTP/proxy headers for allowed responses,
-                # or proxy-generated error pages for failures.
-                _cs = (orig_bytes or 0) + rng.randint(*generator_module._PROXY_CS_OVERHEAD)
-                _response_bytes = (
-                    event.http.response_body_len if event.http is not None else (resp_bytes or 0)
-                )
-                if cache_result == "DENIED":
-                    _sc = rng.randint(500, 2000)  # proxy error page
-                elif cache_result == "AUTH_REQUIRED":
-                    _sc = rng.randint(300, 1200)
-                elif cache_result == "GATEWAY_ERROR":
-                    _sc = rng.randint(250, 1800)
-                elif cache_result == "HIT":
-                    _sc = _response_bytes + rng.randint(*generator_module._PROXY_SC_OVERHEAD)
-                else:
-                    _sc = _response_bytes + rng.randint(*generator_module._PROXY_SC_OVERHEAD)
-                proxy_status_code = (
-                    event.http.status_code
-                    if event.http is not None
-                    else {
-                        "DENIED": 403,
-                        "AUTH_REQUIRED": 407,
-                        "GATEWAY_ERROR": rng.choice([502, 503, 504]),
-                    }.get(cache_result, 200)
-                )
-                event.proxy = ProxyContext(
-                    client_ip=src_ip,
-                    username=executor._proxy_username_for_source(
-                        source_system=source_system,
-                        user_agent=user_agent,
-                        cache_result=cache_result,
-                        hostname=proxy_hostname,
-                        time=event.timestamp,
-                    ),
-                    method=proxy_method,
-                    url=url,
-                    host=proxy_hostname,
-                    status_code=proxy_status_code,
-                    sc_bytes=_sc,
-                    cs_bytes=_cs,
-                    time_taken=generator_module._proxy_time_taken_ms(
-                        duration,
-                        rng,
-                        method=proxy_method,
-                        status_code=proxy_status_code,
-                        cache_result=cache_result,
-                        timing_runtime=self._timing_runtime,
-                        stable_id=f"{stable_id}:proxy-context",
-                    ),
-                    user_agent=user_agent,
-                    content_type=proxy_content_type,
-                    cache_result=cache_result,
-                    referrer=proxy_referrer,
-                    proxy_fqdn=proxy_fqdn,
-                    proxy_action=generator_module._proxy_action_for_context(
-                        method=proxy_method,
-                        url=url,
-                        status_code=proxy_status_code,
-                        cache_result=cache_result,
-                        dst_port=dst_port,
-                    ),
-                )
-
-        # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
-        # Skip for local-only events (no network sensor will see them)
-        rng = network_preparation.rng
-        if (
-            not suppress_application_side_effects
-            and not http_application_layer_only
-            and not local_only
-            and service == "ssl"
-            and proto == "tcp"
-            and conn_state == "SF"
-        ):
-            executor._attach_ssl_context(
-                event,
-                hostname=tls_hostname,
-                dns=dns,
-                dst_ip=dst_ip,
-                rng=rng,
-                allow_failure=not caller_provided_conn_state,
-                timing_stable_id=stable_id,
-                network_preparation=network_preparation,
-                timing_runtime=self._timing_runtime,
-                network_point_expires_at=boundary.network_runtime.window_end,
-            )
-        if (
-            proto == "tcp"
-            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
-            and event.network.service in {"http", "ssl"}
-            and event.http is None
-            and event.ssl is None
-        ):
-            event.network.service = ""
-
-        elif (
-            not local_only
-            and not suppress_application_side_effects
-            and service == "http"
-            and proto == "tcp"
-            and conn_state == "SF"
-            and event.http is None  # Skip auto-generation if caller provided HttpContext
-        ):
-            # Use the already-resolved hostname for HTTP Host header and URI templates.
-            # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
-            host = (
-                hostname
-                if hostname is not None
-                else generator_module.REVERSE_DNS.get(dst_ip, dst_ip)
-            )
-            if host == "":
-                host = dst_ip
-            if dst_port not in (80, 443):
-                host = f"{host}:{dst_port}"
-            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        # When a pre-built HttpContext exists (from browsing session
+        # generator), derive proxy fields from it.  The proxy emitter
+        # handles CONNECT tunnel deduplication automatically.
+        if http is not None:
             from evidenceforge.generation.activity.http_content import (
-                apply_transfer_size_variance,
-                coerce_response_size_for_mime,
-                http_status_message,
-                is_stable_resource_path,
-                response_mime_types_for_status,
-                response_size_for_status,
-            )
-            from evidenceforge.generation.activity.proxy_uri import (
-                pick_proxy_uri,
-                plaintext_http_redirect_status,
+                normalize_mime_type_for_path,
             )
 
-            web_host = (
-                hostname
-                if hostname is not None
-                else generator_module.REVERSE_DNS.get(dst_ip, dst_ip)
+            scheme = "https" if endpoints.dst_port == 443 else "http"
+            proxy_method = http.method
+            url = f"{scheme}://{proxy_hostname}{http.uri}"
+            if http.resp_mime_types or http.status_code == 304:
+                proxy_content_type = normalize_mime_type_for_path(
+                    http.uri,
+                    (http.resp_mime_types[0] if http.resp_mime_types else "text/html"),
+                )
+            else:
+                proxy_content_type = "text/html"
+            proxy_ua_override = None  # session UA is already on HttpContext
+            user_agent = http.user_agent
+            proxy_referrer = http.referrer
+        else:
+            # Sample the URI before its referrer to preserve the request RNG sequence.
+            _src_os = (
+                _get_os_category(endpoints.source_system.os) if endpoints.source_system else None
             )
-            if web_host == "":
-                web_host = dst_ip
-            web_domain_tags = get_domain_tags(web_host)
-            _src_os_http = (
-                generator_module._get_os_category(source_system.os) if source_system else None
-            )
-            uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
+            (
+                path,
+                proxy_content_type,
+                proxy_method,
+                proxy_ua_override,
+                referrer_policy,
+            ) = pick_proxy_uri(
                 rng,
-                web_host,
-                web_domain_tags,
-                source_os=_src_os_http,
-                source_system_type=getattr(source_system, "type", None),
+                proxy_hostname,
+                domain_tags,
+                source_os=_src_os,
+                source_system_type=getattr(endpoints.source_system, "type", None),
                 allow_canonical_protocol_templates=False,
             )
-            ua = executor._proxy_user_agent_for_context(
-                rng,
-                source_system,
-                hostname=web_host,
-                domain_tags=web_domain_tags,
-                existing_user_agent="",
-                override_user_agent=http_ua_override,
-                apply_domain_override=True,
-                source_identity=src_ip,
-            )
-            redirect_status = plaintext_http_redirect_status(
-                web_host,
-                port=dst_port,
-                path=uri,
-                dst_ip=dst_ip,
-            )
-            if redirect_status is not None:
-                status_code = redirect_status
-                status_msg = http_status_message(status_code)
-            else:
-                status_code, status_msg = generator_module._get_http_status(
-                    dst_ip,
-                    uri,
-                    publish_cache=False,
-                )
-
-            if status_code in {204, 304}:
-                resp_body_len = 0
-            else:
-                if status_code >= 300 or is_stable_resource_path(uri):
-                    resp_body_len = apply_transfer_size_variance(
-                        response_size_for_status(status_code, host, uri),
-                        status_code=status_code,
-                        host=host,
-                        uri=uri,
-                        content_type=mime_type,
-                        variant_key=f"{src_ip}:{ua}",
-                    )
-                else:
-                    resp_body_len = coerce_response_size_for_mime(rng, mime_type, resp_bytes)
-            if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
-                event.network.resp_bytes = resp_body_len
-                min_resp_pkts = max(1, generator_module.math.ceil(resp_body_len / 1460))
-                event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
-                min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
-                event.network.resp_ip_bytes = max(
-                    event.network.resp_ip_bytes or 0,
-                    min_resp_ip_bytes,
-                )
+            scheme = "https" if endpoints.dst_port == 443 else "http"
+            url = f"{scheme}://{proxy_hostname}{path}"
             from evidenceforge.generation.activity.referrer import pick_referrer
 
-            _http_referer = (
+            proxy_referrer = (
                 ""
-                if http_referrer_policy == "none"
-                else pick_referrer(rng, host, context="general", port=dst_port)
+                if referrer_policy == "none"
+                else pick_referrer(
+                    rng,
+                    proxy_hostname,
+                    context="general",
+                    port=443 if endpoints.dst_port == 443 else 80,
+                )
             )
-            _http_referer = generator_module._source_native_http_referrer(
-                ua,
-                _http_referer,
-                request_scheme="https" if dst_port == 443 else "http",
-                request_port=dst_port,
-            )
-            event.http = generator_module.HttpContext(
-                method=http_method,
-                host=host,
-                uri=uri,
-                version="1.1",
-                user_agent=ua,
-                request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
-                response_body_len=resp_body_len,
-                status_code=status_code,
-                status_msg=status_msg,
-                referrer=_http_referer,
-                resp_mime_types=response_mime_types_for_status(
-                    status_code,
-                    mime_type,
-                    resp_body_len,
-                    method=http_method,
-                ),
-                tags=[],
-            )
+        return proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer
 
-        if not suppress_application_side_effects:
-            generator_module._attach_http_file_transfers(
-                event,
-                dst_ip=dst_ip,
-                rng=rng,
-                timing_runtime=self._timing_runtime,
-                timing_scope=self._timing_scope(request),
-                deployment_registry=getattr(executor.dispatcher, "deployment_registry", None),
-            )
+    def _prepare_transparent_proxy_evidence(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        protocol_evidence: NetworkProtocolEvidence,
+        rng: random.Random,
+        stable_id: str,
+    ) -> None:
+        """Populate one source-native proxy context after established-egress admission."""
+        executor = self._executor
+        proxy_routes = getattr(executor, "_proxy_routes", {})
+        chain = proxy_routes.get(endpoints.src_ip)
+        if chain:
+            from evidenceforge.events.contexts import ProxyContext
 
-        # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
-        # fields, so only attach the context when the matching conn.log row has a
-        # responder payload.
-        if (
-            not local_only
-            and service == "ntp"
-            and proto == "udp"
-            and event.network.conn_state == "SF"
-            and (event.network.resp_pkts or 0) > 0
-            and (event.network.resp_bytes or 0) > 0
-        ):
-            from evidenceforge.events.contexts import NtpContext
-
-            stratum, ref_id = generator_module._ntp_stratum_and_ref_id(dst_ip)
-            association = executor._ntp_association_profile(
-                event.network.src_ip,
-                dst_ip,
-                network_preparation=network_preparation,
-                expires_at=boundary.network_runtime.window_end,
-            )
-            poll_seconds = float(association["poll"])
-            parser_key = (event.network.src_ip, dst_ip)
-            last_parser_time = network_preparation.read_point(
-                NetworkRuntimePointFamily.NTP_PARSER,
-                parser_key,
-                None,
-                at=ensure_utc(event.timestamp),
-            )
-            parser_gap = (
-                None
-                if last_parser_time is None
-                else (event.timestamp - last_parser_time).total_seconds()
-            )
-            if parser_gap is None or parser_gap >= generator_module._ntp_parser_min_gap_seconds(
-                poll_seconds
+            proxy_sys = chain[0]
+            proxy_fqdn = getattr(proxy_sys, "hostname", "")
+            # Build proxy FQDN from hostname + domain
+            ad_domain = getattr(executor, "_ad_domain", "")
+            if ad_domain and "." not in proxy_fqdn:
+                proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
+            # Hostname was resolved once at the top of generate_connection().
+            proxy_hostname = endpoints.hostname
+            if (
+                proxy_hostname is None
+                and protocol_evidence.dns is not None
+                and protocol_evidence.dns.query
             ):
-                network_preparation.stage_point(
-                    NetworkRuntimePointFamily.NTP_PARSER,
-                    parser_key,
-                    event.timestamp,
-                    expires_at=min(
-                        boundary.network_runtime.window_end,
-                        ensure_utc(event.timestamp)
-                        + timedelta(
-                            seconds=generator_module._ntp_parser_min_gap_seconds(poll_seconds)
-                        ),
-                    ),
+                proxy_hostname = protocol_evidence.dns.query
+            if proxy_hostname is None:
+                proxy_hostname = REVERSE_DNS.get(endpoints.dst_ip)
+            if proxy_hostname is None:
+                proxy_hostname = _generate_random_hostname(rng, endpoints.dst_ip)
+            # Suppressed hostname → use raw IP for proxy logging
+            if proxy_hostname == "":
+                proxy_hostname = endpoints.dst_ip
+            from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+            domain_tags = get_domain_tags(proxy_hostname)
+            proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
+                self._proxy_request_presentation(
+                    event.http,
+                    endpoints=endpoints,
+                    proxy_hostname=proxy_hostname,
+                    domain_tags=domain_tags,
+                    rng=rng,
                 )
-                server_response = executor._ntp_server_response_profile(
-                    dst_ip,
-                    network_preparation=network_preparation,
+            )
+            from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+            apply_domain_user_agent = event.http is None or (
+                not _is_tool_http_user_agent(event.http.user_agent)
+                and not is_browser_like_proxy_domain(proxy_hostname, domain_tags=domain_tags)
+            )
+            user_agent = executor._proxy_user_agent_for_context(
+                rng,
+                endpoints.source_system,
+                hostname=proxy_hostname,
+                domain_tags=domain_tags,
+                existing_user_agent=user_agent,
+                override_user_agent=proxy_ua_override,
+                apply_domain_override=apply_domain_user_agent,
+                source_identity=endpoints.src_ip,
+            )
+            proxy_referrer = _source_native_http_referrer(
+                user_agent,
+                proxy_referrer,
+                request_scheme="https" if endpoints.dst_port == 443 else "http",
+                request_port=endpoints.dst_port,
+            )
+            cache_roll = rng.random()
+            proxy_cacheable = _proxy_request_allows_cache_hit(
+                method=proxy_method,
+                url=url,
+                content_type=proxy_content_type,
+                domain_tags=domain_tags,
+            )
+            if event.http is not None:
+                if event.http.status_code == 304:
+                    cache_result = "REVALIDATED"
+                elif proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
+                    cache_result = "HIT"
+                else:
+                    cache_result = "MISS"
+            elif proxy_cacheable and cache_roll < 0.30:
+                cache_result = "HIT"
+            elif cache_roll < 0.91:
+                cache_result = "MISS"
+            elif cache_roll < 0.945:
+                cache_result = "DENIED"
+            elif cache_roll < 0.975:
+                cache_result = "AUTH_REQUIRED"
+            else:
+                cache_result = "GATEWAY_ERROR"
+            # Proxy sc_bytes/cs_bytes are source-side accounting fields:
+            # payload plus HTTP/proxy headers for allowed responses,
+            # or proxy-generated error pages for failures.
+            _cs = (protocol_evidence.orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
+            _response_bytes = (
+                event.http.response_body_len
+                if event.http is not None
+                else (protocol_evidence.resp_bytes or 0)
+            )
+            if cache_result == "DENIED":
+                _sc = rng.randint(500, 2000)  # proxy error page
+            elif cache_result == "AUTH_REQUIRED":
+                _sc = rng.randint(300, 1200)
+            elif cache_result == "GATEWAY_ERROR":
+                _sc = rng.randint(250, 1800)
+            elif cache_result == "HIT":
+                _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+            else:
+                _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+            proxy_status_code = (
+                event.http.status_code
+                if event.http is not None
+                else {
+                    "DENIED": 403,
+                    "AUTH_REQUIRED": 407,
+                    "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+                }.get(cache_result, 200)
+            )
+            event.proxy = ProxyContext(
+                client_ip=endpoints.src_ip,
+                username=executor._proxy_username_for_source(
+                    source_system=endpoints.source_system,
+                    user_agent=user_agent,
+                    cache_result=cache_result,
+                    hostname=proxy_hostname,
+                    time=event.timestamp,
+                ),
+                method=proxy_method,
+                url=url,
+                host=proxy_hostname,
+                status_code=proxy_status_code,
+                sc_bytes=_sc,
+                cs_bytes=_cs,
+                time_taken=_proxy_time_taken_ms(
+                    protocol_evidence.duration,
+                    rng,
+                    method=proxy_method,
+                    status_code=proxy_status_code,
+                    cache_result=cache_result,
                     timing_runtime=self._timing_runtime,
-                    expires_at=boundary.network_runtime.window_end,
-                )
-                observed_response = generator_module._ntp_observed_response_fields(
-                    server_response,
-                    dst_ip=dst_ip,
-                    event_time=event.timestamp,
-                    timing_runtime=self._timing_runtime,
-                )
-                if ntp_timing is None:
-                    median_rtt_ms, rtt_sigma = generator_module._NTP_STRATUM_TIMING.get(
-                        stratum,
-                        (10.0, 0.7),
-                    )
-                    ntp_timing = self._ntp_timing_components(
-                        request,
-                        median_rtt_ms=median_rtt_ms,
-                        rtt_sigma=rtt_sigma,
-                    )
-                rtt_sec, proc_sec, close_slack_sec, reference_age = ntp_timing
-                ntp_duration = rtt_sec + proc_sec + close_slack_sec
-                if event.network.duration is None or event.network.duration < ntp_duration:
-                    event.network.duration = ntp_duration
-                canonical_server_receive = event.timestamp + timedelta(seconds=rtt_sec / 2)
-                canonical_server_transmit = canonical_server_receive + timedelta(seconds=proc_sec)
-                reference_time = self._ntp_clock_time(
-                    request,
-                    event.timestamp - reference_age,
-                    role="server",
-                    identity=dst_ip,
-                )
-                origin_time = self._ntp_clock_time(
-                    request,
-                    event.timestamp,
-                    role="client",
-                    identity=event.network.src_ip,
-                )
-                receive_time = self._ntp_clock_time(
-                    request,
-                    canonical_server_receive,
-                    role="server",
-                    identity=dst_ip,
-                )
-                transmit_time = self._ntp_clock_time(
-                    request,
-                    canonical_server_transmit,
-                    role="server",
-                    identity=dst_ip,
-                )
-                event.ntp = NtpContext(
-                    version=int(association["version"]),
-                    mode=4,  # server response
-                    stratum=stratum,
-                    poll=poll_seconds,
-                    precision=observed_response["precision"],
-                    root_delay=observed_response["root_delay"],
-                    root_disp=observed_response["root_disp"],
-                    ref_id=ref_id,
-                    ref_ts=round(reference_time.timestamp(), 6),
-                    org_ts=round(origin_time.timestamp(), 6),
-                    rec_ts=round(receive_time.timestamp(), 6),
-                    xmt_ts=round(transmit_time.timestamp(), 6),
+                    stable_id=f"{stable_id}:proxy-context",
+                ),
+                user_agent=user_agent,
+                content_type=proxy_content_type,
+                cache_result=cache_result,
+                referrer=proxy_referrer,
+                proxy_fqdn=proxy_fqdn,
+                proxy_action=_proxy_action_for_context(
+                    method=proxy_method,
+                    url=url,
+                    status_code=proxy_status_code,
+                    cache_result=cache_result,
+                    dst_port=endpoints.dst_port,
+                ),
+            )
+
+    def _prepare_automatic_http_evidence(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        response_bytes: int | None,
+        rng: random.Random,
+    ) -> None:
+        """Choose HTTP request/response evidence and raise only its local payload floor."""
+        executor = self._executor
+        # Use the already-resolved hostname for HTTP Host header and URI templates.
+        # Honor hostname="" (suppressed) — use raw IP instead of REVERSE_DNS.
+        host = (
+            endpoints.hostname
+            if endpoints.hostname is not None
+            else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
+        )
+        if host == "":
+            host = endpoints.dst_ip
+        if endpoints.dst_port not in (80, 443):
+            host = f"{host}:{endpoints.dst_port}"
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+        from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
+            coerce_response_size_for_mime,
+            http_status_message,
+            is_stable_resource_path,
+            response_mime_types_for_status,
+            response_size_for_status,
+        )
+        from evidenceforge.generation.activity.proxy_uri import (
+            pick_proxy_uri,
+            plaintext_http_redirect_status,
+        )
+
+        web_host = (
+            endpoints.hostname
+            if endpoints.hostname is not None
+            else REVERSE_DNS.get(endpoints.dst_ip, endpoints.dst_ip)
+        )
+        if web_host == "":
+            web_host = endpoints.dst_ip
+        web_domain_tags = get_domain_tags(web_host)
+        _src_os_http = (
+            _get_os_category(endpoints.source_system.os) if endpoints.source_system else None
+        )
+        uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
+            rng,
+            web_host,
+            web_domain_tags,
+            source_os=_src_os_http,
+            source_system_type=getattr(endpoints.source_system, "type", None),
+            allow_canonical_protocol_templates=False,
+        )
+        ua = executor._proxy_user_agent_for_context(
+            rng,
+            endpoints.source_system,
+            hostname=web_host,
+            domain_tags=web_domain_tags,
+            existing_user_agent="",
+            override_user_agent=http_ua_override,
+            apply_domain_override=True,
+            source_identity=endpoints.src_ip,
+        )
+        redirect_status = plaintext_http_redirect_status(
+            web_host,
+            port=endpoints.dst_port,
+            path=uri,
+            dst_ip=endpoints.dst_ip,
+        )
+        if redirect_status is not None:
+            status_code = redirect_status
+            status_msg = http_status_message(status_code)
+        else:
+            status_code, status_msg = _get_http_status(
+                endpoints.dst_ip,
+                uri,
+                publish_cache=False,
+            )
+
+        if status_code in {204, 304}:
+            resp_body_len = 0
+        else:
+            if status_code >= 300 or is_stable_resource_path(uri):
+                resp_body_len = apply_transfer_size_variance(
+                    response_size_for_status(status_code, host, uri),
+                    status_code=status_code,
+                    host=host,
+                    uri=uri,
+                    content_type=mime_type,
+                    variant_key=f"{endpoints.src_ip}:{ua}",
                 )
             else:
-                event.network.service = ""
+                resp_body_len = coerce_response_size_for_mime(rng, mime_type, response_bytes)
+        if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
+            event.network.resp_bytes = resp_body_len
+            min_resp_pkts = max(1, math.ceil(resp_body_len / 1460))
+            event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
+            min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
+            event.network.resp_ip_bytes = max(
+                event.network.resp_ip_bytes or 0,
+                min_resp_ip_bytes,
+            )
+        from evidenceforge.generation.activity.referrer import pick_referrer
 
+        _http_referer = (
+            ""
+            if http_referrer_policy == "none"
+            else pick_referrer(rng, host, context="general", port=endpoints.dst_port)
+        )
+        _http_referer = _source_native_http_referrer(
+            ua,
+            _http_referer,
+            request_scheme="https" if endpoints.dst_port == 443 else "http",
+            request_port=endpoints.dst_port,
+        )
+        event.http = HttpContext(
+            method=http_method,
+            host=host,
+            uri=uri,
+            version="1.1",
+            user_agent=ua,
+            request_body_len=rng.randint(50, 2000) if http_method == "POST" else 0,
+            response_body_len=resp_body_len,
+            status_code=status_code,
+            status_msg=status_msg,
+            referrer=_http_referer,
+            resp_mime_types=response_mime_types_for_status(
+                status_code,
+                mime_type,
+                resp_body_len,
+                method=http_method,
+            ),
+            tags=[],
+        )
+
+    def _prepare_ntp_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        network_preparation: NetworkTransactionPreparation,
+        window_end: datetime,
+        ntp_timing: tuple[float, float, float, timedelta] | None,
+    ) -> tuple[float, float, float, timedelta] | None:
+        """Stage parser spacing and response-clock evidence inside the supplied runtime window."""
+        executor = self._executor
+        from evidenceforge.events.contexts import NtpContext
+
+        stratum, ref_id = _ntp_stratum_and_ref_id(endpoints.dst_ip)
+        association = executor._ntp_association_profile(
+            event.network.src_ip,
+            endpoints.dst_ip,
+            network_preparation=network_preparation,
+            expires_at=window_end,
+        )
+        poll_seconds = float(association["poll"])
+        parser_key = (event.network.src_ip, endpoints.dst_ip)
+        last_parser_time = network_preparation.read_point(
+            NetworkRuntimePointFamily.NTP_PARSER,
+            parser_key,
+            None,
+            at=ensure_utc(event.timestamp),
+        )
+        parser_gap = (
+            None
+            if last_parser_time is None
+            else (event.timestamp - last_parser_time).total_seconds()
+        )
+        if parser_gap is None or parser_gap >= _ntp_parser_min_gap_seconds(poll_seconds):
+            network_preparation.stage_point(
+                NetworkRuntimePointFamily.NTP_PARSER,
+                parser_key,
+                event.timestamp,
+                expires_at=min(
+                    window_end,
+                    ensure_utc(event.timestamp)
+                    + timedelta(seconds=_ntp_parser_min_gap_seconds(poll_seconds)),
+                ),
+            )
+            server_response = executor._ntp_server_response_profile(
+                endpoints.dst_ip,
+                network_preparation=network_preparation,
+                timing_runtime=self._timing_runtime,
+                expires_at=window_end,
+            )
+            observed_response = _ntp_observed_response_fields(
+                server_response,
+                dst_ip=endpoints.dst_ip,
+                event_time=event.timestamp,
+                timing_runtime=self._timing_runtime,
+            )
+            if ntp_timing is None:
+                median_rtt_ms, rtt_sigma = _NTP_STRATUM_TIMING.get(
+                    stratum,
+                    (10.0, 0.7),
+                )
+                ntp_timing = self._ntp_timing_components(
+                    request,
+                    median_rtt_ms=median_rtt_ms,
+                    rtt_sigma=rtt_sigma,
+                )
+            rtt_sec, proc_sec, close_slack_sec, reference_age = ntp_timing
+            ntp_duration = rtt_sec + proc_sec + close_slack_sec
+            if event.network.duration is None or event.network.duration < ntp_duration:
+                event.network.duration = ntp_duration
+            canonical_server_receive = event.timestamp + timedelta(seconds=rtt_sec / 2)
+            canonical_server_transmit = canonical_server_receive + timedelta(seconds=proc_sec)
+            reference_time = self._ntp_clock_time(
+                request,
+                event.timestamp - reference_age,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            origin_time = self._ntp_clock_time(
+                request,
+                event.timestamp,
+                role="client",
+                identity=event.network.src_ip,
+            )
+            receive_time = self._ntp_clock_time(
+                request,
+                canonical_server_receive,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            transmit_time = self._ntp_clock_time(
+                request,
+                canonical_server_transmit,
+                role="server",
+                identity=endpoints.dst_ip,
+            )
+            event.ntp = NtpContext(
+                version=int(association["version"]),
+                mode=4,  # server response
+                stratum=stratum,
+                poll=poll_seconds,
+                precision=observed_response["precision"],
+                root_delay=observed_response["root_delay"],
+                root_disp=observed_response["root_disp"],
+                ref_id=ref_id,
+                ref_ts=round(reference_time.timestamp(), 6),
+                org_ts=round(origin_time.timestamp(), 6),
+                rec_ts=round(receive_time.timestamp(), 6),
+                xmt_ts=round(transmit_time.timestamp(), 6),
+            )
+        else:
+            event.network.service = ""
+
+        return ntp_timing
+
+    def _reconcile_http_transport_accounting(
+        self,
+        request: NetworkConnectionRequest,
+        *,
+        event: _NetworkOccurrenceDraft,
+        facts: NetworkRequestFacts,
+        rng: random.Random,
+    ) -> None:
+        """Reconcile body, packet and duration facts before source visibility fixes the interval."""
         # Enforce conn_state/HTTP consistency: if HTTP context exists,
         # the connection must have completed successfully (SF). A connection
         # with a handshake-only, reset, or half-close state cannot have served
@@ -4857,7 +5309,7 @@ class NetworkTransactionPlanner:
             and event.network.conn_state != "SF"
         ):
             event.network.conn_state = "SF"
-            event.network.history = generator_module._tcp_success_history(rng)
+            event.network.history = _tcp_success_history(rng)
             if event.network.duration is None:
                 event.network.duration = self._http_default_duration_seconds(request)
 
@@ -4875,16 +5327,12 @@ class NetworkTransactionPlanner:
             if event.http is not None:
                 method = (event.http.method or "GET").upper()
                 if event.network.service == "http" and method != "CONNECT":
-                    event.network.orig_bytes, event.network.resp_bytes = (
-                        generator_module._http_flow_payload_bytes(event.http)
+                    event.network.orig_bytes, event.network.resp_bytes = _http_flow_payload_bytes(
+                        event.http
                     )
                 else:
-                    request_body_len = generator_module._http_context_flow_body_len(
-                        event.http, "request"
-                    )
-                    response_body_len = generator_module._http_context_flow_body_len(
-                        event.http, "response"
-                    )
+                    request_body_len = _http_context_flow_body_len(event.http, "request")
+                    response_body_len = _http_context_flow_body_len(event.http, "response")
                     request_overhead = rng.randint(180, 620)
                     response_overhead = rng.randint(180, 900)
                     if event.http.status_code in {204, 304} or method == "HEAD":
@@ -4901,15 +5349,15 @@ class NetworkTransactionPlanner:
                     )
             if (
                 event.network.service == "ssl"
-                and not suppress_application_side_effects
-                and not http_application_layer_only
+                and not facts.suppress_application_side_effects
+                and not facts.http_application_layer_only
             ):
                 event.network.orig_bytes = max(event.network.orig_bytes or 0, rng.randint(180, 900))
                 event.network.resp_bytes = max(
                     event.network.resp_bytes or 0, rng.randint(900, 4500)
                 )
             event.network.orig_pkts, event.network.resp_pkts = (
-                generator_module._tcp_packet_counts_from_payload_and_history(
+                _tcp_packet_counts_from_payload_and_history(
                     event.network.orig_bytes,
                     event.network.resp_bytes,
                     event.network.history,
@@ -4918,8 +5366,8 @@ class NetworkTransactionPlanner:
             )
             if (
                 event.network.service == "ssl"
-                and not suppress_application_side_effects
-                and not http_application_layer_only
+                and not facts.suppress_application_side_effects
+                and not facts.http_application_layer_only
             ):
                 event.network.orig_pkts += rng.choices(
                     [0, 1, 2, 3, 5],
@@ -4931,44 +5379,231 @@ class NetworkTransactionPlanner:
                     weights=[35, 25, 20, 15, 5],
                     k=1,
                 )[0]
-            event.network.orig_ip_bytes = generator_module._tcp_ip_byte_count(
+            event.network.orig_ip_bytes = _tcp_ip_byte_count(
                 event.network.orig_bytes,
                 event.network.orig_pkts,
                 rng,
             )
-            event.network.resp_ip_bytes = generator_module._tcp_ip_byte_count(
+            event.network.resp_ip_bytes = _tcp_ip_byte_count(
                 event.network.resp_bytes,
                 event.network.resp_pkts,
                 rng,
             )
 
+    def _plan_network_protocol_evidence(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PlannedNetworkTransport,
+    ) -> PlannedNetworkEvidence | str:
+        """Enrich the root-local draft, then settle its interval before tuple reservation.
+
+        Input identity and accounting come from transport preparation. Helpers
+        mutate this draft or stage points through that same preparation; they
+        neither publish sources nor commit/cancel another owner. Protocol body
+        sizes settle before process visibility and session-end bounds. Only then
+        can the coordinator reserve the exact physical tuple and build responders.
+        """
+        executor = self._executor
+        facts = stage_input.facts
+        endpoints = stage_input.endpoints
+        protocol_evidence = stage_input.protocol
+        applications = stage_input.applications
+        committed_suppressed = stage_input.committed_suppressed
+        event = stage_input.event
+        generic_ssh_preauth_pid = stage_input.generic_ssh_preauth_pid
+        network_preparation = stage_input.network_preparation
+        ntp_timing = protocol_evidence.ntp_timing
+        overhead = stage_input.overhead
+        prepared_responder = stage_input.prepared_responder
+        responding_pid = stage_input.responding_pid
+        rng = stage_input.rng
+        time = stage_input.time
+
+        if protocol_evidence.ids_alerts:
+            event.ids_alerts = list(protocol_evidence.ids_alerts)
+        if protocol_evidence.email is not None:
+            event.email = protocol_evidence.email
+        if protocol_evidence.smtp is not None:
+            event.smtp = protocol_evidence.smtp
+        if request.ssl is not None and not facts.http_application_layer_only:
+            event.ssl = request.ssl
+        if protocol_evidence.x509 is not None and not facts.http_application_layer_only:
+            event.x509 = protocol_evidence.x509
+        if protocol_evidence.x509_chain and not facts.http_application_layer_only:
+            event.x509_chain = list(protocol_evidence.x509_chain)
+        if request.tls_presentation is not None and not facts.http_application_layer_only:
+            event.tls_presentation = request.tls_presentation
+            if not event.x509_chain:
+                event.x509_chain = executor._tls_certificate_planner.x509_contexts(
+                    request.tls_presentation
+                )
+            executor._tls_certificate_planner.validate_projection(
+                request.tls_presentation,
+                event.x509_chain,
+            )
+            event.x509 = event.x509_chain[0]
+            if event.ssl is not None:
+                event.ssl = replace(
+                    event.ssl,
+                    cert_chain_fuids=tuple(cert.fuid for cert in event.x509_chain),
+                )
+        if protocol_evidence.http is not None:
+            event.http = protocol_evidence.http
+        if protocol_evidence.file_transfer is not None:
+            event.file_transfer = protocol_evidence.file_transfer
+        if protocol_evidence.file_transfers:
+            event.file_transfers = list(protocol_evidence.file_transfers)
+        if protocol_evidence.pe is not None:
+            event.pe = protocol_evidence.pe
+        if request.pe_analyses:
+            event.pe_analyses = list(request.pe_analyses)
+        if protocol_evidence.ocsp is not None:
+            event.ocsp = protocol_evidence.ocsp
+        if request.ocsp_transaction is not None:
+            event.ocsp_transaction = request.ocsp_transaction
+        if protocol_evidence.proxy is not None:
+            event.proxy = protocol_evidence.proxy
+        if protocol_evidence.firewall is not None:
+            event.firewall = protocol_evidence.firewall
+
+        committed_suppressed = self._prepare_dns_protocol_evidence(
+            request,
+            event=event,
+            facts=facts,
+            endpoints=endpoints,
+            protocol_evidence=protocol_evidence,
+            network_preparation=network_preparation,
+            rng=rng,
+            time=time,
+            overhead=overhead,
+            committed_suppressed=committed_suppressed,
+        )
+
+        # Proxy context: attach only for established outbound internet traffic.
+        # Forward proxies only see egress that completes (not blocked/denied flows).
         if (
-            not suppress_application_side_effects
-            and not http_application_layer_only
-            and not local_only
+            not facts.local_only
+            and protocol_evidence.service in ("ssl", "http")
+            and endpoints.dst_port in (80, 443)
+            and event.proxy is None
+            and not _is_private_ip(endpoints.dst_ip)
+            and protocol_evidence.conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+        ):
+            self._prepare_transparent_proxy_evidence(
+                event=event,
+                endpoints=endpoints,
+                protocol_evidence=protocol_evidence,
+                rng=rng,
+                stable_id=facts.stable_id,
+            )
+
+        # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
+        # Skip for local-only events (no network sensor will see them)
+        rng = network_preparation.rng
+        if (
+            not facts.suppress_application_side_effects
+            and not facts.http_application_layer_only
+            and not facts.local_only
+            and protocol_evidence.service == "ssl"
+            and protocol_evidence.proto == "tcp"
+            and protocol_evidence.conn_state == "SF"
+        ):
+            executor._attach_ssl_context(
+                event,
+                hostname=endpoints.tls_hostname,
+                dns=protocol_evidence.dns,
+                dst_ip=endpoints.dst_ip,
+                rng=rng,
+                allow_failure=not facts.caller_provided_conn_state,
+                timing_stable_id=facts.stable_id,
+                network_preparation=network_preparation,
+                timing_runtime=self._timing_runtime,
+                network_point_expires_at=boundary.network_runtime.window_end,
+            )
+        if (
+            protocol_evidence.proto == "tcp"
+            and event.network.conn_state in {"S0", "REJ", "SH", "SHR"}
+            and event.network.service in {"http", "ssl"}
+            and event.http is None
+            and event.ssl is None
+        ):
+            event.network.service = ""
+
+        elif (
+            not facts.local_only
+            and not facts.suppress_application_side_effects
+            and protocol_evidence.service == "http"
+            and protocol_evidence.proto == "tcp"
+            and protocol_evidence.conn_state == "SF"
+            and event.http is None  # Skip auto-generation if caller provided HttpContext
+        ):
+            self._prepare_automatic_http_evidence(
+                event=event,
+                endpoints=endpoints,
+                response_bytes=protocol_evidence.resp_bytes,
+                rng=rng,
+            )
+
+        if not facts.suppress_application_side_effects:
+            _attach_http_file_transfers(
+                event,
+                dst_ip=endpoints.dst_ip,
+                rng=rng,
+                timing_runtime=self._timing_runtime,
+                timing_scope=self._timing_scope(request),
+                deployment_registry=getattr(executor.dispatcher, "deployment_registry", None),
+            )
+
+        # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
+        # fields, so only attach the context when the matching conn.log row has a
+        # responder payload.
+        if (
+            not facts.local_only
+            and protocol_evidence.service == "ntp"
+            and protocol_evidence.proto == "udp"
+            and event.network.conn_state == "SF"
+            and (event.network.resp_pkts or 0) > 0
+            and (event.network.resp_bytes or 0) > 0
+        ):
+            ntp_timing = self._prepare_ntp_protocol_evidence(
+                request,
+                event=event,
+                endpoints=endpoints,
+                network_preparation=network_preparation,
+                window_end=boundary.network_runtime.window_end,
+                ntp_timing=ntp_timing,
+            )
+
+        self._reconcile_http_transport_accounting(request, event=event, facts=facts, rng=rng)
+
+        if (
+            not facts.suppress_application_side_effects
+            and not facts.http_application_layer_only
+            and not facts.local_only
             and event.network.service == "ssl"
             and event.network.conn_state == "SF"
             and event.ssl is None
         ):
             executor._attach_ssl_context(
                 event,
-                hostname=tls_hostname,
-                dns=dns,
-                dst_ip=dst_ip,
+                hostname=endpoints.tls_hostname,
+                dns=protocol_evidence.dns,
+                dst_ip=endpoints.dst_ip,
                 rng=rng,
                 allow_failure=False,
-                timing_stable_id=stable_id,
+                timing_stable_id=facts.stable_id,
                 network_preparation=network_preparation,
                 timing_runtime=self._timing_runtime,
                 network_point_expires_at=boundary.network_runtime.window_end,
             )
 
-        generator_module._align_tcp_network_payload_with_history(event.network, rng)
-        if preserve_explicit_payload:
-            generator_module._preserve_explicit_tcp_payload_overrides(
+        _align_tcp_network_payload_with_history(event.network, rng)
+        if facts.preserve_explicit_payload:
+            _preserve_explicit_tcp_payload_overrides(
                 event.network,
-                explicit_orig_bytes=explicit_orig_bytes,
-                explicit_resp_bytes=explicit_resp_bytes,
+                explicit_orig_bytes=facts.explicit_orig_bytes,
+                explicit_resp_bytes=facts.explicit_resp_bytes,
                 rng=rng,
             )
         if (
@@ -4980,7 +5615,7 @@ class NetworkTransactionPlanner:
         ):
             pass
 
-        self._reconcile_application_payload(event, generator_module)
+        self._reconcile_application_payload(event)
 
         scenario_end = getattr(executor, "_scenario_end_time", None)
         if scenario_end is not None and ensure_utc(request.time) == ensure_utc(scenario_end):
@@ -4994,21 +5629,21 @@ class NetworkTransactionPlanner:
 
         pid = event.network.initiating_pid
         process_ctx = event.process
-        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
+        if pid > 0 and endpoints.resolved_source_system is not None and process_ctx is not None:
             adjusted_time = executor._clamp_after_visible_process_create(
-                resolved_source_system,
+                endpoints.resolved_source_system,
                 pid,
                 event.timestamp,
                 "source.windows_wfp_connection",
                 timing_runtime=self._timing_runtime,
             )
             if adjusted_time > event.timestamp:
-                if preserve_start_time:
+                if facts.preserve_start_time:
                     # A higher-level bundle already owns the transport anchor.
                     # Omit late attribution before leasing that immutable interval.
                     executor._set_connection_process_context(
                         event,
-                        source_system=resolved_source_system,
+                        source_system=endpoints.resolved_source_system,
                         pid=-1,
                     )
                     pid = -1
@@ -5025,17 +5660,17 @@ class NetworkTransactionPlanner:
         # must live on the finalized transaction rather than be re-derived from those copies.
         canonical_duration = event.network.duration
         if canonical_duration is None and event.network.conn_state in {"REJ", "S0"}:
-            canonical_duration = max(0.000001, canonical_terminal_duration or 0.000001)
+            canonical_duration = max(0.000001, stage_input.canonical_terminal_duration or 0.000001)
         event.network.duration = self._cap_to_owning_session(
             start=event.timestamp,
             duration=canonical_duration,
-            source_system=resolved_source_system,
+            source_system=endpoints.resolved_source_system,
             pid=pid,
-            stable_id=stable_id,
+            stable_id=facts.stable_id,
         )
         event.network.source_visible_start_time = event.timestamp
         event.network.source_visible_close_time = (
-            event.timestamp + generator_module.timedelta(seconds=max(0.0, event.network.duration))
+            event.timestamp + timedelta(seconds=max(0.0, event.network.duration))
             if event.network.duration is not None
             else None
         )
@@ -5055,16 +5690,18 @@ class NetworkTransactionPlanner:
             if canonical_close is None:
                 raise StateError("Physical TCP/UDP transport requires a canonical close time")
             transport_lease = network_preparation.reserve_transport_tuple(
-                intent_stable_id=stable_id,
+                intent_stable_id=facts.stable_id,
                 src_ip=event.network.src_ip,
                 dst_ip=event.network.dst_ip,
                 dst_port=event.network.dst_port,
                 protocol=event.network.protocol,
                 opened_at=canonical_start,
                 closed_at=canonical_close,
-                source_port=(None if automatic_source_port else event.network.src_port),
-                preferred_source_port=(event.network.src_port if automatic_source_port else None),
-                source_os_category=source_os_category,
+                source_port=(None if facts.automatic_source_port else event.network.src_port),
+                preferred_source_port=(
+                    event.network.src_port if facts.automatic_source_port else None
+                ),
+                source_os_category=endpoints.source_os_category,
             )
             event.network.src_ip = transport_lease.src_ip
             event.network.src_port = transport_lease.src_port
@@ -5072,7 +5709,7 @@ class NetworkTransactionPlanner:
             transport_stable_id = transport_lease.occurrence_stable_id
         else:
             transport_stable_id = _network_transport_occurrence_stable_id(
-                stable_id,
+                facts.stable_id,
                 src_ip=event.network.src_ip,
                 src_port=event.network.src_port,
                 dst_ip=event.network.dst_ip,
@@ -5082,16 +5719,16 @@ class NetworkTransactionPlanner:
             )
             network_preparation.bind_transaction_identity(transport_stable_id)
 
-        if prepare_generic_ssh_responder and target_system is not None:
+        if stage_input.prepare_generic_ssh_responder and endpoints.target_system is not None:
             infer_generic_ssh_preauth = responding_pid <= 0
             prepared_responder = executor.prepare_network_responder(
                 kind="ssh",
-                target_system=target_system,
+                target_system=endpoints.target_system,
                 time=canonical_start,
                 close_time=canonical_close,
                 source_ip=event.network.src_ip,
                 source_port=event.network.src_port,
-                target_user=ssh_attempted_username,
+                target_user=facts.ssh_attempted_username,
                 responding_pid=responding_pid,
                 network_preparation=network_preparation,
                 source_timing_preparation=boundary.timing_preparation,
@@ -5101,10 +5738,10 @@ class NetworkTransactionPlanner:
             event.network.responding_pid = responding_pid
             if infer_generic_ssh_preauth:
                 generic_ssh_preauth_pid = responding_pid
-        elif prepare_generic_smb_responder and target_system is not None:
+        elif stage_input.prepare_generic_smb_responder and endpoints.target_system is not None:
             prepared_responder = executor.prepare_network_responder(
                 kind="smb",
-                target_system=target_system,
+                target_system=endpoints.target_system,
                 time=canonical_start,
                 close_time=canonical_close,
                 source_ip=event.network.src_ip,
@@ -5187,7 +5824,7 @@ class NetworkTransactionPlanner:
             transaction_outcome = "failure"
         event.network.finalize_transaction(
             transport_stable_id,
-            hostname=hostname or event.network.dst_ip,
+            hostname=endpoints.hostname or event.network.dst_ip,
             outcome=transaction_outcome,
             phase_times=tuple(phase_times),
         )
@@ -5201,22 +5838,24 @@ class NetworkTransactionPlanner:
             raise ValueError("Network transaction disappeared after finalization")
         persistent_smb_batch = None
         persistent_smb_client_identity = None
-        if persistent_smb_intent is not None:
-            persistent_smb_batch = persistent_smb_intent.prepare(
+        if applications.persistent_smb_intent is not None:
+            persistent_smb_batch = applications.persistent_smb_intent.prepare(
                 executor.state_manager,
                 transaction,
             )
-            persistent_smb_client_identity = persistent_smb_intent.client_process_identity(
-                executor.state_manager,
-                persistent_smb_batch,
+            persistent_smb_client_identity = (
+                applications.persistent_smb_intent.client_process_identity(
+                    executor.state_manager,
+                    persistent_smb_batch,
+                )
             )
-            client_process = persistent_smb_intent.client_process
+            client_process = applications.persistent_smb_intent.client_process
             if (
                 persistent_smb_client_identity is not None
                 and client_process.transport_attribution == "process"
             ):
                 pid = persistent_smb_client_identity.pid
-                process_ctx = generator_module.ProcessContext(
+                process_ctx = ProcessContext(
                     pid=persistent_smb_client_identity.pid,
                     parent_pid=persistent_smb_client_identity.parent_pid,
                     image=persistent_smb_client_identity.image,
@@ -5257,52 +5896,90 @@ class NetworkTransactionPlanner:
                 ]
             )
         )
-        event = event.build_event(generator_module)
+        event = event.build_event()
 
-        # Automatic weird.log synthesis is intentionally disabled for now. The
-        # Zeek weird type space is broad and state-sensitive; poorly matched
-        # weird rows are more damaging than sparse weird.log output. Explicit
-        # WeirdContext events still render through ZeekWeirdEmitter. Keep one
-        # RNG draw to avoid reshaping unrelated deterministic traffic choices.
-        if not generator_module._AUTO_WEIRD_ENABLED:
-            rng.random()
+        return PlannedNetworkEvidence(
+            publication=NetworkPublicationInputs(
+                facts=facts,
+                endpoints=endpoints,
+                event=event,
+                generic_ssh_preauth_pid=generic_ssh_preauth_pid,
+                prepared_responder=prepared_responder,
+                process_ctx=process_ctx,
+                pid=pid,
+                time=time,
+                uid=stage_input.uid,
+                committed_suppressed=committed_suppressed,
+            ),
+            applications=applications,
+            network_preparation=network_preparation,
+            owner_rng=stage_input.owner_rng,
+            rng=rng,
+            persistent_smb_batch=persistent_smb_batch,
+        )
+
+    def _prepare_network_publication(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PlannedNetworkEvidence,
+    ) -> PreparedNetworkPublication | str:
+        """Assemble and validate state, lifecycle, and source publication capabilities."""
+        from evidenceforge.generation.actions.proxy_transaction import ExplicitProxyOpenPreparation
+
+        executor = self._executor
+        publication_inputs = stage_input.publication
+        applications = stage_input.applications
+        endpoints = publication_inputs.endpoints
+        deferred_authority = applications.deferred_authority
+        network_preparation = stage_input.network_preparation
+        owner_rng = stage_input.owner_rng
+        persistent_smb_batch = stage_input.persistent_smb_batch
+
+        if not _AUTO_WEIRD_ENABLED:
+            stage_input.rng.random()
 
         application_window_end = getattr(executor, "_scenario_end_time", None)
-        transport_inside_application_window = event.network.closed_at is not None and (
-            application_window_end is None
-            or (
-                event.network.started_at < ensure_utc(application_window_end)
-                and event.network.closed_at <= ensure_utc(application_window_end)
+        transport_inside_application_window = (
+            publication_inputs.event.network.closed_at is not None
+            and (
+                application_window_end is None
+                or (
+                    publication_inputs.event.network.started_at < ensure_utc(application_window_end)
+                    and publication_inputs.event.network.closed_at
+                    <= ensure_utc(application_window_end)
+                )
             )
         )
         if (
-            http_channel_affinity is not None
-            and event.http is not None
-            and event.network.conn_state == "SF"
-            and not event.network.application_layer_only
-            and event.network.duration is not None
+            applications.http_channel_affinity is not None
+            and publication_inputs.event.http is not None
+            and publication_inputs.event.network.conn_state == "SF"
+            and not publication_inputs.event.network.application_layer_only
+            and publication_inputs.event.network.duration is not None
             and transport_inside_application_window
         ):
-            assert event.network.closed_at is not None
+            assert publication_inputs.event.network.closed_at is not None
             http_open_token = executor._http_channel_manager.prepare_open_transport(
-                http_channel_affinity,
-                transport_id=event.network.stable_id,
-                zeek_uid=event.network.zeek_uid,
-                conn_id=event.network.conn_id,
-                src_port=event.network.src_port,
-                opened_at=event.network.started_at,
-                closes_at=event.network.closed_at,
-                initial_request_time=event.http.canonical_request_time or event.network.started_at,
+                applications.http_channel_affinity,
+                transport_id=publication_inputs.event.network.stable_id,
+                zeek_uid=publication_inputs.event.network.zeek_uid,
+                conn_id=publication_inputs.event.network.conn_id,
+                src_port=publication_inputs.event.network.src_port,
+                opened_at=publication_inputs.event.network.started_at,
+                closes_at=publication_inputs.event.network.closed_at,
+                initial_request_time=publication_inputs.event.http.canonical_request_time
+                or publication_inputs.event.network.started_at,
                 orig_budget=max(
-                    event.network.orig_bytes or 0,
-                    event.http.request_body_len or 0,
+                    publication_inputs.event.network.orig_bytes or 0,
+                    publication_inputs.event.http.request_body_len or 0,
                 ),
                 resp_budget=max(
-                    event.network.resp_bytes or 0,
-                    event.http.response_body_len or 0,
+                    publication_inputs.event.network.resp_bytes or 0,
+                    publication_inputs.event.http.response_body_len or 0,
                 ),
-                initial_request_body_bytes=event.http.request_body_len or 0,
-                initial_response_body_bytes=event.http.response_body_len or 0,
+                initial_request_body_bytes=publication_inputs.event.http.request_body_len or 0,
+                initial_response_body_bytes=publication_inputs.event.http.response_body_len or 0,
             )
             boundary.track_application(executor._http_channel_manager, http_open_token)
 
@@ -5310,7 +5987,7 @@ class NetworkTransactionPlanner:
         if explicit_proxy_open is not None:
             if not isinstance(explicit_proxy_open, ExplicitProxyOpenPreparation):
                 raise StateError("Network request has an invalid explicit-proxy open preparation")
-            if event.network.application_layer_only:
+            if publication_inputs.event.network.application_layer_only:
                 raise StateError("Explicit-proxy open requires a physical origin transport")
             client_root = explicit_proxy_open.client_root
             client_receipt = explicit_proxy_open.client_receipt
@@ -5324,7 +6001,7 @@ class NetworkTransactionPlanner:
                 raise StateError("Explicit-proxy open changed its client prerequisite identity")
             proxy_open_token = explicit_proxy_open.prepare_token(
                 manager=executor._proxy_channel_manager,
-                origin_transaction=event.network,
+                origin_transaction=publication_inputs.event.network,
             )
             if proxy_open_token is None:
                 raise StateError("Explicit-proxy manager rejected the prepared origin transport")
@@ -5334,10 +6011,10 @@ class NetworkTransactionPlanner:
                 prerequisite_receipts=(client_receipt,),
             )
 
-        lifecycle_mode = request.lifecycle_plan_mode(event.network)
+        lifecycle_mode = request.lifecycle_plan_mode(publication_inputs.event.network)
         materialization_mode = (
             ConnectionMaterializationMode.APPLICATION_CHILD
-            if event.network.application_layer_only
+            if publication_inputs.event.network.application_layer_only
             else ConnectionMaterializationMode.PHYSICAL
         )
         if lifecycle_mode == "deferred_session":
@@ -5349,10 +6026,10 @@ class NetworkTransactionPlanner:
                 raise StateError("Deferred-session authority requires a physical transport")
             deferred_authority = deferred_authority.prepare_state_authority(
                 executor.state_manager,
-                event.network,
+                publication_inputs.event.network,
             )
             deferred_authority = deferred_authority.prepare_application_authority(
-                event.network,
+                publication_inputs.event.network,
             )
             boundary.track_application(
                 deferred_authority.application_manager,
@@ -5365,9 +6042,9 @@ class NetworkTransactionPlanner:
         process_holds = ()
         if (
             materialization_mode is ConnectionMaterializationMode.PHYSICAL
-            and persistent_smb_intent is None
-            and pid > 0
-            and resolved_source_system is not None
+            and applications.persistent_smb_intent is None
+            and publication_inputs.pid > 0
+            and endpoints.resolved_source_system is not None
         ):
             from evidenceforge.events.lifecycle import LifecycleEntityRef, LifecycleHold
             from evidenceforge.generation.state_manager import (
@@ -5376,10 +6053,13 @@ class NetworkTransactionPlanner:
             )
 
             process_identity = executor.state_manager.get_process_identity(
-                resolved_source_system.hostname,
-                pid,
+                endpoints.resolved_source_system.hostname,
+                publication_inputs.pid,
             )
-            activity_time = event.network.closed_at or event.network.started_at
+            activity_time = (
+                publication_inputs.event.network.closed_at
+                or publication_inputs.event.network.started_at
+            )
             lifecycle_process = (
                 None
                 if process_identity is None
@@ -5402,20 +6082,20 @@ class NetworkTransactionPlanner:
                         if session_identity is None
                         else (SessionActivityPatch(session_identity, activity_time),)
                     )
-                    hold_action_id = generator_module.stable_uuid(
+                    hold_action_id = stable_uuid(
                         "network-process-hold-action",
-                        event.network.stable_id,
+                        publication_inputs.event.network.stable_id,
                         process_identity.object_id,
                     )
                     process_holds = (
                         LifecycleHold(
-                            hold_id=generator_module.stable_uuid(
+                            hold_id=stable_uuid(
                                 "network-process-hold",
-                                event.network.stable_id,
+                                publication_inputs.event.network.stable_id,
                                 process_identity.object_id,
                             ),
                             subject=LifecycleEntityRef("process", process_identity.object_id),
-                            acquired_at=event.network.started_at,
+                            acquired_at=publication_inputs.event.network.started_at,
                             hold_until=activity_time,
                             action_id=hold_action_id,
                             reason="canonical_transport_close",
@@ -5423,11 +6103,11 @@ class NetworkTransactionPlanner:
                     )
 
         multipart_reads = self._plan_http_multipart_endpoint_reads(
-            event,
-            resolved_source_system or source_system,
-            target_system,
-            pid,
-            process_ctx,
+            publication_inputs.event,
+            endpoints.resolved_source_system or endpoints.source_system,
+            endpoints.target_system,
+            publication_inputs.pid,
+            publication_inputs.process_ctx,
             request.time,
         )
         if multipart_reads is not None:
@@ -5444,21 +6124,22 @@ class NetworkTransactionPlanner:
                     if patch.identity.object_id in held_object_ids:
                         continue
                     held_object_ids.add(patch.identity.object_id)
-                    hold_action_id = generator_module.stable_uuid(
+                    hold_action_id = stable_uuid(
                         "network-multipart-process-hold-action",
-                        event.network.stable_id,
+                        publication_inputs.event.network.stable_id,
                         patch.identity.object_id,
                     )
                     additional_holds.append(
                         LifecycleHold(
-                            hold_id=generator_module.stable_uuid(
+                            hold_id=stable_uuid(
                                 "network-multipart-process-hold",
-                                event.network.stable_id,
+                                publication_inputs.event.network.stable_id,
                                 patch.identity.object_id,
                             ),
                             subject=LifecycleEntityRef("process", patch.identity.object_id),
-                            acquired_at=event.network.started_at,
-                            hold_until=event.network.closed_at or event.network.started_at,
+                            acquired_at=publication_inputs.event.network.started_at,
+                            hold_until=publication_inputs.event.network.closed_at
+                            or publication_inputs.event.network.started_at,
                             action_id=hold_action_id,
                             reason="http_multipart_local_read",
                         )
@@ -5466,38 +6147,41 @@ class NetworkTransactionPlanner:
                 process_holds = (*process_holds, *additional_holds)
 
         commit_result = NetworkConnectionCommitResult(
-            transaction=event.network,
+            transaction=publication_inputs.event.network,
             lifecycle_mode=lifecycle_mode,
-            effective_dst_ip=event.network.dst_ip,
-            http=event.protocol.http,
-            file_transfers=event.protocol.file_transfers,
+            effective_dst_ip=publication_inputs.event.network.dst_ip,
+            http=publication_inputs.event.protocol.http,
+            file_transfers=publication_inputs.event.protocol.file_transfers,
         )
         deferred_batch = deferred_authority.state_batch if deferred_authority is not None else None
-        if persistent_smb_intent is not None:
+        if applications.persistent_smb_intent is not None:
             if materialization_mode is not ConnectionMaterializationMode.PHYSICAL:
                 raise StateError("Persistent SMB root requires physical network materialization")
             if persistent_smb_batch is None:
                 raise StateError("Persistent SMB root lost its prepared State batch")
             session_plan = persistent_smb_batch.session
             if (
-                persistent_smb_application_intent is None
-                or persistent_smb_file_journal is None
+                applications.persistent_smb_application_intent is None
+                or applications.persistent_smb_file_journal is None
                 or session_plan is None
-                or persistent_smb_application_intent.manager is not executor._smb_channel_manager
+                or applications.persistent_smb_application_intent.manager
+                is not executor._smb_channel_manager
                 or not executor.state_manager.authenticates_smb_file_mutation_journal(
-                    persistent_smb_file_journal
+                    applications.persistent_smb_file_journal
                 )
             ):
                 raise StateError("Persistent SMB root lost an exact prepared child owner")
-            application_token = persistent_smb_application_intent.prepare(
+            application_token = applications.persistent_smb_application_intent.prepare(
                 session_plan.identity,
-                event.network,
+                publication_inputs.event.network,
             )
             boundary.track_application(
                 executor._smb_channel_manager,
                 application_token,
             )
-            network_preparation.terminalize_smb_file_mutation(persistent_smb_file_journal)
+            network_preparation.terminalize_smb_file_mutation(
+                applications.persistent_smb_file_journal
+            )
             network_preparation.reserve_smb_connection_pin()
         deferred_existing_session_patch = (
             deferred_authority.existing_state_patch if deferred_authority is not None else None
@@ -5526,7 +6210,11 @@ class NetworkTransactionPlanner:
                     if hold.subject.object_id not in held_processes
                 ),
             )
-        responder_batch = prepared_responder.batch if prepared_responder is not None else None
+        responder_batch = (
+            publication_inputs.prepared_responder.batch
+            if publication_inputs.prepared_responder is not None
+            else None
+        )
         owned_batches = tuple(
             candidate
             for candidate in (deferred_batch, responder_batch, persistent_smb_batch)
@@ -5535,13 +6223,13 @@ class NetworkTransactionPlanner:
         if len(owned_batches) > 1:
             raise StateError("Network root cannot own multiple State batches")
         root = network_preparation.seal(
-            transaction=event.network,
+            transaction=publication_inputs.event.network,
             lifecycle_mode=lifecycle_mode,
             materialization_mode=materialization_mode,
-            source_system=state_source_system,
-            source_hostname=state_source_hostname,
-            hostname=hostname or event.network.dst_ip,
-            initiating_pid=pid,
+            source_system=endpoints.state_source_system,
+            source_hostname=endpoints.state_source_hostname,
+            hostname=endpoints.hostname or publication_inputs.event.network.dst_ip,
+            initiating_pid=publication_inputs.pid,
             batch=owned_batches[0] if owned_batches else None,
             rdp_existing_session_patch=deferred_existing_session_patch,
             existing_session_process_roles_patch=(deferred_existing_session_process_roles_patch),
@@ -5561,12 +6249,16 @@ class NetworkTransactionPlanner:
             lifecycle_adapter = lifecycle_production_adapter_for(executor)
             if lifecycle_adapter is None:
                 raise StateError("Prepared network publication requires lifecycle authority")
-            authority_hostname = state_source_system or event.network.src_ip
-            source_lifecycle_hostname = state_source_system or event.network.src_ip
+            authority_hostname = (
+                endpoints.state_source_system or publication_inputs.event.network.src_ip
+            )
+            source_lifecycle_hostname = (
+                endpoints.state_source_system or publication_inputs.event.network.src_ip
+            )
             destination_lifecycle_hostname = (
-                target_system.hostname
-                if target_system is not None
-                else (hostname or event.network.dst_ip)
+                endpoints.target_system.hostname
+                if endpoints.target_system is not None
+                else (endpoints.hostname or publication_inputs.event.network.dst_ip)
             )
             deferred_lifecycle_kwargs = (
                 {
@@ -5578,13 +6270,13 @@ class NetworkTransactionPlanner:
                 else {}
             )
             lifecycle_plan = closed_transport_publication_plan(
-                transaction=event.network,
+                transaction=publication_inputs.event.network,
                 authority_hostname=authority_hostname,
                 src_hostname=source_lifecycle_hostname,
                 dst_hostname=destination_lifecycle_hostname,
-                action_id=generator_module.stable_uuid(
+                action_id=stable_uuid(
                     "network-transport-lifecycle",
-                    event.network.stable_id,
+                    publication_inputs.event.network.stable_id,
                 ),
                 **deferred_lifecycle_kwargs,
             )
@@ -5602,16 +6294,16 @@ class NetworkTransactionPlanner:
         persistent_smb_observations = ()
         prepared_multipart_dispatches = ()
         prepared_deferred_session_dispatches = ()
-        if lifecycle_mode == "deferred_session" and committed_suppressed:
+        if lifecycle_mode == "deferred_session" and publication_inputs.committed_suppressed:
             raise StateError("Deferred-session transport cannot suppress its root occurrence")
         if lifecycle_mode == "deferred_session" or (
-            not committed_suppressed or multipart_reads is not None
+            not publication_inputs.committed_suppressed or multipart_reads is not None
         ):
             from evidenceforge.events.dispatcher import PreparedDispatchStateIntent
 
-            if not committed_suppressed:
+            if not publication_inputs.committed_suppressed:
                 prepared_dispatch = executor.dispatcher.prepare_builder(
-                    event,
+                    publication_inputs.event,
                     state_intent=(
                         PreparedDispatchStateIntent.EXTERNAL_DEFERRED_TRANSPORT
                         if lifecycle_mode == "deferred_session"
@@ -5636,7 +6328,7 @@ class NetworkTransactionPlanner:
             if deferred_authority is not None:
                 deferred_state_starts = self._deferred_session_dependent_builders(
                     deferred_authority,
-                    event,
+                    publication_inputs.event,
                     root,
                 )
                 prepared_deferred_session_dispatches = tuple(
@@ -5659,16 +6351,16 @@ class NetworkTransactionPlanner:
         boundary.seal_timing()
         if prepared_dispatch is not None:
             executor.dispatcher.validate_prepared(prepared_dispatch)
-            if persistent_smb_intent is not None:
+            if applications.persistent_smb_intent is not None:
                 prepared_transaction, persistent_smb_observations = (
                     executor.dispatcher.persistent_smb_prepared_transport_facts(prepared_dispatch)
                 )
-                if prepared_transaction != event.network:
+                if prepared_transaction != publication_inputs.event.network:
                     raise StateError("Persistent SMB prepared transport changed identity")
         for dependent_dispatch in prepared_deferred_session_dispatches:
             executor.dispatcher.validate_prepared(dependent_dispatch)
-        if prepared_responder is not None:
-            for responder_process in prepared_responder.processes:
+        if publication_inputs.prepared_responder is not None:
+            for responder_process in publication_inputs.prepared_responder.processes:
                 executor.dispatcher.validate_prepared(responder_process.publication)
         prepared_multipart_batch = None
         if multipart_reads is not None:
@@ -5776,55 +6468,94 @@ class NetworkTransactionPlanner:
                 deferred_publication_batch,
             )
         boundary.validate_deferred_session_publication_batch()
-        if persistent_smb_intent is not None:
+        if applications.persistent_smb_intent is not None:
             if (
-                persistent_smb_terminal_authority is None
-                or persistent_smb_terminal_continuation is None
+                applications.persistent_smb_terminal_authority is None
+                or applications.persistent_smb_terminal_continuation is None
                 or prepared_dispatch is None
                 or lifecycle_token is None
                 or boundary.application_token is None
             ):
                 raise StateError("Persistent SMB root lost a prepared continuation owner")
-            persistent_smb_terminal_authority.bind_prepared_root(
-                persistent_smb_terminal_continuation,
+            applications.persistent_smb_terminal_authority.bind_prepared_root(
+                applications.persistent_smb_terminal_continuation,
                 PersistentSmbPreparedRoot(
                     root=root,
                     owner_rng=owner_rng,
                     source_timing_preparation=boundary.timing_preparation,
                     lifecycle_token=lifecycle_token,
                     application_token=boundary.application_token,
-                    file_journal=persistent_smb_file_journal,
+                    file_journal=applications.persistent_smb_file_journal,
                     prerequisite_receipts=boundary.prerequisite_receipts,
                     prepared_dispatch=prepared_dispatch,
                     observations=persistent_smb_observations,
                     outcome=(
                         NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
-                        if committed_suppressed
+                        if publication_inputs.committed_suppressed
                         else NetworkConnectionPublicationOutcome.PUBLISHED
                     ),
                 ),
             )
         boundary.transfer()
         if (
-            persistent_smb_intent is not None
-            and persistent_smb_terminal_authority is not None
-            and persistent_smb_terminal_continuation is not None
+            applications.persistent_smb_intent is not None
+            and applications.persistent_smb_terminal_authority is not None
+            and applications.persistent_smb_terminal_continuation is not None
         ):
             return self._resume_or_publish_persistent_smb_root(
                 boundary=boundary,
-                authority=persistent_smb_terminal_authority,
-                continuation=persistent_smb_terminal_continuation,
+                authority=applications.persistent_smb_terminal_authority,
+                continuation=applications.persistent_smb_terminal_continuation,
             )
+
+        return PreparedNetworkPublication(
+            publication=publication_inputs,
+            sources=PreparedNetworkSources(
+                prepared_dispatch=prepared_dispatch,
+                prepared_multipart_batch=prepared_multipart_batch,
+                materialization_mode=materialization_mode,
+            ),
+            applications=(
+                applications
+                if deferred_authority is applications.deferred_authority
+                else replace(applications, deferred_authority=deferred_authority)
+            ),
+            owner_rng=owner_rng,
+            application_token=application_token
+            if applications.persistent_smb_intent is not None
+            else None,
+            deferred_composition=deferred_composition,
+            deferred_publication_batch=deferred_publication_batch,
+            lifecycle_token=lifecycle_token,
+            persistent_smb_observations=persistent_smb_observations,
+            root=root,
+        )
+
+    def _commit_prepared_network(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: PreparedNetworkPublication,
+    ) -> CommittedNetworkPublication | str:
+        """Commit through the existing authority and preserve exact receipt recovery."""
+        executor = self._executor
+        publication_inputs = stage_input.publication
+        sources = stage_input.sources
+        applications = stage_input.applications
+        deferred_composition = stage_input.deferred_composition
+        owner_rng = stage_input.owner_rng
+        root = stage_input.root
+
         try:
             deferred_published = (
                 executor._lifecycle_authority.materialize_prepared_deferred_session_publication(
                     deferred_composition,
-                    deferred_authority.coordinator,
+                    applications.deferred_authority.coordinator,
                     owner_rng,
                     dispatcher=executor.dispatcher,
-                    publication_batch=deferred_publication_batch,
+                    publication_batch=stage_input.deferred_publication_batch,
                 )
-                if deferred_composition is not None and deferred_authority is not None
+                if deferred_composition is not None and applications.deferred_authority is not None
                 else None
             )
             materialized = (
@@ -5834,7 +6565,7 @@ class NetworkTransactionPlanner:
                     root,
                     owner_rng,
                     source_timing_preparation=boundary.timing_preparation,
-                    lifecycle_token=lifecycle_token,
+                    lifecycle_token=stage_input.lifecycle_token,
                     application_token=boundary.application_token,
                     prerequisite_receipts=boundary.prerequisite_receipts,
                 )
@@ -5843,7 +6574,7 @@ class NetworkTransactionPlanner:
 
             outcome = (
                 NetworkConnectionPublicationOutcome.COMMITTED_SUPPRESSED
-                if committed_suppressed
+                if publication_inputs.committed_suppressed
                 else NetworkConnectionPublicationOutcome.PUBLISHED
             )
             application_result = materialized.connection.application
@@ -5853,14 +6584,14 @@ class NetworkTransactionPlanner:
                 else None
             )
             persistent_smb_handoff = None
-            if persistent_smb_intent is not None:
+            if applications.persistent_smb_intent is not None:
                 from evidenceforge.generation.smb_channels import SmbChannelAdmissionResult
 
                 pin_install = materialized.connection.state.smb_connection_pin_install
                 file_mutation = materialized.connection.state.smb_file_mutation
                 smb_application = materialized.connection.application
                 if (
-                    prepared_dispatch is None
+                    sources.prepared_dispatch is None
                     or pin_install is None
                     or file_mutation is None
                     or type(smb_application) is not SmbChannelAdmissionResult
@@ -5882,21 +6613,21 @@ class NetworkTransactionPlanner:
                             materialized.receipt
                         )
                     ),
-                    file_journal=persistent_smb_file_journal,
-                    prepared_dispatch=prepared_dispatch,
-                    observations=persistent_smb_observations,
+                    file_journal=applications.persistent_smb_file_journal,
+                    prepared_dispatch=sources.prepared_dispatch,
+                    observations=stage_input.persistent_smb_observations,
                     pin_install_receipt=pin_install,
                     file_mutation=file_mutation,
-                    application_token=application_token,
+                    application_token=stage_input.application_token,
                     application_result=smb_application,
                 )
                 if (
-                    persistent_smb_terminal_authority is None
-                    or persistent_smb_terminal_continuation is None
+                    applications.persistent_smb_terminal_authority is None
+                    or applications.persistent_smb_terminal_continuation is None
                 ):
                     raise StateError("Persistent SMB root lost its continuation owner")
-                persistent_smb_terminal_authority.bind_committed_root(
-                    persistent_smb_terminal_continuation,
+                applications.persistent_smb_terminal_authority.bind_committed_root(
+                    applications.persistent_smb_terminal_continuation,
                     materialization=materialized,
                     handoff=persistent_smb_handoff,
                     outcome=outcome,
@@ -5987,60 +6718,88 @@ class NetworkTransactionPlanner:
         except BaseException:
             raise
 
-        executor._last_connection_effective_dst_ip = event.network.dst_ip
+        return CommittedNetworkPublication(
+            publication=publication_inputs,
+            sources=sources,
+            deferred_published=deferred_published,
+            materialized=materialized,
+        )
+
+    def _publish_committed_network(
+        self,
+        request: NetworkConnectionRequest,
+        boundary: _PreparedNetworkBoundary,
+        stage_input: CommittedNetworkPublication,
+    ) -> str:
+        """Publish committed evidence and update the established runtime observations."""
+        executor = self._executor
+        publication_inputs = stage_input.publication
+        sources = stage_input.sources
+        facts = publication_inputs.facts
+        endpoints = publication_inputs.endpoints
+        deferred_published = stage_input.deferred_published
+        materialized = stage_input.materialized
+
+        executor._last_connection_effective_dst_ip = publication_inputs.event.network.dst_ip
         executor._last_connection_effective_tuple = None
         executor._last_connection_effective_time = None
         executor._last_connection_effective_transaction_id = ""
-        process_owner_system = resolved_source_system or source_system
-        if process_owner_system is not None and event.network.initiating_pid > 0:
+        process_owner_system = endpoints.resolved_source_system or endpoints.source_system
+        if process_owner_system is not None and publication_inputs.event.network.initiating_pid > 0:
             executor._remember_process_connection_hold(
                 system=process_owner_system,
-                pid=event.network.initiating_pid,
-                close_time=event.network.closed_at,
+                pid=publication_inputs.event.network.initiating_pid,
+                close_time=publication_inputs.event.network.closed_at,
             )
-        if materialization_mode is ConnectionMaterializationMode.PHYSICAL:
+        if sources.materialization_mode is ConnectionMaterializationMode.PHYSICAL:
             executor._last_connection_effective_tuple = (
-                event.network.src_ip,
-                event.network.src_port,
-                event.network.dst_ip,
-                event.network.dst_port,
-                event.network.protocol,
+                publication_inputs.event.network.src_ip,
+                publication_inputs.event.network.src_port,
+                publication_inputs.event.network.dst_ip,
+                publication_inputs.event.network.dst_port,
+                publication_inputs.event.network.protocol,
             )
-            executor._last_connection_effective_time = event.timestamp
-            executor._last_connection_effective_transaction_id = event.network.stable_id
-            executor._last_connection_http_context = event.protocol.http
-            executor._last_connection_file_transfers = event.protocol.file_transfers
+            executor._last_connection_effective_time = publication_inputs.event.timestamp
+            executor._last_connection_effective_transaction_id = (
+                publication_inputs.event.network.stable_id
+            )
+            executor._last_connection_http_context = publication_inputs.event.protocol.http
+            executor._last_connection_file_transfers = (
+                publication_inputs.event.protocol.file_transfers
+            )
         kerberos_target_wfp_published = False
         if (
-            kerberos_prerequisite_success
-            and not suppress_application_side_effects
-            and event.network.service == "kerberos"
-            and event.network.dst_port == 88
-            and event.network.protocol in {"tcp", "udp"}
-            and event.network.src_port > 0
+            facts.kerberos_prerequisite_success
+            and not facts.suppress_application_side_effects
+            and publication_inputs.event.network.service == "kerberos"
+            and publication_inputs.event.network.dst_port == 88
+            and publication_inputs.event.network.protocol in {"tcp", "udp"}
+            and publication_inputs.event.network.src_port > 0
         ):
             if (
-                not committed_suppressed
+                not publication_inputs.committed_suppressed
                 and deferred_published is None
-                and target_system is not None
-                and dst_host_ctx is not None
-                and dst_host_ctx.os_category == "windows"
-                and not event.network.application_layer_only
-                and executor._should_emit_windows_inbound_wfp(event, target_system)
+                and endpoints.target_system is not None
+                and endpoints.dst_host_ctx is not None
+                and endpoints.dst_host_ctx.os_category == "windows"
+                and not publication_inputs.event.network.application_layer_only
+                and executor._should_emit_windows_inbound_wfp(
+                    publication_inputs.event, endpoints.target_system
+                )
             ):
-                inbound_pid = event.network.responding_pid
+                inbound_pid = publication_inputs.event.network.responding_pid
                 inbound_application = executor._lookup_process_name(
-                    target_system.hostname,
+                    endpoints.target_system.hostname,
                     inbound_pid,
                     "windows",
                 )
                 executor.generate_wfp_connection(
-                    system=target_system,
-                    time=time,
-                    network=event.network,
+                    system=endpoints.target_system,
+                    time=publication_inputs.time,
+                    network=publication_inputs.event.network,
                     pid=inbound_pid,
                     application=inbound_application,
-                    parent_action_group_id=parent_action_group_id,
+                    parent_action_group_id=facts.parent_action_group_id,
                 )
                 kerberos_target_wfp_published = True
             # Publish endpoint audit evidence only after the canonical transport
@@ -6048,16 +6807,16 @@ class NetworkTransactionPlanner:
             # visible, admit that exact source frontier before dependent KDC
             # processing is planned.
             executor._emit_dc_audit_for_kerberos_connection(
-                src_ip=event.network.src_ip,
-                src_port=event.network.src_port,
-                dst_ip=event.network.dst_ip,
-                time=event.network.started_at,
-                dst_port=event.network.dst_port,
-                proto=event.network.protocol,
-                conn_state=event.network.conn_state,
-                service=event.network.service,
-                source_system=resolved_source_system,
-                transport=event.network,
+                src_ip=publication_inputs.event.network.src_ip,
+                src_port=publication_inputs.event.network.src_port,
+                dst_ip=publication_inputs.event.network.dst_ip,
+                time=publication_inputs.event.network.started_at,
+                dst_port=publication_inputs.event.network.dst_port,
+                proto=publication_inputs.event.network.protocol,
+                conn_state=publication_inputs.event.network.conn_state,
+                service=publication_inputs.event.network.service,
+                source_system=endpoints.resolved_source_system,
+                transport=publication_inputs.event.network,
                 audit_mode=request.kerberos_audit_mode,
                 audit_username=request.kerberos_audit_username,
                 audit_service_name=request.kerberos_audit_service_name,
@@ -6074,12 +6833,12 @@ class NetworkTransactionPlanner:
                 None,
             )
             if callable(identifier_publisher):
-                identifier_publisher(uid, network_identifiers_by_format)
-            return uid
-        if committed_suppressed:
-            if prepared_multipart_batch is not None:
+                identifier_publisher(publication_inputs.uid, network_identifiers_by_format)
+            return publication_inputs.uid
+        if publication_inputs.committed_suppressed:
+            if sources.prepared_multipart_batch is not None:
                 executor.dispatcher.publish_prepared_network_dependent_batch(
-                    prepared_multipart_batch,
+                    sources.prepared_multipart_batch,
                     materialization_receipt=materialized.receipt,
                 )
             # The typed capture exposes the committed internal root, while the
@@ -6087,97 +6846,111 @@ class NetworkTransactionPlanner:
             # connection identity for a suppressed observation.
             return ""
 
-        if prepared_responder is not None and target_system is not None:
+        if (
+            publication_inputs.prepared_responder is not None
+            and endpoints.target_system is not None
+        ):
             executor.publish_prepared_network_responder(
-                prepared_responder,
+                publication_inputs.prepared_responder,
                 materialization_receipt=materialized.receipt,
-                target_system=target_system,
-                close_time=event.network.closed_at,
+                target_system=endpoints.target_system,
+                close_time=publication_inputs.event.network.closed_at,
             )
-        assert prepared_dispatch is not None
+        assert sources.prepared_dispatch is not None
         if request.defer_source_publication:
-            return uid
+            return publication_inputs.uid
         network_identifiers_by_format = (
             executor.dispatcher.publish_prepared(
-                prepared_dispatch,
+                sources.prepared_dispatch,
                 materialization_receipt=materialized.receipt,
             )
             or {}
         )
-        if prepared_multipart_batch is not None:
+        if sources.prepared_multipart_batch is not None:
             executor.dispatcher.publish_prepared_network_dependent_batch(
-                prepared_multipart_batch,
+                sources.prepared_multipart_batch,
                 materialization_receipt=materialized.receipt,
             )
-        executor._maybe_emit_ocsp_transaction(event)
-        if generic_ssh_preauth_pid is not None and target_system is not None:
+        executor._maybe_emit_ocsp_transaction(publication_inputs.event)
+        if (
+            publication_inputs.generic_ssh_preauth_pid is not None
+            and endpoints.target_system is not None
+        ):
             executor._emit_generic_ssh_preauth_failure_syslog(
-                target_system=target_system,
-                target_host=dst_host_ctx,
-                time=event.timestamp,
-                source_ip=src_ip,
-                source_port=src_port,
-                sshd_pid=generic_ssh_preauth_pid,
-                attempted_username=ssh_attempted_username,
-                duration=event.network.duration,
+                target_system=endpoints.target_system,
+                target_host=endpoints.dst_host_ctx,
+                time=publication_inputs.event.timestamp,
+                source_ip=endpoints.src_ip,
+                source_port=endpoints.src_port,
+                sshd_pid=publication_inputs.generic_ssh_preauth_pid,
+                attempted_username=facts.ssh_attempted_username,
+                duration=publication_inputs.event.network.duration,
             )
-        generator_module.logger.debug(
-            f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})"
+        logger.debug(
+            f"Generated connection: {endpoints.src_ip} -> {endpoints.dst_ip}:{endpoints.dst_port} (UID: {publication_inputs.uid})"
         )
 
         # Emit 5156 (WFP connection) on Windows source hosts when process ownership is known.
         # Unknown ownership is not PID 4 by default; rendering it as System makes ordinary
         # user/proxy flows look kernel-originated.
-        wfp_system = resolved_source_system or source_system
-        wfp_application = event.process.image if event.process is not None else None
+        wfp_system = endpoints.resolved_source_system or endpoints.source_system
+        wfp_application = (
+            publication_inputs.event.process.image
+            if publication_inputs.event.process is not None
+            else None
+        )
         if (
             wfp_system
-            and generator_module._get_os_category(wfp_system.os) == "windows"
-            and (pid > 0 or wfp_application is not None)
-            and not event.network.application_layer_only
+            and _get_os_category(wfp_system.os) == "windows"
+            and (publication_inputs.pid > 0 or wfp_application is not None)
+            and not publication_inputs.event.network.application_layer_only
         ):
             executor.generate_wfp_connection(
                 system=wfp_system,
-                time=time,
-                network=event.network,
-                pid=pid,
+                time=publication_inputs.time,
+                network=publication_inputs.event.network,
+                pid=publication_inputs.pid,
                 application=wfp_application,
-                parent_action_group_id=parent_action_group_id,
+                parent_action_group_id=facts.parent_action_group_id,
             )
 
         if (
             not kerberos_target_wfp_published
-            and target_system is not None
-            and dst_host_ctx is not None
-            and dst_host_ctx.os_category == "windows"
-            and not event.network.application_layer_only
-            and executor._should_emit_windows_inbound_wfp(event, target_system)
+            and endpoints.target_system is not None
+            and endpoints.dst_host_ctx is not None
+            and endpoints.dst_host_ctx.os_category == "windows"
+            and not publication_inputs.event.network.application_layer_only
+            and executor._should_emit_windows_inbound_wfp(
+                publication_inputs.event, endpoints.target_system
+            )
         ):
-            inbound_pid = event.network.responding_pid
+            inbound_pid = publication_inputs.event.network.responding_pid
             inbound_application = executor._lookup_process_name(
-                target_system.hostname,
+                endpoints.target_system.hostname,
                 inbound_pid,
                 "windows",
             )
             executor.generate_wfp_connection(
-                system=target_system,
-                time=time,
-                network=event.network,
+                system=endpoints.target_system,
+                time=publication_inputs.time,
+                network=publication_inputs.event.network,
                 pid=inbound_pid,
                 application=inbound_application,
-                parent_action_group_id=parent_action_group_id,
+                parent_action_group_id=facts.parent_action_group_id,
             )
 
         if (
-            pid != caller_owned_pid
-            and pid > 0
-            and resolved_source_system is not None
-            and process_ctx is not None
+            publication_inputs.pid != facts.caller_owned_pid
+            and publication_inputs.pid > 0
+            and endpoints.resolved_source_system is not None
+            and publication_inputs.process_ctx is not None
         ):
-            running = executor.state_manager.get_process(resolved_source_system.hostname, pid)
+            running = executor.state_manager.get_process(
+                endpoints.resolved_source_system.hostname, publication_inputs.pid
+            )
             if executor._process_termination_recorded(
-                resolved_source_system.hostname,
-                pid,
+                endpoints.resolved_source_system.hostname,
+                publication_inputs.pid,
                 running.start_time if running is not None else None,
             ):
                 identifier_publisher = getattr(
@@ -6186,20 +6959,18 @@ class NetworkTransactionPlanner:
                     None,
                 )
                 if callable(identifier_publisher):
-                    identifier_publisher(uid, network_identifiers_by_format)
-                return uid
+                    identifier_publisher(publication_inputs.uid, network_identifiers_by_format)
+                return publication_inputs.uid
             lifetime = (
                 executor._foreground_process_lifetime_for_attribution(
-                    resolved_source_system, running
+                    endpoints.resolved_source_system, running
                 )
                 if running is not None
                 else None
             )
-            if lifetime is not None and generator_module.re.match(
-                r"^[a-zA-Z0-9._$-]+$", running.username
-            ):
+            if lifetime is not None and re.match(r"^[a-zA-Z0-9._$-]+$", running.username):
                 known_users = getattr(executor, "_users_by_username", {})
-                process_user = known_users.get(running.username) or generator_module.User(
+                process_user = known_users.get(running.username) or User(
                     username=running.username,
                     full_name=running.username,
                     email=f"{running.username}@example.local",
@@ -6208,16 +6979,16 @@ class NetworkTransactionPlanner:
                 max_delay = max(min_delay + 0.5, min(lifetime[1] + 8.0, 45.0))
                 executor.generate_process_termination(
                     user=process_user,
-                    system=resolved_source_system,
-                    time=time
-                    + generator_module.timedelta(
+                    system=endpoints.resolved_source_system,
+                    time=publication_inputs.time
+                    + timedelta(
                         seconds=self._foreground_teardown_delay_seconds(
                             request,
                             min_delay,
                             max_delay,
                         )
                     ),
-                    pid=pid,
+                    pid=publication_inputs.pid,
                     process_name=running.image,
                     logon_id=running.logon_id,
                 )
@@ -6228,5 +6999,5 @@ class NetworkTransactionPlanner:
             None,
         )
         if callable(identifier_publisher):
-            identifier_publisher(uid, network_identifiers_by_format)
-        return uid
+            identifier_publisher(publication_inputs.uid, network_identifiers_by_format)
+        return publication_inputs.uid

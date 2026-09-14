@@ -2780,8 +2780,10 @@ class _DuckExactSysmon:
         raise AssertionError("duck Sysmon exact marker executed")
 
 
+@pytest.mark.parametrize("reverse_output_order", (False, True))
 def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     tmp_path: Path,
+    reverse_output_order: bool,
 ) -> None:
     """Production RDP Event 1 rows use authenticated staged and boot-parent identities."""
 
@@ -2841,7 +2843,9 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     _close_rdp_terminal_harness(harness)
     rendered = "\n".join(
         output.read_text(encoding="utf-8")
-        for output in (harness.output_root / "sysmon").rglob("*.xml")
+        for output in sorted(
+            (harness.output_root / "sysmon").rglob("*.xml"), reverse=reverse_output_order
+        )
     )
     event_one_rows = _xml_events(rendered, 1)
     assert not _xml_events(rendered, 3)
@@ -2857,10 +2861,18 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
         assert match is not None
         return datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
 
+    def _on_target(event: str) -> bool:
+        match = re.search(r"<Computer>(.*?)</Computer>", event)
+        assert match is not None
+        return match.group(1).split(".", 1)[0].casefold() == harness.target_hostname.casefold()
+
+    # Both hosts emit Explorer rows. Image names alone cannot select the target
+    # ancestry, and filesystem enumeration order differs across platforms.
     target_rows = {
         _field(event, "Image").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
         for event in event_one_rows
-        if _field(event, "Image").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        if _on_target(event)
+        and _field(event, "Image").replace("\\", "/").rsplit("/", 1)[-1].casefold()
         in {"winlogon.exe", "userinit.exe", "explorer.exe"}
     }
     assert set(target_rows) == {"winlogon.exe", "userinit.exe", "explorer.exe"}
@@ -2894,12 +2906,14 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
 
     security_rendered = "\n".join(
         output.read_text(encoding="utf-8")
-        for output in (harness.output_root / "windows").rglob("*.xml")
+        for output in sorted(
+            (harness.output_root / "windows").rglob("*.xml"), reverse=reverse_output_order
+        )
     )
     type_ten = next(
         event
         for event in _xml_events(security_rendered, 4624)
-        if _field(event, "LogonType") == "10"
+        if _on_target(event) and _field(event, "LogonType") == "10"
     )
     assert _field(type_ten, "TargetUserSid").startswith("S-")
     assert re.fullmatch(r"\{[0-9a-f-]{36}\}", _field(type_ten, "LogonGuid"), re.I)
@@ -2910,7 +2924,8 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     process_rows = {
         _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold(): event
         for event in _xml_events(security_rendered, 4688)
-        if _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold()
+        if _on_target(event)
+        and _field(event, "NewProcessName").replace("\\", "/").rsplit("/", 1)[-1].casefold()
         in {"winlogon.exe", "userinit.exe", "explorer.exe"}
     }
     assert _field(process_rows["winlogon.exe"], "SubjectUserSid") == "S-1-5-18"
@@ -2953,7 +2968,9 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
             rendered_times[image],
         )
     userinit_closes = [
-        event for event in event_five_rows if _field(event, "ProcessId") == str(userinit.pid)
+        event
+        for event in event_five_rows
+        if _on_target(event) and _field(event, "ProcessId") == str(userinit.pid)
     ]
     assert len(userinit_closes) == 1
     rendered_userinit_lifetime = _event_time(userinit_closes[0]) - rendered_times["userinit.exe"]

@@ -1,0 +1,139 @@
+{
+  "cases": {
+    "batch_script-137-serial": {
+      "GROUND_TRUTH.json": "5c4f3eacecf55bed44aa377537f5934864c11b23c54b9768ea3d379de8cda8fe",
+      "WIN-01/ecar.json": "8f597f866f26e592ada840911b25da0762efae56d67248061b607014e1f88a0b"
+    },
+    "batch_script-137-threaded": {
+      "GROUND_TRUTH.json": "5c4f3eacecf55bed44aa377537f5934864c11b23c54b9768ea3d379de8cda8fe",
+      "WIN-01/ecar.json": "8f597f866f26e592ada840911b25da0762efae56d67248061b607014e1f88a0b"
+    },
+    "batch_script-42-serial": {
+      "GROUND_TRUTH.json": "1c34b41dd929eeb5b38e651432bbefb0d017f9d2aa56365ed868581299a4c0ed",
+      "WIN-01/ecar.json": "6eacef404e578e82e83945f044b62c9e8c497b3432e354942f3042b47e49416f"
+    },
+    "batch_script-42-threaded": {
+      "GROUND_TRUTH.json": "1c34b41dd929eeb5b38e651432bbefb0d017f9d2aa56365ed868581299a4c0ed",
+      "WIN-01/ecar.json": "6eacef404e578e82e83945f044b62c9e8c497b3432e354942f3042b47e49416f"
+    },
+    "browser_precedence-137-serial": {
+      "GROUND_TRUTH.json": "767713ae9dd416bdc4ac83b7cf07a1897b646b34c56b98b412c47a27d15a5ddb"
+    },
+    "browser_precedence-137-threaded": {
+      "GROUND_TRUTH.json": "767713ae9dd416bdc4ac83b7cf07a1897b646b34c56b98b412c47a27d15a5ddb"
+    },
+    "browser_precedence-42-serial": {
+      "GROUND_TRUTH.json": "0c9f64ba72dfaaaa6439bb5ddd2c67d3f813de0d7a8fc234cc58c1508d8a4933"
+    },
+    "browser_precedence-42-threaded": {
+      "GROUND_TRUTH.json": "0c9f64ba72dfaaaa6439bb5ddd2c67d3f813de0d7a8fc234cc58c1508d8a4933"
+    },
+    "browser_reuse-137-serial": {
+      "GROUND_TRUTH.json": "51621a3d6c349f4c36059bcdbfb5d6602f10d82246f95e447a9f066606161bb3"
+    },
+    "browser_reuse-137-threaded": {
+      "GROUND_TRUTH.json": "51621a3d6c349f4c36059bcdbfb5d6602f10d82246f95e447a9f066606161bb3"
+    },
+    "browser_reuse-42-serial": {
+      "GROUND_TRUTH.json": "906a17b37abfc914f9d0a6f259adfe0801b7b59328857ec517f52beea77b9dce"
+    },
+    "browser_reuse-42-threaded": {
+      "GROUND_TRUTH.json": "906a17b37abfc914f9d0a6f259adfe0801b7b59328857ec517f52beea77b9dce"
+    },
+    "defender_path-137-serial": {
+      "GROUND_TRUTH.json": "dfd9bace0948d5b5756fea00f7f4330d1e4c0c3e59d921daad48367e01b458fd",
+      "WIN-01/ecar.json": "65310eda103a03fba0d393321287ae1d5b830cec1d42ede9fbf6e12b76115b7f"
+    },
+    "defender_path-137-threaded": {
+      "GROUND_TRUTH.json": "dfd9bace0948d5b5756fea00f7f4330d1e4c0c3e59d921daad48367e01b458fd",
+      "WIN-01/ecar.json": "65310eda103a03fba0d393321287ae1d5b830cec1d42ede9fbf6e12b76115b7f"
+    },
+    "defender_path-42-serial": {
+      "GROUND_TRUTH.json": "7ea02892072bca03008a3b70c293f68c1eae845de6098628dee6629c3e94134d",
+      "WIN-01/ecar.json": "277f542451e0cbaa509fc0b639de70f1a4c9caab069b7d19085caa12de12e9ae"
+    },
+    "defender_path-42-threaded": {
+      "GROUND_TRUTH.json": "7ea02892072bca03008a3b70c293f68c1eae845de6098628dee6629c3e94134d",
+      "WIN-01/ecar.json": "277f542451e0cbaa509fc0b639de70f1a4c9caab069b7d19085caa12de12e9ae"
+    },
+    "exact_parent-137-serial": {
+      "GROUND_TRUTH.json": "0e487bdf52b87e0c2c6220914f3032ad29ffe229fd1c0ee8aa175ebda8fe8230",
+      "WIN-01/ecar.json": "41b28279325193acab2296e6746b447f0ab16efcc55e0a5017890495486edb97"
+    },
+    "exact_parent-137-threaded": {
+      "GROUND_TRUTH.json": "0e487bdf52b87e0c2c6220914f3032ad29ffe229fd1c0ee8aa175ebda8fe8230",
+      "WIN-01/ecar.json": "41b28279325193acab2296e6746b447f0ab16efcc55e0a5017890495486edb97"
+    },
+    "exact_parent-42-serial": {
+      "GROUND_TRUTH.json": "00b1a261bfcbd9821418da464bc1daa4f16b9765d0d2f5620a1ac9c2da3cfc36",
+      "WIN-01/ecar.json": "f4556ecf30e3d15926fb6b82ebab057bb5d001b9fb4a28629a22a987002aab31"
+    },
+    "exact_parent-42-threaded": {
+      "GROUND_TRUTH.json": "00b1a261bfcbd9821418da464bc1daa4f16b9765d0d2f5620a1ac9c2da3cfc36",
+      "WIN-01/ecar.json": "f4556ecf30e3d15926fb6b82ebab057bb5d001b9fb4a28629a22a987002aab31"
+    },
+    "persistent_reuse-137-serial": {
+      "GROUND_TRUTH.json": "b33a85c3b343d916fc99b529530009662482a2517d8f10d11497d94c98936a39"
+    },
+    "persistent_reuse-137-threaded": {
+      "GROUND_TRUTH.json": "b33a85c3b343d916fc99b529530009662482a2517d8f10d11497d94c98936a39"
+    },
+    "persistent_reuse-42-serial": {
+      "GROUND_TRUTH.json": "fc07cd64c522920466f58bd79f4b0d5976d9bf86d62cdeff8c033b89476b5ce1"
+    },
+    "persistent_reuse-42-threaded": {
+      "GROUND_TRUTH.json": "fc07cd64c522920466f58bd79f4b0d5976d9bf86d62cdeff8c033b89476b5ce1"
+    },
+    "powershell_script-137-serial": {
+      "GROUND_TRUTH.json": "05c568e313bc32bd6145087c336c95ff09faedbabbf87f179ce936cb26c5a204",
+      "WIN-01/ecar.json": "cbea8c5ad13c51c221b3199371e7701dad7cd557d1c3bb53cebbf5b347b386b9"
+    },
+    "powershell_script-137-threaded": {
+      "GROUND_TRUTH.json": "05c568e313bc32bd6145087c336c95ff09faedbabbf87f179ce936cb26c5a204",
+      "WIN-01/ecar.json": "cbea8c5ad13c51c221b3199371e7701dad7cd557d1c3bb53cebbf5b347b386b9"
+    },
+    "powershell_script-42-serial": {
+      "GROUND_TRUTH.json": "0861393d3bb064b57798f4425e960f625924fba20f900c7795ec4b0b0b417856",
+      "WIN-01/ecar.json": "8cbd096a72fd390c46da886fd175c1107263f7ff05979442193fc508b5f00b1d"
+    },
+    "powershell_script-42-threaded": {
+      "GROUND_TRUTH.json": "0861393d3bb064b57798f4425e960f625924fba20f900c7795ec4b0b0b417856",
+      "WIN-01/ecar.json": "8cbd096a72fd390c46da886fd175c1107263f7ff05979442193fc508b5f00b1d"
+    },
+    "psexec_service-137-serial": {
+      "GROUND_TRUTH.json": "11308e5b5bdcd6fa65cc9605f06f165a31b9f4399a99ad6fe36ad346705b9fa7",
+      "WIN-01/ecar.json": "69407c467ee04e38741cb91216a755ad372e56282ae50ff9a70822611bfa0888"
+    },
+    "psexec_service-137-threaded": {
+      "GROUND_TRUTH.json": "11308e5b5bdcd6fa65cc9605f06f165a31b9f4399a99ad6fe36ad346705b9fa7",
+      "WIN-01/ecar.json": "69407c467ee04e38741cb91216a755ad372e56282ae50ff9a70822611bfa0888"
+    },
+    "psexec_service-42-serial": {
+      "GROUND_TRUTH.json": "edb1ec53da6d36ffc06cc9e856aa589e129b8c207681fb6dc8f2756bc825a1b4",
+      "WIN-01/ecar.json": "1335bb0b93468b450ce7e756c5d17a3192ca17d61f9188d817490413e5b39d8b"
+    },
+    "psexec_service-42-threaded": {
+      "GROUND_TRUTH.json": "edb1ec53da6d36ffc06cc9e856aa589e129b8c207681fb6dc8f2756bc825a1b4",
+      "WIN-01/ecar.json": "1335bb0b93468b450ce7e756c5d17a3192ca17d61f9188d817490413e5b39d8b"
+    },
+    "visibility_rejection-137-serial": {
+      "GROUND_TRUTH.json": "a2532b85f13e3b5b1e0179f622d707822fe4149bccae37debeb91b523293c12f"
+    },
+    "visibility_rejection-137-threaded": {
+      "GROUND_TRUTH.json": "a2532b85f13e3b5b1e0179f622d707822fe4149bccae37debeb91b523293c12f"
+    },
+    "visibility_rejection-42-serial": {
+      "GROUND_TRUTH.json": "a459a2392c2e30cef9c60d0ff99682104d5013a5d8e361dfa5747128d07712f9"
+    },
+    "visibility_rejection-42-threaded": {
+      "GROUND_TRUTH.json": "a459a2392c2e30cef9c60d0ff99682104d5013a5d8e361dfa5747128d07712f9"
+    }
+  },
+  "frozen_drivers": {
+    "cleanup_foreground_contract.py": "a322eac3f74ae6c37ba2eed0520b687891e6bf56e89f0f6b1301a4b50cc5c207",
+    "cleanup_process_contract.py": "cfe41baa8363ddf378a9487c11b9b0f9930bb8f56516d379233db0b22df3d8b2"
+  },
+  "original_commit": "e4035435e8e53400ab25a74fe551313354369203",
+  "source_commit": "5858a0a8",
+  "uv_lock_sha256": "298d9408c78bbab6b64d38997c0b6897f9279d5997a7dec81c44f759fde5f4e5"
+}

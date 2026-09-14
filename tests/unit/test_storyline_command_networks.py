@@ -879,8 +879,7 @@ class TestStorylineCommandNetworks:
             "www-data",
             "System",
         )
-        generator = object.__new__(ActivityGenerator)
-        generator.state_manager = state
+        generator = ActivityGenerator(state, {})
         generator._system_pids = {"WEB-EXT-01": {"apache2": apache_pid}}
         generator._recent_connection_tuples = {
             ("185.70.41.45", 61522, "203.0.113.10", 443, "tcp"): ts.timestamp() - 1200,
@@ -4121,3 +4120,62 @@ class TestStorylineCommandSideEffects:
         assert entity is not None
         assert entity.local_source_path == "/tmp/report.rar"
         assert entity.wire_filename == ""
+
+
+def test_process_output_and_network_companions_precede_lifecycle_bookkeeping() -> None:
+    source = System(hostname="SRC", ip="10.10.0.10", os="Windows 11", type="workstation")
+    actor = User(username="alice", full_name="Alice", email="alice@example.com")
+    engine = object.__new__(StorylineMixin)
+    engine.scenario = SimpleNamespace(
+        environment=SimpleNamespace(systems=[source], service_accounts=[])
+    )
+    engine.state_manager = _FakeStateManager()
+    engine.activity_generator = _FakeActivityGenerator()
+    order: list[str] = []
+    files: list[Any] = []
+    generate_process = engine.activity_generator.generate_process
+    generate_connection = engine.activity_generator.generate_connection
+
+    def create(*args: Any, **kwargs: Any) -> int:
+        order.append("root")
+        return generate_process(*args, **kwargs)
+
+    def emit_file(event: Any) -> None:
+        order.append("file")
+        files.append(event)
+
+    def connect(*args: Any, **kwargs: Any) -> str:
+        order.append("network")
+        return generate_connection(*args, **kwargs)
+
+    def mark_story_process(hostname: str, pid: int) -> None:
+        order.append("lifecycle")
+        assert (hostname, pid) == ("SRC", 4242)
+
+    def expand(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("supplementary=none must suppress expansion")
+
+    engine.activity_generator.generate_process = create
+    engine.activity_generator.generate_connection = connect
+    engine.activity_generator._expand_and_emit = expand
+    engine.state_manager.mark_story_process = mark_story_process
+    engine.dispatcher = SimpleNamespace(visibility_engine=None, dispatch_builder=emit_file)
+    event = engine._execute_typed_event(
+        spec=SimpleNamespace(
+            type="process",
+            process_name="curl.exe",
+            command_line=r"curl.exe https://example.com/status > C:\Temp\status.txt",
+            supplementary="none",
+        ),
+        actor=actor,
+        system=source,
+        time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+        activity="fetch status",
+        explicit_types={"process"},
+    )
+
+    assert order == ["root", "file", "network", "lifecycle"]
+    assert files[0].process.pid == engine.activity_generator.connections[0]["pid"] == 4242
+    assert files[0].process.image == engine.activity_generator.connections[0]["process_image"]
+    assert event["output_file"] == r"C:\Temp\status.txt"
+    assert event["network_url"] == "https://example.com/status"

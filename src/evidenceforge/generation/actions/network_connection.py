@@ -128,6 +128,13 @@ from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
+    from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+    from evidenceforge.generation.network_runtime import NetworkTransactionRuntime
+    from evidenceforge.generation.source_timing import SourceTimingPlanner
+    from evidenceforge.generation.state_manager import StateManager
+
+if TYPE_CHECKING:
     from evidenceforge.events.dispatcher import PreparedDispatch
     from evidenceforge.generation.actions.proxy_transaction import (
         ExplicitProxyOpenPreparation,
@@ -2383,7 +2390,13 @@ _register_network_request_type(NetworkConnectionRequest)
 
 
 class NetworkConnectionExecutor(Protocol):
-    """Services supplied by the activity generator to network planning."""
+    """Existing canonical owners supplied to network planning."""
+
+    state_manager: StateManager
+    dispatcher: EventDispatcher
+    _source_timing_planner: SourceTimingPlanner
+    _network_transaction_runtime: NetworkTransactionRuntime
+    _lifecycle_authority: GeneratorLifecycleAuthority
 
 
 class NetworkConnectionActionBundle:

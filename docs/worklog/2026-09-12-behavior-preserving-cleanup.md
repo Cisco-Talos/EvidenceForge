@@ -1,0 +1,1554 @@
+# Behavior-preserving 2.0.0 cleanup
+
+## Host-specific resolver correction — complete
+
+Approved follow-up to the nine-item pass, starting from clean
+`fd007c7b4732865821e152fad31f99a5efc4bd3b`. A complete source archive is preserved at
+`/private/tmp/eforge-resolver-baseline`; earlier source checkouts and evidence remain intact.
+All 250 prior final captures were rehashed successfully, including manifest-listed files.
+The [resolver correction report](2026-09-13-resolver-correction.json) records frozen controls,
+artifact and log hashes, checkpoint results, structural measurements, performance samples,
+reproduction scripts, failures and limitations. Captures remain under
+`/private/tmp/eforge-resolver-fix`.
+
+### Ownership and intentional evidence changes
+
+The correction reuses each Linux host's existing resolver selection through a function-local
+hostname-to-pool dictionary. It adds no resolver calls, durable cache, expiry index, RNG or
+checkpoint state. Population occurs immediately after the existing selection and before DHCP
+whole-host skips; the later Linux syslog pass consumes the same list by reference. Each map
+lasts for one hourly coordinator call, including terminal calls, and contains only Linux hosts.
+The traffic coordinator grows from 299 to 302 lines; the 463-line syslog pass and 34-line renderer
+retain their responsibilities. No custom cache/pool is needed for this temporary lookup.
+
+Revision **79**, `baseline-host-specific-resolver-health`, declares `impact: localized`.
+Its surface digest is
+`426dd9631e69a41328f1954cf35fb2a3b61158064c04b869cea66a720f12dfe4`;
+the corrected installed-build digest is
+`e22031a0df979c05e03ca713cf888c3fd508ef5d17497e318b15e28c59f2729c`.
+History, fingerprint algorithms, exact-policy rejection and compatible-resume classification
+are unchanged. The previous pass's byte-preservation claim remains true for that pass; this
+separate correction intentionally supersedes its resolver behavior.
+
+The complete **250-case corpus has 239 unchanged cases and 11 address-only corrections**:
+
+| Fixture family | Affected cases | Resolver-address substitutions |
+|---|---:|---:|
+| Linux SMB, seeds 42 and 137 | 2 | 6 |
+| Typed handlers, seed 42, all targets | 3 | 12 |
+| Periodic content, seed 42, all targets | 3 | 12 |
+| Process companions, seed 42, all targets | 3 | 6 |
+| Total | 11 | 36 |
+
+These are real resolver-ownership improvements in the fixtures' accompanying baseline activity.
+For Linux SMB, SAMBA-01 now reports its own resolver; in the other affected fixtures, LINUX-01
+reports its own resolver. Every changed byte is within a DNS-server address in syslog. Timestamps,
+row order, SMB execution, typed events, periodic timing, ground truth and all other evidence remain
+identical. No downstream RNG difference or broader output exception was needed.
+
+An independent checkout of the starting build changes only the old renderer argument to a direct
+call to the existing per-source resolver owner, plus truthful behavior provenance. It contains no
+mapping implementation. All 11 changed cases match that reference's raw evidence exactly, supplying
+independent attribution to the corrected resolver input. Original captures remain historical
+references; corrected captures under `corpus/<group>/<case>` are the accepted references for later
+behavior-preserving work. Existing group drivers can use `--baseline
+/private/tmp/eforge-resolver-fix/corpus/<group>` without replacing older evidence.
+
+### Correctness, output and checkpoint gates
+
+- Focused subsystem coverage: **174 passed**. The replacement regression includes **24 layouts**
+  covering reversed order, Windows last, single/shared pools, no messages, no Linux hosts, empty
+  systems, two successive hours, changed pools and DHCP host skips. Selection order/count and list
+  identity are checked; the mapping is fresh per call and is not stored on the runtime owner.
+- Standard suite: **8573 passed, 27 skipped, 2011 deselected in 311.08s**.
+- Full slow suite: **1780 passed, 8831 deselected in 1165.00s**.
+- Both Ruff checks and behavior-manifest validation against `fd007c7b` pass. The 27 existing skips
+  concern optional external parsers, licensed Splunk, unavailable sample data and one full-engine-only
+  case. Full soak remains excluded; this change adds no retained state or synchronization owner.
+- **30 additional bounded controls** cover seeds 42/137, all three targets, full/narrowed formats,
+  serial/threaded emission and configured/public resolvers. All 30 original and corrected runs repeat
+  exactly; all corrected cases match the independent reference. Renderer pools, before/after RNG
+  states and resolver call counts pass. **2,613 canonical DNS queries** agree with those per-host
+  pools. Artifact file sets and hashes are verified without normalizing evidence or ground truth.
+- Checkpoints: **26 successful candidate resumes**, **7 additional independent-reference resumes**
+  and **6 exact-policy rejections**. These include the six starting-build compatible/six corrected
+  exact cases, six affected mixed-host compatible/six exact cases, and one collected-history
+  compatible/exact pair. Both seeds and all targets are covered. Preserved checkpoint bundles
+  remain unchanged. The starting checkpoints have revision 78 and installed-build digest
+  `ecfc32a0d61dfed2fca3478488e93f135be6644935bd23bfec25291f4e38276a`.
+
+The approved historical-evidence policy leaves stored degradation/recovery pairs unchanged.
+A resumed old pair can recover on its recorded, potentially incorrect server; the next pair uses
+the correct pool. No broken selection branch was retained, and this policy is not required for
+checkpoint load compatibility. The codec regression explicitly verifies old recovery followed by
+a corrected new pair and confirms that the original state is unchanged.
+
+A real checkpoint taken after one collected hour also retains four previously emitted incorrect
+resolver rows and resumes identically to the independent reference. Its existing per-host message
+quota leaves no new resolver row after that cursor; it does not replace the codec test of the
+next recovery/new pair. Evidence is never rewritten to make old observations look corrected.
+
+### Performance observations and limitations
+
+Benchmarks ran separately from correctness tests in eight fresh processes, alternating starting
+and corrected builds within each workload. Each process ran one warmup, three timed generations,
+one separate allocation observation and one separate call-count audit: **24 timed samples** total.
+The same interpreter, dependencies, inputs and options were used. Each row is the median of six
+timed samples per build; the report retains every sample, throughput, RSS and traced allocation.
+
+| Mixed-host workload | Starting seconds | Corrected seconds | Ratio |
+|---|---:|---:|---:|
+| Public resolver selection | 7.805176 | 7.672347 | 0.983x |
+| Configured resolver selection | 9.865665 | 10.174704 | 1.031x |
+
+Public runs measured about 1.7% faster and configured runs about 3.1% slower. Both differences are
+smaller than the variation between the two baseline process medians; these measurements do not
+establish a causal speedup or slowdown from the mapping. Resolver selection counts remain exactly
+**65 public / 242 configured** in both builds. Corrected maps contain two entries during each of
+three hourly passes and are never retained on the engine. Traced peaks remain approximately
+28.7–28.9 MB public and 31.7–31.8 MB configured; retained traced bytes remain about 0.13/0.15 MB.
+The implementation adds one short-lived dictionary and reuses existing lists. Performance has no
+numerical rejection threshold; correctness and ownership checks pass.
+
+Failures were retained and resolved: the new mapping regression fails against the original code;
+eight initial corrected failures came from a synthetic Windows fixture missing `world_model`;
+an initial invocation omitted the existing checkpoint test's slow marker; Ruff corrected new
+control formatting. The first benchmark warmup used macOS's `/var` alias and failed the emitter's
+scratch-ancestry check; resolving the harness temporary path fixed it for both builds without a
+production change. Initial and final frozen harness hashes are preserved. A trial zero-hour
+warmup fixture was rejected before generation; the final history control instead delays suspension
+until after the required warmup checkpoint. Initial attribution stopped on additional affected
+groups and was extended to verify every group. An interim commentary count omitted the final
+companion group and was corrected to 239 unchanged/11 corrected after inspecting all 250 cases.
+A final ad hoc report audit initially misread separate old/new checkpoint entries as combined entries;
+the corrected audit verifies all six revision-79 origins against the final source digest.
+
+No merge, release, dependency, package-version, authored-schema or checkpoint-schema change.
+
+## Nine-item simplification pass — complete
+
+### Final acceptance — all nine items complete
+
+Implementation commit `e9d174a81dd9af0101688fbc7a4b404d673595c5`; behavior revisions 63–78 preserve
+all earlier history and declare `impact: none`. The complete range validates against both
+`26a150ac` and original dev. This pass adds no evidence exception and does not update existing
+golden evidence to accommodate differences.
+All four requested contract comments are present, with representative regression links.
+
+- Standard suite: **8550 passed, 27 skipped, 2011 deselected in 300.54s (0:05:00)**.
+- Full slow suite: **1780 passed, 8808 deselected in 1113.75s (0:18:33)**.
+- Targeted final process/network/registry retention soak: **7 passed, 2 deselected in 58.87s**.
+  The final SMB boundary separately passed all 37 selected recovery/timing/soak controls.
+- Both Ruff checks passed. The 27 existing skips are audited: optional external parsers,
+  license-gated Splunk, one full-engine-only case and unavailable gitignored sample data.
+  The full repository soak tier remains excluded.
+- **250/250 raw-byte cases** match `26a150ac`; evidence and ground-truth file sets and bytes
+  were compared without normalization. Recorded artifact hashes are verified. Each implementation
+  boundary also compared relevant cases against its predecessor.
+- **24/24 successful resumes** and **18/18 exact-policy rejections** across both seeds and
+  all three targets. Preserved original-dev, `010ae90f` and `26a150ac` checkpoint bundles remain
+  unchanged. Final-build exact resumes also reproduce the accepted reference evidence.
+
+Structural results (lines include signatures and contract comments):
+
+| Coordinator | Baseline | Final |
+|---|---:|---:|
+| Baseline system traffic | 2,314 | 299 |
+| Process storyline | 745 | 432 |
+| CLI generation | 940 | 544 |
+| Raw overlay validation | 659 | 384 |
+| Merged configuration validation | 834 | 317 |
+| Network request resolution | 1,030 | 853 |
+| Network transport planning | 957 | 801 |
+| Network protocol evidence | 1,138 | 527 |
+| Persistent SMB execution | 1,298 | 436 |
+| Retained SMB source execution | 215 | 152 |
+
+Fingerprint combined operations build/scan once instead of twice. Wander interpolation and knot
+sampling each have one implementation; eight independent registries share one gate implementation,
+and three lock-acquisition copies share one helper. Identical SMB State-finalization, member-commit
+recovery and source-publication retries each have one owner. The six network stages, composed
+records, their 133 fields and transaction ownership are unchanged. Shared owner/cache/RNG/state
+relationships remain authoritative. Additional calls and short-lived return tuples are documented
+in each item report; static overlay definitions now retain 124 containers instead of allocating
+them per check. No broad persistent context or generic retry framework was introduced.
+The source diff adds 1,212 net lines, including explicit helper signatures/calls, contract
+documentation and append-only behavior history. The measured improvements are smaller coordinators,
+fewer duplicated implementations and clearer ownership; the report includes increases in helper
+call counts and direct-owner attribute counts as well as reductions.
+
+Final isolated performance observations used 44 fresh benchmark processes, two warmups each and
+**308 timed samples**, alternating baseline/candidate with a separate allocation sample per run.
+Each row reports the average of its two run medians, in seconds; throughput, RSS, traced memory,
+retained allocations and exact result checks are in the final JSON. A ratio above 1 is slower;
+there is no performance rejection threshold.
+
+| Workload | Baseline seconds | Final seconds | Ratio |
+|---|---:|---:|---:|
+| cli-failure | 2.680487 | 2.342548 | 0.874x |
+| clocks | 0.051387 | 0.052362 | 1.019x |
+| configuration | 0.783926 | 0.777862 | 0.992x |
+| fingerprint | 0.198143 | 0.109607 | 0.553x |
+| gates | 0.005305 | 0.005316 | 1.002x |
+| gates-context | 0.010153 | 0.010426 | 1.027x |
+| generation | 5.220562 | 5.222379 | 1.000x |
+| generation-cli | 7.430479 | 7.322194 | 0.985x |
+| network | 0.123122 | 0.123214 | 1.001x |
+| prepared-clocks | 0.054925 | 0.055120 | 1.004x |
+| smb | 2.546184 | 2.533490 | 0.995x |
+
+Interpretation: one payload build/installed-build scan replaces two, explaining the approximately
+45% fingerprint improvement. The four-branch CLI failure workload improves about 13%, consistent
+with avoiding that repeated work in each invocation. Full CLI generation improves about 1.5%;
+direct generation is effectively unchanged. The live-clock and context-gate microbenchmarks are
+about 1.9% and 2.7% slower, consistent with the additional direct helper/method calls documented
+in their item reports. Centralized math/admission policy retains its correctness and maintenance
+benefit. Traced generation/network/SMB peaks remain close; gate peaks decrease from 2,600 to 2,432
+bytes, with the same 360 retained bytes. State census and retention tests supply the leak gate;
+single RSS samples are informational. No workload was weakened to change these observations.
+
+Fingerprint values differ only through truthful build/behavior provenance; diagnostic components
+outside that explicit field allowlist match. Every other benchmark result matches exactly.
+Resource retention checks pass; no slowdown was hidden by weakening workload or output checks.
+
+The pre-existing ambient Linux resolver-pool defect is now a durable TODO item. It remains unchanged
+here and requires a separate realism correction. Large family-specific functions still offer future
+bounded decomposition opportunities; lower-priority evaluator/external-parser work remains excluded.
+
+The final report `2026-09-12-nine-item-final.json` retains the full comparison hashes, checkpoint
+verification records, performance samples, structural measurements, gate log hashes and links to
+all per-item reports, including failed drafts and corrected tests. Earlier baselines/reports remain
+preserved. No merge, release, version bump, dependency change or authored schema change occurred.
+
+### Item 9c accepted — SMB publication and exact recovery
+
+Predecessor `304fc68e`. The continuation coordinator explicitly selects reserved preparation, root execution, retained source building, retained source preparation and terminal acknowledgement at their original authenticated boundaries. A fresh-source publication operation finalizes State, authenticates/rebinds, certifies timing, commits members and publishes in order; its late file/State authentication stays distinct from resumed certification. Two identical member commit/recover/retry loops now share one 43-line operation, and two identical exact-publication retries share one 28-line operation. No generic retry policy was introduced. Across item 9, the main coordinator falls from 1,298 to 436 lines and the retained-source coordinator from 215 to 152.
+
+Acceptance: 36 passed, 29 deselected in 17.84s,
+8550 passed, 27 skipped, 2011 deselected in 312.55s (0:05:12). Targeted slow controls:
+37 passed, 7 deselected in 74.69s (0:01:14). Both Ruff checks, revision-78 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.534/2.511/2.517/2.516 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-publication.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The first full final slow run passed 1,779 tests and failed one source-inventory assertion naming the former SMB timing-claim location. Updated that one expected function to _certify_new_persistent_smb_sources; all claim counts, forbidden-call checks and lock-order assertions remain intact. The original failed log is preserved as final-slow-initial.log. No production output or runtime assertion failed.
+
+### Item 9b accepted — SMB source construction and certification
+
+Predecessor `2b1b7e5e`. Operation events, session events, projection/timing preparation and fresh-attempt certification now have named operations consuming existing authenticated preparation records. The main coordinator falls from 1,060 to 539 lines. One 24-line finalization operation replaces the identical fresh/resumed materialize-recover-retry blocks; callers retain their original authentication and close-rebinding checks. Existing retry certification remains separate because it can adopt retained certifications or timing commits. Digest functions preserve their exact serialization. No authentication or mutation was moved across a phase boundary.
+
+Acceptance: 36 passed, 29 deselected in 17.88s,
+8550 passed, 27 skipped, 2011 deselected in 295.80s (0:04:55). Targeted slow controls:
+37 passed, 7 deselected in 74.37s (0:01:14). Both Ruff checks, revision-77 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.531/2.544/2.538/2.537 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-source-preparation.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+### Item 9a accepted — SMB reversible action and root execution
+
+Predecessor `6d022448`. Three direct operations now prepare each file mutation, assemble/bind the reversible action recipe, and execute the canonical network root. File preparation appends to the same local plan buffers in the same order, under the original journal cleanup scope. The coordinator retains phase admission, recipe validation, root-fact refresh and all retained-owner authentication. A compact phase table documents prepared/committed state, authenticated evidence, allowed retry and recovery ownership, with representative regression links. Two obsolete forwarding locals were removed. The network URI comment now describes the shared HTTP/HTTPS RNG order accurately.
+
+Acceptance: 36 passed, 29 deselected in 17.16s,
+8550 passed, 27 skipped, 2011 deselected in 294.57s (0:04:54). Targeted slow controls:
+37 passed, 7 deselected in 74.39s (0:01:14). Both Ruff checks, revision-76 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 2.541/2.533/2.545/2.542 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-smb-action-root.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: Before production edits, the bounded SMB matrix had 28 passes and one failure: its soak atomicity test expected a new client in the active-process list after the operation had already terminated it. Original 26a150ac failed identically. The corrected test observes the exact new client at successful canonical root commit, retains all precommit-failure neutrality checks, and passes on both builds before extraction. No production behavior or golden evidence changed. Ruff identified two now-unused forwarding locals, affinity and operation_plans; both were removed before gates.
+
+### Item 8c accepted — protocol evidence and interval reconciliation
+
+Predecessor `6556fe20`. The protocol-evidence coordinator falls from 1,138 to 527 lines. Focused operations own DNS normalization/cache staging (127 lines), proxy request presentation (68), proxy source context (160), automatic HTTP evidence (135), NTP parser/clock evidence (115), and HTTP transport accounting (99). The duplicated legacy HTTP/HTTPS URI/referrer branches now share one parameterized operation. All helpers use the existing phase-local event draft and preparation. Protocol/body adjustments still precede process visibility, session bounds and exact tuple reservation; responder preparation and independently committed prerequisites retain their boundaries. Existing composed records are unchanged.
+
+Acceptance: 64 passed in 2.15s,
+8550 passed, 27 skipped, 2011 deselected in 297.95s (0:04:57). Targeted slow controls:
+14 passed, 33 deselected in 23.14s. Both Ruff checks, revision-75 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.119/0.121/0.121/0.121 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-evidence.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: An initial focused command named a nonexistent test_zeek_ntp.py and collected no tests. The log is preserved as item8c-focused-initial.log. Corrected verified paths passed 64 focused tests; the additional NTP/proxy selection passed 33 tests with one existing skip because gitignored sample_data/Zeek-JSON is unavailable (44 deselected). No production correctness or byte comparison failed.
+
+### Item 8b accepted — protocol-specific transport accounting
+
+Predecessor `9db12667`. ICMP echo payload/duration, explicit TCP/UDP states, sampled UDP states, sampled TCP states and ICMP observation spacing now have five focused operations. Identity allocation, preparation entry, packet accounting, process/session caps and tuple ownership remain at their original execution points. The ICMP spacing helper receives the exact existing preparation and window bound; it acquires no independent state or cancellation authority. The static prepared-region regression now follows direct helper calls transitively, preventing extracted code from hiding publication, owner RNG or unstaged timing operations.
+
+Acceptance: 48 passed in 2.08s,
+8550 passed, 27 skipped, 2011 deselected in 295.89s (0:04:55). Targeted slow controls:
+14 passed, 33 deselected in 22.42s. Both Ruff checks, revision-74 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.119/0.121/0.120/0.120 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-transport.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The first two targeted slow runs reported the old 194-selector assertion after one four-call function was split into two two-call helpers. The first edit missed the assertion variable name; the assertion was then corrected to 195 without changing the 358-call ceiling. Both failed logs are preserved as item8b-slow-initial.log and item8b-slow-second.log. The accepted rerun passed all 14 selected slow tests. Ruff corrected import ordering before acceptance. No production output gate failed.
+
+### Item 8a accepted — network request decisions
+
+Predecessor `4a41709a`. The request coordinator falls from 1,030 lines/85 branches to 853 lines/69 branches. Five direct helpers own scoped Kerberos discovery (44 lines), ownerless Linux-server attribution policy (35), explicit endpoint lookup (35), process lifetime attribution (106), and command HTTP discovery (50). Proxy delegation, invalid-request exits, application-channel admission and independently committed process/DNS prerequisites stay visible at their original execution points. Stage docstrings explain cancellation and committed-prerequisite semantics and link production regression contracts. Existing composed stage records and all six stages remain unchanged.
+
+Acceptance: 48 passed, 8 deselected in 2.08s,
+8550 passed, 27 skipped, 2011 deselected in 294.46s (0:04:54). Targeted slow controls:
+3 passed, 33 deselected in 11.33s. Both Ruff checks, revision-73 validation,
+and **44 raw-byte comparisons against original `26a150ac` and the predecessor** pass.
+No new runtime owner, durable state, RNG stream or output exception was added.
+
+Alternating baseline/candidate performance medians: 0.121/0.123/0.123/0.121 seconds. Results match throughout;
+performance is informational. `2026-09-12-nine-item-network-resolution.json` preserves full samples,
+allocation and coordinator measurements, gate logs/hashes and limitations.
+
+Failures/limitations: The draft SMB control used a 30-minute warmup, which the existing schema rejected. The failed capture is preserved; accepted v2 uses the required one-hour warmup and repeats exactly. Inspection caught an extraction hazard: response-sizing discovery precedes unknown-internal endpoint rejection. The candidate preserves that flag; two new tests pass against original 26a150ac and the candidate. Ruff corrected import ordering before gates. No evidence exception or golden update was introduced.
+
+### Item 7 accepted — ordered configuration family checks
+
+Item 6b committed as `2fe26cb8`. Static overlay shape definitions now have a dependency-neutral
+module; all 48 definitions are AST-identical to the previous literals. Their 124 containers are
+allocated once and retained, rather than recreated for every raw phase. This is a small static-memory
+tradeoff, not a new runtime state owner. Raw validation falls from 659 to 384 lines. The merged
+coordinator falls from 834 to 317 lines and 127 to 44 branches, calling focused system-process,
+process-access, syslog and network families in their original order. DNS tunnel, external scanner,
+response weights and proxy status checks have named owners. Three identical weight sums share one
+implementation, retaining iteration, floating-point addition and malformed-entry behavior.
+
+Three frozen controls verify exact diagnostics, deduplication, deferred schema issue order and
+provider activation on original `26a150ac` and the candidate. Acceptance: **24 focused tests**,
+**28 targeted family controls**, **8,548 standard tests** (27 existing skips, 2,011 deselected,
+294.89 seconds), both Ruff checks, revision-72 validation against `2fe26cb8`, and **12 raw-byte
+comparisons against both references**. No output or correctness gate failed. A draft test import
+ordering issue was fixed before production extraction.
+
+Isolated alternating configuration medians were 0.768/0.785/0.779/0.777 seconds, with identical results
+(92 files, no issues) throughout. The report `2026-09-12-nine-item-configuration.json` records all
+samples, allocations, structural measurements, fixture/log hashes and the static retention tradeoff.
+
+### Item 6b accepted — shared temporary cleanup and recovery reporting
+
+Item 6a committed as `1cf35c5c`. Three identical temporary-staging cleanup sequences and three
+identical recovery-guidance rendering sequences now each have one owner. AST inspection confirmed
+that each extracted statement matched all three original copies. The command is now **544 lines**.
+Migration restoration, persistent staging, publication cleanup, lock release, and distinct planned
+suspension/signal interruption/ordinary failure outcomes retain their original owners and order.
+No rollback boundary, retained state or public interface changed.
+
+Four new pre-extraction controls cover OSError and KeyboardInterrupt with checkpointing enabled and
+disabled: temporary staging is removed, persistent staging survives, and old evidence stays intact.
+Acceptance passes: **118 focused tests** (14 deselected, 65.92 seconds), **8,545 standard tests**
+(27 unchanged skips, 2,011 deselected, 296.91 seconds), **5 slow interruption/publication controls**
+(95 deselected, 77.20 seconds), both Ruff checks, revision-71 validation against `1cf35c5c`, and
+**six CLI raw-byte comparisons against both references**.
+
+The checkpoint harness now reads each authenticated manifest's actual revision/build and supports
+multiple preserved source/checkpoint pairs. It validates all checkpoint file sets and hashes on
+exact-policy rejection, rather than only CURRENT.json. All **18 preserved checkpoint identities**
+match their source checkouts. A real 26-build pilot passed exact rejection (exit 1), full hydration,
+compatible resume, provenance and byte comparisons; all **35 original/copied checkpoint files**
+remained unchanged at rejection. The final 24-resume/18-rejection matrix remains outstanding.
+
+The focused four-path CLI failure benchmark produced alternating medians 2.667/2.321/2.679/2.335 seconds
+(baseline/candidate/baseline/candidate), with identical exit, preservation and staging results.
+These cumulative timings include earlier fingerprint savings. Ruff caught a draft benchmark loop
+closure and matrix import ordering; both were corrected. The initial benchmark A report is preserved
+but excluded in favor of the corrected A2 baseline. `2026-09-12-nine-item-cli-cleanup.json` retains
+all accepted performance/allocation data, structural evidence, hashes and limitations.
+
+### Item 6a accepted — CLI preparation and published-output reporting
+
+Item 5 committed as `7e86b07e`. Eight direct functions now own option admission, preliminary input
+recovery, target selection, fresh OOB authorization, compilation/validation, format reachability,
+resume policy and successful-output reporting. The outer command retains workspace locking, recovery
+under lock, migration staging, generation, publication, and distinct suspension/interruption/failure
+branches. No context object or persistent owner is introduced; five small return tuples carry values
+already consumed by the command. The public Typer signature remains exactly unchanged.
+
+The command falls from **934 to 571 lines** (including its public signature), and **116 to 46 statement
+branches**. An AST comparison confirms that extracted statement subtrees match the preceding source.
+The largest helper is 132 lines and owns scenario compilation plus its ordered diagnostic/exit boundary.
+Six new admission controls passed against original 26 and the preceding code. A draft assertion
+expected an invalid target value to be echoed; it was corrected to the existing allowed-values-only
+diagnostic before production changes. The isolated original-source run emitted the existing Typer
+`is_flag`/`flag_value` deprecation warning.
+
+Six full/narrowed public CLI captures across seeds 42/137 and all targets were frozen, repeated and
+captured from the preceding build before extraction. The complete matrix now has **212 cases**.
+After extraction: **114 focused tests** (14 slow deselected, 62.80 seconds), **8,541 standard tests**
+(27 unchanged skips, 2,011 deselected, 292.66 seconds), **3 slow publication crash controls**
+(93 deselected, 53.98 seconds), both Ruff checks, revision-70 validation against `7e86b07e`, and
+**all six CLI byte comparisons against both references** pass. CLI code is outside the covered
+behavior surface; the unchanged surface digest and changed exact installed-build identity are correct.
+
+A frozen CLI subprocess benchmark includes startup and public generation. Alternating medians were
+7.396/7.327/7.494/7.354 seconds (original baseline/candidate/baseline/candidate), with identical artifact hashes.
+Traced allocations measure the parent harness; child-process max RSS is recorded separately. These
+are cumulative comparisons against 26, not an isolated attribution of earlier fingerprint savings to
+this extraction. `2026-09-12-nine-item-cli-preparation.json` contains structural, AST, performance and
+gate evidence. No performance threshold or output exception was introduced.
+
+### Item 5 accepted — ordered process companions
+
+Item 4 committed as `1c266cfd`. The typed process handler now calls four direct operations for
+redirected files, HTTP, database and SCP evidence. Root actor/session/parent resolution, admission,
+identity registration, explicit credentials, supplementary suppression and termination remain in the
+coordinator. Network and SSH companions retain their existing bundles; redirected output retains its
+existing canonical occurrence/dispatcher path. No state, context object, cache or RNG is introduced.
+
+The coordinator shrinks from **745 to 432 lines**, and from **56 to 34 statement branches**. Helpers
+consume the resolved identity and preserve source-visibility clamps. Modeled SCP still previews the
+SSH tuple; external SCP still reserves its tuple. The process-order regression confirms root -> file
+-> network -> lifecycle, shared PID/image and supplementary suppression. The existing RNG ceiling
+remains 358; only selectors moved to the new functions (190 -> 194 selectors).
+
+Six new frozen companion cases cover HTTP redirection, known/failed database destinations, modeled
+and external SCP, named processes and suppression. Original-26 repeat and preceding-item captures
+pass. The expanded matrix now contains **206 cases**. Before extraction, 114 existing focused tests
+and the new order control passed. After extraction: **115 focused tests**, **3 slow RNG-policy tests**,
+**8,535 standard tests** (27 unchanged skips, 2,011 deselected, 292.83 seconds), both Ruff checks,
+revision-69 validation against `1c266cfd`, and **48 byte comparisons against both references** pass.
+
+Isolated generation medians were 5.176/5.195/5.205/5.226 seconds (baseline/candidate/baseline/candidate), with
+identical evidence hashes. Four additional direct calls per process clarify companion responsibilities;
+there is no new retained service state or independent scheduling owner. Complete allocation/performance data,
+structural counts, input references and gate hashes are in `2026-09-12-nine-item-process-companions.json`.
+The earlier unfrozen-fixture refusal remains recorded. An optional process-list diagnostic was denied
+by the sandbox; it had no bearing on acceptance. No refactor output difference was accepted.
+
+### Item 4 accepted — shared registry admission and lock mechanics
+
+Item 3 committed as `bdbc8f93`. Eight gate implementations now share `MutationWatermarkGate`;
+three identical stable-lock helpers share `acquire_stable_locks`. Compatibility aliases keep the
+existing importing names. All eight registry constructors still create independent gates, and
+registry-specific lock selection/ranks stay with the original callers. The common gate uses the
+existing artifact gate's slotted four-field layout. Checkpoint owner inventories classify `_gate`
+as rebuilt state, so synchronization layout is not a serialized checkpoint change.
+
+The frozen AST inventory proves that all eight watermark bodies and all three stable-lock bodies
+were identical; the shared bodies still match those hashes. The two old mutation entry forms now
+use one admission/release implementation, retaining both manual and context-managed interfaces.
+No new scheduler, durable owner or cross-registry lock is introduced.
+
+Acceptance passes: **31 characterizations**, **482 focused registry/checkpoint tests** (11 deselected,
+17.07 seconds), **10 slow registry controls** (113 deselected, 6.88 seconds), **9 slow SSH/RDP
+watermark controls** (201 deselected, 2.08 seconds), and **8,534 standard tests** (27 unchanged skips,
+2,011 deselected, 297.57 seconds). Both Ruff checks, revision-68 validation against `bdbc8f93` and
+**38 raw-byte comparisons** against both `26a150ac` and the preceding commit pass.
+
+The initial slow keyword selection matched no tests and exited 5; it is not counted as passing.
+Collecting the actual slow owners and adding explicit production watermark cases resolved that
+selection error. A new test's import ordering also failed the first full Ruff check; the corrected
+check passes. Complete records, AST hashes and performance samples are in `2026-09-12-nine-item-gates.json`.
+
+Isolated manual-entry medians were 0.005152/0.005314/0.005199/0.005158 seconds for 10,000 operations
+(baseline/candidate/baseline/candidate). Context-managed entry medians were
+0.010067/0.010362/0.010075/0.010460 seconds. Context entry now calls the shared admission/release
+methods; its small measured cost removes independent copies of the policy. Peak traced memory
+decreased from 2,600 to 2,432 bytes in these workloads. State results remain identical; no speed cap
+or slowdown-based rejection applies.
+
+Preparation for item 5 produced a draft mixed companion fixture outside the tracked input set.
+The comparison harness correctly refused that unfrozen input, before generation. A separate draft
+generation succeeded for coverage inspection; it is not an accepted baseline and will be frozen,
+repeated and compared before changing process companions.
+
+### Item 3 accepted — one clock calculation implementation
+
+Item 2b committed as `211446d7`. Live and prepared clock registries now delegate wander interpolation
+and knot sampling/accounting to two shared functions. Both pairs of old method entrypoints remain;
+cache operations, audit ownership, versioning and commit/cancel behavior stay with their original
+owners. Arithmetic order, floor-based negative ordinals and two logical knot samples even at an
+exact boundary remain explicit. Interpolation receives the existing knot callable so overrides of
+that entrypoint still apply; this introduces one transient bound-method argument per projection,
+without new persistent state or an independent RNG.
+
+The 12 additional clock controls passed against the preserved original checkout and again before
+production edits in the current checkout (0.78 seconds). After extraction, **52 focused tests**
+(4.64 seconds) and **12 slow source-timing preparation tests** (6.21 seconds) pass. Both Ruff checks
+and revision-67 validation against `211446d7` pass. The standard suite passes **8,523 tests**,
+with 27 unchanged skips and 2,011 deselected (298.41 seconds). All **38 raw-byte cases** match both
+`26a150ac` and the preceding commit. Report: `/private/tmp/eforge-cleanup-evidence/pass4-item3-report.json`.
+
+Before editing clock calculations, an additional nonzero-wander prepared-clock benchmark was frozen:
+2,048 projections across 16 preparations, with 12 commits and four cancellations. Its baseline median
+is 0.052667 seconds with 16,953 peak traced bytes. A fresh live-clock baseline is 0.049417 seconds
+with 8,078 peak traced bytes. The benchmark now also records retained traced allocation blocks;
+existing workload inputs and prior reports are preserved. Alternating live-clock medians were
+0.049417/0.050874/0.050947/0.051005 seconds (baseline/candidate/baseline/candidate); prepared-clock
+medians were 0.052667/0.053954/0.053621/0.054621 seconds. All value hashes and owner censuses match.
+The additional helper calls and transient callable binding have a small measured cost; they retain
+the existing callable seam while eliminating two independently maintained calculations. Peak traced
+memory remains under 9 KB for live and 17 KB for prepared workloads. No speed rejection gate applies.
+`2026-09-12-nine-item-clocks.json` contains all samples, allocation counts, structural and gate results.
+
+### Item 2b accepted — explicit cross-host passes
+
+Item 2a committed as `8230adf6`. Seven additional operations now own cross-host RDP placement,
+service logons, machine authentication, DC authentication/renewal, Linux syslog, ICMP and IDS noise.
+The coordinator directly calls the existing RDP executor, RSAT owner and web renderer in their
+original positions. The web pass was already a three-line loop over a cohesive renderer, so it
+remains explicit rather than acquiring another forwarding method.
+
+The complete system-traffic coordinator is now **299 lines and 15 statement branches**, versus
+2,314 lines and 233 branches at `26a150ac`. RDP placement returns the existing tuple of intents only
+after every placement draw; execution advances the global lifecycle frontier afterward. DC client
+selection and TGT renewal remain together, including unconditional initialization of the existing
+renewal dictionary. No durable state, scheduler, RNG or context object is added. The legacy Linux
+resolver dependency is explicit; the empty-host guard preserves the old empty-loop behavior without
+reading an unbound last-host local.
+
+The focused suite passes **267 tests**, one existing skip and 20 deselected (6.21 seconds); the
+targeted slow RDP/RNG suite passes **23 tests** (13.29 seconds). Both Ruff checks and revision-66
+validation against `8230adf6` pass. The standard suite passes **8,511 tests**, with 27 unchanged
+skips and 2,011 deselected (297.19 seconds). All **38 raw-byte cases** match both `26a150ac` and
+the preceding item, `8230adf6`. The report is
+`/private/tmp/eforge-cleanup-evidence/pass4-item2b-report.json`. No refactor or diagnostic-order
+regression appeared in this substep.
+
+Isolated generation medians were 5.212 s (preceding baseline observation), 5.224 s (candidate),
+5.209 s (repeated baseline), and 5.194 s (repeated candidate), with about 20.2 MB peak traced memory.
+Evidence hashes agree across all observations. The coordinator now has 57 calls and 38 direct owner
+attributes, versus 666 and 73 originally; the existing RDP intent list is still converted to exactly
+one tuple per pass. `2026-09-12-nine-item-baseline-cross-host.json` records the complete structural,
+performance and acceptance evidence. Performance remains informational, with no slowdown threshold.
+
+Six byte-for-byte copies of the already verified revision-62 checkpoints now live under
+`/private/tmp/eforge-cleanup-evidence/pass4-baseline-checkpoints`; `preserved-build.json` records
+the whole-bundle hashes and their exact `26a150ac` identity. Original files remain unchanged.
+A preliminary CLI characterization rejected exact resume from that older build while preserving
+the complete 35-file checkpoint bundle and file set, strengthening the existing pointer-only
+rejection check before the CLI refactor. The final matrix must repeat this across all 18 older-build
+cases and require all 24 successful resumes; this one pilot is not the final checkpoint gate.
+
+### Item 2a accepted — per-host baseline operations
+
+Fourteen direct methods on the existing baseline owner now perform the per-host DNS, NTP, DHCP,
+directory authentication, Windows process/registry and Linux shell families. The coordinator retains
+host iteration, shared RNG preparation, the authored-DHCP whole-host skip and every call's original
+position. No scheduler, persistent context, cache or RNG was introduced. Cross-host work remains in
+the coordinator for the separately committed next substep.
+
+Isolated alternating generation medians were 5.415 s (initial baseline), 5.190 s (candidate),
+5.212 s (repeated baseline), and 5.188 s (repeated candidate). Peak traced memory remained about
+20.2 MB. Every measurement's evidence hashes agree. These observations show no material runtime
+or retention change in the fixed workload; there is no speed-based acceptance threshold.
+Detailed structural measurements, performance samples, gate counts and report/log hashes are in
+`2026-09-12-nine-item-baseline-per-host.json`.
+
+The coordinator shrank from 2,314 to 1,354 lines, from 233 to 137 statement branches and from 666 to
+377 calls. These are responsibility-location measurements, not claims that behavior branches were
+removed. Its direct owner-attribute dependencies decreased from 73 to 67; cross-host decomposition
+will remove the remaining family implementation dependencies. The helpers receive existing values
+explicitly and retain no state.
+
+Before extraction, two new characterizations passed on the preceding implementation: authored DHCP
+skips the remainder of a host, and ambient resolver messages retain the last host's resolver pool.
+The latter confirms a pre-existing realism defect and is intentionally preserved here. It needs a
+separate owning-layer correction and evidence review, without treating this preservation control as
+the desired long-term behavior.
+
+Acceptance: **8,511 standard tests**, 27 unchanged skips, 2,011 deselected (304.16 seconds); **267
+focused tests**, one existing skip, 20 deselected (6.74 seconds); **23 targeted slow RDP/RNG tests**
+(14.04 seconds); both Ruff checks; revision-65 validation against `a6b28bcf`; **38 raw-byte cases**
+against both `26a150ac` and `a6b28bcf`. The preceding commit's full **200-case capture** also passed.
+Reports are `/private/tmp/eforge-cleanup-evidence/pass4-item2a-report.json` and
+`pass4-item2a-previous-report.json`; predecessor capture is `pass4-item1-full-report.json`.
+
+The first focused run had three source-location assertion failures after moving the implementations.
+Their owner inventories now name the extracted methods; sink/admission classifications and totals
+remain unchanged. The RNG inventory relocates its existing 28 calls without raising the global
+358-call ceiling. All repeated checks passed. A read-only process-list command was unavailable in
+the sandbox; no acceptance gate depends on it.
+
+Independent preparation for later items froze 12 live/prepared clock controls and 11 gate/lock
+controls against the preserved `26a150ac` checkout, before those production paths change. One draft
+gate control used the wrong SSH lock-helper import name; correcting it to `_stable_locks` made all
+11 controls pass. These control files remain outside the working tree until their owning item.
+The six existing revision-62 checkpoint fixtures were verified against `26a150ac`'s actual installed
+build digest; they already preserve that exact build and do not need to be regenerated.
+
+Starting commit: `26a150ac4d807b1b00e6d7c02019837132447dc1`, clean on
+`codex/2.0.0-code-cleanup`. Preserved checkout: `/private/tmp/eforge-cleanup-nine-baseline`.
+All nine approved items remain behavior-preserving; realism/correctness take priority over speed.
+Performance observations have no numerical rejection gate. No public/schema/version/dependency/
+checkpoint-policy change, merge or release is authorized by this cleanup.
+
+Order: fingerprint; baseline per-host then cross-host; clocks; gates/lock helper; process companions;
+CLI preparation then cleanup; validation; network request/transport/evidence; SMB root/source/recovery.
+Each named substep is independently committed after focused, standard, Ruff, manifest and relevant
+raw-byte gates. Final gates include full slow, expanded evidence, 24 resumes/18 older-build exact
+rejections and targeted retention soak. No incomplete gate is accepted.
+
+The existing 194 byte controls and 18 previous resumes reverified successfully. The verification
+report is `/private/tmp/eforge-cleanup-pass4-existing-controls.json`; structural baseline and hash
+are in `2026-09-12-nine-item-baseline.json`. Eighteen new fingerprint/gate characterization tests
+pass before extraction. A new bounded multi-host baseline fixture adds Windows DC and RHEL traffic,
+all targets, both seeds and a partial final hour; first capture and repeat are being frozen.
+Initial preflight comments explain token ownership and the two exception scopes.
+
+Initial fingerprint benchmark (0.206748 s median) overlapped the start of the generation control
+capture and is not accepted as an isolated performance measurement; retain it as a draft and repeat.
+Missing guessed test filenames in read-only searches were corrected using the actual test inventory.
+No production change or evidence difference resulted from these setup searches.
+
+
+### Initial controls accepted
+
+The six added baseline cases repeat byte-identically and the initial comment-only build also
+matches them (32 artifacts for seed 42, 34 for seed 137). Together with the existing reverified
+194 controls, the frozen matrix now has 200 cases. The initial standard suite passes **8,507 tests**,
+with 27 unchanged skips and 2,011 deselected (311.70 seconds). Eighteen focused characterizations,
+both Ruff checks and revision-63 manifest validation pass. A sandboxed uv attempt failed before
+running checks because its cache was inaccessible; the required checks succeeded with authorized
+cache access. No failed attempt is counted as passing.
+
+Isolated baseline performance (two warmups, seven samples plus separate traced-allocation sample)
+is recorded in `2026-09-12-nine-item-baseline.json`, alongside frozen input hashes. The earlier
+concurrently started fingerprint measurement remains excluded. Initial byte report:
+`/private/tmp/eforge-cleanup-evidence/pass4-initial-report.json`. All controls precede semantic
+implementation changes. Performance measurements are informational, without a speed cap.
+
+### Item 1 — fingerprint acceptance in progress
+
+Initial controls committed as `ad8a4aa5`. One operation-local payload now produces both the exact
+fingerprint and its components in generation, checkpoint status and checkpoint verification.
+Existing standalone APIs remain. The diagnostic projection copies the top-level mapping rather
+than popping the shared resolved payload. New tests cover one discovery/build scan and freshness
+on the next operation; all 128 focused CLI/checkpoint/characterization tests pass (14 deselected,
+66.42 seconds). Six raw-byte cases match both the initial build and `26a150ac`. Standard acceptance
+and isolated performance comparison are pending. A formatting check caught one long test line;
+Ruff formatted it before the standard run, and both complete Ruff checks now pass.
+Revision 64 records the provenance-only refactor. Its covered generation surface digest is unchanged
+from revision 63 because the checkpoint controls are excluded by the existing surface algorithm.
+The build fingerprint still changes, as required; no fingerprint algorithm or compatibility policy
+was altered.
+
+A read-only baseline extraction inventory also found that ambient systemd-resolved message rendering
+receives `system_dns_ips` left by the preceding per-host pass. With host-specific resolver pools,
+this may describe another host's resolver. This is a pre-existing realism concern, separate from
+the approved refactor; preserve the current dependency and characterize it before extraction.
+
+### Item 1 accepted — operation-local fingerprints
+
+All gates pass: **8,509 standard tests**, 27 existing skips, 2,011 deselected (304.61 seconds);
+128 focused tests; both Ruff checks; manifest validation against `ad8a4aa5`; six raw-byte cases
+against both the initial control build and `26a150ac`. The three callers now make one payload
+build/installed-source scan instead of two. Serialization, standalone interfaces, freshness and
+compatible/exact policies are unchanged. Isolated alternating measurements: baseline medians
+0.209489/0.195718 seconds; candidate 0.104539/0.105476 seconds. Peak traced allocation remains
+about 5.49 MB. These are focused fingerprint measurements, not whole-generation speedup claims.
+Report: `2026-09-12-nine-item-fingerprint.json`. Logs:
+`/private/tmp/eforge-pass4-item1-{focused,standard,byte}.log`. No new evidence exception or skip.
+
+## Final process-ownership pass — complete
+
+All three remaining opportunities are complete in four independently gated implementation commits
+on `codex/2.0.0-code-cleanup`, starting from clean
+`010ae90ff3dc345d5f05224345c4d529b87fe37a`: platform parent policies, the 35 selected internal
+forwarding calls, explicit preflight ownership, and staged planning/reservations.
+The corrected foreground behavior is preserved. No evidence exception, golden update,
+package/dependency/schema change, fingerprint-policy change, merge or release was introduced.
+
+Final acceptance passes: **8,489 standard tests** (27 unchanged existing skips), **1,780 slow
+tests**, **194 raw-byte comparisons**, **18 successful checkpoint resumes**, **12 older-build
+exact-policy rejections**, **seven targeted retention soak tests**, both Ruff checks and behavior
+validation against the previous item, `010ae90f` and original dev. Full soak is excluded as agreed.
+Artifact hashes and field-level provenance were verified; the final report is
+`2026-09-12-process-ownership-evidence.json`. Final acceptance below supersedes historical pending
+notes; all failed attempts and repairs remain recorded.
+
+The starting checkout is preserved at `/private/tmp/eforge-cleanup-process-baseline`.
+The existing 122 byte controls and 12 resumes re-verify, with a fresh verification report at
+`/private/tmp/eforge-cleanup-pass3-existing-controls.json`. The frozen source hashes, parent
+method inventory and 35 call sites across 20 generator methods are recorded in
+`2026-09-12-process-cleanup-baseline.json`.
+
+New native controls cover 18 parent/preflight paths × two seeds × serial/threaded emission.
+The first driver draft incorrectly treated `RunningProcess` as a Pydantic model; the first
+matrix draft omitted Linux PID 1. These setup errors were fixed before freezing accepted controls.
+The first 15-test characterization run also had setup errors (the state map name and Linux
+bootstrap parent); its repeat passed 13 and failed two because assigning `end_time` bypassed
+canonical termination indexes. The fixtures now call the existing `StateManager.end_process`.
+All these attempts occurred before production edits; no expected production behavior was changed.
+
+### Parent extraction acceptance attempts
+
+The frozen additional reference contains 72 repeatable cases (18 paths, two seeds,
+serial/threaded), expanding 122 controls to 194. A draft module-plan serializer also failed;
+its concurrent repeat was stopped (exit 130) before correcting and freezing the driver.
+All draft captures and logs remain available; accepted reference hashes are in
+`2026-09-12-parent-preflight-reference.json`.
+
+The initial parent split passed 516 focused tests, 15 timing slow tests and 60 parent/publication
+slow tests. All 162 native/supplement byte cases passed. The standard run passed 8,483 tests
+and failed one documentation first-reference trademark check, with 27 existing skips.
+The core matrix stopped at Linux SMB seed 42: a missing scenario-start binding skipped visible
+Linux shell materialization and changed parent IDs and dependent evidence. Acceptance was blocked.
+The helper now explicitly receives the current scenario start; two bounded tests cover the
+materialization guard, and the failing SMB case again matches all 25 artifacts byte for byte.
+The documentation first reference was corrected. No baseline or expected evidence changed.
+
+Platform policy also owns the remaining Windows account/session fallback operations, invoked
+at the existing shared branch points. Shared history and active-shell querying have dedicated
+owners so platform helpers never call back into the parent coordinator. Final parent gates
+are being rerun after these changes.
+
+### Item 1 accepted — platform parent policies
+
+Final parent gates: 57 focused tests, **8,486 standard tests passed**, 27 existing skips,
+2,010 deselected (301.33 seconds); **75 targeted slow tests passed**, two deselected
+(15.73 seconds); both Ruff checks, whitespace and revision-59 manifest validation against
+`010ae90f` pass. All **194 raw-byte controls** match their frozen corrected baseline, with
+manifest hashes verified. No checkpoint resume is claimed at this boundary; six fresh revision-58
+checkpoints have been preserved for the final 18-resume gate.
+
+The shared coordinator is 1,400 lines (previously 2,074), retaining 26 existing signatures plus
+three ephemeral helper bindings. Windows policy is 826 lines with six explicit dependencies;
+Linux policy is 249 lines with seven; shared history is 76 lines with three. Shared active-shell
+querying moved into the existing query owner. Total lines increase because the compatibility
+adapters and explicit bindings remain; the improvement is single policy ownership, not fewer
+lines. Helpers contain no generator reference or callback into the parent coordinator.
+The 35 internal forwarding calls remain intentionally unchanged until item 2.
+
+Representative paths: shared explicit-parent validation → platform existing fallback; shared
+account/session classification → Windows role policy; shared spawn rules → Linux shell/service
+selection → shared recursive chain materialization. The Linux observation-start binding now
+covers both warmup-parent reuse and visible-shell materialization.
+
+Final source digest: `bdde3219a09aa938f04c826e517b64c070cf24f1b4229e3c6cae0650c458e2f7`.
+Report: `2026-09-12-process-parent-evidence.json`, SHA-256
+`daf6ece96b2e953206b94a0d5a3b39d8ff07c7b4c51ce23e5cb5c4beeffdcd53`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item1-final-{standard,slow,core,native,supplements}.log`
+and `/private/tmp/eforge-cleanup-pass3-parent-final-focused.log`.
+
+### Item 2 acceptance — internal parent calls
+
+Item 1 is committed as `788c3680`. Item 2 migrates exactly the frozen 35 calls across
+20 generator methods, preserving every argument expression (none contains a nested call)
+and binding a fresh parent owner at the existing operation point. All old forwarders remain.
+Revision 60 uses digest `d8e9447c3fb1787a6c3dc137b84b05a763d09dae6406df0b3a38f633f8646de1`.
+The complete 194-case matrix matches both `010ae90f` and the preceding parent commit.
+The measured remaining frozen forwarding-call count is zero.
+
+The first standard run passed 8,482 tests and failed four fixture interceptions: two bounded
+application-catalog cases, the outbound mail worker fault, and a minimal Linux pipeline fixture
+still mocked the generator forwarders. Their stubs now target the parent owner; assertions,
+expected timing, error and residue behavior are unchanged. All 44 affected caller tests pass.
+The standard suite is being repeated before committing; 63 other focused tests and both Ruff
+checks already pass. First-run and repeat logs are retained separately.
+
+Before preflight extraction, two additional reservation characterizations were exercised against
+the current implementation: repeated cleanup and failure after new reservations while preserving
+a caller-supplied token. The first draft tried to patch a read-only slotted manager method and
+failed one test; class-level fault injection corrected the fixture. Both tests now pass, with no
+production change. Drafts/logs remain under `/private/tmp/eforge-cleanup-pass3-preflight-extra-*`.
+
+### Item 2 accepted — direct internal parent ownership
+
+The standard repeat passed **8,486 tests**, with 27 existing skips and 2,010 deselected
+(286.63 seconds). Together with 63 focused tests, 44 caller tests, both Ruff checks,
+revision-60 validation against `788c3680`, and 194 raw-byte comparisons against both references,
+all item-2 gates pass. No targeted slow run was required for this forwarding-only migration.
+The first failed standard attempt remains recorded above; no production regression or changed
+expected evidence was accepted.
+
+Report: `2026-09-12-process-parent-callers-evidence.json`, SHA-256
+`ed5ec27cc872b7627bd6a6107beaf1f128a53644a56b994252e46c43197daa0a`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item2-{focused,caller-tests,standard,standard-repeat,
+core,native,supplements}.log`. Existing adapters and all public family action interfaces remain.
+
+### Item 3a acceptance — explicit process preflight owner
+
+Item 2 is committed as `c72b3a4f`. `ProcessPreflightPlanner` now owns bounded source-deadline
+admission, command/endpoint planning, lifetime previews, scoped endpoint RNG construction,
+and uncommitted artifact cleanup. Its 11 explicit dependencies are existing state/timing/
+dispatch/content owners, four existing process owners, and narrow reuse/scanner capabilities.
+No generator object or new durable state is introduced. Generator hooks and the scanner-count
+entrypoint forward; eight implementations shrink from 785 generator lines to 65 forwarding lines.
+The shared file-action mapping and process artifact-owner classifier moved to existing pure policy.
+
+Scratch extraction drafts had relative/duplicate-import and indentation issues; these were fixed
+before production extraction. The first focused production run passed 563 and failed four tests
+that still patched the old RNG owner or inspected the generator implementation. Patches and source
+inspection now target the planner; expected evidence and assertions remain unchanged. The repeat
+passed **567 tests**, four deselected (11.04 seconds). **78 artifact rollback/recovery tests** pass
+(4.44 seconds), as do **75 targeted slow timing/parent checks** (14.94 seconds). A new bounded
+retention soak passes 1,000 prepare/cancel operations with no live planner references, reserved
+slots, prepared/claimed publications, or canonical artifact/process residue (1.87 seconds).
+
+Revision 61 uses digest `bf62dcb13a743846cec4b2b300cb40dc1849d35e059b5ffc9a60ffff212a56cb`.
+Both Ruff checks and manifest validation against `c72b3a4f` pass. Standard tests and the complete
+194-case byte matrix are running; this item is not committed or accepted yet.
+
+### Item 3a accepted — preflight implementation ownership
+
+The complete standard suite passes **8,489 tests**, with 27 existing skips and 2,011 deselected
+(300.15 seconds). All **194 raw-byte cases** match `010ae90f` and `c72b3a4f`, with artifact
+hash verification. Combined with 567 focused, 78 rollback/recovery, 75 targeted slow tests,
+the 1,000-operation reservation soak, both Ruff checks and revision-61 validation, all owner
+extraction gates pass. No changes to prepared-result types, bundle cleanup placement, optional
+hook discovery, execution publication/commit boundaries or checkpoint representations were made.
+
+Report: `2026-09-12-process-preflight-owner-evidence.json`, SHA-256
+`407b4cbd93dd5f47c71d20a43a096a82b88524e26c6fa3d1c3980b88e0fe2e3c`.
+Logs: `/private/tmp/eforge-cleanup-pass3-item3a-{focused,focused-repeat,standard,core,native,
+supplements,recovery,slow,reservation-soak}.log`. The two endpoint-preparation failure scopes
+are still intact; separating their cohesive operations is the next independently gated substep.
+
+### Item 3b / final acceptance — in progress
+
+Item 3a is committed as `e65109ce`. Preparation now follows six explicit operations in its
+original order: actor/effect selection (277 lines), allocation-free endpoint/cohort validation
+(29), endpoint artifact reservation (85 after correcting the issue below), lifetime/deadline
+preview (49), root-binary reservation (69), and existing prepared-result assembly. The coordinating
+side-effect method shrinks from 540 to 62 lines. Three ephemeral records carry only produced
+values (five selection fields, three reservation fields, two lifetime fields); runtime owners,
+mutable drafts and RNGs are not copied into these records.
+
+The first focused run passed 566 and failed the new caller-token regression: an extracted local
+`newly_reserved` declaration shadowed the preparation-owned list, so a later lifetime rejection
+left one new token reserved. Removed that declaration; both reservation stages now append to the
+same preparation-local list, and the original two exception scopes remain intact. The repeat
+passes **567 tests**, four deselected (10.42 seconds). No expected value or golden evidence was
+changed to accommodate the failure. The existing registry source-inspection assertion now points
+to the effect-selection operation containing that unchanged logic.
+
+Final-source **78 rollback/recovery tests** pass (3.87 seconds), and **seven targeted retention
+soak tests** pass (48.00 seconds), including the new 1,000-cycle reservation cleanup check.
+Full soak remains excluded. Revision 62 uses digest
+`52f9757f67793ce4771f6b93cc9aeeebe826d10f01553f7dfc1d4458774a8180` and validates against
+`e65109ce`, `010ae90f` and original dev `e4035435`; both Ruff checks pass.
+Full standard/slow suites, 194 byte comparisons and the expanded 18-resume checkpoint gate are
+running against this frozen production source. Item 3b is not yet accepted or committed.
+
+Final candidate prefix: `/private/tmp/eforge-cleanup-evidence/pass3-final`.
+Final checkpoint root: `/private/tmp/eforge-cleanup-evidence/pass3-final-checkpoints`.
+The six preserved `010ae90f` checkpoints are in `pass3-baseline-checkpoints`, alongside the
+preserved original-dev checkpoints. Final logs use `/private/tmp/eforge-cleanup-pass3-final-*`.
+
+### Final process-ownership acceptance and review
+
+All requested final gates pass on the frozen revision-62 source:
+
+| Gate | Result |
+|---|---|
+| Full standard suite | 8,489 passed; 27 existing skips; 2,011 deselected; 311.56 seconds |
+| Full slow suite | 1,780 passed; 8,747 deselected; 1,136.22 seconds |
+| Final focused process tests | 567 passed; four deselected; 10.42 seconds |
+| Final artifact rollback/recovery | 78 passed; 3.87 seconds |
+| Targeted process/network retention soak | Seven passed; 108 deselected; 48.00 seconds |
+| Frozen evidence and ground truth | 194 cases match both `010ae90f` and the preceding accepted commit |
+| Checkpoint hydration/resume | Original dev compatible: six; revision 58 compatible: six; final exact: six |
+| Older-build exact policy | 12 rejections; checkpoint pointers unchanged before compatible retries |
+| Ruff / whitespace / behavior history | All pass; revision 62 validates against `e65109ce`, `010ae90f`, `e4035435` |
+
+The 27 skipped test identities were compared with the previously accepted standard log and are
+identical: three external parser checks, one optional Splunk integration, one full-engine web-access
+case and 22 external sample-data checks. No new skip was introduced. The full soak tier and release
+coverage gate are outside this feature-branch scope. An optional OS process-status probe was denied
+by the sandbox; completed pytest logs and tool exit statuses independently confirmed the gates.
+
+The final raw-byte/provenance verification was repeated after all tests completed, and the report
+itself was byte-identical. Report SHA-256:
+`b91f1885d83db5ab3fdde8d2940aa28040a8e702f239bbeac0fa7f71f654448d`.
+It records every case's actual file hashes, all 18 resume artifact sets, 12 exact-rejection log
+hashes, frozen input hashes, the original caller inventory, baseline dependency access counts and
+current owner fields/operation sizes. The package version and dependency declarations were also
+compared as raw bytes with `010ae90f` and are unchanged.
+
+| Structural measure | Before | After |
+|---|---|---|
+| Shared parent coordinator | 2,074 lines | 1,400 lines; shared ancestry, history coordination and recursive/service-worker materialization remain here |
+| Platform parent policy | Embedded in coordinator | One Windows helper (six explicit inputs), one Linux helper (seven), shared history helper (three) |
+| Frozen internal parent forwarding calls | 35 across 20 methods | Zero; all compatibility forwarders remain available |
+| Generator preflight implementation | 785 lines across eight methods | 65 forwarding lines; implementation belongs to `ProcessPreflightPlanner` |
+| Preflight preparation coordinator | 540 lines | 62 lines following the six preparation phases |
+| Preflight dependency contract | 18 direct generator attributes, including internal helpers, plus one optional cutoff attribute | 11 named current-owner/capability inputs; no broad generator field |
+
+The dependency counts describe different interface shapes, not a claim that eight independent
+runtime authorities disappeared. Existing state, timing, registry, cache and lifecycle owners
+remain authoritative. The new records contain only phase results. No planner retains independent
+state or RNGs; current bindings and zero retained services/reservations are exercised by the
+replacement-owner tests and retention cases.
+
+Representative final paths are shared parent validation → platform policy → shared recursive
+materialization; direct internal caller → fresh parent owner; and bounded admission → actor/effect
+selection → allocation-free endpoint/cohort validation → endpoint reservations → lifetime/deadline
+preview → root-binary reservation → existing prepared result → unchanged bundle execution and cleanup.
+A failure during endpoint reservation uses its existing inner cleanup scope. A later lifetime or
+root-binary failure uses the existing outer scope over the same local new-token list. Explicitly
+supplied tokens stay outside that list. Publication and canonical commit remain execution-owned.
+
+Residual complexity is deliberate: shared ancestry repair remains substantial, effect selection
+still contains the existing file/module/registry branches, and compatibility/public action adapters
+remain. This pass completes its three opportunities without a broader adapter purge or a change to
+those policies. Raw evidence, ground truth, corrected foreground behavior, checkpoint representations,
+and compatible/exact policy behavior remain preserved by the exercised gates.
+
+Implementation history: `788c3680` (platform parents), `c72b3a4f` (35 internal calls),
+`e65109ce` (preflight owner), followed by the final `refactor: stage process preflight reservations`
+commit containing revision 62 and this acceptance record. Final logs are
+`/private/tmp/eforge-cleanup-pass3-final-{standard,slow,core,native,supplements,checkpoints,
+recovery,retention-soak}.log`; the staged-preflight focused attempts use
+`/private/tmp/eforge-cleanup-pass3-item3b-focused{,-repeat}.log`.
+All earlier checkouts, captures and reports remain preserved. Delivery is the dedicated branch;
+no merge or release is part of this effort.
+
+## Second-pass final status
+
+The first-pass preservation claim below is limited to its exercised matrix. Review found a
+misplaced scenario-deadline lookup in the process service. The user authorized a six-item second
+pass: correct foreground ownership against real process/session behavior, then consolidate shell
+policy, storyline session resolution, handler helpers, network stage records, and process services.
+Original dev remains a comparison reference, not the correctness authority for the correction.
+The first-pass checkout is preserved at `/private/tmp/eforge-cleanup-first-pass` (`2c7dee2a`).
+All six second-pass items are complete on `codex/2.0.0-code-cleanup`. Final gates pass:
+**8,468 standard tests** (27 existing skips), **1,780 slow tests**, **122 frozen byte comparisons**,
+**12 checkpoint resumes**, **six targeted retention soak tests**, both Ruff checks, artifact-hash
+verification and behavior-manifest validation. Full soak remains excluded as agreed.
+No dependency/version/checkpoint-schema or fingerprint-algorithm changes, merge, or release were
+made. Original checkpoints remain load-compatible; exact policy still rejects a different build.
+
+Revision 49 records the intentional foreground correction. Eight original matrix cases change
+only Linux eCAR/syslog evidence; the remaining original evidence and ground truth stay identical.
+All subsequent refactors match the accepted corrected references byte for byte. The final
+structural review, measured counts, limitations, hashes and reproduction tools appear below.
+This final status supersedes historical pending notes; failed and interrupted attempts remain
+recorded for handoff. Original dev and first-pass preservation claims do not override the
+foreground lifecycle correction.
+
+## First-pass status (historical)
+
+All seven items are complete on `codex/2.0.0-code-cleanup`, in seven sequential refactor commits.
+Final gates: **8,418 standard tests passed** (27 existing skips), **1,780 slow tests passed**,
+**44 frozen byte-comparison cases passed**, and **12 checkpoint resumes passed**. Ruff lint,
+formatting, whitespace, and behavior-manifest checks against the predecessor and original dev pass.
+Original 2.0.0 checkpoints remain compatible under compatible policy; exact policy correctly rejects
+the changed build. Version/dependency declarations and the original dev ref are unchanged.
+No merge or release was performed. The execution record below retains intermediate failures and
+historical pending notes; this final status supersedes those notes.
+
+## Contract and baseline
+
+- Approved implementation order: shared shell-history policy; shared timing constructor;
+  configuration validation; checkpoint scratch cleanup; storyline dispatch; shared Windows/Sysmon
+  infrastructure; full process and network ownership extraction.
+- Branch: `codex/2.0.0-code-cleanup`, based on clean `dev` at
+  `e4035435e8e53400ab25a74fe551313354369203` (version 2.0.0).
+- Preserved baseline checkout: `/private/tmp/eforge-200-cleanup-baseline`.
+- Use the same locked Python environment for baseline/candidate comparisons. Installed the `dev`
+  extra with `uv sync --frozen --extra dev`; no dependency/version declarations changed.
+- Acceptance: unchanged evidence file set and raw bytes, including ground truth. Only runtime
+  diagnostics and field-level build/run/checkpoint provenance may differ. No rewritten golden data.
+- Between every item: standard pytest, focused tests, Ruff lint/format, behavior-manifest check,
+  baseline and predecessor byte comparisons. Final: all standard and slow tests; relevant soak
+  diagnostics only. Preserve original checkpoint hydration and resumed evidence.
+- Append `impact: none` behavior revisions with updated digests for covered code changes. Preserve
+  existing classification and exact-build resume policy.
+
+## Execution record
+
+- Created branch and detached baseline worktree. Standard baseline suite started; results pending.
+- Added an initial fresh-process evidence capture/comparison harness. Full matrix, provenance
+  checks, and original-build checkpoint fixtures remain to be completed before acceptance.
+- Item 1 completed: shared policy in `config/shell_history_policy.py`, used by validation and
+  generation without importing the generator to discover account eligibility.
+- Item 1 gate: 8,406 standard tests passed, 27 skipped, 2,009 deselected (293.29 seconds).
+  Focused policy/behavior tests: 32 passed. Comparison-harness tests: 3 passed separately.
+  Ruff check/format, whitespace, and behavior revision 43 validation against `e4035435` passed.
+- Original baseline minimal repeat: all 16 artifacts matched (raw evidence; manifest creation time
+  exempt). Item 1 minimal and all-format/default/seed-42 comparisons passed (16 and 26 artifacts).
+- All 32 original baseline matrix captures completed. A separate original-build repeat/comparison
+  is running; the expanded final matrix is not yet accepted.
+- Original-build checkpoints retained for seeds 42/137 and default/sof-elk/splunk targets under
+  `/private/tmp/eforge-cleanup-evidence/checkpoints`. Never resume those originals directly.
+- A copy of the original default/42 checkpoint successfully resumed under item 1 with normal
+  compatible policy. All evidence and ground-truth bytes matched original uninterrupted CLI output.
+  Only manifest creation time, resume lineage, and explicit-vs-adopted seed override bookkeeping
+  differed; effective seed remained 42. Final automated provenance comparison remains outstanding.
+- An exploratory standard run begun before item 1 also passed (8,397 tests); the dedicated item 1
+  gate above is the authoritative validation after all production changes.
+
+### Item 2 — shared timing constructor
+
+- Shared the existing mixture constructor through `timing.distributions.uniform_distribution`;
+  retained action-local import aliases and exact distribution classes/representation.
+- Added exact sample expectations captured from the original build for seeds 42 and 137.
+- Gates: 39 focused tests passed; 8,412 standard tests passed, 27 skipped, 2,009 deselected
+  (285.44 seconds); Ruff lint/format and whitespace passed. Behavior revision 44 validated.
+- All-format/default/42 evidence matched both original `dev` and item 1 (26 artifacts).
+- Full original-build repeat matrix passed all 32 cases, including both seeds, three targets,
+  serial/threaded emitters, format filtering, and Windows/Linux SMB.
+- Automated original-default/42 checkpoint hydration, compatible migration, and evidence comparison
+  passed. Verification's protected-path checks reject the macOS `/var` temporary-path alias;
+  the harness now supplies a canonical temporary directory, without changing product checks.
+- Standard-suite skips include unavailable gitignored `sample_data/` and optional external-parser
+  fixtures; full reason list is in `/private/tmp/eforge-cleanup-item2-tests.log`.
+- Items 3–7 and the final full standard/slow and expanded checkpoint matrix remain outstanding.
+
+### Item 3 — configuration validation phases
+
+- Moved reusable validation to `validation/configuration.py` with explicit legacy CLI re-exports.
+  The public coordinator is 26 lines; effective loading/orchestration is 253 lines, followed by
+  12 explicitly ordered domain checks. DNS indexes and shared IDS callbacks have a named result.
+- Raw overlay validation precedes delayed scope activation. The scoped overlay discovery pass
+  remains explicit, preserving the old recursive pass's scope-dependent diagnostics and counts.
+- Default configuration result exactly matches original `dev`: 92 files checked, no issues.
+- Gates: 65 focused non-soak tests and all 91 exhaustive configuration soak cases passed;
+  8,412 standard tests passed, 27 skipped, 2,009 deselected (289.08 seconds). Ruff and whitespace
+  passed. All-format/default/42 bytes match both original baseline and item 2.
+- Behavior digest remains revision 44: neither CLI nor validation module paths belong to the
+  existing generation behavior surface, and the checker confirms no surface change.
+- Items 4–7 and final standard/slow/expanded-checkpoint acceptance remain outstanding.
+
+### Item 4 — checkpoint scratch resource ownership
+
+- Replaced arbitrary object-graph traversal with construction-time owner registrations for
+  SQLite connections, directory descriptors, child writers, and base-emitter workers.
+  Disposal remains separate from normal finalization and preserves primary-error handling.
+- Focused regression coverage includes duplicate descriptors, partial initialization, unowned
+  handles, worker shutdown, repeated disposal, and SQLite close failure. The existing synthetic
+  checkpoint owner now explicitly registers its connection; its no-finalization assertion remains.
+- Gates: 146 focused tests, 3 targeted slow checkpoint tests, and 8,416 standard tests passed;
+  27 standard skips and 2,009 deselections (298.81 seconds). Initial focused failure was the
+  synthetic owner's missing registration; the corrected repeat passed. Ruff/format passed.
+- Revision 45 validated against item 3. All-format/default/42 raw evidence matches original
+  baseline and item 3. Original-build checkpoint verification and compatible resume also passed
+  with byte-identical evidence and validated provenance.
+- Items 5–7 and final comprehensive acceptance remain outstanding.
+
+### Item 5 — typed storyline dispatch
+
+- Extracted all 32 typed branches into six family modules with explicit selection and a
+  shared ephemeral context. The coordinator retains RNG acquisition, future specs, ground-truth
+  initialization, and visibility lookup. All extracted execution bodies have identical ASTs to
+  original dev; no action-bundle routing or branch ordering changed.
+- Shared storyline helper imports resolve during execution, preserving existing instrumentation
+  seams without retaining a mocked helper at first module import. The initial standard run exposed
+  13 helper-binding failures and one source-location assertion; these were corrected, retaining
+  DHCP's exact ownership-wiring assertions at the moved handler location.
+- A draft supplemental fixture also caused one initial standard failure (invalid 20-minute warmup).
+  Its construction errors were resolved against original dev: use a one-hour warmup and a distinct
+  DHCP server. The frozen fixture lives under scripts/fixtures, separate from authored examples.
+- Gates: initial focused 154 passed; expanded repeat 360 passed; final standard 8,416 passed,
+  27 skipped, 2,009 deselected (303.53 seconds). Ruff, format, manifest revision 46, and harness
+  tests passed. All 32 original matrix cases passed during extraction; a final all-format/42
+  capture after the helper-binding correction matches both original dev and item 4.
+- Added six bounded supplemental cases covering remote sessions, admin/task/service actions,
+  DHCP/DNS, locking, process lifecycle, and proxy output across seeds 42/137 and all three targets.
+  All six original-build repeats and all six item-5 comparisons passed (28–29 artifacts each).
+  Input SHA-256 values are locked in scripts/fixtures/cleanup-inputs.json and checked before capture.
+- Items 6–7 and final standard/slow/checkpoint acceptance remain outstanding.
+
+### Item 6 — composed Windows/Sysmon journal infrastructure
+
+- Shared 26 identical spool, journal, owner-fencing, and terminal-cleanup operations through
+  source_journal.py. Existing emitter methods forward to the helpers; provider rendering, record
+  IDs, causal adjustments, mutable state, lock order, and checkpoint adapters remain in place.
+  Provider names are explicit parameters so existing error strings remain exact.
+- Gates: 163 focused tests and 181 targeted slow finalization/publication tests passed; standard
+  suite 8,416 passed, 27 skipped, 2,009 deselected (291.48 seconds). Ruff/format/whitespace passed.
+  Behavior revision 47 validated against item 5.
+- All-format/default/42 evidence matches original dev and item 5. All six supplemental cases
+  match the frozen original outputs. Original-default/42 checkpoint verification and compatible
+  resume reproduce byte-identical evidence with validated provenance.
+- No runtime owner or retention policy was added, so no additional scalability soak was warranted.
+  Item 7 and final comprehensive gates remain outstanding.
+
+### Item 7 — sequential ownership decomposition
+
+- Protocol stage: moved 82 definitions into common, HTTP, DNS, NTP, proxy, and transport modules.
+  The network planner now uses direct imports and its existing executor protocol, with no import
+  of the activity-generator module. Generator imports preserve legacy helper entrypoints.
+- The first standard run found 11 test-binding/source-inventory failures after the move. Updated
+  fault injection at the new owners without weakening assertions. Timing inventories now follow
+  the moved callers, retaining the exact 359-call global ceiling. Focused repeat: 224 passed;
+  targeted network identity and timing-policy slow tests: 86 passed.
+- Protocol standard gate: 8,416 passed, 27 skipped, 2,009 deselected (297.25 seconds). All-format/42
+  raw bytes match both original dev and item 6. Expanded checkpoint harness confirms exact-policy
+  rejection leaves the checkpoint pointer unchanged; compatible hydration/resume and declared
+  behavior-history provenance match with byte-identical evidence.
+- Process execution and network stage decomposition remain in progress. Revision 48 is reserved
+  for the complete item; it is not yet committed or accepted as a completed item.
+- Process stage: creation and termination now execute in bundle-owned services. Their ephemeral
+  bindings inject the existing state/dispatch owners (creation additionally binds lifecycle/content
+  ownership); helper callbacks still use the existing runtime's timing/configuration services.
+  Legacy generator methods forward to the services, and bundles no longer call those adapters.
+- Process gates: corrected service-delegation tests retain preflight-before-execution checks;
+  557 focused, 15 targeted slow, and 8,416 standard tests passed (295.45 seconds; 27 skipped,
+  2,009 deselected). All six supplemental cases match original dev and item 6 directly.
+
+- Network stage: split request resolution, transport planning, protocol/evidence planning,
+  prepared publication, commit, and publication into six explicit stages with frozen typed
+  intermediate records. These records carry existing references without new durable state or RNGs.
+  The existing transaction boundary retains claims, cancellation, timing seals, and recovery;
+  persistent SMB and indeterminate-commit recovery paths remain distinct.
+- Compared the moved network statements structurally against item 6: control flow and execution
+  order are preserved, apart from import placement, direct helper qualification, and one dead
+  local assignment. Added executable ownership regression tests for both final architecture gates.
+- Network focused gate initially passed 610 tests with one source-inventory failure. Updated that
+  inventory to inspect the six stages and assert their exact coordinator order; its existing
+  mutation/publication assertions remain. Corrected focused gate: 43 passed. Targeted network
+  slow gate: 86 passed. Network standard gate: 8,416 passed (310.58 seconds).
+- Final standard gate, including the two new ownership tests: **8,418 passed, 27 skipped,
+  2,009 deselected** (300.91 seconds). The 27 skips comprise three opt-in external-parser tests,
+  one license-gated Splunk container test, one existing full-engine-only web-access case, and
+  22 cases needing the gitignored sample_data directory. No new skips were introduced.
+- Final targeted retention soak: **3 passed**, 69 deselected (14.06 seconds), covering 1,000
+  capacity-one handoffs each for ordinary, HTTP, and proxy network carriers. The full soak tier
+  remains excluded. Item 3 separately passed its 91 configuration soak cases.
+- The first complete final slow run reported **1,779 passed, 1 failed** (1,164.83 seconds).
+  The failure was the remaining timing source-inventory expectation for the moved network helper
+  and transport stage. Updated only those expected source locations; all eight tests in that file
+  then passed. The clean complete repeat passed **1,780 tests**, 8,674 deselected, in 1,124.38 seconds.
+  The earlier failed run is retained as a failure, not counted as a passing gate.
+- A second bounded fixture covers periodic and content handlers (beacon, DGA, DNS tunneling,
+  credential spray, port scan, mail, spillage, adversarial payload, and raw events). Its initial
+  draft paired Windows logoff was rejected by original dev's process-lifecycle constraints;
+  the fixture uses the existing Linux unpaired-logoff fallback instead. The successful original
+  inputs were frozen before candidate comparison. No production behavior or golden data changed.
+- Final raw-byte comparisons: **44 cases passed** (32 core, six typed-handler supplements,
+  six periodic/content supplements). Both seeds and all three targets are included; the core
+  all-format cases also cover serial/threaded and full/narrowed formats. Original-build repeats
+  passed for every group. Final predecessor comparison passed for all-format/default/42 and all
+  six typed-handler supplements. Evidence and ground truth are compared without sorting records,
+  normalizing timestamps, or rewriting identifiers.
+- Final checkpoint matrix: **12 resumes passed** across seeds 42/137 and default/sof-elk/splunk:
+  six original-dev checkpoints hydrate and resume compatibly with byte-identical evidence;
+  six same-build checkpoints resume exactly with byte-identical evidence. Exact policy rejects
+  all six different-build originals without modifying their checkpoint pointer. Original durable
+  checkpoints remain untouched; verification/resume always operates on copies.
+- Provenance checks enforce exact field sets, recorded file hashes, seed adoption, run lineage,
+  consistent build identities, and the six appended behavior revisions. The compatible change
+  classification remains localized. Revision 48 and the unchanged fingerprint algorithm pass
+  manifest validation against item 6 and original dev.
+
+## Acceptance artifacts and reproduction
+
+The durable [evidence hash report](2026-09-12-cleanup-evidence-hashes.json) records the original
+commit, candidate build identity, dependency lock hash, frozen input hashes, all 44 per-file
+comparison snapshots, and the six paired checkpoint cases. Full generated artifacts and command
+logs remain in `/private/tmp/eforge-cleanup-evidence` and `/private/tmp/eforge-cleanup-*.log`;
+these temporary files are not committed and should be retained if future investigation needs them.
+The report is a durable record; the scripts can regenerate evidence using the preserved checkout.
+
+Use the same `.venv/bin/python` for both builds, and fresh output directories for every capture:
+
+```sh
+.venv/bin/python scripts/cleanup_output_matrix.py --source /private/tmp/eforge-200-cleanup-baseline --fixtures /private/tmp/eforge-200-cleanup-baseline/tests/fixtures/scenarios --output /private/tmp/cleanup-recheck-baseline
+.venv/bin/python scripts/cleanup_output_matrix.py --source "$PWD" --fixtures /private/tmp/eforge-200-cleanup-baseline/tests/fixtures/scenarios --output /private/tmp/cleanup-recheck-final --baseline /private/tmp/cleanup-recheck-baseline
+.venv/bin/python scripts/cleanup_supplement_matrix.py --source "$PWD" --output /private/tmp/cleanup-recheck-typed --baseline /private/tmp/eforge-cleanup-evidence/supplement-baseline
+.venv/bin/python scripts/cleanup_supplement_matrix.py --source "$PWD" --fixture scripts/fixtures/cleanup-periodic-content.yaml --output /private/tmp/cleanup-recheck-periodic --baseline /private/tmp/eforge-cleanup-evidence/periodic-baseline
+.venv/bin/python scripts/cleanup_checkpoint_matrix.py --source "$PWD" --baseline-source /private/tmp/eforge-200-cleanup-baseline --original-checkpoints /private/tmp/eforge-cleanup-evidence/checkpoints --output /private/tmp/cleanup-recheck-checkpoints
+.venv/bin/python scripts/report_cleanup_acceptance.py --evidence-root /private/tmp/eforge-cleanup-evidence --output docs/worklog/2026-09-12-cleanup-evidence-hashes.json
+uv run pytest
+uv run pytest -m slow --no-cov
+uv run ruff check .
+uv run ruff format --check .
+.venv/bin/python scripts/check_generation_behavior.py --base-ref e4035435e8e53400ab25a74fe551313354369203
+```
+
+The focused original-checkpoint capture helper accepts `--source`, `--fixture`, `--output`,
+`--target`, and `--seed` if the temporary checkpoint fixtures need rebuilding. The core and
+supplement matrix scripts can also regenerate original repeatability controls before comparison.
+
+Remaining opportunities are narrower extractions within the still-large process creation service
+and network request/protocol stages. They are separate future work: this cleanup establishes the
+ownership boundaries while preserving the mature execution and recovery paths.
+
+Final command logs: `/private/tmp/eforge-cleanup-final-standard.log`,
+`/private/tmp/eforge-cleanup-final-slow.log` (initial failure),
+`/private/tmp/eforge-cleanup-final-slow-repeat.log` (complete passing repeat),
+`/private/tmp/eforge-cleanup-final-targeted-soak.log`, and
+`/private/tmp/eforge-cleanup-final-checkpoints.log`. Final behavior surface digest:
+`bfb6f5cb93f045f2248734740261068f605a9fed3c42251275499a2b1031f0bf` (revision 48).
+
+## Second-pass execution
+
+### Item 1 — foreground ownership
+
+- Active unbounded foreground occupancy is derived from existing process/session state; no new
+  durable owner map or invented collection-end termination is introduced. Unknown release means
+  later same-shell work is unavailable. Prospective session fences are derived, not cached as
+  actual releases, so earlier actual termination can release the shell.
+- Removed the misplaced service-local scenario-end lookup along with the original speculative
+  release bookkeeping. Generation/telemetry callers now handle unavailable shell slots explicitly.
+- Focused tests, matrix attribution, behavior revision, and checkpoint acceptance are pending.
+
+- Revision 49 is localized. Revision 48's preservation claim was incomplete: its service-local
+  deadline lookup dropped original dev's fallback reservation. Original dev also incorrectly
+  retained speculative collection/session reservations after actual earlier termination.
+- Added native eCAR lifecycle captures (eight fixed cases, seeds 42/137, serial/threaded), plus
+  six end-to-end shell cases. Native seed 42 demonstrates: original dev reserves 13:12:00.991
+  despite no known completion; revision 48 admits a second command at 13:00:30; the correction
+  reports no available slot. Earlier real termination now permits the 13:00:30 command,
+  including an exact legacy reservation. Separate shells and explicit concurrency remain usable.
+- Investigation preserved the existing background-monitor contract: shell preparation explicitly
+  adds `&` to tail/watch/follow history, while process argv omits shell syntax. A trial treating
+  those stripped arguments as foreground incorrectly blocked later work and was discarded.
+  The new six-case scenario reproduces byte-identically under original dev, revision 48, and
+  the final item-1 implementation; direct canonical fixtures cover truly unknown foreground release.
+- Focused suites passed 578 cases before discarding that background-policy trial; the final
+  selection has 576 cases (two redundant trial-only parameters removed). An added completion
+  test exposed a datetime-max overflow in legacy matching; skipping impossible candidate deadlines
+  fixed it. The manifest's first summary exceeded its 240-character schema limit and was shortened.
+- The first two standard runs and core captures were intentionally interrupted during the policy
+  investigation. A subsequent standard run stopped making progress at the ASA identifier test;
+  it was interrupted for a repeat with faulthandler diagnostics. None counts as a passing gate.
+  The initial new scenario draft used unsupported zero traffic rates; it was rejected before
+  generation, then corrected to bounded supported positive rates before controls were frozen.
+
+- Full-suite diagnostics isolated an existing ASA weak-reference registry deadlock: cyclic GC
+  runs `discard()` while `bind()` holds its non-reentrant lock (stack in standard-4.log).
+  The new bounded subprocess regression also times out against preserved revision 48, proving
+  the defect predates this pass. The constructor registry now uses an RLock; rendering, state,
+  authentication checks, and writer locks are unchanged. Revision 50 records this internal repair
+  as impact none. It is included as a small prerequisite to reliable acceptance gates.
+- Actual earlier completion now supersedes bounded-process reservations too (sleep 600 terminated
+  at 20 seconds), while a remaining pipeline sibling retains its own planned completion fence.
+  Only an exact process-owned reservation is removed, using existing finalizer/session state.
+- Final focused item-1 process/ASA tests: 650 passed, 2 deselected. Supplemental timing and manifest
+  checks: 42 passed. The first full run after the GC fix completed with 8,406 passed and 23 failures:
+  it overlapped the final bounded-release edits, invalidating loaded-source inspection and cached
+  behavior digests. That run is not an acceptance gate; a fresh run against frozen sources is active.
+- Native fixture coverage is now nine cases × two seeds × serial/threaded = 36. All corrected
+  state contracts pass. Original and corrected repeatability controls are retained. The corrected
+  old-build checkpoint/default/42 resumes to exactly the corrected uninterrupted CLI evidence and
+  ground truth; its earlier comparison with original dev correctly failed on Linux eCAR/syslog
+  timing. Exact-policy rejection, integrity, migration history, and compatible hydration passed.
+- The initial 32 core captures were byte-identical before bounded early-release correction.
+  The final core comparison now has intentional differences and is being completed and attributed;
+  existing accepted controls are preserved, never rewritten. Final source edits are frozen during
+  these gates. Structural baseline inventory is in 2026-09-12-second-pass-structure-before.json.
+
+- Final typed admission regression: rejected foreground work must not emit preparatory bash
+  history. Its targeted test failed before moving the existing friction emission behind the
+  read-only availability check, then passed. The 196 process/storyline tests passed afterward.
+  Full-coverage/42 and all six typed cases stayed byte-identical to the accepted correction.
+- **Item 1 acceptance:** standard suite **8,432 passed, 27 existing skips, 2,009 deselected**
+  (299.37 s); focused process/ASA **650 passed**; final process/storyline **196 passed**;
+  targeted slow timing-policy tests **3 passed, 116 deselected**; both Ruff checks and manifest
+  validation against `2c7dee2a` passed (revision 50, digest
+  `31ec2940524b29b9efdeb0cd61ef7b15c236574fbd160b6294947aa6e18055b3`).
+- The 44 existing cases retain identical ground truth. Eight core cases intentionally change
+  only Linux eCAR/syslog: all-format seed 42 full-format runs across the three targets and two
+  emission modes; full-coverage/42 (MAIL-01 and WEB-01); Linux SMB/137 (SAMBA-01). All other
+  files and all other 36 existing cases are byte-identical to original dev. The early-release
+  change is isolated by the preceding 32-case control, which retained the old bounded release
+  and reproduced all original bytes. For example, one default/42 sudo `free -m` launch moves
+  from 10:00:39.748 to 10:00:39.396, and its child/termination records and time-derived process
+  identities follow the corrected launch. Counts, principals, commands, and unrelated sources
+  are preserved in that example. This is a scheduling correction, not an output normalization.
+- Six new end-to-end shell cases are identical across original dev, revision 48, and correction.
+  The native 36-case matrix exercises the intentional differences directly; both original and
+  corrected repeatability controls pass. Explicit concurrency is unchanged, unknown release no
+  longer admits a sibling, and early completion/termination releases both bounded and unbounded
+  commands. Ground truth in those native controls deliberately records the changed admission.
+- **All 12 checkpoint resumes passed** (original compatible plus current exact for seeds 42/137
+  and default/sof-elk/splunk), using the corrected uninterrupted build as the evidence authority.
+  All six originals are rejected under exact policy without pointer mutation. File hashes,
+  integrity/hydration, migration history and provenance were verified. The checkpoint matrix
+  now accepts `--control-source` to make the selected corrected reference explicit.
+- Structural baseline: 46 handler helper-name imports from the coordinator; network records have
+  240 field declarations, 240 input-unpack assignments and 78 pure-forward locals (22 in commit);
+  process creation/termination consume 53/17 broad runtime members. These are measured by
+  `scripts/measure_cleanup_structure.py` for the remaining five items.
+
+### Item 2 — shared shell-history policy
+
+- Item 1 committed as `ffdce735`; its accepted source is preserved separately at
+  `/private/tmp/eforge-cleanup-corrected`. The durable corrected evidence reference has 86 cases
+  and 12 verified resumes; original controls remain intact.
+- EDR shell-history file selection now calls the same predicate as validation and bash generation.
+  The surrounding executable/path conditions, lowercasing behavior, and random draws are unchanged.
+  Other account classifications remain purpose-specific. Revision 51 declares impact none.
+- Item 2 gates pending.
+
+- **Item 2 acceptance:** focused tests **109 passed**; standard suite **8,432 passed, 27 existing
+  skips, 2,009 deselected** (291.12 s); Ruff and revision-51 manifest validation passed. All-format
+  default/42 plus all six typed-handler captures are byte-identical to the corrected item-1
+  reference. The isolated five-account EDR duplicate is removed; validation and both generation
+  paths now consume the one shared predicate. Digest:
+  `98710feccb126f39e59257e823d199cf0bfc375109ced87fdad4464906803c18`.
+
+### Item 3 — shared storyline process-session resolution
+
+- Item 2 committed as `bd20077e`. Typed process events and command spills now use one
+  resolver for account classification, host-scoped reuse, required lifetime, creation, and
+  recording. The spill entrypoint remains a forwarding adapter. The typed no-planner path
+  retains its unfiltered user-session lookup, newest-host selection, Type 3 creation, and recording.
+- Eighteen characterization cases passed before extraction and after it, asserting concrete
+  call order and exact RNG state for ordinary users, interactive Linux root, local daemons,
+  case-sensitive account classification, built-in/declared services, existing sessions, and fallback.
+- Focused session/spill suites: **292 passed**, 29 deselected. All six typed and six periodic
+  captures are byte-identical to the corrected reference; the typed six also match item 2.
+  The timing inventory now has 358 continuous draw sites (one duplicate removed); its three
+  targeted slow tests pass. No executed draw is added or removed on an existing path.
+- The first focused invocation named a nonexistent test file and collected nothing; corrected
+  paths passed. Ruff initially rejected the sentinel exception's missing Error suffix; fixed.
+  Revision 52 and Ruff gates pass; standard suite pending.
+- **Item 3 acceptance:** standard suite **8,450 passed, 27 existing skips, 2,009 deselected**
+  (292.56 s). Both Ruff checks, revision-52 manifest validation against `bd20077e`, 292 focused
+  cases, three targeted slow inventory cases, and the 12 evidence cases pass. Digest:
+  `baf280f1c716f03d4e47edafcf3cc35bdee73626dd9d6ade146b5dfb63ec161d`.
+
+### Item 4 — one-way handler helper dependencies
+
+- Item 3 committed as `233bbf7a`. Twenty-eight shared helper implementations now live in four
+  focused IDS, HTTP, process parsing, and periodic modules. Coordinator exports retain explicit
+  aliases, while execution references the owning modules. The 46 runtime helper-name imports
+  back from typed handlers to the coordinator are gone; annotation-only imports remain.
+- AST comparison confirms all 28 moved function bodies are unchanged. Regression checks enforce
+  the dependency direction and alias identity. Periodic tests patch the actual helper owner;
+  the slow timing inventory changes source paths only. Preparation included a transient syntax
+  error from an overly broad annotation edit; it was corrected before running acceptance tests.
+- **Item 4 acceptance:** focused **372 passed**; standard **8,452 passed, 27 existing skips,
+  2,009 deselected** (297.17 s); targeted slow timing inventory **3 passed**. Both Ruff checks
+  and revision-53 manifest validation against `233bbf7a` pass. Six typed and six periodic cases
+  match both item 3 and the corrected reference; all-format/default/42 matches the corrected
+  reference too. Digest: `a37351d86be543418deebf730b4ba6b746d7c5032db6df1bb07840b6f343d2d6`.
+
+### Item 5 — composed network stage interfaces
+
+- Item 4 committed as `5858a0a8` and preserved in a detached comparison checkout. Stable request
+  facts, endpoint identity, protocol inputs, existing application intents, canonical publication
+  inputs, and prepared source work now travel as composed records. Changed fields remain explicit
+  local variables until their phase returns revised records; unchanged groups travel by reference.
+- Field declarations fall from 240 to 129, top-level input unpacks from 240 to 39, and locals
+  used only for forwarding from 78 to **zero**. The remaining unpacks name actual phase work or
+  shared groups. All five downstream stages retain their exact branch and return counts.
+  AST comparison confirms every non-stage planner method and the transaction boundary are unchanged.
+- New integration tests observe the actual six-stage path, one shared boundary, shared facts and
+  publication objects, and the authenticated final receipt. Failures injected immediately before
+  commit and immediately after commit preserve the distinct cancellation and committed recovery
+  outcomes. Existing fault coverage runs against the new grouped inputs too.
+- Initial extraction tooling expected an absolute import where the planner used a relative import;
+  corrected before tests. Three unused group aliases were removed after lint inspection.
+- Focused **46 passed**, 83 deselected; targeted slow network/timing **86 passed**, 46 deselected.
+  Ruff checks and revision-54 manifest validation pass. Standard and expanded byte gates pending.
+- **Item 5 acceptance:** standard **8,455 passed, 27 existing skips, 2,009 deselected**
+  (308.45 s); focused **46 passed** and targeted slow **86 passed**. All **44 existing matrix
+  cases** match both the preserved item-4 checkout and accepted corrected reference byte for
+  byte. File sets, ground truth and manifest-listed hashes are unchanged. Both Ruff checks and
+  revision-54 validation pass; digest
+  `fbd9b98cf01a5e94bc0bffe752e547ee80a891afc9bbaabf2e81a814b16ba7e7`.
+
+### Item 6a — shared process command normalization
+
+- Item 5 committed as `5bcad92d`. Preflight and execution share one pure image/command/executable
+  normalizer. The later duplicate Defender-path rewrite was removed after verifying no intervening
+  assignment can change the image. Actor revalidation and deliberately different timing paths remain.
+- Nine native Windows process cases × seeds 42/137 × serial/threaded emission add **36 controls**
+  for batch scripts, unchanged non-batch scripts, PSEXESVC and Defender paths, persistent/browser
+  reuse, preferred-browser precedence, exact parents, and source-deadline rejection. All match
+  original dev and the accepted pre-process source (`5858a0a8`); the pre-process control repeats
+  exactly. The initial eight-case draft is retained separately; the added batch case was frozen
+  before process production edits. Native drivers are hash-locked, and both native matrices now
+  use one shared runner. The durable process-reference JSON records every file hash.
+- Focused normalization/process tests: **155 passed**, 60 deselected. Candidate process **36/36**
+  and foreground **36/36** raw comparisons pass; all-format/default/42 and six typed cases also
+  match item 5. The expanded final evidence matrix is now **122 cases** (44 original, six shell
+  scenarios, 36 foreground native and 36 process native).
+- Initial preparation lint caught a now-redundant normalizer call and import order; corrected.
+  The first focused invocation named a nonexistent test file and ran no tests; correct paths pass.
+  Both Ruff checks and revision-55 manifest validation pass; standard suite pending.
+- **Item 6a acceptance:** standard **8,455 passed, 27 existing skips, 2,009 deselected**
+  (300.39 s), focused **155 passed**, all **79 selected byte cases** passed (72 native plus
+  all-format/default/42 and six typed), and both Ruff checks pass. Revision-55 digest:
+  `a4005912398a4efceca4c1cce7f1513d1aa62e7f7baf2d90015381924e8e9345`.
+
+### Item 6b — shared process reuse decisions
+
+- Item 6a committed as `2ebd6d09`. Eight precedence/visibility characterization tests passed
+  before this extraction. Bounded preflight and ordinary execution now share one selection
+  implementation, preserving singleton, service, persistent-application and browser precedence.
+  Explorer bootstrap remains unavailable to preflight. Bounded reuse token revalidation moved
+  into the process service; generator entrypoints remain adapters.
+- Completion bookkeeping is shared: source checks, optional-effect auditing, and the deliberately
+  different activity-update rules retain their existing order. Authenticated bounded reuse skips
+  redundant visibility checks only after its original full token/actor/precedence revalidation.
+- The first focused run failed 68 cases because the moved reuse token was imported from a package
+  that does not re-export it. Importing its defining module fixed the error; the repeat passed
+  **163 tests**, 60 deselected. Targeted slow process/lifecycle tests: **60 passed**, 155 deselected.
+  Standard and byte gates are running against frozen production sources.
+- **Item 6b acceptance:** standard **8,463 passed, 27 existing skips, 2,009 deselected**
+  (294.66 s); focused **163 passed**, targeted slow **60 passed**; both Ruff checks and
+  revision-56 validation pass. All **79 selected byte cases** match both item 6a and frozen
+  corrected references. Digest:
+  `5027a78fa82410da461c82599a38ee488ef1b3d583e5c7182bd5d99285cdb611`.
+
+### Item 6c — explicit process preparation and publication
+
+- Item 6b committed as `79529f46`. Creation now coordinates admission, actor resolution, launch
+  and parent planning, exact root planning, canonical evidence preparation, source/artifact
+  preparation, publication, and post-publication bookkeeping. Each operation receives the records
+  it consumes; unchanged actor/root identities travel by reference. Due lifecycle closes still
+  commit before root allocation planning and source timing preparation.
+- The two existing cohort/materialization commit paths retain their claim order, cleanup and
+  publication handling. Two new integration cases inspect the actual publication boundary:
+  preparation has no root in State or emitted root row, and publication commits both State and
+  timing before post-launch work. Existing fault tests cover artifact and cohort rejection.
+- Focused **165 passed**, 60 deselected; targeted slow timing **12 passed** and RNG inventory
+  **3 passed**. The first timing invocation selected no tests because that file is slow-tier;
+  the explicit slow repeat passed. Inventory entries name the new evidence/publication operations.
+- All **79 selected raw-byte cases** match item 6b and their accepted corrected references.
+  Both Ruff checks and revision-57 manifest validation pass. Digest:
+  `5080fb93deec21296908ef1499ed6a06bcbed2494272556b9f49ee1dd21ff8f1`.
+- **Item 6c acceptance:** standard **8,465 passed, 27 existing skips, 2,009 deselected**
+  (296.56 s). All focused, slow timing, lint, manifest and selected byte gates passed.
+
+### Item 6d — explicit process owners and current capability bindings
+
+- Item 6c committed as `7a28bbda`. Creation and termination services no longer import, accept,
+  or hold a broad generator object. The bundle asks its provider for a freshly bound service.
+  Process actors, canonical State queries, parent/service chains, reuse, launch scheduling,
+  foreground lifecycle, source timing and endpoint evidence now have focused implementation owners.
+  System-process execution and image-load implementation moved too; generator entrypoints forward.
+- This moves 108 generator method implementations, 26 module-level policy definitions and eight
+  class policy sets into process-owned modules. All dictionaries, caches, RNGs and lifecycle,
+  timing, identity and publication authorities stay on their existing owners. Factories bind
+  current references on each call, including after hydration or watermark replacement. Existing
+  lazy source-cache initialization remains on the generator binding boundary.
+- Remaining cross-family capabilities are 16 typed callbacks for host/user identity, shared
+  activity timing, session bootstrap/teardown, collection visibility, scanner requests and public
+  process action requests. They do not reproduce the old 53-member creation/17-member termination
+  generator interface. Session teardown's ContextVar and exact generator-owner authentication
+  remain with the session implementation; process operations ask that owner about frozen closes.
+- Initial extraction diagnostics caught missing/relative imports, a generated annotation typo and
+  a misplaced declaration block; these were fixed before acceptance tests. The first focused run
+  still patched the old reuse owner; the next identified four old service-factory patches and one
+  parent fault-injection patch. Updating the patch locations preserved all behavioral assertions.
+- Focused process/activity **630 passed**, 62 deselected; separate process/cache retention
+  **21 passed**; timing inventory/claim-order slow **15 passed**. A mistaken ownership-test command
+  named nonexistent files and collected nothing; the corrected invocation ran the 21 real cases.
+- The first full standard run was **9 failed, 8,458 passed, 27 existing skips, 2,009 deselected**.
+  Those failures were partial `object.__new__` fixtures or patches at former helper locations.
+  Tests now construct initialized owners and patch actual source-timing/SSH/foreground helpers.
+  No expected values were changed. A repeat found one more nested partial fixture; the complete
+  affected group then passed **178 tests**. The full standard gate is being repeated.
+- All **122 frozen byte cases** and **12 checkpoint resumes** pass. The final report re-verifies
+  each file set, every raw evidence/ground-truth hash, manifest-listed hashes, and the exact
+  field-level resume/provenance policy. Seventy-nine relevant cases also match item 6c directly.
+  Original-build exact policy rejects all six older checkpoints without rewriting their pointers;
+  compatible policy hydrates them and yields the corrected uninterrupted reference.
+- Targeted network retention soak: **5 passed**, 68 deselected (44.29 s), including 45 simulated
+  days and capacity-one ordinary/HTTP/proxy publication. Targeted process soak: **1 passed**,
+  2 deselected (4.76 s), covering 960 create/terminate lifecycles over 30 simulated days. At days
+  7 and 30 no ephemeral services remain reachable; source/terminal caches drain and successive
+  operations bind the replacement watermark-owned dictionaries.
+- Revision 58 validates against both item 6c and original dev. Digest:
+  `1f5580ec1a92690365240ba80e90e64fad178c2beb46158c6a654cf17f9ab84b`.
+  Full slow release gate is running; full soak remains excluded.
+- The repeated standard gate passed **8,467 tests**, 27 existing skips, 2,010 deselected
+  (309.46 s). Final inspection then identified an unseeded-generator edge: binding a missing
+  `_system_pids` to a temporary dictionary could retain that fallback across helper calls. The
+  binding now carries absence explicitly and obtains the original fresh fallback for each read;
+  an actual seeded role table still passes by reference. A new integration check confirms that
+  canonical systemd materialization creates no parallel role table on the ephemeral service.
+- The first full slow run was deliberately stopped (exit 143) before that final production edit;
+  it is **incomplete**, not passing. Its 60-second faulthandler reports came from long-running
+  medium-dataset/iteration tests, not assertion failures. All final gates are rerunning in fresh
+  `pass2-final2-*` captures; the earlier passing captures and report remain preserved separately.
+  Final focused repeat: **631 passed**, 63 deselected.
+- The first exploratory process-soak probe omitted its `EventDispatcher` and failed before
+  parent publication. Supplying the production-shaped dispatcher corrected the probe setup.
+  The final-source targeted retention repeat passes **6 tests**, 71 deselected (51.62 s).
+
+### Final structural review
+
+| Contract | Before this pass | Final implementation |
+|---|---|---|
+| Shell-history eligibility | Shared predicate plus an EDR duplicate | One predicate used by validation and both generation paths |
+| Storyline process sessions | Separate typed and spill decisions | One resolver, with the existing no-world-planner fallback |
+| Handler imports of coordinator helpers | 46 imported helper names | 0 runtime helper imports back to the coordinator |
+| Network stage fields | 240 declarations / 240 top-level unpacks | 129 declarations / 39 group or phase unpacks |
+| Network locals used solely to forward fields | 78 | 0 |
+| Broad generator members used by create/terminate services | 53 / 17 | 0 / 0 |
+| Process implementation ownership | Generator callbacks behind the services | 108 moved methods and explicit State/timing/lifecycle/evidence owners |
+
+The 16 remaining typed callbacks cross actual shared-identity, timing, session, scanner or
+public action-request boundaries. They are not a renamed generator facade. All creation,
+termination, system-process and image-load implementations now live in process-owned services;
+generator methods preserve forwarding entrypoints. Services retain no independent RNG or durable
+cache. The serialized runtime owners and fingerprint algorithms are unchanged.
+
+Representative paths checked:
+
+- Typed process and standalone command spill → common session resolver → existing process bundle.
+  Interactive root, local daemons, existing-session precedence and absent world planner retain
+  their prior branch order and exact RNG state.
+- Ordinary process → admission → actor → launch/parent → independent due closes → exact root
+  plan → canonical evidence → prepared publication → original commit boundary → bookkeeping.
+  Reuse can return before root allocation; exact-parent and visibility rejection remain intact.
+- Network → request resolution → transport planning → protocol evidence → publication preparation
+  → commit → publication. The same transaction boundary owns all claims, cancellation, timing
+  seals and recovery. Before-commit rejection and after-commit recovery remain distinct.
+- Occupied Linux shell → existing process/session lifecycle lookup. Unknown completion blocks
+  sequential work; actual termination or teardown releases it. Collection cutoff creates no close.
+  Explicit concurrency and other shells retain their existing independent paths.
+
+Remaining opportunities are narrower follow-ups: separate Windows and Linux parent-selection
+policy within the large parent owner, and migrate additional callers from compatibility adapters
+to the focused owners where that improves clarity. The existing preflight endpoint-effect planner
+and artifact-reservation cleanup entrypoints also remain in the generator; this pass shares their
+normalization, actor and reuse decisions with execution, but does not extract that separate
+artifact-planning coordinator. The creation/termination services and their process helpers consume
+the explicit owners described above. These remaining areas are outside the dependency count,
+which measures the creation and termination services specifically.
+
+### Final-source acceptance results
+
+The final source is frozen at behavior revision 58 with surface digest
+`d9cafeb7c0b89b37c6868472fb1a685235dc57f008b5b0e825033a6b7bf37c9c`.
+The earlier revision-58 digest above describes the superseded pre-fallback capture, not this
+accepted source. All final captures use the new, separately preserved `pass2-final2-*` prefix.
+
+- Standard: **8,468 passed, 27 existing skips, 2,010 deselected** (312.76 s).
+- Full slow suite: **1,780 passed, 8,725 deselected** (1,155.62 s). This is the complete
+  `uv run pytest -m slow --no-cov` gate against the final source, with no skips or failures.
+- Focused process/activity: **631 passed**, 63 deselected (11.43 s).
+- Behavior compatibility, RNG inventory and timing/claim contracts: **38 passed** (14.16 s).
+- Targeted process/network retention soak: **6 passed**, 71 deselected (51.62 s).
+- Both Ruff checks pass: **833 files already formatted**. Whitespace validation passes.
+- Behavior-manifest validation passes against item 6c (`7a28bbda`) and original dev (`e4035435`).
+- Expanded matrix: **122 raw-byte comparisons pass** against the accepted corrected references;
+  **79** relevant captures also match item 6c directly. No additional evidence or ground-truth
+  differences were accepted during items 2–6.
+- **12 checkpoint resumes pass**: six original-build compatible resumes and six same-build exact
+  resumes. The six original checkpoints are also rejected under exact policy. Integrity, actual
+  manifest-listed artifact hashes and the field-level provenance allowlist all verify.
+- Final structural inventory was recomputed and matches the source. Version, dependency,
+  checkpoint-schema and fingerprint-algorithm files are unchanged from the first-pass endpoint.
+- **All final acceptance gates pass.** The full soak tier was excluded as agreed; the six
+  relevant retention soak cases ran. The 27 standard skips remain the existing three SOF-ELK®
+  parser integrations, one Splunk integration, one full-engine web-access case and 22 external
+  sample-data checks. No new skips or changed golden expectations were introduced.
+
+The final machine-readable reports are:
+
+- `2026-09-12-second-pass-evidence.json`: SHA-256
+  `97e61e2c86eeddd3bf96b0802430f5bef615a26dbadfc4095be639c0701f47ae`.
+- `2026-09-12-second-pass-structure-comparison.json`: SHA-256
+  `4244d8eeaf52c0e9db469140b53c517896cc63bfb99b199aae7b7de523ec8f2b`.
+
+Final logs are `/private/tmp/eforge-cleanup-pass2-final2-{standard,slow,core,native,supplements,
+checkpoints,behavior-timing,retention-soak}.log`; the focused final-source log is
+`/private/tmp/eforge-cleanup-pass2-item6d-focused-final-2.log`. Frozen captures and original,
+first-pass and accepted corrected checkouts remain in their recorded `/private/tmp` locations.
+
+Delivery remains the dedicated branch. Items 1–5 and process substeps 6a–6c are recorded in
+`ffdce735`, `bd20077e`, `233bbf7a`, `5858a0a8`, `5bcad92d`, `2ebd6d09`, `79529f46`, and
+`7a28bbda`; the final capability-binding substep and this acceptance record are delivered together
+as `refactor: bind process services to explicit current owners`. No merge or release is part of
+this effort.

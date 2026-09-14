@@ -1,0 +1,374 @@
+{
+  "after": {
+    "coordinator_calls": 377,
+    "coordinator_lines": 1354,
+    "coordinator_statement_branches": 137,
+    "direct_owner_attributes": 67,
+    "per_host_operations": {
+      "_generate_system_delegation_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "pass_end",
+          "sys_pids",
+          "system",
+          "terminal_pass"
+        ],
+        "lines": 70
+      },
+      "_generate_system_dhcp_renewal": {
+        "explicit_arguments": [
+          "current_hour",
+          "dhcp_state",
+          "rng",
+          "sys_pids",
+          "system"
+        ],
+        "lines": 88
+      },
+      "_generate_system_dns_traffic": {
+        "explicit_arguments": [
+          "_svc_pid",
+          "current_hour",
+          "hour_start_sec",
+          "is_rhel_like",
+          "os_cat",
+          "rng",
+          "services",
+          "system",
+          "system_dns_ips"
+        ],
+        "lines": 70
+      },
+      "_generate_system_group_policy_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "hour_start_sec",
+          "os_cat",
+          "sys_pids",
+          "system",
+          "terminal_pass"
+        ],
+        "lines": 99
+      },
+      "_generate_system_kerberos_traffic": {
+        "explicit_arguments": [
+          "_svc_pid",
+          "current_hour",
+          "dc_hostname_by_ip",
+          "dc_hostnames",
+          "dc_targets",
+          "os_cat",
+          "rng",
+          "services",
+          "system"
+        ],
+        "lines": 84
+      },
+      "_generate_system_ldap_traffic": {
+        "explicit_arguments": [
+          "_svc_pid",
+          "current_hour",
+          "dc_targets",
+          "os_cat",
+          "rng",
+          "services",
+          "system"
+        ],
+        "lines": 57
+      },
+      "_generate_system_linux_shell_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "system",
+          "terminal_pass"
+        ],
+        "lines": 174
+      },
+      "_generate_system_module_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "system"
+        ],
+        "lines": 51
+      },
+      "_generate_system_ntp_traffic": {
+        "explicit_arguments": [
+          "_svc_pid",
+          "current_hour",
+          "hour_start_sec",
+          "ntp_ips",
+          "os_cat",
+          "rng",
+          "services",
+          "system"
+        ],
+        "lines": 86
+      },
+      "_generate_system_process_access_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "sys_pids",
+          "system"
+        ],
+        "lines": 42
+      },
+      "_generate_system_registry_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "sys_pids",
+          "system"
+        ],
+        "lines": 159
+      },
+      "_generate_system_remote_thread_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "sys_pids",
+          "system"
+        ],
+        "lines": 47
+      },
+      "_generate_system_scheduled_activity": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "sys_pids",
+          "system",
+          "terminal_pass"
+        ],
+        "lines": 110
+      },
+      "_generate_system_service_processes": {
+        "explicit_arguments": [
+          "current_hour",
+          "os_cat",
+          "rng",
+          "sys_pids",
+          "system",
+          "terminal_pass"
+        ],
+        "lines": 87
+      }
+    }
+  },
+  "before": {
+    "coordinator_calls": 666,
+    "coordinator_lines": 2314,
+    "coordinator_statement_branches": 233,
+    "direct_owner_attributes": 73
+  },
+  "behavior_revision": 65,
+  "byte_comparisons": {
+    "all_raw_bytes_identical": true,
+    "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+    "candidate_report_sha256": "8b7436776f1a1b1fc6c9d7a4542b67f893c784e96df51fbfd8530196b76acbe1",
+    "case_count": 38,
+    "preceding_commit": "a6b28bcf",
+    "preceding_report_sha256": "1bcc4235543d55c35f5415d097e74b2afea810ae25ac06ef94229ac46a1c525d"
+  },
+  "failures": [
+    "Three moved-source assertions failed initially; original sink counts/classifications and all assertions retained at new owners.",
+    "Read-only ps unavailable in sandbox; no gate depends on it."
+  ],
+  "focused_tests": {
+    "deselected": 20,
+    "passed": 267,
+    "seconds": 6.74,
+    "skipped": 1
+  },
+  "introduced_persistent_owners": 0,
+  "introduced_rngs": 0,
+  "item": "2a",
+  "known_realism_defect": "Ambient systemd-resolved messages consume the last per-host resolver pool. Characterized and preserved, not corrected in this pass.",
+  "logs": {
+    "/private/tmp/eforge-pass4-item2a-focused-repeat.log": "2c85f0f01ccab7f7fca0b6b637ac592803b4031135d1821839e9f9598249e966",
+    "/private/tmp/eforge-pass4-item2a-focused.log": "d39052f9e8d94034446fe95efcfac71a3aa03097959d3be334a687dba935c31f",
+    "/private/tmp/eforge-pass4-item2a-slow.log": "3b081988edbfe22814d712c6d07ccec4830fbe75ad7b6253926b7b3d89786e94",
+    "/private/tmp/eforge-pass4-item2a-standard.log": "c2816a77bb4807161e51b4c7ce4fe6062bc17a204b0ec6097a0e3c29e3325d75"
+  },
+  "manifest": "passed against a6b28bcf",
+  "performance_alternating_runs": [
+    {
+      "allocation_sample_peak_bytes": 20202956,
+      "allocation_sample_retained_bytes": 12170257,
+      "median_seconds": 5.414512834046036,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.18468882254966276,
+      "process_max_rss": 188006400,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.4053389999317005,
+        5.428074875031598,
+        5.414512834046036,
+        5.378231375012547,
+        5.399534750031307,
+        5.417737624957226,
+        5.421552125015296
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20203657,
+      "allocation_sample_retained_bytes": 12176737,
+      "median_seconds": 5.189952707965858,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19267998308831188,
+      "process_max_rss": 185827328,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.189952707965858,
+        5.203066000016406,
+        5.235158541006967,
+        5.165848875069059,
+        5.1627226249547675,
+        5.20525700005237,
+        5.173914582934231
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20193618,
+      "allocation_sample_retained_bytes": 12163041,
+      "median_seconds": 5.211813542060554,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19187179125457313,
+      "process_max_rss": 185581568,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.2549151660641655,
+        5.206202166969888,
+        5.190926042036153,
+        5.211813542060554,
+        5.239892084035091,
+        5.233163291006349,
+        5.196876667090692
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "generation"
+    },
+    {
+      "allocation_sample_peak_bytes": 20191429,
+      "allocation_sample_retained_bytes": 12161475,
+      "median_seconds": 5.187594166025519,
+      "operations_per_sample": 1,
+      "operations_per_second": 0.19276758512629585,
+      "process_max_rss": 185909248,
+      "result": {
+        "COLLECTION_PROFILE.json": "33251fef2e92045e7eebe74e2b36b57d469060e7511d3f9cb78629496a831636",
+        "GENERATION_MANIFEST.json": "5a1361bf4315c54d6ec071d1ab093b8311ba2ec03370401e4765b6ea165b6d80",
+        "GROUND_TRUTH.json": "e4ee3038af90f2160cd62e966d96613a416204298ee8ed4ef47fc0a6e0f72dde",
+        "GROUND_TRUTH.md": "274c7d30391bf509302dd8c305216e5813c5f80465c3a9394a690595f45d7958",
+        "OBSERVATION_MANIFEST.json": "bfc7d7c1d99b9be95cb7a0017255d42fce471532c342331d647f73e71659ca8a",
+        "OUTPUT_TARGET.txt": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+        "RESOLVED_SCENARIO.yaml": "366b4d7226b900f94fe988f30ce26a05fae07aeb56545346d943e71ed0553495",
+        "STORAGE_MANIFEST.json": "53a26b20ab2bcf79bdd177c1f49afeb82659e24b017c3ccca7807717ce471e8f",
+        "TEST-01.example.com/windows_event_security.xml": "5715d977fcc7ace439896f2ba18c88fb1eeca3bffa7f847cfa4f1b4e4a8d0d4b",
+        "TEST-01.example.com/windows_event_sysmon.xml": "7dba9879c912cbdcd3380a2d7399514cdf206a742868c4bcba5df1223c0705f7",
+        "core-zeek/conn.json": "4d297419c3b6d4503e289ec473ff0280f482e6ce39d9f3c43c72416d27b07a73",
+        "core-zeek/dns.json": "01fad16e013414de73988067077fa24aad1d9e7fce4ae95c537c971ab7494c9a",
+        "core-zeek/files.json": "d01e0a654f213b526f13bb655909e65a6fd43cecdf92400d38c3fd27d4221e78",
+        "core-zeek/http.json": "e82bf2e7c99bdf32d15d407fb1c92bc43d8d22ea96a629d7d55d358274e8445e",
+        "core-zeek/ssl.json": "10bd1046a51bd54ee3b585bbf6becab5009e3f384223ec9fa5c134cedf505d7a",
+        "core-zeek/x509.json": "d9ee42d6c2e499ee4970956948763ea75f1bf79ba0698c125d2fe2f206a03087"
+      },
+      "seconds": [
+        5.147472916985862,
+        5.197123458958231,
+        5.199737916933373,
+        5.187594166025519,
+        5.1814108330290765,
+        5.171222832985222,
+        5.205851541948505
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "generation"
+    }
+  ],
+  "preceding_commit": "a6b28bcf",
+  "representative_paths": [
+    "host DNS -> NTP -> DHCP (authored lease continues whole host) -> SMB -> Kerberos -> LDAP -> profiles -> Windows families -> Linux shell",
+    "cross-host RDP placement -> execution -> RSAT -> auth -> Linux syslog -> ICMP -> IDS -> web (unchanged until 2b)"
+  ],
+  "ruff_check": "passed",
+  "ruff_format_check": "passed",
+  "slow_tests": {
+    "passed": 23,
+    "seconds": 14.04
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8511,
+    "seconds": 304.16,
+    "skipped": 27
+  },
+  "starting_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1"
+}

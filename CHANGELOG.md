@@ -6,6 +6,78 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.0.1 (2026-09-14)
+
+This patch corrects foreground process ownership, Linux resolver-health evidence, and short
+Kerberos exchange timing, and prevents premature identity retirement from breaking checkpoints
+during long periodic scenarios. It simplifies generation ownership and shared policy while preserving
+public interfaces, authored schemas, output formats, checkpoint representations, and resume
+compatibility policies. Behavior-preserving refactors retain byte-identical evidence; correctness
+fixes intentionally change affected evidence.
+
+**Realism fixes**
+
+- Keep Linux foreground commands attached to their shell until modeled completion, termination,
+  or session teardown; release early terminations promptly and do not manufacture a release at
+  collection end (`ffdce735`).
+- Bind baseline Linux resolver degradation/recovery evidence to the emitting host's selected DNS
+  pool. Preserve stored recovery pairs on checkpoint resume and select the correct pool for new
+  episodes (`237b72c1`).
+- Reserve a joint source-local timing budget for responder WFP admission and subsequent Kerberos
+  processing, preventing short exchanges from exhausting their committed transport interval.
+  Preserve valid candidates and unrelated WFP timing, with bounded regressions and FOR668 scenario
+  and checkpoint comparisons (`d2671021`).
+- Retire process/session identities against completed simulation work instead of future event
+  timestamps, preventing periodic lookahead from invalidating pending SSH checkpoints. Preserve
+  the exact SSH source process through PID reuse and checkpoint hydration, with existing retention
+  caps and checkpoint representations (`b2948b2f`).
+
+**Process and storyline ownership**
+
+- Consolidate shell-history eligibility across validation and both generation paths, dispatch
+  typed events through family handlers, and share process-session resolution and independent
+  storyline helper owners (`2f75a27b`, `bd20077e`, `d3dea0d3`, `233bbf7a`, `5858a0a8`).
+- Extract process execution/termination ownership and staged network transactions; share process
+  normalization and reuse decisions, separate preparation from publication, and bind services to
+  explicit current state, timing, identity, and lifecycle owners (`2c7dee2a`, `2ebd6d09`,
+  `79529f46`, `7a28bbda`, `010ae90f`).
+- Separate Windows/Linux parent policies from shared ancestry coordination, remove the inventoried
+  internal parent-forwarding hops, and move bounded preflight into an ephemeral owner with distinct
+  planning and artifact-reservation phases (`788c3680`, `c72b3a4f`, `e65109ce`, `26a150ac`).
+- Separate HTTP, database, SCP, and file companions from the process-storyline coordinator while
+  preserving action-bundle routing and execution order (`7e86b07e`).
+
+**Shared infrastructure and coordinator simplification**
+
+- Share exact timing-distribution construction and live/prepared clock calculations, consolidate
+  registry admission gates and stable-lock mechanics, and derive fingerprint identity and
+  diagnostics from one payload build and installed-build scan (`7085b0b1`, `bdbc8f93`,
+  `1c266cfd`, `a6b28bcf`).
+- Replace checkpoint scratch object-graph inspection with explicit resource disposal and compose
+  shared Windows/Sysmon spool, journal, and finalization operations (`d5414c4b`, `8275d8dc`).
+- Decompose ordered per-host and cross-host baseline passes, CLI preparation/reporting/recovery,
+  and configuration-validation phases and families (`8230adf6`, `211446d7`, `1cf35c5c`,
+  `2fe26cb8`, `0bcb6e2f`, `4a41709a`).
+- Compose network-stage inputs and extract request-resolution, transport-accounting, and protocol
+  evidence decisions while retaining transaction ownership and commit boundaries (`5bcad92d`,
+  `9db12667`, `6556fe20`, `6d022448`).
+- Decompose persistent SMB action/root preparation, source construction/certification, and
+  publication/recovery along existing authenticated continuation phases (`2b1b7e5e`, `304fc68e`,
+  `e9d174a8`).
+
+**Validation, documentation, and release tooling**
+
+- Freeze characterization and raw-byte comparison controls, document reservation and lifecycle
+  contracts, and record structural, checkpoint, retention, performance, and final acceptance
+  results. The nine-item refactor passes all 250 byte-comparison cases; subsequent resolver and
+  Kerberos corrections retain explicit attribution reports (`ad8a4aa5`, `fd007c7b`).
+- Split the extended release test gate into four deterministic shards while retaining the
+  cross-Python checkpoint-portability gate (`e4035435`).
+- Make RDP ancestry checks host-specific and syslog recovery tests independent of filesystem
+  inode and file-descriptor allocation choices (`8358acdb`).
+- Record general entity availability across evidence families as future work and correct the
+  FOR668 worklog's trademark reference (`3b3917dc`, `d8a3d252`).
+
 ## v2.0.0 (2026-09-11)
 
 This final 2.0 release completes the post-RC3 realism gate, closes the remaining hard

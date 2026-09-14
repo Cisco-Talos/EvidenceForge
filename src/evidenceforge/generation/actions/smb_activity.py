@@ -40,7 +40,7 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortProjection,
     PreparedPersistentSmbSourcePublication,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -70,6 +70,7 @@ from evidenceforge.generation.persistent_smb_continuation import (
     PersistentSmbClientProcessPreparation,
     PersistentSmbRootHandoff,
     PersistentSmbTerminalContinuation,
+    PersistentSmbTerminalContinuationAuthority,
     SmbActivityResult,
 )
 from evidenceforge.generation.persistent_smb_continuation import (
@@ -100,6 +101,7 @@ from evidenceforge.generation.persistent_smb_projection import (
 )
 from evidenceforge.generation.smb_channels import (
     SmbChannelAffinity,
+    SmbClosedSessionBatch,
     SmbCompletedHandlePlan,
     SmbCompletedOperationPlan,
     SmbHandleView,
@@ -110,6 +112,9 @@ from evidenceforge.generation.source_timing import (
     SourceTimingPreparation,
 )
 from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
+    SmbConnectionFinalizationResult,
+    SmbConnectionPin,
     SmbConnectionPinInstallReceipt,
     SmbFileMutationCommitResult,
     SmbFileMutationJournal,
@@ -1728,7 +1733,176 @@ class SmbActivityActionBundle:
             lifecycle=rendered.lifecycle,
         )
 
-    def _execute_persistent_windows(
+    def _append_persistent_smb_file_operation(
+        self,
+        file: CompiledStorageFile,
+        index: int,
+        *,
+        share: CompiledStorageShare,
+        journal: SmbFileMutationJournal,
+        operation_cursor: datetime,
+        byte_allocation: tuple[int, int],
+        operation_plans: list[SmbCompletedOperationPlan],
+        prepared_records: list[_PersistentSmbPreparedOperation],
+    ) -> datetime:
+        """Stage one file mutation and append its plans to the caller's local preparation buffers.
+
+        The journal remains reversible until the existing network root commits.
+        Append order matters for partial failure; cancellation stays with the
+        enclosing action preparation, which also owns the operation deadline.
+        """
+        timing = self._operation_timing(
+            file,
+            index,
+            size_bytes=self._planned_operation_size(file, index),
+        )
+        started_at = (
+            operation_cursor if index == 0 else operation_cursor + timedelta(microseconds=1)
+        )
+        ended_at = started_at + timedelta(seconds=timing.total_seconds)
+        action = self.request.spec.operation
+        result = self.outcome
+        creates_remote_copy = (
+            action in {"copy", "move"}
+            and not isinstance(self.request.spec.source, SmbShareLocation)
+            and isinstance(self.request.spec.destination, SmbShareLocation)
+        )
+        state = file
+        handle_access = ""
+        handle_deny_write = False
+        handle_role = "operation"
+        if result in {"access_denied", "not_found"}:
+            pass
+        elif result == "sharing_violation":
+            state = self.executor.state_manager.touch_smb_file(file, journal=journal)
+            handle_access = "read"
+            handle_deny_write = True
+            handle_role = "sharing-conflict"
+        elif action == "create" or creates_remote_copy:
+            state = self.executor.state_manager.create_smb_file(
+                share=share.ref,
+                path=file.path,
+                size_bytes=file.size_bytes,
+                mime_type=file.mime_type,
+                timestamp=started_at,
+                tags=file.tags,
+                journal=journal,
+            )
+            handle_access = "write"
+            if result == "success" and action == "move" and creates_remote_copy:
+                source_file = self._client_source_by_destination.get(file.file_id)
+                if source_file is not None:
+                    source_state = self.executor.state_manager.touch_smb_file(
+                        source_file,
+                        journal=journal,
+                    )
+                    self.executor.state_manager.delete_smb_file(
+                        source_state.file_id,
+                        journal=journal,
+                    )
+        else:
+            state = self.executor.state_manager.touch_smb_file(file, journal=journal)
+            handle_access = "read" if action in {"browse", "read", "copy"} else "write"
+        previous_path = ""
+        previous_client_path = ""
+        previous_server_path = ""
+        if result == "success" and action == "update":
+            state = self.executor.state_manager.update_smb_file(
+                state.file_id,
+                size_bytes=self._updated_size(file, index),
+                journal=journal,
+            )
+        elif result == "success" and action == "move" and not creates_remote_copy:
+            destination = self.request.spec.destination
+            destination_path = (
+                destination.path
+                if isinstance(destination, SmbShareLocation) and destination.path
+                else f"Archive\\{ntpath.basename(state.path)}"
+            )
+            destination_share = (
+                destination.share if isinstance(destination, SmbShareLocation) else share.ref
+            )
+            previous_path = state.path
+            previous_client_path = self._client_path(state.path, share)
+            previous_server_path = self.world.server_local_path(share, state.path)
+            state = self.executor.state_manager.move_smb_file(
+                state.file_id,
+                share=destination_share,
+                path=destination_path,
+                journal=journal,
+            )
+        elif result == "success" and action == "delete":
+            state = self.executor.state_manager.delete_smb_file(
+                state.file_id,
+                journal=journal,
+            )
+
+        handle_file_id = state.file_id
+        handle_content_version = state.version
+
+        phase_type = {
+            "browse": "smb_directory_enumeration",
+            "read": "smb_file_read",
+            "create": "smb_file_write",
+            "update": "smb_file_write",
+            "copy": "smb_file_read"
+            if isinstance(self.request.spec.source, SmbShareLocation)
+            else "smb_file_write",
+            "move": "smb_file_write" if creates_remote_copy else "smb_file_rename",
+            "delete": "smb_file_delete",
+        }[action]
+        phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
+        action_time = started_at + timedelta(seconds=timing.setup_seconds + timing.jitter_seconds)
+        handle_close_time = min(
+            ended_at,
+            action_time + timedelta(seconds=timing.transfer_seconds + timing.close_delay_seconds),
+        )
+        if result == "sharing_violation":
+            handle_close_time = min(
+                ended_at,
+                started_at + timedelta(milliseconds=5),
+            )
+        handles = (
+            (
+                SmbCompletedHandlePlan(
+                    file_id=handle_file_id,
+                    content_version=handle_content_version,
+                    access=handle_access,
+                    opened_at=started_at,
+                    closed_at=handle_close_time,
+                    deny_write=handle_deny_write,
+                    role=handle_role,
+                ),
+            )
+            if handle_access
+            else ()
+        )
+        operation_plans.append(
+            SmbCompletedOperationPlan(
+                semantic_operation_id=f"{self.anchor.stable_id}:{index}",
+                started_at=started_at,
+                ended_at=ended_at,
+                initiator_bytes=byte_allocation[0],
+                responder_bytes=byte_allocation[1],
+                handles=handles,
+            )
+        )
+        prepared_records.append(
+            _PersistentSmbPreparedOperation(
+                state=state,
+                timing=timing,
+                phase_type=phase_type,
+                phase=phase,
+                action_time=action_time,
+                handle_close_time=handle_close_time,
+                previous_path=previous_path,
+                previous_client_path=previous_client_path,
+                previous_server_path=previous_server_path,
+            )
+        )
+        return ended_at
+
+    def _prepare_persistent_windows_action(
         self,
         *,
         share: CompiledStorageShare,
@@ -1736,460 +1910,119 @@ class SmbActivityActionBundle:
         server: System,
         client_system: System | None,
         client_ip: str,
-        principal_user: User,
+        process: ProcessContext | None,
+        duration: float,
+        auth_protocol: str,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        terminal_continuation: PersistentSmbTerminalContinuation,
+        client_process_preparation: PersistentSmbClientProcessPreparation,
+    ) -> None:
+        """Bind the reversible recipe only after every file fits the planned transport."""
+        timing = self._timing_planner()
+        timing_lifecycle_id = self.anchor.stable_id
+        auth_time = self.request.time + timing.packet_observation_delta(
+            relationship_key="smb.transport_to_auth",
+            stable_id=f"{self.anchor.stable_id}:authentication",
+            minimum_ms=28,
+            maximum_ms=96,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="authentication",
+        )
+        tree_time = auth_time + timing.packet_observation_delta(
+            relationship_key="smb.auth_to_tree_connect",
+            stable_id=f"{self.anchor.stable_id}:tree-connect",
+            minimum_ms=14,
+            maximum_ms=88,
+            host=server.hostname,
+            lifecycle_id=timing_lifecycle_id,
+            sample_key="tree_connect",
+        )
+        close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
+        auth_session_ref = stable_uuid(
+            "persistent-smb-auth-session",
+            self.anchor.stable_id,
+            server.hostname,
+            self.smb_principal,
+            client_ip,
+            auth_time,
+        )
+        operation_start = tree_time + timedelta(seconds=self._session_setup_seconds())
+        affinity = self._channel_affinity(
+            share=share,
+            server=server,
+            client_system=client_system,
+            client_ip=client_ip,
+            process=process,
+            client_logon_id=client_process_preparation.logon_id,
+            auth_protocol=auth_protocol,
+        )
+        byte_allocations = self._transport_byte_allocations(selected)
+        journal = self.executor.state_manager.begin_smb_file_mutation_journal(
+            f"{self.anchor.stable_id}:files"
+        )
+        operation_plans: list[SmbCompletedOperationPlan] = []
+        prepared_records: list[_PersistentSmbPreparedOperation] = []
+        operation_cursor = operation_start
+        try:
+            for index, file in enumerate(selected):
+                operation_cursor = self._append_persistent_smb_file_operation(
+                    file,
+                    index,
+                    share=share,
+                    journal=journal,
+                    operation_cursor=operation_cursor,
+                    byte_allocation=byte_allocations[index],
+                    operation_plans=operation_plans,
+                    prepared_records=prepared_records,
+                )
+            if operation_cursor > close_time:
+                raise StateError("Persistent SMB operations exceed their physical transport")
+            preparation = _PersistentSmbActionPreparation(
+                auth_time=auth_time,
+                tree_time=tree_time,
+                close_time=close_time,
+                auth_session_ref=auth_session_ref,
+                affinity=affinity,
+                byte_allocations=tuple(byte_allocations),
+                journal=journal,
+                operation_plans=tuple(operation_plans),
+                operations=tuple(prepared_records),
+                client_process=client_process_preparation,
+            )
+            authority.bind_action_prepared(terminal_continuation, preparation)
+        except BaseException as primary:
+            self._cancel_file_journal_after_failure(journal, primary)
+            raise
+
+    def _build_persistent_smb_operation_sources(
+        self,
+        *,
+        preparation: _PersistentSmbActionPreparation,
+        opening: NetworkTransactionPlan,
+        application_batch: SmbClosedSessionBatch,
+        session_identity: SessionIdentity,
+        share: CompiledStorageShare,
+        server: System,
+        client_system: System | None,
+        client_ip: str,
         auth_protocol: str,
         effective_uid: int | None,
         effective_gid: int | None,
-        process: ProcessContext | None,
-        transport_pid: int,
-        transport_image: str,
-        duration: float,
-        target_formats: tuple[str, ...],
-        terminal_binding_digest: str,
-        member_budget: int,
-        terminal_continuation: PersistentSmbTerminalContinuation,
-        client_process_preparation: PersistentSmbClientProcessPreparation,
-    ) -> SmbActivityResult:
-        """Execute one bounded persistent Windows disk-share action."""
+        client_identity: ProcessIdentity | None,
+        client_process_context: ProcessContext | None,
+    ) -> tuple[list[OccurrenceBuilder], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Build ordered file-phase sources from already authenticated root/application facts.
 
-        authority = self.executor._persistent_smb_terminal_continuations
-        root_facts = authority.root_facts(terminal_continuation)
-        if root_facts.phase == "reserved":
-            timing = self._timing_planner()
-            timing_lifecycle_id = self.anchor.stable_id
-            auth_time = self.request.time + timing.packet_observation_delta(
-                relationship_key="smb.transport_to_auth",
-                stable_id=f"{self.anchor.stable_id}:authentication",
-                minimum_ms=28,
-                maximum_ms=96,
-                host=server.hostname,
-                lifecycle_id=timing_lifecycle_id,
-                sample_key="authentication",
-            )
-            tree_time = auth_time + timing.packet_observation_delta(
-                relationship_key="smb.auth_to_tree_connect",
-                stable_id=f"{self.anchor.stable_id}:tree-connect",
-                minimum_ms=14,
-                maximum_ms=88,
-                host=server.hostname,
-                lifecycle_id=timing_lifecycle_id,
-                sample_key="tree_connect",
-            )
-            close_time = self.request.time + timedelta(seconds=max(0.2, duration - 0.02))
-            auth_session_ref = stable_uuid(
-                "persistent-smb-auth-session",
-                self.anchor.stable_id,
-                server.hostname,
-                self.smb_principal,
-                client_ip,
-                auth_time,
-            )
-            operation_start = tree_time + timedelta(seconds=self._session_setup_seconds())
-            affinity = self._channel_affinity(
-                share=share,
-                server=server,
-                client_system=client_system,
-                client_ip=client_ip,
-                process=process,
-                client_logon_id=client_process_preparation.logon_id,
-                auth_protocol=auth_protocol,
-            )
-            byte_allocations = self._transport_byte_allocations(selected)
-            journal = self.executor.state_manager.begin_smb_file_mutation_journal(
-                f"{self.anchor.stable_id}:files"
-            )
-            operation_plans: list[SmbCompletedOperationPlan] = []
-            prepared_records: list[_PersistentSmbPreparedOperation] = []
-            operation_cursor = operation_start
-            try:
-                for index, file in enumerate(selected):
-                    timing = self._operation_timing(
-                        file,
-                        index,
-                        size_bytes=self._planned_operation_size(file, index),
-                    )
-                    started_at = (
-                        operation_cursor
-                        if index == 0
-                        else operation_cursor + timedelta(microseconds=1)
-                    )
-                    ended_at = started_at + timedelta(seconds=timing.total_seconds)
-                    action = self.request.spec.operation
-                    result = self.outcome
-                    creates_remote_copy = (
-                        action in {"copy", "move"}
-                        and not isinstance(self.request.spec.source, SmbShareLocation)
-                        and isinstance(self.request.spec.destination, SmbShareLocation)
-                    )
-                    state = file
-                    handle_access = ""
-                    handle_deny_write = False
-                    handle_role = "operation"
-                    if result in {"access_denied", "not_found"}:
-                        pass
-                    elif result == "sharing_violation":
-                        state = self.executor.state_manager.touch_smb_file(file, journal=journal)
-                        handle_access = "read"
-                        handle_deny_write = True
-                        handle_role = "sharing-conflict"
-                    elif action == "create" or creates_remote_copy:
-                        state = self.executor.state_manager.create_smb_file(
-                            share=share.ref,
-                            path=file.path,
-                            size_bytes=file.size_bytes,
-                            mime_type=file.mime_type,
-                            timestamp=started_at,
-                            tags=file.tags,
-                            journal=journal,
-                        )
-                        handle_access = "write"
-                        if result == "success" and action == "move" and creates_remote_copy:
-                            source_file = self._client_source_by_destination.get(file.file_id)
-                            if source_file is not None:
-                                source_state = self.executor.state_manager.touch_smb_file(
-                                    source_file,
-                                    journal=journal,
-                                )
-                                self.executor.state_manager.delete_smb_file(
-                                    source_state.file_id,
-                                    journal=journal,
-                                )
-                    else:
-                        state = self.executor.state_manager.touch_smb_file(file, journal=journal)
-                        handle_access = "read" if action in {"browse", "read", "copy"} else "write"
-                    previous_path = ""
-                    previous_client_path = ""
-                    previous_server_path = ""
-                    if result == "success" and action == "update":
-                        state = self.executor.state_manager.update_smb_file(
-                            state.file_id,
-                            size_bytes=self._updated_size(file, index),
-                            journal=journal,
-                        )
-                    elif result == "success" and action == "move" and not creates_remote_copy:
-                        destination = self.request.spec.destination
-                        destination_path = (
-                            destination.path
-                            if isinstance(destination, SmbShareLocation) and destination.path
-                            else f"Archive\\{ntpath.basename(state.path)}"
-                        )
-                        destination_share = (
-                            destination.share
-                            if isinstance(destination, SmbShareLocation)
-                            else share.ref
-                        )
-                        previous_path = state.path
-                        previous_client_path = self._client_path(state.path, share)
-                        previous_server_path = self.world.server_local_path(share, state.path)
-                        state = self.executor.state_manager.move_smb_file(
-                            state.file_id,
-                            share=destination_share,
-                            path=destination_path,
-                            journal=journal,
-                        )
-                    elif result == "success" and action == "delete":
-                        state = self.executor.state_manager.delete_smb_file(
-                            state.file_id,
-                            journal=journal,
-                        )
-
-                    handle_file_id = state.file_id
-                    handle_content_version = state.version
-
-                    phase_type = {
-                        "browse": "smb_directory_enumeration",
-                        "read": "smb_file_read",
-                        "create": "smb_file_write",
-                        "update": "smb_file_write",
-                        "copy": "smb_file_read"
-                        if isinstance(self.request.spec.source, SmbShareLocation)
-                        else "smb_file_write",
-                        "move": "smb_file_write" if creates_remote_copy else "smb_file_rename",
-                        "delete": "smb_file_delete",
-                    }[action]
-                    phase = phase_type.removeprefix("smb_file_").removeprefix("smb_")
-                    action_time = started_at + timedelta(
-                        seconds=timing.setup_seconds + timing.jitter_seconds
-                    )
-                    handle_close_time = min(
-                        ended_at,
-                        action_time
-                        + timedelta(seconds=timing.transfer_seconds + timing.close_delay_seconds),
-                    )
-                    if result == "sharing_violation":
-                        handle_close_time = min(
-                            ended_at,
-                            started_at + timedelta(milliseconds=5),
-                        )
-                    handles = (
-                        (
-                            SmbCompletedHandlePlan(
-                                file_id=handle_file_id,
-                                content_version=handle_content_version,
-                                access=handle_access,
-                                opened_at=started_at,
-                                closed_at=handle_close_time,
-                                deny_write=handle_deny_write,
-                                role=handle_role,
-                            ),
-                        )
-                        if handle_access
-                        else ()
-                    )
-                    operation_plans.append(
-                        SmbCompletedOperationPlan(
-                            semantic_operation_id=f"{self.anchor.stable_id}:{index}",
-                            started_at=started_at,
-                            ended_at=ended_at,
-                            initiator_bytes=byte_allocations[index][0],
-                            responder_bytes=byte_allocations[index][1],
-                            handles=handles,
-                        )
-                    )
-                    prepared_records.append(
-                        _PersistentSmbPreparedOperation(
-                            state=state,
-                            timing=timing,
-                            phase_type=phase_type,
-                            phase=phase,
-                            action_time=action_time,
-                            handle_close_time=handle_close_time,
-                            previous_path=previous_path,
-                            previous_client_path=previous_client_path,
-                            previous_server_path=previous_server_path,
-                        )
-                    )
-                    operation_cursor = ended_at
-                if operation_cursor > close_time:
-                    raise StateError("Persistent SMB operations exceed their physical transport")
-                preparation = _PersistentSmbActionPreparation(
-                    auth_time=auth_time,
-                    tree_time=tree_time,
-                    close_time=close_time,
-                    auth_session_ref=auth_session_ref,
-                    affinity=affinity,
-                    byte_allocations=tuple(byte_allocations),
-                    journal=journal,
-                    operation_plans=tuple(operation_plans),
-                    operations=tuple(prepared_records),
-                    client_process=client_process_preparation,
-                )
-                authority.bind_action_prepared(terminal_continuation, preparation)
-            except BaseException as primary:
-                self._cancel_file_journal_after_failure(journal, primary)
-                raise
-            root_facts = authority.root_facts(terminal_continuation)
-        preparation = root_facts.action_preparation
-        if type(preparation) is not _PersistentSmbActionPreparation:
-            raise StateError("Persistent SMB continuation lost its action preparation")
-        auth_time = preparation.auth_time
-        tree_time = preparation.tree_time
-        close_time = preparation.close_time
-        auth_session_ref = preparation.auth_session_ref
-        affinity = preparation.affinity
-        byte_allocations = preparation.byte_allocations
-        journal = preparation.journal
-        operation_plans = preparation.operation_plans
-        prepared_records = preparation.operations
-        final_orig_bytes = sum(orig for orig, _resp in byte_allocations)
-        final_resp_bytes = sum(resp for _orig, resp in byte_allocations)
-
-        capture: NetworkConnectionIdentityCapture | None = None
-        transport_uid = ""
-        if root_facts.phase in {"action_prepared", "root_prepared"}:
-            capture = NetworkConnectionIdentityCapture()
-            transport_uid = self.executor.generate_connection(
-                src_ip=client_ip,
-                dst_ip=server.ip,
-                time=self.request.time,
-                dst_port=445,
-                proto="tcp",
-                service="smb",
-                duration=duration,
-                orig_bytes=final_orig_bytes,
-                resp_bytes=final_resp_bytes,
-                conn_state="SF",
-                emit_dns=False,
-                source_system=client_system,
-                pid=-1,
-                process_image=None,
-                hostname=server.hostname,
-                preserve_start_time=True,
-                preserve_explicit_payload=True,
-                suppress_application_side_effects=True,
-                suppress_source_pid_inference=True,
-                suppress_prereq_dns=True,
-                parent_action_group_id=self.anchor.stable_id,
-                persistent_smb_root_intent=PersistentSmbRootIntent(
-                    username=principal_user.username,
-                    system=server.hostname,
-                    auth_time=auth_time,
-                    lifecycle_group_id=self.anchor.stable_id,
-                    auth_protocol=auth_protocol,
-                    smb_principal=self.smb_principal,
-                    account_scope="directory",
-                    auth_session_ref=auth_session_ref,
-                    effective_uid=effective_uid,
-                    effective_gid=effective_gid,
-                    client_process=preparation.client_process,
-                ),
-                persistent_smb_application_intent=PersistentSmbApplicationIntent(
-                    manager=self.executor._smb_channel_manager,
-                    affinity=affinity,
-                    auth_session_ref=auth_session_ref,
-                    principal=self.smb_principal,
-                    auth_protocol=auth_protocol,
-                    account_scope="directory",
-                    effective_uid=effective_uid,
-                    effective_gid=effective_gid,
-                    client_access=self.client_access,
-                    server_hostname=server.hostname,
-                    client_ip=client_ip,
-                    lifecycle_group_id=self.anchor.stable_id,
-                    share_ref=share.ref,
-                    tree_connected_at=tree_time,
-                    operations=operation_plans,
-                    idle_timeout=max(
-                        self._idle_timeout(),
-                        close_time - operation_plans[-1].ended_at,
-                    ),
-                    closed_at=close_time,
-                ),
-                persistent_smb_file_mutation_journal=journal,
-                persistent_smb_terminal_authority=authority,
-                persistent_smb_terminal_continuation=terminal_continuation,
-                defer_source_publication=True,
-                identity_capture=capture,
-            )
-            root_facts = authority.root_facts(terminal_continuation)
-        if root_facts.phase not in {
-            "root_committed",
-            "source_building",
-            "source_prepared",
-            "source_published",
-        }:
-            raise StateError("Persistent SMB root did not retain its committed continuation")
-        prepared_root = root_facts.prepared_root
-        materialization = root_facts.materialization
-        handoff = root_facts.handoff
-        if (
-            prepared_root is None
-            or materialization is None
-            or type(handoff) is not PersistentSmbRootHandoff
-            or handoff.materialization is not materialization
-            or handoff.file_journal is not journal
-        ):
-            raise StateError("Persistent SMB committed root changed retained owners")
-        projection_group = root_facts.projection_group
-        source_reservation = root_facts.source_reservation
-        source_timing_capacity = root_facts.source_timing_capacity
-        if (
-            type(projection_group) is not PersistentSmbProjectionGroupToken
-            or type(source_reservation) is not PreparedPersistentSmbSourcePublication
-            or type(source_timing_capacity) is not SourceTimingActionCapacityReservation
-            or not self.executor.dispatcher.source_timing_planner.authenticates_action_capacity(
-                source_timing_capacity,
-                action_id=self.anchor.stable_id,
-                action_binding_digest=terminal_binding_digest,
-                detached_binding_budget=member_budget,
-            )
-        ):
-            raise StateError("Persistent SMB committed root lost its pre-root source capacity")
-        if root_facts.phase == "source_building":
-            return self._resume_persistent_smb_source_building(terminal_continuation)
-        if root_facts.phase == "source_prepared":
-            return self._resume_persistent_smb_source_prepared(terminal_continuation)
-        if root_facts.phase == "source_published":
-            return self._resume_persistent_windows_terminal(terminal_continuation)
-        opening = prepared_root.root.transaction
-        if capture is not None and (
-            capture.require() is not opening
-            or capture.require_prepared_root() is not prepared_root.root
-            or capture.require_persistent_smb_root_handoff() is not handoff
-        ):
-            raise StateError("Persistent SMB root capture changed retained owners")
-        if opening.closed_at is None:
-            raise StateError("Persistent SMB root lost its canonical close")
-        close_time = opening.closed_at
-        self.transport_start = opening.started_at
-        client_process_preparation = preparation.client_process
-        client_identity: ProcessIdentity | None = None
-        if client_process_preparation.disposition == "materialize":
-            staged_processes = prepared_root.root.state_plan.batch.processes
-            committed_processes = materialization.connection.state.processes
-            if len(staged_processes) != 1 or len(committed_processes) != 1:
-                raise StateError("Persistent SMB root lost its materialized client process")
-            client_identity = staged_processes[0].identity
-            if committed_processes[0].ecar_object_id != client_identity.object_id:
-                raise StateError("Persistent SMB root committed a different client process")
-        elif client_process_preparation.disposition == "reuse":
-            client_identity = self.executor.state_manager.get_process_identity(
-                client_process_preparation.hostname,
-                client_process_preparation.pid,
-            )
-        if client_identity is not None and (
-            client_identity.hostname != client_process_preparation.hostname
-            or client_identity.image != client_process_preparation.image
-            or client_identity.command_line != client_process_preparation.command_line
-            or client_identity.principal != client_process_preparation.username
-            or client_identity.logon_id != client_process_preparation.logon_id
-            or client_identity.started_at != client_process_preparation.started_at
-            or (
-                client_process_preparation.disposition == "reuse"
-                and client_identity.object_id != client_process_preparation.process_object_id
-            )
-        ):
-            raise StateError("Persistent SMB root changed its exact client process identity")
-        client_process_context = (
-            self._exact_client_process_context(client_system, client_identity)
-            if client_identity is not None
-            else None
-        )
-        if client_system is not None and client_identity is not None:
-            self.executor._remember_process_dependent_hold(
-                system=client_system,
-                pid=client_identity.pid,
-                required_until=close_time,
-            )
-            if client_process_preparation.lifecycle == "operation":
-                self.executor._remember_foreground_process_finalizer(
-                    system=client_system,
-                    user=self.request.actor,
-                    pid=client_identity.pid,
-                    process_name=client_identity.image,
-                    logon_id=client_identity.logon_id,
-                    termination_time=close_time,
-                )
-        pin_install = handoff.pin_install_receipt
-        lifecycle_receipt = materialization.receipt
-        if (
-            transport_uid and opening.zeek_uid != transport_uid
-        ) or not self.executor.state_manager.authenticates_smb_connection_pin_install_receipt(
-            pin_install
-        ):
-            raise StateError("Persistent SMB root handoff failed owner authentication")
-        lifecycle_binding = handoff.lifecycle_binding
-        if not self.executor._lifecycle_authority.authenticates_detached_network_receipt_binding(
-            lifecycle_binding
-        ):
-            raise StateError("Persistent SMB root handoff lost its detached lifecycle proof")
-        traffic_binding = self.executor._persistent_smb_traffic_authority.issue_binding(
-            opening,
-            handoff.observations,
-        )
-        session_identity = pin_install.session_identity
-        application_batch = handoff.application_result.result
-        if (
-            application_batch.session.logon_id != session_identity.logon_id
-            or application_batch.session.transport_plan != opening
-            or len(application_batch.operations) != len(selected)
-        ):
-            raise StateError("Persistent SMB terminal application result changed root identity")
+        Auth contexts remain distinct per event, and content/SID lookups keep
+        their original order. The returned lists are local source drafts, not
+        published evidence or an additional lifecycle authority.
+        """
         operation_events: list[OccurrenceBuilder] = []
         operation_truth: list[dict[str, Any]] = []
         operation_commons: list[dict[str, Any]] = []
         application_network = self._application_network_plan(transport_plan=opening)
-        for index, record in enumerate(prepared_records):
+        for index, record in enumerate(preparation.operations):
             state = record.state
             timing = record.timing
             phase_type = record.phase_type
@@ -2275,7 +2108,7 @@ class SmbActivityActionBundle:
                         auth_protocol=auth_protocol,
                         smb_principal=self.smb_principal,
                         account_scope="directory",
-                        auth_session_ref=auth_session_ref,
+                        auth_session_ref=preparation.auth_session_ref,
                         effective_uid=effective_uid,
                         effective_gid=effective_gid,
                     ),
@@ -2307,7 +2140,7 @@ class SmbActivityActionBundle:
                             auth_protocol=auth_protocol,
                             smb_principal=self.smb_principal,
                             account_scope="directory",
-                            auth_session_ref=auth_session_ref,
+                            auth_session_ref=preparation.auth_session_ref,
                             effective_uid=effective_uid,
                             effective_gid=effective_gid,
                         ),
@@ -2346,7 +2179,7 @@ class SmbActivityActionBundle:
                             auth_protocol=auth_protocol,
                             smb_principal=self.smb_principal,
                             account_scope="directory",
-                            auth_session_ref=auth_session_ref,
+                            auth_session_ref=preparation.auth_session_ref,
                             effective_uid=effective_uid,
                             effective_gid=effective_gid,
                         ),
@@ -2379,56 +2212,31 @@ class SmbActivityActionBundle:
                 }
             )
 
-        final_traffic = self._persistent_final_traffic(
-            opening.traffic,
-            orig_payload=final_orig_bytes,
-            resp_payload=final_resp_bytes,
-        )
-        final_transaction = replace(opening, traffic=final_traffic)
-        final_observation_traffic = tuple(
-            final_traffic
-            if observation.traffic is opening.traffic
-            else self._persistent_final_traffic(
-                observation.traffic,
-                orig_payload=(
-                    final_orig_bytes
-                    - (opening.traffic.orig.payload_bytes - observation.traffic.orig.payload_bytes)
-                ),
-                resp_payload=(
-                    final_resp_bytes
-                    - (opening.traffic.resp.payload_bytes - observation.traffic.resp.payload_bytes)
-                ),
-            )
-            for observation in handoff.observations
-        )
-        normalized_auth_protocol = auth_protocol.casefold()
-        kerberos_auth = normalized_auth_protocol == "kerberos"
-        auth = AuthContext(
-            username=self.smb_principal,
-            user_sid=self.executor._get_sid(self.smb_principal),
-            logon_id=session_identity.logon_id,
-            session_id=session_identity.session_id,
-            logon_type=3,
-            auth_package="Kerberos" if kerberos_auth else "NTLM",
-            source_ip=client_ip,
-            source_port=opening.src_port,
-            logon_process="Kerberos" if kerberos_auth else "NtLmSsp",
-            lm_package="-" if kerberos_auth else "NTLM V2",
-            logon_guid=session_identity.logon_guid,
-            subject_sid="S-1-5-18",
-            subject_username="SYSTEM",
-            subject_domain="NT AUTHORITY",
-            subject_logon_id="0x3e7",
-            reporting_pid=self.executor._get_system_pid(server.hostname, "lsass", 0x2E0),
-            workstation_name=client_system.hostname if client_system is not None else "-",
-            session_kind="smb",
-            auth_protocol=auth_protocol,
-            smb_principal=self.smb_principal,
-            account_scope="directory",
-            auth_session_ref=auth_session_ref,
-            effective_uid=effective_uid,
-            effective_gid=effective_gid,
-        )
+        return operation_events, operation_truth, operation_commons
+
+    def _build_persistent_smb_session_sources(
+        self,
+        *,
+        preparation: _PersistentSmbActionPreparation,
+        final_transaction: NetworkTransactionPlan,
+        auth: AuthContext,
+        close_time: datetime,
+        client_identity: ProcessIdentity | None,
+        client_process_context: ProcessContext | None,
+        client_system: System | None,
+        server: System,
+        session_identity: SessionIdentity,
+        operation_commons: list[dict[str, Any]],
+        operation_events: list[OccurrenceBuilder],
+    ) -> tuple[list[OccurrenceBuilder], OccurrenceBuilder | None]:
+        """Assemble client-create, transport, logon/tree/file and logoff drafts in source order.
+
+        This only looks up the already committed client/session identities. File
+        drafts acquire their final application interval here, before any source
+        projection or timing certification can consume them.
+        """
+        client_process_preparation = preparation.client_process
+        auth_time, tree_time = preparation.auth_time, preparation.tree_time
         application_network = self._application_network_plan(transport_plan=final_transaction)
         owned_projection_plan = OwnedEffectOccurrencePlan(
             owner=EffectOccurrenceOwner.SMB_PROTOCOL_FILE_PHASE,
@@ -2573,74 +2381,44 @@ class SmbActivityActionBundle:
                 ),
             )
         )
-        state_builder = self.executor.state_manager.begin_action_cohort_materialization()
-        state_builder.finalize_smb_connection(
-            pin_install.pin,
-            final_transaction,
-            session_identity,
-            end_time=close_time,
-        )
-        state_plan = state_builder.seal()
-        if not self.executor._lifecycle_authority.authenticates_detached_network_receipt_binding(
-            lifecycle_binding
-        ):
-            raise StateError("Persistent SMB lifecycle binding failed authentication")
+        return events, process_create_event
 
-        def owner_digest(label: str, values: tuple[object, ...]) -> str:
-            return hashlib.sha256(repr((label, values)).encode("utf-8")).hexdigest()
+    @staticmethod
+    def _persistent_smb_owner_digest(label: str, values: tuple[object, ...]) -> str:
+        """Hash the existing ordered owner tuple without changing serialization."""
+        return hashlib.sha256(repr((label, values)).encode("utf-8")).hexdigest()
 
-        def owner_generation(digest: str) -> int:
-            return (int(digest[:16], 16) % ((1 << 63) - 1)) + 1
+    @staticmethod
+    def _persistent_smb_owner_generation(digest: str) -> int:
+        """Retain the existing scalar generation projection of an owner digest."""
+        return (int(digest[:16], 16) % ((1 << 63) - 1)) + 1
 
-        lifecycle_digest = owner_digest(
-            "persistent-smb-lifecycle-binding-v1",
-            (
-                lifecycle_binding.transaction_id,
-                lifecycle_binding.state_publication_token,
-                lifecycle_binding.runtime_publication_token,
-                lifecycle_binding.physical_transport_id,
-                lifecycle_binding.conn_id,
-                lifecycle_binding.zeek_uid,
-                lifecycle_binding.network_result_digest,
-                lifecycle_binding.timing_receipt_digest,
-                lifecycle_binding.runtime_receipt_digest,
-                lifecycle_binding.connection_receipt_digest,
-                object.__getattribute__(lifecycle_binding, "_integrity_token"),
-            ),
-        )
-        network_digest = owner_digest(
-            "persistent-smb-network-binding-v1",
-            (
-                opening.stable_id,
-                opening.conn_id,
-                opening.zeek_uid,
-                opening.src_ip,
-                opening.src_port,
-                opening.dst_ip,
-                opening.dst_port,
-                opening.started_at,
-                opening.closed_at,
-                pin_install.initial_transaction_digest,
-                pin_install.pin.conn_id,
-                pin_install.pin.zeek_uid,
-                object.__getattribute__(pin_install, "_integrity_token"),
-            ),
-        )
-        traffic_digest = owner_digest(
-            "persistent-smb-traffic-binding-v1",
-            (
-                traffic_binding.authority_id,
-                traffic_binding.binding_id,
-                traffic_binding.transport_digest,
-                traffic_binding.observation_digests,
-                traffic_binding.lossless_ordinals,
-                object.__getattribute__(traffic_binding, "_integrity"),
-            ),
-        )
-        lifecycle_generation = owner_generation(lifecycle_digest)
-        network_generation = owner_generation(network_digest)
-        traffic_generation = owner_generation(traffic_digest)
+    def _prepare_persistent_smb_source_projections(
+        self,
+        *,
+        events: list[OccurrenceBuilder],
+        process_create_event: OccurrenceBuilder | None,
+        final_transaction: NetworkTransactionPlan,
+        tree_id: str,
+        close_time: datetime,
+        projection_group: PersistentSmbProjectionGroupToken,
+        source_timing_capacity: SourceTimingActionCapacityReservation,
+        target_formats: tuple[str, ...],
+        lifecycle_digest: str,
+        network_digest: str,
+        traffic_digest: str,
+    ) -> tuple[
+        SourceTimingPreparation,
+        list[PreparedActionCohortProjection],
+        list[tuple[PersistentSmbProjectionPhase, str, str, bytes]],
+        str,
+    ]:
+        """Prepare source order, timing and member capsules on the existing reserved capacity.
 
+        This creates no publication. The caller retains the returned shell and
+        exact member specification before append can begin, allowing the existing
+        source-building continuation to recover a lost append return.
+        """
         source_carriers: list[PreparedActionCohortProjection] = []
         member_specs: list[tuple[PersistentSmbProjectionPhase, str, str, bytes]] = []
         transport_index = 1 if process_create_event is not None else 0
@@ -2668,7 +2446,7 @@ class SmbActivityActionBundle:
                         not_after=final_transaction.started_at,
                     )
                 operation_id = f"{self.anchor.stable_id}:{ordinal}:{phase.value}"
-                operation_binding_digest = owner_digest(
+                operation_binding_digest = self._persistent_smb_owner_digest(
                     "persistent-smb-projection-operation-v1",
                     (
                         operation_id,
@@ -2702,11 +2480,11 @@ class SmbActivityActionBundle:
                 f"{self.anchor.stable_id}:{disconnect_ordinal}:"
                 f"{PersistentSmbProjectionPhase.TREE_DISCONNECT.value}"
             )
-            disconnect_digest = owner_digest(
+            disconnect_digest = self._persistent_smb_owner_digest(
                 "persistent-smb-projection-operation-v1",
                 (
                     disconnect_operation_id,
-                    application_batch.tree.tree_id,
+                    tree_id,
                     close_time,
                     lifecycle_digest,
                     network_digest,
@@ -2717,7 +2495,7 @@ class SmbActivityActionBundle:
                     self.anchor.stable_id.encode("utf-8"),
                     disconnect_operation_id.encode("utf-8"),
                     PersistentSmbProjectionPhase.TREE_DISCONNECT.value.encode("ascii"),
-                    application_batch.tree.tree_id.encode("utf-8"),
+                    tree_id.encode("utf-8"),
                     close_time.isoformat().encode("ascii"),
                 )
             )
@@ -2737,7 +2515,7 @@ class SmbActivityActionBundle:
                 f"{self.anchor.stable_id}:{logoff_ordinal}:"
                 f"{PersistentSmbProjectionPhase.LOGOFF.value}"
             )
-            logoff_digest = owner_digest(
+            logoff_digest = self._persistent_smb_owner_digest(
                 "persistent-smb-projection-operation-v1",
                 (
                     logoff_operation_id,
@@ -2773,7 +2551,7 @@ class SmbActivityActionBundle:
             )
             operation_digests.append(logoff_digest)
 
-        publication_binding_digest = owner_digest(
+        publication_binding_digest = self._persistent_smb_owner_digest(
             "persistent-smb-source-publication-v1",
             (
                 self.anchor.stable_id,
@@ -2783,6 +2561,588 @@ class SmbActivityActionBundle:
                 network_digest,
                 traffic_digest,
             ),
+        )
+        return timing, source_carriers, member_specs, publication_binding_digest
+
+    def _materialize_persistent_smb_finalization(
+        self,
+        state_plan: ActionCohortMaterializationPlan,
+        pin: SmbConnectionPin,
+    ) -> SmbConnectionFinalizationResult | None:
+        """Recover a lost finalization return before considering the original bounded retry."""
+        try:
+            materialization = self.executor.state_manager.materialize_action_cohort(state_plan)
+            finalization = materialization.smb_connection_finalization
+        except BaseException as primary:
+            finalization = self.executor.state_manager.recover_smb_connection_finalization(pin)
+            if finalization is None:
+                try:
+                    materialization = self.executor.state_manager.materialize_action_cohort(
+                        state_plan
+                    )
+                except BaseException as recovery_error:
+                    primary.add_note(
+                        "Persistent SMB State-finalization retry also failed: "
+                        f"{type(recovery_error).__name__}: {recovery_error}"
+                    )
+                    raise primary from recovery_error
+                finalization = materialization.smb_connection_finalization
+        return finalization
+
+    def _certify_new_persistent_smb_sources(
+        self,
+        continuation: PersistentSmbTerminalContinuation,
+        preparation: _PersistentSmbPreparedSource,
+        *,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        action_binding_digest: str,
+        member_budget: int,
+    ) -> tuple[PersistentSmbProjectionMemberCertification, ...]:
+        """Certify a fresh source attempt while retaining its exact timing adoption and rollback.
+
+        Existing source_prepared retries must use their continuation's retained
+        certifications instead; they are deliberately a separate operation.
+        """
+        timing = preparation.timing_preparation
+        member_work = preparation.member_work
+        target_formats = preparation.target_formats
+        lifecycle_digest, lifecycle_generation = (
+            preparation.lifecycle_digest,
+            preparation.lifecycle_generation,
+        )
+        network_digest, network_generation = (
+            preparation.network_digest,
+            preparation.network_generation,
+        )
+        traffic_digest, traffic_generation = (
+            preparation.traffic_digest,
+            preparation.traffic_generation,
+        )
+        certifications: list[PersistentSmbProjectionMemberCertification] = []
+        expected_timing_receipt = None
+        try:
+            with timing.claimed_commit() as claimed:
+                expected_timing_receipt = claimed.expected_receipt
+                for member in member_work:
+                    try:
+                        certification = (
+                            self.executor.dispatcher.certify_persistent_smb_projection_member(
+                                member,
+                                target_formats=target_formats,
+                                lifecycle_binding_digest=lifecycle_digest,
+                                lifecycle_binding_generation=lifecycle_generation,
+                                network_binding_digest=network_digest,
+                                network_binding_generation=network_generation,
+                                traffic_binding_digest=traffic_digest,
+                                traffic_binding_generation=traffic_generation,
+                                expected_timing_receipt=claimed.expected_receipt,
+                            )
+                        )
+                    except BaseException as primary:
+                        try:
+                            certification = (
+                                self.executor.dispatcher.certify_persistent_smb_projection_member(
+                                    member,
+                                    target_formats=target_formats,
+                                    lifecycle_binding_digest=lifecycle_digest,
+                                    lifecycle_binding_generation=lifecycle_generation,
+                                    network_binding_digest=network_digest,
+                                    network_binding_generation=network_generation,
+                                    traffic_binding_digest=traffic_digest,
+                                    traffic_binding_generation=traffic_generation,
+                                    expected_timing_receipt=claimed.expected_receipt,
+                                )
+                            )
+                        except BaseException as recovery_error:
+                            primary.add_note(
+                                "Persistent SMB member-certification retry also failed: "
+                                f"{type(recovery_error).__name__}: {recovery_error}"
+                            )
+                            raise primary from recovery_error
+                    certifications.append(certification)
+                retained_certifications = tuple(certifications)
+                authority.bind_source_certifications(
+                    continuation,
+                    retained_certifications,
+                )
+                claimed.certify_composite_commit(claimed.expected_receipt)
+                claimed.commit_no_fail()
+        except BaseException as primary:
+            if not self._adopts_persistent_smb_timing_commit(
+                timing,
+                expected_timing_receipt,
+            ):
+                if not self._rollback_retained_persistent_smb_source_attempt(
+                    continuation,
+                    preparation,
+                    action_binding_digest=action_binding_digest,
+                    member_budget=member_budget,
+                    primary=primary,
+                ):
+                    primary.add_note(
+                        "Persistent SMB failed source certification retained cleanup-only work"
+                    )
+                raise
+        return retained_certifications
+
+    def _execute_persistent_windows_root(
+        self,
+        *,
+        preparation: _PersistentSmbActionPreparation,
+        share: CompiledStorageShare,
+        server: System,
+        client_system: System | None,
+        client_ip: str,
+        principal_user: User,
+        auth_protocol: str,
+        effective_uid: int | None,
+        effective_gid: int | None,
+        duration: float,
+        final_orig_bytes: int,
+        final_resp_bytes: int,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        terminal_continuation: PersistentSmbTerminalContinuation,
+    ) -> tuple[NetworkConnectionIdentityCapture, str]:
+        """Execute or recover the exact prepared root through the canonical network bundle."""
+        capture = NetworkConnectionIdentityCapture()
+        transport_uid = self.executor.generate_connection(
+            src_ip=client_ip,
+            dst_ip=server.ip,
+            time=self.request.time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=duration,
+            orig_bytes=final_orig_bytes,
+            resp_bytes=final_resp_bytes,
+            conn_state="SF",
+            emit_dns=False,
+            source_system=client_system,
+            pid=-1,
+            process_image=None,
+            hostname=server.hostname,
+            preserve_start_time=True,
+            preserve_explicit_payload=True,
+            suppress_application_side_effects=True,
+            suppress_source_pid_inference=True,
+            suppress_prereq_dns=True,
+            parent_action_group_id=self.anchor.stable_id,
+            persistent_smb_root_intent=PersistentSmbRootIntent(
+                username=principal_user.username,
+                system=server.hostname,
+                auth_time=preparation.auth_time,
+                lifecycle_group_id=self.anchor.stable_id,
+                auth_protocol=auth_protocol,
+                smb_principal=self.smb_principal,
+                account_scope="directory",
+                auth_session_ref=preparation.auth_session_ref,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_process=preparation.client_process,
+            ),
+            persistent_smb_application_intent=PersistentSmbApplicationIntent(
+                manager=self.executor._smb_channel_manager,
+                affinity=preparation.affinity,
+                auth_session_ref=preparation.auth_session_ref,
+                principal=self.smb_principal,
+                auth_protocol=auth_protocol,
+                account_scope="directory",
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_access=self.client_access,
+                server_hostname=server.hostname,
+                client_ip=client_ip,
+                lifecycle_group_id=self.anchor.stable_id,
+                share_ref=share.ref,
+                tree_connected_at=preparation.tree_time,
+                operations=preparation.operation_plans,
+                idle_timeout=max(
+                    self._idle_timeout(),
+                    preparation.close_time - preparation.operation_plans[-1].ended_at,
+                ),
+                closed_at=preparation.close_time,
+            ),
+            persistent_smb_file_mutation_journal=preparation.journal,
+            persistent_smb_terminal_authority=authority,
+            persistent_smb_terminal_continuation=terminal_continuation,
+            defer_source_publication=True,
+            identity_capture=capture,
+        )
+        return capture, transport_uid
+
+    def _execute_persistent_windows(
+        self,
+        *,
+        share: CompiledStorageShare,
+        selected: tuple[CompiledStorageFile, ...],
+        server: System,
+        client_system: System | None,
+        client_ip: str,
+        principal_user: User,
+        auth_protocol: str,
+        effective_uid: int | None,
+        effective_gid: int | None,
+        process: ProcessContext | None,
+        transport_pid: int,
+        transport_image: str,
+        duration: float,
+        target_formats: tuple[str, ...],
+        terminal_binding_digest: str,
+        member_budget: int,
+        terminal_continuation: PersistentSmbTerminalContinuation,
+        client_process_preparation: PersistentSmbClientProcessPreparation,
+    ) -> SmbActivityResult:
+        """Advance one authenticated continuation without replaying committed work.
+
+        Phase             Retained truth/proof                 Permitted next work
+        reserved          exact claim and source capacity      prepare reversible file recipe
+        action_prepared   action recipe and file journal       prepare/execute network root
+        cancelling        incomplete cancellation ownership    cleanup only, via outer owner
+        root_prepared     exact root/capabilities              commit/adopt that same root
+        root_committed    State/lifecycle/application receipts construct source projections
+        source_building   source shell and exact member specs  resume member append
+        source_prepared   members, timing, any certifications  certify/commit/publish exact work
+        source_published  authenticated publication result     terminal acknowledgements only
+
+        File journals, network root, timing, projection members and publication
+        retain separate recovery owners. A lost return may mean committed work;
+        authenticate/recover it before retrying. Preserve the original failure
+        when recovery also fails. Never rebuild evidence from a rendered row.
+
+        Representative contracts in tests/unit/test_smb_persistent_production.py:
+        test_persistent_smb_second_file_failure_is_neutral_and_replayable,
+        test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral,
+        test_persistent_smb_projection_and_publication_faults_recover_exact_bytes,
+        test_persistent_smb_ordinary_retry_resumes_terminal_cursor_without_new_root.
+        """
+
+        authority = self.executor._persistent_smb_terminal_continuations
+        root_facts = authority.root_facts(terminal_continuation)
+        if root_facts.phase == "reserved":
+            self._prepare_persistent_windows_action(
+                share=share,
+                selected=selected,
+                server=server,
+                client_system=client_system,
+                client_ip=client_ip,
+                process=process,
+                duration=duration,
+                auth_protocol=auth_protocol,
+                authority=authority,
+                terminal_continuation=terminal_continuation,
+                client_process_preparation=client_process_preparation,
+            )
+            root_facts = authority.root_facts(terminal_continuation)
+        preparation = root_facts.action_preparation
+        if type(preparation) is not _PersistentSmbActionPreparation:
+            raise StateError("Persistent SMB continuation lost its action preparation")
+        close_time = preparation.close_time
+        auth_session_ref = preparation.auth_session_ref
+        byte_allocations = preparation.byte_allocations
+        journal = preparation.journal
+        final_orig_bytes = sum(orig for orig, _resp in byte_allocations)
+        final_resp_bytes = sum(resp for _orig, resp in byte_allocations)
+
+        capture: NetworkConnectionIdentityCapture | None = None
+        transport_uid = ""
+        if root_facts.phase in {"action_prepared", "root_prepared"}:
+            capture, transport_uid = self._execute_persistent_windows_root(
+                preparation=preparation,
+                share=share,
+                server=server,
+                client_system=client_system,
+                client_ip=client_ip,
+                principal_user=principal_user,
+                auth_protocol=auth_protocol,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                duration=duration,
+                final_orig_bytes=final_orig_bytes,
+                final_resp_bytes=final_resp_bytes,
+                authority=authority,
+                terminal_continuation=terminal_continuation,
+            )
+            root_facts = authority.root_facts(terminal_continuation)
+        if root_facts.phase not in {
+            "root_committed",
+            "source_building",
+            "source_prepared",
+            "source_published",
+        }:
+            raise StateError("Persistent SMB root did not retain its committed continuation")
+        prepared_root = root_facts.prepared_root
+        materialization = root_facts.materialization
+        handoff = root_facts.handoff
+        if (
+            prepared_root is None
+            or materialization is None
+            or type(handoff) is not PersistentSmbRootHandoff
+            or handoff.materialization is not materialization
+            or handoff.file_journal is not journal
+        ):
+            raise StateError("Persistent SMB committed root changed retained owners")
+        projection_group = root_facts.projection_group
+        source_reservation = root_facts.source_reservation
+        source_timing_capacity = root_facts.source_timing_capacity
+        if (
+            type(projection_group) is not PersistentSmbProjectionGroupToken
+            or type(source_reservation) is not PreparedPersistentSmbSourcePublication
+            or type(source_timing_capacity) is not SourceTimingActionCapacityReservation
+            or not self.executor.dispatcher.source_timing_planner.authenticates_action_capacity(
+                source_timing_capacity,
+                action_id=self.anchor.stable_id,
+                action_binding_digest=terminal_binding_digest,
+                detached_binding_budget=member_budget,
+            )
+        ):
+            raise StateError("Persistent SMB committed root lost its pre-root source capacity")
+        if root_facts.phase == "source_building":
+            return self._resume_persistent_smb_source_building(terminal_continuation)
+        if root_facts.phase == "source_prepared":
+            return self._resume_persistent_smb_source_prepared(terminal_continuation)
+        if root_facts.phase == "source_published":
+            return self._resume_persistent_windows_terminal(terminal_continuation)
+        opening = prepared_root.root.transaction
+        if capture is not None and (
+            capture.require() is not opening
+            or capture.require_prepared_root() is not prepared_root.root
+            or capture.require_persistent_smb_root_handoff() is not handoff
+        ):
+            raise StateError("Persistent SMB root capture changed retained owners")
+        if opening.closed_at is None:
+            raise StateError("Persistent SMB root lost its canonical close")
+        close_time = opening.closed_at
+        self.transport_start = opening.started_at
+        client_process_preparation = preparation.client_process
+        client_identity: ProcessIdentity | None = None
+        if client_process_preparation.disposition == "materialize":
+            staged_processes = prepared_root.root.state_plan.batch.processes
+            committed_processes = materialization.connection.state.processes
+            if len(staged_processes) != 1 or len(committed_processes) != 1:
+                raise StateError("Persistent SMB root lost its materialized client process")
+            client_identity = staged_processes[0].identity
+            if committed_processes[0].ecar_object_id != client_identity.object_id:
+                raise StateError("Persistent SMB root committed a different client process")
+        elif client_process_preparation.disposition == "reuse":
+            client_identity = self.executor.state_manager.get_process_identity(
+                client_process_preparation.hostname,
+                client_process_preparation.pid,
+            )
+        if client_identity is not None and (
+            client_identity.hostname != client_process_preparation.hostname
+            or client_identity.image != client_process_preparation.image
+            or client_identity.command_line != client_process_preparation.command_line
+            or client_identity.principal != client_process_preparation.username
+            or client_identity.logon_id != client_process_preparation.logon_id
+            or client_identity.started_at != client_process_preparation.started_at
+            or (
+                client_process_preparation.disposition == "reuse"
+                and client_identity.object_id != client_process_preparation.process_object_id
+            )
+        ):
+            raise StateError("Persistent SMB root changed its exact client process identity")
+        client_process_context = (
+            self._exact_client_process_context(client_system, client_identity)
+            if client_identity is not None
+            else None
+        )
+        if client_system is not None and client_identity is not None:
+            self.executor._remember_process_dependent_hold(
+                system=client_system,
+                pid=client_identity.pid,
+                required_until=close_time,
+            )
+            if client_process_preparation.lifecycle == "operation":
+                self.executor._remember_foreground_process_finalizer(
+                    system=client_system,
+                    user=self.request.actor,
+                    pid=client_identity.pid,
+                    process_name=client_identity.image,
+                    logon_id=client_identity.logon_id,
+                    termination_time=close_time,
+                )
+        pin_install = handoff.pin_install_receipt
+        lifecycle_receipt = materialization.receipt
+        if (
+            transport_uid and opening.zeek_uid != transport_uid
+        ) or not self.executor.state_manager.authenticates_smb_connection_pin_install_receipt(
+            pin_install
+        ):
+            raise StateError("Persistent SMB root handoff failed owner authentication")
+        lifecycle_binding = handoff.lifecycle_binding
+        if not self.executor._lifecycle_authority.authenticates_detached_network_receipt_binding(
+            lifecycle_binding
+        ):
+            raise StateError("Persistent SMB root handoff lost its detached lifecycle proof")
+        traffic_binding = self.executor._persistent_smb_traffic_authority.issue_binding(
+            opening,
+            handoff.observations,
+        )
+        session_identity = pin_install.session_identity
+        application_batch = handoff.application_result.result
+        if (
+            application_batch.session.logon_id != session_identity.logon_id
+            or application_batch.session.transport_plan != opening
+            or len(application_batch.operations) != len(selected)
+        ):
+            raise StateError("Persistent SMB terminal application result changed root identity")
+        operation_events, operation_truth, operation_commons = (
+            self._build_persistent_smb_operation_sources(
+                preparation=preparation,
+                opening=opening,
+                application_batch=application_batch,
+                session_identity=session_identity,
+                share=share,
+                server=server,
+                client_system=client_system,
+                client_ip=client_ip,
+                auth_protocol=auth_protocol,
+                effective_uid=effective_uid,
+                effective_gid=effective_gid,
+                client_identity=client_identity,
+                client_process_context=client_process_context,
+            )
+        )
+
+        final_traffic = self._persistent_final_traffic(
+            opening.traffic,
+            orig_payload=final_orig_bytes,
+            resp_payload=final_resp_bytes,
+        )
+        final_transaction = replace(opening, traffic=final_traffic)
+        final_observation_traffic = tuple(
+            final_traffic
+            if observation.traffic is opening.traffic
+            else self._persistent_final_traffic(
+                observation.traffic,
+                orig_payload=(
+                    final_orig_bytes
+                    - (opening.traffic.orig.payload_bytes - observation.traffic.orig.payload_bytes)
+                ),
+                resp_payload=(
+                    final_resp_bytes
+                    - (opening.traffic.resp.payload_bytes - observation.traffic.resp.payload_bytes)
+                ),
+            )
+            for observation in handoff.observations
+        )
+        normalized_auth_protocol = auth_protocol.casefold()
+        kerberos_auth = normalized_auth_protocol == "kerberos"
+        auth = AuthContext(
+            username=self.smb_principal,
+            user_sid=self.executor._get_sid(self.smb_principal),
+            logon_id=session_identity.logon_id,
+            session_id=session_identity.session_id,
+            logon_type=3,
+            auth_package="Kerberos" if kerberos_auth else "NTLM",
+            source_ip=client_ip,
+            source_port=opening.src_port,
+            logon_process="Kerberos" if kerberos_auth else "NtLmSsp",
+            lm_package="-" if kerberos_auth else "NTLM V2",
+            logon_guid=session_identity.logon_guid,
+            subject_sid="S-1-5-18",
+            subject_username="SYSTEM",
+            subject_domain="NT AUTHORITY",
+            subject_logon_id="0x3e7",
+            reporting_pid=self.executor._get_system_pid(server.hostname, "lsass", 0x2E0),
+            workstation_name=client_system.hostname if client_system is not None else "-",
+            session_kind="smb",
+            auth_protocol=auth_protocol,
+            smb_principal=self.smb_principal,
+            account_scope="directory",
+            auth_session_ref=auth_session_ref,
+            effective_uid=effective_uid,
+            effective_gid=effective_gid,
+        )
+        events, process_create_event = self._build_persistent_smb_session_sources(
+            preparation=preparation,
+            final_transaction=final_transaction,
+            auth=auth,
+            close_time=close_time,
+            client_identity=client_identity,
+            client_process_context=client_process_context,
+            client_system=client_system,
+            server=server,
+            session_identity=session_identity,
+            operation_commons=operation_commons,
+            operation_events=operation_events,
+        )
+        state_builder = self.executor.state_manager.begin_action_cohort_materialization()
+        state_builder.finalize_smb_connection(
+            pin_install.pin,
+            final_transaction,
+            session_identity,
+            end_time=close_time,
+        )
+        state_plan = state_builder.seal()
+        if not self.executor._lifecycle_authority.authenticates_detached_network_receipt_binding(
+            lifecycle_binding
+        ):
+            raise StateError("Persistent SMB lifecycle binding failed authentication")
+
+        lifecycle_digest = self._persistent_smb_owner_digest(
+            "persistent-smb-lifecycle-binding-v1",
+            (
+                lifecycle_binding.transaction_id,
+                lifecycle_binding.state_publication_token,
+                lifecycle_binding.runtime_publication_token,
+                lifecycle_binding.physical_transport_id,
+                lifecycle_binding.conn_id,
+                lifecycle_binding.zeek_uid,
+                lifecycle_binding.network_result_digest,
+                lifecycle_binding.timing_receipt_digest,
+                lifecycle_binding.runtime_receipt_digest,
+                lifecycle_binding.connection_receipt_digest,
+                object.__getattribute__(lifecycle_binding, "_integrity_token"),
+            ),
+        )
+        network_digest = self._persistent_smb_owner_digest(
+            "persistent-smb-network-binding-v1",
+            (
+                opening.stable_id,
+                opening.conn_id,
+                opening.zeek_uid,
+                opening.src_ip,
+                opening.src_port,
+                opening.dst_ip,
+                opening.dst_port,
+                opening.started_at,
+                opening.closed_at,
+                pin_install.initial_transaction_digest,
+                pin_install.pin.conn_id,
+                pin_install.pin.zeek_uid,
+                object.__getattribute__(pin_install, "_integrity_token"),
+            ),
+        )
+        traffic_digest = self._persistent_smb_owner_digest(
+            "persistent-smb-traffic-binding-v1",
+            (
+                traffic_binding.authority_id,
+                traffic_binding.binding_id,
+                traffic_binding.transport_digest,
+                traffic_binding.observation_digests,
+                traffic_binding.lossless_ordinals,
+                object.__getattribute__(traffic_binding, "_integrity"),
+            ),
+        )
+        lifecycle_generation = self._persistent_smb_owner_generation(lifecycle_digest)
+        network_generation = self._persistent_smb_owner_generation(network_digest)
+        traffic_generation = self._persistent_smb_owner_generation(traffic_digest)
+
+        timing, source_carriers, member_specs, publication_binding_digest = (
+            self._prepare_persistent_smb_source_projections(
+                events=events,
+                process_create_event=process_create_event,
+                final_transaction=final_transaction,
+                tree_id=application_batch.tree.tree_id,
+                close_time=close_time,
+                projection_group=projection_group,
+                source_timing_capacity=source_timing_capacity,
+                target_formats=target_formats,
+                lifecycle_digest=lifecycle_digest,
+                network_digest=network_digest,
+                traffic_digest=traffic_digest,
+            )
         )
         activity_result = SmbActivityResult(
             session_id=application_batch.session.session_id,
@@ -2828,123 +3188,37 @@ class SmbActivityActionBundle:
         source_preparation = self._complete_persistent_smb_source_building(
             terminal_continuation,
         )
-        member_work = source_preparation.member_work
         source_publication = self.executor.dispatcher.prepare_persistent_smb_source_publication(
             source_reservation,
             tuple(source_carriers),
             publication_binding_digest=publication_binding_digest,
         )
         self._acknowledge_persistent_smb_pin_install(pin_install)
-        file_mutation = handoff.file_mutation
-
-        try:
-            materialization = self.executor.state_manager.materialize_action_cohort(state_plan)
-            finalization = materialization.smb_connection_finalization
-        except BaseException as primary:
-            finalization = self.executor.state_manager.recover_smb_connection_finalization(
-                pin_install.pin
-            )
-            if finalization is None:
-                try:
-                    materialization = self.executor.state_manager.materialize_action_cohort(
-                        state_plan
-                    )
-                except BaseException as recovery_error:
-                    primary.add_note(
-                        "Persistent SMB State-finalization retry also failed: "
-                        f"{type(recovery_error).__name__}: {recovery_error}"
-                    )
-                    raise primary from recovery_error
-                finalization = materialization.smb_connection_finalization
-        if (
-            finalization is None
-            or not self.executor.state_manager.authenticates_smb_connection_finalization_result(
-                finalization
-            )
-            or not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
-                file_mutation.receipt
-            )
-        ):
-            raise StateError("Persistent SMB terminal State result failed authentication")
-        rebound, rebound_observations = self.executor.dispatcher.rebind_persistent_smb_close(
-            traffic_authority=self.executor._persistent_smb_traffic_authority,
-            binding=traffic_binding,
-            opening_transport=opening,
-            opening_observations=handoff.observations,
-            final_traffic=final_traffic,
-            final_observation_traffic=final_observation_traffic,
-            state_result=finalization,
+        self._publish_new_persistent_smb_sources(
+            terminal_continuation,
+            source_preparation,
+            handoff,
+            source_publication=source_publication,
+            projection_group=projection_group,
+            authority=authority,
+            action_binding_digest=terminal_binding_digest,
+            member_budget=member_budget,
         )
-        if rebound != final_transaction or len(rebound_observations) != len(handoff.observations):
-            raise StateError("Persistent SMB traffic close disagrees with terminal State")
+        del lifecycle_binding
+        return self._resume_persistent_windows_terminal(terminal_continuation)
 
-        certifications: list[PersistentSmbProjectionMemberCertification] = []
-        expected_timing_receipt = None
-        try:
-            with timing.claimed_commit() as claimed:
-                expected_timing_receipt = claimed.expected_receipt
-                for member in member_work:
-                    try:
-                        certification = (
-                            self.executor.dispatcher.certify_persistent_smb_projection_member(
-                                member,
-                                target_formats=target_formats,
-                                lifecycle_binding_digest=lifecycle_digest,
-                                lifecycle_binding_generation=lifecycle_generation,
-                                network_binding_digest=network_digest,
-                                network_binding_generation=network_generation,
-                                traffic_binding_digest=traffic_digest,
-                                traffic_binding_generation=traffic_generation,
-                                expected_timing_receipt=claimed.expected_receipt,
-                            )
-                        )
-                    except BaseException as primary:
-                        try:
-                            certification = (
-                                self.executor.dispatcher.certify_persistent_smb_projection_member(
-                                    member,
-                                    target_formats=target_formats,
-                                    lifecycle_binding_digest=lifecycle_digest,
-                                    lifecycle_binding_generation=lifecycle_generation,
-                                    network_binding_digest=network_digest,
-                                    network_binding_generation=network_generation,
-                                    traffic_binding_digest=traffic_digest,
-                                    traffic_binding_generation=traffic_generation,
-                                    expected_timing_receipt=claimed.expected_receipt,
-                                )
-                            )
-                        except BaseException as recovery_error:
-                            primary.add_note(
-                                "Persistent SMB member-certification retry also failed: "
-                                f"{type(recovery_error).__name__}: {recovery_error}"
-                            )
-                            raise primary from recovery_error
-                    certifications.append(certification)
-                retained_certifications = tuple(certifications)
-                authority.bind_source_certifications(
-                    terminal_continuation,
-                    retained_certifications,
-                )
-                claimed.certify_composite_commit(claimed.expected_receipt)
-                claimed.commit_no_fail()
-        except BaseException as primary:
-            if not self._adopts_persistent_smb_timing_commit(
-                timing,
-                expected_timing_receipt,
-            ):
-                if not self._rollback_retained_persistent_smb_source_attempt(
-                    terminal_continuation,
-                    source_preparation,
-                    action_binding_digest=terminal_binding_digest,
-                    member_budget=member_budget,
-                    primary=primary,
-                ):
-                    primary.add_note(
-                        "Persistent SMB failed source certification retained cleanup-only work"
-                    )
-                raise
+    def _commit_persistent_smb_source_members(
+        self,
+        certifications: tuple[PersistentSmbProjectionMemberCertification, ...],
+        projection_group: PersistentSmbProjectionGroupToken,
+    ) -> tuple[PersistentSmbProjectionMemberCommitReceipt, ...]:
+        """Adopt a committed member before retrying its exact authenticated certification.
+
+        An unavailable recovery result permits the existing one retry; failure
+        still preserves the first exception and its member-specific context.
+        """
         commit_receipts: list[PersistentSmbProjectionMemberCommitReceipt] = []
-        for certification in retained_certifications:
+        for certification in certifications:
             try:
                 commit_receipt = self.executor.dispatcher.commit_persistent_smb_projection_member(
                     certification
@@ -2975,7 +3249,18 @@ class SmbActivityActionBundle:
                         )
                         raise primary from recovery_error
             commit_receipts.append(commit_receipt)
-        committed_members = tuple(commit_receipts)
+        return tuple(commit_receipts)
+
+    def _publish_persistent_smb_sources(
+        self,
+        source_publication: PreparedPersistentSmbSourcePublication,
+        committed_members: tuple[PersistentSmbProjectionMemberCommitReceipt, ...],
+    ) -> PersistentSmbSourcePublicationResult:
+        """Retry the exact publication once, preserving the original failure if both fail.
+
+        This dispatcher operation authenticates/adopts its own committed result;
+        callers must not rebuild members or redispatch rendered source records.
+        """
         try:
             source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
                 source_publication,
@@ -2993,8 +3278,71 @@ class SmbActivityActionBundle:
                     f"{type(recovery_error).__name__}: {recovery_error}"
                 )
                 raise primary from recovery_error
+        return source_result
+
+    def _publish_new_persistent_smb_sources(
+        self,
+        continuation: PersistentSmbTerminalContinuation,
+        preparation: _PersistentSmbPreparedSource,
+        handoff: PersistentSmbRootHandoff,
+        *,
+        source_publication: PreparedPersistentSmbSourcePublication,
+        projection_group: PersistentSmbProjectionGroupToken,
+        authority: PersistentSmbTerminalContinuationAuthority,
+        action_binding_digest: str,
+        member_budget: int,
+    ) -> None:
+        """Finalize, certify and publish a fresh prepared source attempt in that order.
+
+        Entry authentication and source-carrier reservation remain with the
+        phase coordinator. Fresh attempts retain their late State/file receipt
+        checks; retained source_prepared attempts have their own certification
+        adoption and cleanup path in _resume_persistent_smb_source_prepared.
+        """
+        file_mutation = handoff.file_mutation
+
+        finalization = self._materialize_persistent_smb_finalization(
+            preparation.state_plan, handoff.pin_install_receipt.pin
+        )
         if (
-            self.executor._smb_channel_manager.session_view(application_batch.session.channel_id)
+            finalization is None
+            or not self.executor.state_manager.authenticates_smb_connection_finalization_result(
+                finalization
+            )
+            or not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
+                file_mutation.receipt
+            )
+        ):
+            raise StateError("Persistent SMB terminal State result failed authentication")
+        rebound, rebound_observations = self.executor.dispatcher.rebind_persistent_smb_close(
+            traffic_authority=self.executor._persistent_smb_traffic_authority,
+            binding=preparation.traffic_binding,
+            opening_transport=preparation.opening,
+            opening_observations=handoff.observations,
+            final_traffic=preparation.final_transaction.traffic,
+            final_observation_traffic=preparation.final_observation_traffic,
+            state_result=finalization,
+        )
+        if rebound != preparation.final_transaction or len(rebound_observations) != len(
+            handoff.observations
+        ):
+            raise StateError("Persistent SMB traffic close disagrees with terminal State")
+
+        retained_certifications = self._certify_new_persistent_smb_sources(
+            continuation,
+            preparation,
+            authority=authority,
+            action_binding_digest=action_binding_digest,
+            member_budget=member_budget,
+        )
+        committed_members = self._commit_persistent_smb_source_members(
+            retained_certifications, projection_group
+        )
+        source_result = self._publish_persistent_smb_sources(source_publication, committed_members)
+        if (
+            self.executor._smb_channel_manager.session_view(
+                handoff.application_result.result.session.channel_id
+            )
             is not None
         ):
             raise StateError("Persistent SMB application channel retained its exact session")
@@ -3005,7 +3353,7 @@ class SmbActivityActionBundle:
             raise StateError("Persistent SMB published source result failed authentication")
         external_transport_uids = self._persistent_source_transport_uids(
             source_result,
-            canonical_uid=application_batch.session.ground_truth_transport_uid,
+            canonical_uid=handoff.application_result.result.session.ground_truth_transport_uid,
         )
         if not self.executor.state_manager.authenticates_smb_file_mutation_commit_receipt(
             file_mutation.receipt
@@ -3018,14 +3366,12 @@ class SmbActivityActionBundle:
                 "Persistent SMB retained connection finalization failed authentication"
             )
         authority.bind_source_published(
-            terminal_continuation,
+            continuation,
             source_result=source_result,
             file_mutation=file_mutation,
             finalization=finalization,
             external_transport_uids=external_transport_uids,
         )
-        del lifecycle_binding
-        return self._resume_persistent_windows_terminal(terminal_continuation)
 
     def _complete_persistent_smb_source_building(
         self,
@@ -3138,27 +3484,10 @@ class SmbActivityActionBundle:
         )
         self._acknowledge_persistent_smb_pin_install(handoff.pin_install_receipt)
 
-        try:
-            materialization = self.executor.state_manager.materialize_action_cohort(
-                preparation.state_plan
-            )
-            finalization = materialization.smb_connection_finalization
-        except BaseException as primary:
-            finalization = self.executor.state_manager.recover_smb_connection_finalization(
-                handoff.pin_install_receipt.pin
-            )
-            if finalization is None:
-                try:
-                    materialization = self.executor.state_manager.materialize_action_cohort(
-                        preparation.state_plan
-                    )
-                except BaseException as recovery_error:
-                    primary.add_note(
-                        "Persistent SMB State-finalization retry also failed: "
-                        f"{type(recovery_error).__name__}: {recovery_error}"
-                    )
-                    raise primary from recovery_error
-                finalization = materialization.smb_connection_finalization
+        finalization = self._materialize_persistent_smb_finalization(
+            preparation.state_plan,
+            handoff.pin_install_receipt.pin,
+        )
         file_mutation = handoff.file_mutation
         if (
             finalization is None
@@ -3253,56 +3582,10 @@ class SmbActivityActionBundle:
                     )
                 raise
 
-        commit_receipts: list[PersistentSmbProjectionMemberCommitReceipt] = []
-        for certification in certifications:
-            try:
-                commit_receipt = self.executor.dispatcher.commit_persistent_smb_projection_member(
-                    certification
-                )
-            except BaseException as primary:
-                try:
-                    recovery = (
-                        self.executor.dispatcher.recover_committed_persistent_smb_projection_member(
-                            projection_group,
-                            operation_id=certification.operation_id,
-                            operation_binding_digest=certification.operation_binding_digest,
-                        )
-                    )
-                except BaseException:
-                    recovery = None
-                commit_receipt = recovery.commit_receipt if recovery is not None else None
-                if commit_receipt is None:
-                    try:
-                        commit_receipt = (
-                            self.executor.dispatcher.commit_persistent_smb_projection_member(
-                                certification
-                            )
-                        )
-                    except BaseException as recovery_error:
-                        primary.add_note(
-                            "Persistent SMB member-commit retry also failed: "
-                            f"{type(recovery_error).__name__}: {recovery_error}"
-                        )
-                        raise primary from recovery_error
-            commit_receipts.append(commit_receipt)
-        committed_members = tuple(commit_receipts)
-        try:
-            source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
-                source_publication,
-                commit_receipts=committed_members,
-            )
-        except BaseException as primary:
-            try:
-                source_result = self.executor.dispatcher.publish_persistent_smb_source_publication(
-                    source_publication,
-                    commit_receipts=committed_members,
-                )
-            except BaseException as recovery_error:
-                primary.add_note(
-                    "Persistent SMB exact-publication retry also failed: "
-                    f"{type(recovery_error).__name__}: {recovery_error}"
-                )
-                raise primary from recovery_error
+        committed_members = self._commit_persistent_smb_source_members(
+            certifications, projection_group
+        )
+        source_result = self._publish_persistent_smb_sources(source_publication, committed_members)
         application_batch = handoff.application_result.result
         if (
             self.executor._smb_channel_manager.session_view(application_batch.session.channel_id)

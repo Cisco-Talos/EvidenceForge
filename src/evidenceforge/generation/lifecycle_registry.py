@@ -70,6 +70,7 @@ from evidenceforge.generation.indexes import (
     PackedUniqueDigestMap,
     SegmentedTemporalIndex,
 )
+from evidenceforge.generation.synchronization import MutationWatermarkGate as _MutationGate
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.time import ensure_utc
 
@@ -1083,51 +1084,6 @@ class _HostCommitLanes:
     def __len__(self) -> int:
         with self._map_lock:
             return len(self._lanes)
-
-
-class _MutationGate:
-    """Admit disjoint shard work concurrently and serialize watermarks."""
-
-    def __init__(self) -> None:
-        self._condition = Condition(Lock())
-        self._readers = 0
-        self._writer = False
-        self._waiting_writers = 0
-
-    @contextmanager
-    def mutation(self) -> Iterator[None]:
-        """Enter the shared mutation lane."""
-
-        with self._condition:
-            while self._writer or self._waiting_writers:
-                self._condition.wait()
-            self._readers += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._readers -= 1
-                if self._readers == 0:
-                    self._condition.notify_all()
-
-    @contextmanager
-    def watermark(self) -> Iterator[None]:
-        """Enter the exclusive watermark lane after active mutations finish."""
-
-        with self._condition:
-            self._waiting_writers += 1
-            try:
-                while self._writer or self._readers:
-                    self._condition.wait()
-                self._writer = True
-            finally:
-                self._waiting_writers -= 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._writer = False
-                self._condition.notify_all()
 
 
 @dataclass(frozen=True, slots=True)

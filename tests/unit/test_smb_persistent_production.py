@@ -1283,18 +1283,28 @@ def test_persistent_smb_new_client_process_is_root_atomic_and_retry_neutral(
         )
         _assert_transient_authorities_drained(engine)
 
-        monkeypatch.setattr(generator, "generate_connection", original)
+        materialized: list[tuple[str, str, str]] = []
+
+        def observe_committed_client(*args: object, **kwargs: object) -> str:
+            uid = original(*args, **kwargs)
+            # Observe at the root commit: successful operation-lived clients
+            # have already terminated by the time the outer SMB action returns.
+            root = kwargs["identity_capture"].require_prepared_root()
+            for plan in root.state_plan.batch.processes:
+                identity = state.get_process_identity(plan.identity.hostname, plan.identity.pid)
+                assert identity is not None
+                assert identity.object_id == plan.identity.object_id
+                materialized.append((identity.object_id, identity.image, identity.command_line))
+            return uid
+
+        monkeypatch.setattr(generator, "generate_connection", observe_committed_client)
         result = _invoke_windows_read(engine, scenario)
         assert len(result.transport_uids) == 1
         before_ids = {identity[0] for identity in before}
-        materialized = [
-            process
-            for process in state.get_processes_on_system(client.hostname)
-            if process.ecar_object_id not in before_ids
-        ]
         assert len(materialized) == 1
-        assert materialized[0].image == "/usr/bin/smbclient"
-        assert "smbclient" in materialized[0].command_line
+        assert materialized[0][0] not in before_ids
+        assert materialized[0][1] == "/usr/bin/smbclient"
+        assert "smbclient" in materialized[0][2]
         _assert_transient_authorities_drained(engine)
     finally:
         engine._close_emitters()
@@ -1858,3 +1868,46 @@ def test_persistent_smb_terminal_continuation_guards_and_proof_release(
     finally:
         engine._close_emitters()
     assert _source_bytes(tmp_path) == windows_read_control
+
+
+@pytest.mark.parametrize("seed", [42, 137])
+def test_persistent_smb_client_parent_identity_survives_periodic_lookahead(
+    scenarios_dir: Path, tmp_path: Path, seed: int
+) -> None:
+    """Future ticks cannot change an Explorer client's parent or sampling identity."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    scenario.generation_seed = seed
+    with generation_seed_scope(seed):
+        reset_thread_rng()
+        engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+        try:
+            engine._initialize()
+            actor = scenario.environment.users[0]
+            client = scenario.environment.systems[0]
+            engine.activity_generator.generate_logon(
+                actor, client, engine.start_time + timedelta(minutes=1), logon_type=2
+            )
+            preparation = _prepare_windows_read(engine, scenario)
+            bundle = SmbActivityActionBundle(engine.activity_generator, preparation.request)
+            bundle._adopt_preparation(preparation)
+            arguments = {
+                "share": preparation.share,
+                "selected": preparation.selected,
+                "server": preparation.server,
+                "client_system": preparation.client_system,
+                "auth_protocol": preparation.auth_protocol,
+            }
+            before = bundle._prepare_persistent_client_process(**arguments)
+            assert before.disposition == "reuse"
+            assert before.parent_object_id
+            assert engine.state_manager.get_process(client.hostname, before.parent_pid) is None
+
+            engine.state_manager.set_current_time(engine.start_time + timedelta(days=56))
+            after = bundle._prepare_persistent_client_process(**arguments)
+            # The parent ID participates in the network intent that seeds Zeek
+            # capture loss and file timing. Lookahead must preserve this exact
+            # recipe even though Explorer's bootstrap parent has already exited.
+            assert after == before
+        finally:
+            engine._close_emitters()

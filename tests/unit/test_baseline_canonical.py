@@ -39,6 +39,9 @@ from evidenceforge.events.contexts import HostContext, HttpContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dll_load_profiles import (
     module_is_compatible_with_process,
@@ -153,7 +156,7 @@ def test_gpo_refresh_commands_are_data_driven_and_force_is_rare() -> None:
 def test_gpo_refresh_termination_requires_admitted_process() -> None:
     """A source-timing-rejected gpupdate process must not receive a termination."""
 
-    source = inspect.getsource(BaselineMixin._generate_system_traffic)
+    source = inspect.getsource(BaselineMixin._generate_system_group_policy_activity)
 
     assert "if gpupdate_pid and end_ts is not None:" in source
 
@@ -1437,6 +1440,11 @@ class TestWebAccessCorrelation:
             "_get_http_status",
             lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
         )
+        monkeypatch.setattr(
+            network_planner_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
 
         activity_gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1486,6 +1494,11 @@ class TestWebAccessCorrelation:
         )
         monkeypatch.setattr(
             generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
+        )
+        monkeypatch.setattr(
+            network_planner_module,
             "_get_http_status",
             lambda dst_ip, uri, *, publish_cache=True: (200, "OK"),
         )
@@ -2618,9 +2631,9 @@ class TestBaselineRegistryRealism:
         """Baseline registry effects must supply time and type before dispatch."""
         import inspect
 
-        source = inspect.getsource(BaselineMixin)
+        source = inspect.getsource(BaselineMixin._generate_system_registry_activity)
         assert "_key, _vname, _details, _value_type = materialize_registry_effect(" in source
-        assert "_template_user,\n                        _reg_ts," in source
+        assert "_template_user, _reg_ts," in " ".join(source.split())
         assert "value_type=_value_type" in source
 
     def test_registry_writer_candidates_preserve_native_ownership(self):

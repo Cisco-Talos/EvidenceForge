@@ -11,6 +11,9 @@ import pytest
 import evidenceforge.generation.activity.generator as generator_module
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.observation import ObservationPolicy
+from evidenceforge.generation.actions import (
+    network_transaction_planner as network_planner_module,
+)
 from evidenceforge.generation.actions.auth_session import (
     FailedLogonRequest,
     MachineAccountLogonRequest,
@@ -495,6 +498,7 @@ def test_process_source_bound_survives_parent_termination_and_retention() -> Non
     assert state.end_process(system.hostname, child_pid, child_end)
     retention_cutoff = parent_end + timedelta(hours=48, minutes=1)
     state.set_current_time(retention_cutoff)
+    state.advance_pid_allocation_watermark(retention_cutoff)
     generator.advance_process_state_watermark(retention_cutoff)
 
     assert state.get_process_identity(system.hostname, parent_pid) is None
@@ -503,6 +507,7 @@ def test_process_source_bound_survives_parent_termination_and_retention() -> Non
 
     final_cutoff = child_end + timedelta(hours=49)
     state.set_current_time(final_cutoff)
+    state.advance_pid_allocation_watermark(final_cutoff)
     generator.advance_process_state_watermark(final_cutoff)
 
     assert state.get_process_identity(system.hostname, child_pid) is None
@@ -1061,7 +1066,12 @@ def test_sudo_missing_ssh_shell_uses_full_bootstrap_and_readiness_ceiling(
             return 5_199
         return stable_seed(text)
 
+    from evidenceforge.generation.actions.process_support import actors, foreground
+
+    monkeypatch.setattr(actors, "_stable_seed", maximum_shell_seed)
+    monkeypatch.setattr(foreground, "_stable_seed", maximum_shell_seed)
     monkeypatch.setattr(generator_module, "_stable_seed", maximum_shell_seed)
+    monkeypatch.setattr(network_planner_module, "_stable_seed", maximum_shell_seed)
     complete_by = _START + timedelta(seconds=1, milliseconds=50)
     serialization_ceiling = generator._linux_sudo_foreground_admission_ceiling(
         system=system,
@@ -1178,6 +1188,7 @@ def test_failed_logon_cadence_shift_recomputes_full_family_deadline(
     rng_before = rng.getstate()
     get_rng = Mock(return_value=rng)
     monkeypatch.setattr(generator_module, "_get_rng", get_rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", get_rng)
 
     generator.generate_failed_logon(
         user=user,
@@ -1236,6 +1247,7 @@ def test_remote_failed_logon_rejects_transport_tail_before_mutation(
     rng_before = rng.getstate()
     get_rng = Mock(return_value=rng)
     monkeypatch.setattr(generator_module, "_get_rng", get_rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", get_rng)
     cadence_metrics_before = generator._failed_logon_attempt_times.metrics()
     cadence_watermark_before = generator._failed_logon_attempt_times.watermark_seconds
     pending_before = dict(generator._failed_logon_attempt_pending)
@@ -1331,6 +1343,7 @@ def test_linux_remote_failed_logon_rejects_ssh_close_tail_before_mutation(
     rng_before = rng.getstate()
     get_rng = Mock(return_value=rng)
     monkeypatch.setattr(generator_module, "_get_rng", get_rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", get_rng)
     cadence_metrics_before = generator._failed_logon_attempt_times.metrics()
     cadence_watermark_before = generator._failed_logon_attempt_times.watermark_seconds
     recent_tuples_before = tuple(generator._recent_connection_tuples.items())
@@ -1502,6 +1515,7 @@ def test_failed_logon_rejects_dc_validation_tail_before_mutation(
     rng_before = rng.getstate()
     get_rng = Mock(return_value=rng)
     monkeypatch.setattr(generator_module, "_get_rng", get_rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", get_rng)
     cadence_metrics_before = generator._failed_logon_attempt_times.metrics()
     cadence_watermark_before = generator._failed_logon_attempt_times.watermark_seconds
     pending_before = dict(generator._failed_logon_attempt_pending)
@@ -1624,6 +1638,7 @@ def test_machine_account_rejects_full_close_bound_before_rng_or_state(
     monkeypatch.setattr(state, "preview_logon_id", preview_logon_id)
     get_rng = Mock(side_effect=AssertionError("RNG must not be acquired"))
     monkeypatch.setattr(generator_module, "_get_rng", get_rng)
+    monkeypatch.setattr(network_planner_module, "_get_rng", get_rng)
     bound = _machine_account_headroom(
         generator,
         source_ip="10.0.10.10",

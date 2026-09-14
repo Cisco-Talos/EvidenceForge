@@ -1,6 +1,9 @@
 name: Release Slow Tests
 
 on:
+  # Temporary one-run dev trigger for the four-shard validation trial.
+  push:
+    branches: [dev]
   pull_request:
     branches: [main]
 
@@ -13,9 +16,21 @@ concurrency:
 
 jobs:
   slow-comprehensive:
-    name: Slow comprehensive tests (no coverage)
+    name: Slow comprehensive tests (${{ matrix.shard_number }}/4, no coverage)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard_index: 0
+            shard_number: 1
+          - shard_index: 1
+            shard_number: 2
+          - shard_index: 2
+            shard_number: 3
+          - shard_index: 3
+            shard_number: 4
 
     steps:
       - name: Checkout code
@@ -36,7 +51,33 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run slow comprehensive tests without coverage
-        run: uv run pytest -m slow --no-cov --durations=20
+        run: >-
+          uv run pytest -m slow --no-cov --durations=20
+          --slow-shard-count 4
+          --slow-shard-index "${{ matrix.shard_index }}"
+
+  checkpoint-portability:
+    name: Python 3.12 to 3.13 checkpoint portability
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          prune-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
 
       - name: Verify Python 3.12 to 3.13 checkpoint portability
         run: uv run python scripts/check_checkpoint_python_portability.py
@@ -44,7 +85,7 @@ jobs:
   release-required:
     name: Required Release CI
     runs-on: ubuntu-latest
-    needs: [slow-comprehensive]
+    needs: [slow-comprehensive, checkpoint-portability]
     if: always()
 
     steps:
@@ -52,5 +93,10 @@ jobs:
         run: |
           if [ "${{ needs['slow-comprehensive'].result }}" != "success" ]; then
             echo "Slow comprehensive tests finished with result: ${{ needs['slow-comprehensive'].result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs['checkpoint-portability'].result }}" != "success" ]; then
+            echo "Checkpoint portability finished with result: ${{ needs['checkpoint-portability'].result }}"
             exit 1
           fi

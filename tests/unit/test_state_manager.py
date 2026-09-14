@@ -2862,6 +2862,7 @@ class TestCanonicalIdentityState:
             first_object_id = first_object_id or identity.object_id
             latest_object_id = identity.object_id
             sm.end_process("WS-01", pid, event_time + timedelta(seconds=1))
+            sm.advance_pid_allocation_watermark(event_time)
 
         assert len(sm._ended_processes_by_object_id) <= 49
         assert len(sm._ended_processes_by_key) <= 49

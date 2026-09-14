@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.0.0 release-candidate validation; post-1.0 quality improvements ongoing
+**Status:** 2.0.1 patch release; post-2.0 quality improvements ongoing
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-10
+**Last Roadmap Review:** 2026-09-14
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -13,6 +13,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and completed-phase details
 ---
 
 ## Completed Milestones
+
+**2.0.1 cleanup and correctness.** Simplified generation ownership and shared infrastructure,
+corrected foreground lifecycle, resolver selection, and Kerberos timing, and repaired long-run
+SSH checkpoint identity retention. See [CHANGELOG.md](CHANGELOG.md#v201-2026-09-14).
 
 **Phase 1: Core Generation.** Pydantic scenario models, StateManager, Windows
 Event Security and Zeek conn.log output, hour-by-hour generation engine, and
@@ -157,6 +161,21 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P2** Design and implement general authored entity availability/participation controls
+  across all evidence families. Support entities appearing during a scenario without generating
+  earlier activity merely because they are declared in the environment; the motivating case is
+  FOR668 `scenario-3_1`'s rogue device appearing before its intended arrival. Apply the mechanism
+  through canonical planning and lifecycle owners across warmup, baseline, storyline, causal
+  prerequisites, and source/destination selection, rather than DHCP-specific checks or filtering
+  rendered rows. Define physical presence separately from collection visibility, and preserve
+  realistic evidence from other entities (such as failed attempts to reach an absent host).
+  Cover exact activation boundaries, correlated evidence, lifecycle transitions, and checkpoint
+  resume; retain existing behavior when controls are omitted. Document supported authoring and
+  limitations in the scenario/configuration skills. Final schema and scope remain design work.
+- [x] **P2** Bind ambient Linux `systemd-resolved` traffic to each host's selected DNS
+  resolvers. The cross-host syslog pass now reuses the correct pool, with address-only evidence
+  corrections and compatible checkpoint recovery verified. See the
+  [cleanup worklog](docs/worklog/2026-09-12-behavior-preserving-cleanup.md#host-specific-resolver-correction--complete).
 - [x] **P1** Make process-to-file and process-to-registry effects actor-native by construction.
   Data-driven executable eligibility and canonical process/session ownership now cover Defender,
   WER, CBS, Office MRU, UserAssist, and shell-state artifacts, with PID/ProcessGuid correlation

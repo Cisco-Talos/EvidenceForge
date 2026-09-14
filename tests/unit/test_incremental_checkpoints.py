@@ -4072,11 +4072,15 @@ def test_resume_compatibility_attempts_every_runtime_component(runtime_field: st
 
 
 def test_verification_disposal_closes_sqlite_without_normal_emitter_close() -> None:
+    from evidenceforge.generation.emitters.verification_resources import VerificationResources
+
     connection = sqlite3.connect(":memory:")
 
     class ScratchEmitter:
         def __init__(self) -> None:
             self._connection = connection
+            self._verification_resources = VerificationResources(self)
+            self._verification_resources.register("connection", "_connection")
             self._thread = None
             self._stop_event = None
             self.close_called = False

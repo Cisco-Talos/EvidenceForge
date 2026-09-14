@@ -45,6 +45,7 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.emitters.verification_resources import VerificationResources
 from evidenceforge.output_targets import OutputTarget, normalize_output_target
 
 logger = logging.getLogger(__name__)
@@ -1139,6 +1140,7 @@ class LogEmitter(ABC):
             buffer_size: Number of events to buffer before flushing (default: 10K)
             threaded: Enable threaded mode with queue-based processing (Phase 2.1)
         """
+        self._verification_resources = VerificationResources(self, worker=True)
         self.format_def = format_def
         self.output_path = output_path
         self.buffer_size = buffer_size

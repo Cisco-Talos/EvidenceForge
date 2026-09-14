@@ -1,0 +1,485 @@
+{
+  "after": {
+    "command_calls": 139,
+    "command_lines_including_public_signature": 544,
+    "command_statement_branches": 37
+  },
+  "ast_proof": "All statements in each shared helper matched three exact original statement subtrees; Typer signature unchanged",
+  "baseline_commit": "26a150ac4d807b1b00e6d7c02019837132447dc1",
+  "before": {
+    "command_calls": 154,
+    "command_lines_including_public_signature": 571,
+    "command_statement_branches": 46
+  },
+  "behavior_revision": 71,
+  "byte_comparisons": {
+    "cases": 6,
+    "references": [
+      "26a150ac",
+      "1cf35c5c"
+    ],
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item6b-report.json",
+    "sha256": "5433518f2d985c5799ae910bb3d39bb5afe240391b960e6305ed8d3ef8881f7a"
+  },
+  "characterization_before": {
+    "new_failure_cases": 4,
+    "passed": 4,
+    "seconds": 3.82
+  },
+  "checkpoint_pilot": {
+    "exact_policy_rejections": 1,
+    "origin": {
+      "behavior_revision": 62,
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "manifest_sha256": "bf5133dd8208c7ac5845a8a38891c47f09a15d0f33e6adf79afc4c601d328efc",
+      "run_fingerprint": "c1c40c2e809a1c764e1d5098b943b66982f37c2eef80fadb7b967b3b427514bc"
+    },
+    "report": "/private/tmp/eforge-cleanup-evidence/pass4-item6b-pilot-26-default-42.verification.json",
+    "sha256": "853377f9330f5b46a773ebde0fca1612a58e99963913ec55fb3a31f278fe57f8",
+    "successful_resumes": 1,
+    "whole_bundle_files_unchanged": 35
+  },
+  "duplicate_recovery_guidance_rendering_implementations": {
+    "after": 1,
+    "before": 3
+  },
+  "duplicate_staging_cleanup_implementations": {
+    "after": 1,
+    "before": 3
+  },
+  "failures": [
+    "Ruff found a loop-variable closure in the draft failure benchmark and an import-order issue in the generalized matrix; both fixed.",
+    "Draft benchmark baseline A is retained but excluded; A2 uses the corrected frozen benchmark for all accepted alternating samples."
+  ],
+  "focused_tests": {
+    "deselected": 14,
+    "passed": 118,
+    "seconds": 65.92
+  },
+  "full_checkpoint_matrix_status": "24 successful resumes and 18 rejections remain a final-build gate; this pilot does not replace it",
+  "introduced_context_objects": 0,
+  "introduced_persistent_state": 0,
+  "item": "6b",
+  "logs": {
+    "/private/tmp/eforge-pass4-item6b-before.log": "ac7ea0885e59ad2dcf69109ec3394aaf987a244a98673808c9af0b8069a0960d",
+    "/private/tmp/eforge-pass4-item6b-checkpoint-pilot.log": "9ccba992013105d63afe9e8a09fda884341ec46c7298b7ab4fe3d4d20ab78aee",
+    "/private/tmp/eforge-pass4-item6b-focused.log": "017d98921595981e0c8e70120fe6dd42d33c546f87dec5ce8d0b8be551ff3f94",
+    "/private/tmp/eforge-pass4-item6b-matrix.log": "0f85bfe0a85ce33bcbc9ba9c8144556bd8be00e98fe82c04c2171d94ac9eb816",
+    "/private/tmp/eforge-pass4-item6b-slow.log": "2ab90bc700db4db4958d34c214e2604506fd58cc842550965a713c0e55ba50a2",
+    "/private/tmp/eforge-pass4-item6b-standard.log": "6497043bcb864f54c5653fc822771963af75e3bd4b492adf7a11dc48e40a6e4c"
+  },
+  "manifest": "passed against 1cf35c5c",
+  "performance_alternating_runs": [
+    {
+      "allocation_sample_peak_bytes": 23567563,
+      "allocation_sample_retained_blocks": 40833,
+      "allocation_sample_retained_bytes": 5028652,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.667132542002946,
+      "operations_per_sample": 4,
+      "operations_per_second": 1.4997379908971848,
+      "process_max_rss": 212598784,
+      "result": [
+        {
+          "cleanup_message": true,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": true,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        }
+      ],
+      "seconds": [
+        2.6723289999645203,
+        2.6620430420152843,
+        2.676817125058733,
+        2.667132542002946,
+        2.6515154580119997,
+        2.6874262919882312,
+        2.6627910420065746
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "cli-failure"
+    },
+    {
+      "allocation_sample_peak_bytes": 23560748,
+      "allocation_sample_retained_blocks": 40806,
+      "allocation_sample_retained_bytes": 5022042,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.3213725419482216,
+      "operations_per_sample": 4,
+      "operations_per_second": 1.7231185118796069,
+      "process_max_rss": 204210176,
+      "result": [
+        {
+          "cleanup_message": true,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": true,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        }
+      ],
+      "seconds": [
+        2.329780041007325,
+        2.3194052500184625,
+        2.317322332994081,
+        2.3277092500356957,
+        2.3233105830149725,
+        2.3213725419482216,
+        2.3182392499875277
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "cli-failure"
+    },
+    {
+      "allocation_sample_peak_bytes": 23566534,
+      "allocation_sample_retained_blocks": 40817,
+      "allocation_sample_retained_bytes": 5027467,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.6785222919424996,
+      "operations_per_sample": 4,
+      "operations_per_second": 1.493360728052462,
+      "process_max_rss": 210665472,
+      "result": [
+        {
+          "cleanup_message": true,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": true,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        }
+      ],
+      "seconds": [
+        2.6805855000857264,
+        2.671992582967505,
+        2.703908000024967,
+        2.676541416090913,
+        2.6764491670764983,
+        2.6891106660477817,
+        2.6785222919424996
+      ],
+      "source": "/private/tmp/eforge-cleanup-nine-baseline",
+      "warmups": 2,
+      "workload": "cli-failure"
+    },
+    {
+      "allocation_sample_peak_bytes": 23559675,
+      "allocation_sample_retained_blocks": 40783,
+      "allocation_sample_retained_bytes": 5020816,
+      "allocation_scope": "in-process workload",
+      "child_process_max_rss": 0,
+      "median_seconds": 2.3351840000832453,
+      "operations_per_sample": 4,
+      "operations_per_second": 1.7129271183159043,
+      "process_max_rss": 203997184,
+      "result": [
+        {
+          "cleanup_message": true,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": true,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": false,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 21,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        },
+        {
+          "cleanup_message": false,
+          "exit_code": 130,
+          "old_evidence_sha256": "62b0c0767a0d936528c5e12e349eb572c57ff271930d84715d43ad1e4599d279",
+          "old_truth_sha256": "c2639ef19d1593ce5299bd1dabc203dad16d301b0725f781fea57148291c11d6",
+          "persistent_staging": true,
+          "preservation_message": true,
+          "temporary_staging_count": 0
+        }
+      ],
+      "seconds": [
+        2.337478542001918,
+        2.334748166031204,
+        2.3385787500301376,
+        2.328278874978423,
+        2.341520042042248,
+        2.3351840000832453,
+        2.31803491699975
+      ],
+      "source": "/Users/bianco/projects/EvidenceForge",
+      "warmups": 2,
+      "workload": "cli-failure"
+    }
+  ],
+  "performance_scope": "Four fresh CLI failure/interrupt paths across temporary and persistent staging. Cumulative baseline comparison includes earlier fingerprint deduplication.",
+  "preceding_commit": "1cf35c5c",
+  "preserved_checkpoint_identities": [
+    {
+      "behavior_revision": 42,
+      "case": "default-42",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "f06f36174c982074cf0d02e1cbe1abe3a93e63502ca7189457beb51af58efd53",
+      "run_fingerprint": "b22621c41bce1a25d77023f32f48aa2666d0bc9c2f17d9b585330f998ed18088"
+    },
+    {
+      "behavior_revision": 42,
+      "case": "default-137",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "c019b42fa15cc7688148c3bd4a2657aec1b4cfc459fb45017b98efa7052bfb06",
+      "run_fingerprint": "68269c84b60782af9352012b9eedb8fb959818f254982f44c0fd95b1f469fa22"
+    },
+    {
+      "behavior_revision": 42,
+      "case": "sof-elk-42",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "bf2e0dee5ae3cd3177af1314440a41c2379cdeb56182c94abcc9314c8a01f5ae",
+      "run_fingerprint": "8f44417702b541669bfcf0b8e3f719084d68483c3e514166dcae1df69dd4697a"
+    },
+    {
+      "behavior_revision": 42,
+      "case": "sof-elk-137",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "4065567019f3616953366bd226dd5400b261fc710fa9d24319c277b9465b844e",
+      "run_fingerprint": "7c3752f6a66e34f179e10dc918f6ce7075bf6b8872b1212a59a89e97659e6035"
+    },
+    {
+      "behavior_revision": 42,
+      "case": "splunk-42",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "eb63857eefedcb652135ac0a22cd6074c8f8a73d22224f945582aae4374ba9d8",
+      "run_fingerprint": "fea3675f0760e4379e28e9e74e7f217786d70c9a5a2aae1b9aaf79fbfaa48d67"
+    },
+    {
+      "behavior_revision": 42,
+      "case": "splunk-137",
+      "evidenceforge_build_sha256": "a3cde0d7fdd75a37f27c1389afa1413b53bd891bec73d7ddec281c53b7a9e311",
+      "label": "original",
+      "manifest_sha256": "c495ae7ef159cc7f4b76e547a5f3406b52dc8d964a6edbf77869f60c976f923f",
+      "run_fingerprint": "cd85aa5cc74ea064bd4948e50f302b58f0f1ac833305bfc8eef0818f411c34b1"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "default-42",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "130e430ba3b69f342136daa803ec54544e1b72b5cf56c9835a9430a6093f6169",
+      "run_fingerprint": "44e4f595be64e412e515901a2f747002f6e087f81a82a4a6b00763a77669c73a"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "default-137",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "c60157d9fe49cbc0372a6a7e3eebe760a25559bcdf279bf5ae2e195a1ea2a189",
+      "run_fingerprint": "94f2404b875a611edd956b2725d246c184d9f9bf54d8bfb39abc18fe6758d54e"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "sof-elk-42",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "c61ec1fc794d0ec6f658f0d3a879cb30092c56a564ae13fcc7c2e68924bc7cf4",
+      "run_fingerprint": "d7f77a74abe75e0ad2748caaece77423f115ff107d07b6e2e01645a581547d2e"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "sof-elk-137",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "60af06567838617e40046aad2bd06228b4b66b0e9f30204e08b4e33c3262c429",
+      "run_fingerprint": "9e5ac7581d71259349b30d0f2a07b50b8c77e0a355466b85c17f2abb97c0e1e9"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "splunk-42",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "d0ba76ae4c6c8e6a347463e749a44e65f1cae0da3fc11c52a8f9ff86ef5532ee",
+      "run_fingerprint": "59385ae8fc0329bae15cba8bf4d436376f6ac2043d86fd3378822568203259ec"
+    },
+    {
+      "behavior_revision": 58,
+      "case": "splunk-137",
+      "evidenceforge_build_sha256": "88c32d04521d0952b243dbd14fd37ce39ef6b2b7ca022508a99eb06c1988756a",
+      "label": "corrected",
+      "manifest_sha256": "74e66b9268ebbbfc62bf8e2a182e7602a86759b880fc6c8f71237168002783f8",
+      "run_fingerprint": "8747134206968ef253d8bc9b85565add06fef11638fe8e90854402fcd4627e82"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "default-42",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "bf5133dd8208c7ac5845a8a38891c47f09a15d0f33e6adf79afc4c601d328efc",
+      "run_fingerprint": "c1c40c2e809a1c764e1d5098b943b66982f37c2eef80fadb7b967b3b427514bc"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "default-137",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "63f8700a458593774d58a1bd0fa3ba7e256a9489d51ccba730b6d3021885b1a9",
+      "run_fingerprint": "ad00f78b68a1f95b94325ce7bfe86b8777da62064d53b240391d2351e90b40ef"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "sof-elk-42",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "90b5c8cac901a01b7298209f96ee28326a044ac023fc74ef512cbaf7e7178cd0",
+      "run_fingerprint": "101139cd0af85633113d8322cab39c8017e771c3eef437481c8e4d86c489b4c5"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "sof-elk-137",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "2bd38e82de0b168e37ffe5424c18f402b78d423f02970879e671383b1d0720e5",
+      "run_fingerprint": "43048bf242f8f709d3c4559d264271f982390817eeaf68787db394fcd602d9af"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "splunk-42",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "25e4addf266af3d060f2ffdd758f29d9f858f31543c93cd4a659ba62b2c7a84b",
+      "run_fingerprint": "b0e2e82640f32456fc045b8f8e30bf8f613f94f123492dbc8ee97045706073af"
+    },
+    {
+      "behavior_revision": 62,
+      "case": "splunk-137",
+      "evidenceforge_build_sha256": "0723fce21d52105f164284ecbff43f531f5576128262d3960b221a336b21baa2",
+      "label": "nine-baseline",
+      "manifest_sha256": "51f7c22d23242629ea81aeef58512f1157d47bfe2e637a1ca4a760852eead581",
+      "run_fingerprint": "8bc7fd9b5af0727bf338286c3be0a38d4b8f4aa2a33d8a3c5fc38970dce7e9cb"
+    }
+  ],
+  "representative_paths": [
+    "restore migration staging -> temporary-only cleanup -> outcome-specific message -> recovery guidance -> outcome-specific logging/exit",
+    "planned suspension remains distinct; signal suspension shares only the previously identical statements",
+    "outer finally retains lock release and conditional workspace removal; publication cleanup remains separate"
+  ],
+  "ruff_check": "passed",
+  "ruff_format_check": "passed",
+  "slow_tests": {
+    "deselected": 95,
+    "passed": 5,
+    "scope": "checkpointed and uncheckpointed SIGINT; three atomic publication SIGKILL points",
+    "seconds": 77.2
+  },
+  "standard_tests": {
+    "deselected": 2011,
+    "passed": 8545,
+    "seconds": 296.91,
+    "skipped": 27
+  }
+}
