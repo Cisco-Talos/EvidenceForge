@@ -416,3 +416,21 @@ records the fresh checks at the final PR revision after this documentation/test-
 cleanup. Package version, checkpoint schemas, generated evidence, POSIX implementations,
 release workflows, and repository protections remain unchanged by the extension.
 No merge or release was performed.
+
+### Windows routine CI timeout headroom
+
+At a2787369, [run 34893222845](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34893222845)
+passed all required checks after an unchanged Windows retry. The retry passed
+8,681 tests in 1,465.27s; the complete job took 24m 56s, only four seconds below
+the 25-minute limit. The first Windows attempt reached 5,997 passing tests with
+no assertion failures before timing out. An existing storage-heavy Snort test
+took approximately 495s in that attempt versus 253s in the retry and 169s in the
+preceding complete run, demonstrating substantial runtime variation.
+
+The maintainer requested a 45-minute Windows routine timeout to provide headroom.
+The routine matrix now declares each platform's timeout explicitly: Windows
+45 minutes and Linux 25 minutes. The focused Windows durability job retains its
+20-minute timeout. Test selection, commands, required-check aggregation, and
+production code are unchanged. Validation for this workflow-only follow-up uses
+workflow configuration checks, Ruff, and the generation behavior declaration;
+the PR records the resulting GitHub check status.

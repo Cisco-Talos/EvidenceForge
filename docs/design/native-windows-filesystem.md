@@ -159,7 +159,9 @@ versus exact evidence, and journal cleanup.
 ## CI and acceptance evidence
 
 The routine Python 3.12 matrix runs `uv run pytest --no-cov` on Ubuntu and native Windows for
-PRs and pushes to `dev` and `main`, with matrix fail-fast disabled. `Required CI` requires lint,
+PRs and pushes to `dev` and `main`, with matrix fail-fast disabled. The routine timeouts are
+45 minutes on Windows and 25 minutes on Linux; the focused Windows durability timeout is
+20 minutes. `Required CI` requires lint,
 every routine test entry, and the Windows durability job to succeed. One unmarked real CLI
 smoke test covers generation, a first
 collection-hour checkpoint, cooperative CLI suspension, verification without index mutation,
@@ -170,7 +172,7 @@ The complete write-through implementation at `730ef96d` passed
 [run 34890511405](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34890511405):
 native Windows **8,681 passed, 30 skipped** and Linux **8,644 passed, 67 skipped**, with
 2,023 slow/soak cases deselected. Local macOS passed **8,644 tests, 67 skipped**. The Windows
-routine job took 22m 57s, within its existing 25-minute timeout. All 16 routine native
+routine job took 22m 57s, within its then-configured 25-minute timeout. All 16 routine native
 checkpoint contracts, the checkpoint smoke on all three hosts, lint, and `Required CI` passed.
 
 The dedicated Windows durability gate passed all four slow cases in 132.88s: 906 crash cases
