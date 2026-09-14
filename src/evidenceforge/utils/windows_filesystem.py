@@ -146,6 +146,18 @@ _nt_create_file = _bind(
     ],
 )
 _nt_error = _bind(_ntdll, "RtlNtStatusToDosError", wintypes.ULONG, [ctypes.c_int32])
+_nt_set_information = _bind(
+    _ntdll,
+    "NtSetInformationFile",
+    ctypes.c_int32,
+    [
+        wintypes.HANDLE,
+        ctypes.POINTER(_IoStatusBlock),
+        wintypes.LPVOID,
+        wintypes.ULONG,
+        ctypes.c_int,
+    ],
+)
 _close_handle = _bind(_kernel, "CloseHandle", wintypes.BOOL, [wintypes.HANDLE])
 _get_info = _bind(
     _kernel,
@@ -547,6 +559,13 @@ def replace_child(
         ctypes.memmove(
             ctypes.addressof(buffer) + _RenameInformation.FileName.offset, encoded, len(encoded)
         )
-        _require(_set_info(_handle(descriptor), _FILE_RENAME_INFO, buffer, len(buffer)))
+        # Use the native information class for RootDirectory-relative renames;
+        # the Win32 wrapper rejects this form on the hosted Windows runner.
+        status = _IoStatusBlock()
+        result = _nt_set_information(
+            _handle(descriptor), ctypes.byref(status), buffer, len(buffer), 10
+        )
+        if result < 0:
+            raise ctypes.WinError(_nt_error(result))
     finally:
         os.close(descriptor)
