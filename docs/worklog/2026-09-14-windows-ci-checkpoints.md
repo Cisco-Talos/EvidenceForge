@@ -271,3 +271,21 @@ at `7160bfc6bbfd9a1c2d854e2a321a8f4e44a1e724` passed:
 - Durable roadmap now records backend implementation and retains dev branch
   protection as a separate uncompleted repository administration item. No merge,
   release, package version bump, or repository settings changes were made.
+
+### Approved Windows write-through extension
+
+The maintainer approved extending PR #419 with opt-in native write-through
+checkpoint publication and CI-only simulated power-loss testing. macOS/Linux
+implementations and generated evidence semantics must remain unchanged. No
+schema/package version change, merge, release, or protection change is authorized.
+Baseline for this extension is e012a93c75c992c451c4cc4f27b3ff25a8aa51b1.
+
+The Windows checkpoint boundary now stages directory creation, flushes complete
+binary files, publishes names through write-through native handles, and flushes
+regular-file metadata after rename. Existing native callers default to ordinary
+I/O. Checkpoint input/catalog/segment dependencies from earlier processes are
+authenticated and republished once before new acknowledgment. An uncertain index
+publication prevents further writes or reclamation on that store. Windows cleanup
+uses the authenticated index rather than selecting the newest directory names.
+Native CI first validates the low-level barriers; the storage model and real CLI
+crash-image tests are being added next. This entry is progress, not acceptance.

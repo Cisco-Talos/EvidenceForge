@@ -294,6 +294,13 @@ class AppendOnlySpoolParticipant:
 
     @staticmethod
     def _replace_file(path: Path, payloads: list[bytes]) -> None:
+        if os.name == "nt":
+            from .windows_io import WindowsCheckpointIO
+
+            operations = WindowsCheckpointIO()
+            operations.mkdir(path.parent, parents=True, exist_ok=True)
+            operations.write_atomic(path, payloads)
+            return
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         parent = path.parent.lstat()
         if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode):

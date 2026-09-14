@@ -73,6 +73,11 @@ def _canonical_json(model: BaseModel) -> bytes:
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        WindowsCheckpointIO().write_atomic(path, (payload,))
+        return
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
         descriptor = open_host_file(
@@ -97,6 +102,14 @@ def _atomic_write(path: Path, payload: bytes) -> None:
 def _atomic_create(path: Path, payload: bytes) -> bool:
     """Publish a complete record only when the fixed destination is absent."""
 
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        try:
+            WindowsCheckpointIO().write_new(path, payload)
+        except FileExistsError:
+            return False
+        return True
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
         descriptor = open_host_file(
@@ -238,6 +251,8 @@ def mark_suspended(
 ) -> SuspensionRecord:
     """Acknowledge a request only after its recovery manifest is durable."""
 
+    if os.name == "nt":
+        store._windows_io.require_healthy()
     record = SuspensionRecord(
         request_id=request.request_id,
         completed_ns=time.time_ns(),

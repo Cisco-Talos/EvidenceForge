@@ -23,6 +23,7 @@ _DELETE = 0x00010000
 _SYNCHRONIZE = 0x00100000
 _FILE_READ_ATTRIBUTES = 0x80
 _FILE_DIRECTORY_FILE = 0x1
+_FILE_WRITE_THROUGH = 0x2
 _FILE_NON_DIRECTORY_FILE = 0x40
 _FILE_SYNCHRONOUS_IO_NONALERT = 0x20
 _FILE_DELETE_ON_CLOSE = 0x1000
@@ -396,6 +397,7 @@ def _open_native(
     private: bool = False,
     extra_access: int = 0,
     temporary: bool = False,
+    write_through: bool = False,
 ) -> int:
     supported_flags = (
         os.O_RDONLY
@@ -435,6 +437,8 @@ def _open_native(
     if flags & os.O_TRUNC and disposition != _FILE_CREATE:
         disposition = _FILE_OVERWRITE_IF if flags & os.O_CREAT else _FILE_OVERWRITE
     options = _FILE_OPEN_REPARSE_POINT | _FILE_SYNCHRONOUS_IO_NONALERT
+    if write_through:
+        options |= _FILE_WRITE_THROUGH
     if temporary:
         options |= _FILE_DELETE_ON_CLOSE
     if directory is not None:
@@ -509,7 +513,13 @@ def open_directory(path: Path, *, create: bool = False) -> int:
 
 
 def open_child(
-    parent: int, name: str, flags: int, mode: int = 0o600, *, directory: bool = False
+    parent: int,
+    name: str,
+    flags: int,
+    mode: int = 0o600,
+    *,
+    directory: bool = False,
+    write_through: bool = False,
 ) -> int:
     """Open or exclusively create a child while retaining its parent identity."""
     return _open_native(
@@ -518,6 +528,7 @@ def open_child(
         flags=flags,
         directory=directory,
         private=bool(flags & os.O_CREAT and mode in {0o600, 0o700}),
+        write_through=write_through,
     )
 
 
@@ -610,17 +621,24 @@ def replace_child(
     *,
     replace: bool = True,
     directory: bool = False,
+    write_through: bool = False,
+    expected_identity: tuple[int, int] | None = None,
 ) -> None:
     """Atomically publish a file using retained source and destination directory handles."""
     _component(target)
     descriptor = _open_native(
         source,
         root=_handle(source_parent),
-        flags=os.O_RDONLY,
+        flags=os.O_RDWR if write_through and not directory else os.O_RDONLY,
         directory=directory,
         extra_access=_DELETE,
+        write_through=write_through,
     )
     try:
+        if expected_identity is not None:
+            metadata = os.fstat(descriptor)
+            if (int(metadata.st_dev), int(metadata.st_ino)) != expected_identity:
+                raise OSError("Windows file identity changed before publication")
         encoded = target.encode("utf-16-le")
         buffer = ctypes.create_string_buffer(ctypes.sizeof(_RenameInformation) + len(encoded))
         information = _RenameInformation.from_buffer(buffer)
@@ -638,16 +656,21 @@ def replace_child(
         )
         if result < 0:
             raise ctypes.WinError(_nt_error(result))
+        if write_through and not directory:
+            # Flush the renamed object's metadata as well as its already-flushed
+            # contents. Directory namespace publication uses the NTFS write-through
+            # rename contract; it is not a POSIX directory-fsync emulation.
+            flush_file(descriptor)
     finally:
         os.close(descriptor)
 
 
-def open_file(path: Path, flags: int, mode: int = 0o600) -> int:
+def open_file(path: Path, flags: int, mode: int = 0o600, *, write_through: bool = False) -> int:
     """Open a regular binary file through a pinned, no-follow absolute parent."""
     absolute = Path(os.path.abspath(path))
     parent = open_directory(absolute.parent)
     try:
-        return open_child(parent, absolute.name, flags, mode)
+        return open_child(parent, absolute.name, flags, mode, write_through=write_through)
     finally:
         os.close(parent)
 

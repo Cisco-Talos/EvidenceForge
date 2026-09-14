@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 88
+current_revision: 89
 history_start_revision: 1
 behavior_surface_sha256: 120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c
 changes:
@@ -791,3 +791,10 @@ changes:
       - host-filesystem
     formats: []
     summary: Use writable Windows journal output reconciliation handles while preserving original POSIX read-only opens
+  - revision: 89
+    id: native-windows-checkpoint-write-through
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Publish Windows checkpoint dependencies and recovery indexes through native write-through handles without changing POSIX operations or evidence semantics
