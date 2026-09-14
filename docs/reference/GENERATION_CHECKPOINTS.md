@@ -170,14 +170,21 @@ the filesystem cannot provide those guarantees; use another filesystem or explic
 `--checkpoint-hours 0`. A demonstrably stale lock may be reclaimed, but concurrent generation
 against the same output root is rejected.
 
-Native Windows checkpoint I/O uses binary file descriptors, file flushing, and atomic replacement.
-Directory synchronization is omitted because Python's Windows file API cannot perform the POSIX
-directory-sync operation; this does not provide the same directory-entry durability after power
-loss. POSIX mode/UID checks do not establish Windows ACL protection. A native protected filesystem
-backend is still required for Windows generation: Windows/Sysmon and Syslog output journals retain
-their POSIX capability checks. The native Windows CI job currently measures this compatibility gap;
-it does not establish Windows support. Disabling checkpoints does not bypass the output-journal
-requirements. Use macOS or Linux (including WSL on a Windows host) for generation in the meantime.
+Native Windows generation runs Python directly without WSL. Protected output journals, temporary
+storage, and checkpoint workspaces require fixed local NTFS storage, restrictive ACLs, and paths
+without reparse points such as junctions. Checkpoint publication uses buffered binary I/O,
+explicit file flushing, and native write-through creation and rename handles. Newly created
+checkpoint directories are staged and published through write-through renames; this supplies
+the Windows namespace barrier instead of POSIX directory synchronization. Disabling checkpoints
+does not bypass the native output-journal storage requirements.
+
+Checkpoint dependencies become durable before the recovery index is published and acknowledged.
+While the checkpoint remains retained, simulated power loss after acknowledgment must recover
+that checkpoint or a newer complete point. This is conditional on stable pre-existing ancestry
+and storage honoring flush/write-through requests. Native API and simulated power-loss CI tests
+validate the publication protocol, not physical hardware power-loss safety or final bundle
+publication. See the [native Windows design](../design/native-windows-filesystem.md) for tested
+platforms and the full storage contract.
 
 The newest corrupt recovery point produces a warning and falls back to the previous valid point.
 Tampering, incompatible run inputs, unsupported schemas, failed hydration, and unsafe ownership are
