@@ -15,6 +15,7 @@ import stat
 import tempfile
 from ctypes import wintypes
 from pathlib import Path, PureWindowsPath
+from threading import RLock
 from typing import Any
 
 _READ_CONTROL = 0x00020000
@@ -68,6 +69,16 @@ class _ObjectAttributes(ctypes.Structure):
 
 class _IoStatusBlock(ctypes.Structure):
     _fields_ = [("Status", ctypes.c_void_p), ("Information", ctypes.c_size_t)]
+
+
+class _StandardInformation(ctypes.Structure):
+    _fields_ = [
+        ("AllocationSize", ctypes.c_int64),
+        ("EndOfFile", ctypes.c_int64),
+        ("NumberOfLinks", wintypes.DWORD),
+        ("DeletePending", wintypes.BYTE),
+        ("Directory", wintypes.BYTE),
+    ]
 
 
 class _RenameInformation(ctypes.Structure):
@@ -160,24 +171,6 @@ _nt_set_information = _bind(
         wintypes.ULONG,
         ctypes.c_int,
     ],
-)
-_nt_query_information = _bind(
-    _ntdll,
-    "NtQueryInformationFile",
-    ctypes.c_int32,
-    [
-        wintypes.HANDLE,
-        ctypes.POINTER(_IoStatusBlock),
-        wintypes.LPVOID,
-        wintypes.ULONG,
-        ctypes.c_int,
-    ],
-)
-_reopen_file = _bind(
-    _kernel,
-    "ReOpenFile",
-    wintypes.HANDLE,
-    [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD],
 )
 _close_handle = _bind(_kernel, "CloseHandle", wintypes.BOOL, [wintypes.HANDLE])
 _get_info = _bind(
@@ -353,7 +346,7 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
             if ace.AceType != 0:
                 raise PermissionError("Windows protected storage has an unsupported ACL entry")
             principal = _sid(pointer.value + _AllowedAce.SidStart.offset)
-            if principal not in trusted and ace.Mask & mutation:
+            if principal not in trusted | {"S-1-3-4"} and ace.Mask & mutation:
                 raise PermissionError(
                     "Windows protected storage allows another principal to mutate it: "
                     f"SID={principal}, mask=0x{ace.Mask:08x}, ancestry={ancestry}"
@@ -441,7 +434,7 @@ def _open_native(
         if tags[0] & _FILE_ATTRIBUTE_REPARSE_POINT:
             raise PermissionError("Windows protected storage cannot traverse a reparse point")
         descriptor = msvcrt.open_osfhandle(
-            handle.value, (flags & (os.O_RDWR | os.O_WRONLY)) | os.O_BINARY
+            handle.value, (flags & (os.O_RDWR | os.O_WRONLY)) | os.O_BINARY | os.O_NOINHERIT
         )
     except BaseException:
         _close_handle(handle)
@@ -662,7 +655,7 @@ def temporary_descriptor() -> int:
     try:
         for _attempt in range(128):
             try:
-                return _open_native(
+                descriptor = _open_native(
                     f".eforge-private-{secrets.token_hex(16)}",
                     root=_handle(parent),
                     flags=os.O_RDWR | os.O_CREAT | os.O_EXCL,
@@ -670,6 +663,20 @@ def temporary_descriptor() -> int:
                     private=True,
                     temporary=True,
                 )
+                try:
+                    delete = wintypes.BYTE(1)
+                    _require(
+                        _set_info(
+                            _handle(descriptor),
+                            _FILE_DISPOSITION_INFO,
+                            ctypes.byref(delete),
+                            ctypes.sizeof(delete),
+                        )
+                    )
+                    return descriptor
+                except BaseException:
+                    os.close(descriptor)
+                    raise
             except FileExistsError:
                 continue
         raise FileExistsError("Unable to allocate private Windows temporary storage")
@@ -682,32 +689,51 @@ def require_temporary(descriptor: int) -> None:
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
         raise PermissionError("Windows temporary storage is not one private regular file")
-    mode = wintypes.ULONG()
-    status = _IoStatusBlock()
-    result = _nt_query_information(
-        _handle(descriptor), ctypes.byref(status), ctypes.byref(mode), ctypes.sizeof(mode), 16
+    information = _StandardInformation()
+    _require(
+        _get_info(_handle(descriptor), 1, ctypes.byref(information), ctypes.sizeof(information))
     )
-    if result < 0:
-        raise ctypes.WinError(_nt_error(result))
-    if not mode.value & _FILE_DELETE_ON_CLOSE or os.get_inheritable(descriptor):
-        raise PermissionError("Windows temporary storage lost its delete-on-close ownership")
+    if not information.DeletePending or os.get_inheritable(descriptor):
+        raise PermissionError("Windows temporary storage lost its delete-pending ownership")
     require_private(descriptor)
 
 
+# These operations are used together for opaque Syslog-owned descriptors. Holding
+# the same lock across save/read/restore preserves a shared file pointer even
+# when another owner operation uses a duplicated handle. No pathname is reopened.
+_position_lock = RLock()
+
+
+def read(descriptor: int, count: int) -> bytes:
+    """Read a native journal under the positioned-I/O coordination lock."""
+    with _position_lock:
+        return os.read(descriptor, count)
+
+
+def write(descriptor: int, payload: bytes | memoryview) -> int:
+    """Write a native journal under the positioned-I/O coordination lock."""
+    with _position_lock:
+        return os.write(descriptor, payload)
+
+
+def lseek(descriptor: int, offset: int, whence: int = os.SEEK_SET) -> int:
+    """Move the native journal pointer without racing a positioned read."""
+    with _position_lock:
+        return os.lseek(descriptor, offset, whence)
+
+
 def pread(descriptor: int, count: int, offset: int) -> bytes:
-    """Read via the retained object with a separate file pointer, never via its path."""
+    """Read an opaque journal without changing its shared owner file position.
+
+    Callers must use this module's read/write/lseek operations for the same
+    descriptor and its duplicates. Syslog's Windows boundary enforces that rule.
+    """
     if count < 0 or offset < 0:
         raise ValueError("Windows positioned read requires nonnegative count and offset")
-    handle = _reopen_file(_handle(descriptor), 0x80000000, 0x7, 0)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        reader = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-    except BaseException:
-        _close_handle(handle)
-        raise
-    try:
-        os.lseek(reader, offset, os.SEEK_SET)
-        return os.read(reader, count)
-    finally:
-        os.close(reader)
+    with _position_lock:
+        original = os.lseek(descriptor, 0, os.SEEK_CUR)
+        try:
+            os.lseek(descriptor, offset, os.SEEK_SET)
+            return os.read(descriptor, count)
+        finally:
+            os.lseek(descriptor, original, os.SEEK_SET)
