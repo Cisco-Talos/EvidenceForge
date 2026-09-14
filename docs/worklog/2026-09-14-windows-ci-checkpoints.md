@@ -102,3 +102,17 @@ Initial CI at code commit `ca146454` completed:
 The final handoff commit changes only TODO/worklog/design documentation; no tested runtime,
 workflow, or test code changes after `ca146454`. Its normal CI rerun may be pending at handoff.
 No merge, release, package version bump, or repository-protection changes were made.
+
+## Native Windows implementation authorization and first iteration
+
+The maintainer authorized fixing the shared import blocker, repeatedly running native Windows
+CI and repairing root causes until green, verifying macOS/Linux, and preparing the PR to dev.
+The existing macOS/Linux implementations and functionality must remain unchanged. OS-specific
+wrappers and structural separation are permitted; stop for guidance if a repair requires changing
+POSIX behavior. No automatic merge is authorized.
+
+The first iteration adds a Windows-only temporary-stream adapter exposing explicit class methods
+while retaining Python's underlying temporary-file cleanup owner. Syslog's existing POSIX factory
+selection is unchanged. Regression coverage exercises wrapper ownership, binary bytes, cleanup,
+and unchanged POSIX registry selection. Runtime publication capability guards remain intact while
+the next native CI run inventories execution failures.

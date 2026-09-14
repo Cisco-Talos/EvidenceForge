@@ -460,6 +460,12 @@ def _make_security_registry() -> tuple[
     trusted_json = json
     module_namespace = globals()
     trusted_factory = tempfile.TemporaryFile
+    if os.name == "nt":
+        # Windows TemporaryFile delegates fileno/flush/closed through an instance
+        # wrapper. Keep its cleanup owner alive behind explicit registry methods.
+        from evidenceforge.utils.windows_streams import temporary_stream
+
+        trusted_factory = temporary_stream
     trusted_factory_code = trusted_factory.__code__
     trusted_mkstemp_inner = tempfile._mkstemp_inner
     prototype = trusted_factory(mode="w+b")

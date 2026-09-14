@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 82
+current_revision: 83
 history_start_revision: 1
-behavior_surface_sha256: 303e3e6907c741d40efe6e10dd9591ba632521d94206ac108acb66fef964ec49
+behavior_surface_sha256: e5490d09b83f7a4f3e6b64454bab2c41e67131481a643292145d0ffb0ca25a9f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -749,3 +749,10 @@ changes:
       - checkpoint-filesystem
     formats: []
     summary: Centralize host-platform directory syncing and preserve generated evidence semantics while enabling native Windows checkpoint I/O
+  - revision: 83
+    id: native-windows-temporary-stream-import
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Adapt Windows temporary-file wrappers while preserving the existing POSIX stream implementation and generated evidence
