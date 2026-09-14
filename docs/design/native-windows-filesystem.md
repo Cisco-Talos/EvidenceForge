@@ -1,116 +1,117 @@
-# Native Windows filesystem backend: follow-up implementation plan
+# Native Windows filesystem support
 
-## Objective and current boundary
+## Scope and platform boundary
 
-Complete native Windows generation and checkpoint recovery without WSL and without weakening the
-protected publication contracts. Build on draft PR #419 (`codex/windows-ci-checkpoint-smoke`),
-which adds the required Linux/Windows routine matrix and a real checkpoint smoke test. The
-maintainer explicitly separated this backend from the groundwork effort after inspection found
-POSIX-only output-journal requirements.
+EvidenceForge uses native Windows Python and Windows filesystem APIs; WSL is not involved.
+Protected generation journals and checkpoint workspaces require a local, fixed NTFS volume.
+UNC/network shares, non-NTFS volumes, and reparse points (including junctions and cloud
+placeholders) along active protected paths are rejected. Output, temporary storage, and
+`EFORGE_SPOOL_DIR` must satisfy these requirements.
 
-WindowsEventEmitter and Sysmon's source-finalization path require no-follow, directory-relative
-operations and effective-owner metadata. Their shared `source_journal` code owns directory/file
-identity, SQLite initialization, and retryable publication. Syslog additionally captures an
-attested registry of filesystem functions and requires descriptor-relative traversal and pread.
-Snort and bash history have related private-spool/publication contracts. Simply bypassing these
-capability checks, fabricating POSIX ownership, or switching to an independent renderer would
-break existing guarantees.
+macOS and Linux remain the primary supported platforms. Their existing implementations remain
+in place. OS branches select Windows operations, and shared wrappers call the original POSIX
+operations with their original arguments. Native Windows modules are imported only on Windows.
+Generated event semantics, checkpoint schemas, and the package version are unchanged.
 
-Initial supported host scope: Python 3.12 on 64-bit Windows with local NTFS volumes and a normal
-user token. Keep macOS/Linux behavior unchanged. Network shares, non-NTFS Windows output, cloud
-placeholder/reparse paths, cross-OS checkpoint transfer, and the full slow suite on Windows are
-outside the first implementation. Reject unsupported storage during preflight with an actionable
-message; do not silently reduce protection.
+Validation uses Python 3.12: macOS 26.6.2/arm64 locally and GitHub-hosted Ubuntu and Windows
+Server 2025 runners. Windows 10, Python 3.13 on Windows, cross-OS checkpoint transfer, and the
+broad Windows slow suite are not established by this effort's tests. Release slow tests and
+Python 3.12-to-3.13 checkpoint portability remain on Linux.
 
-## First native CI measurement
+## Native operations
 
-[Run 34844565216](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34844565216)
-on Windows/Python 3.12.10 at `ca146454` installed dependencies successfully but stopped during
-collection: **257 errors**, including 237 occurrences of `_TemporaryFileWrapper` lacking a class
-`fileno` attribute and 20 cascading partial-import errors. The source is Syslog's module-level
-`_make_security_registry` (`syslog.py:467` at this revision). This is one shared import blocker,
-not 257 independent defects. No Windows test or smoke-test execution was established by this run.
+`utils/windows_filesystem.py` owns the native handle and ACL operations. Typed ctypes bindings
+load system DLLs from System32. Directory-relative `NtCreateFile` calls open single components;
+opened-handle metadata rejects reparse points and unsupported volumes. Retained directory
+handles omit delete sharing, pinning their names and ancestry while in use. File handles use
+binary, non-inheritable CRT descriptors. Unsupported open flags fail before mutation.
 
-## Backend contract and implementation order
+File identity comes from the opened descriptor's volume/device and file identity. Native rename
+and deletion operate relative to retained directories, with explicit replacement policy and
+identity checks for owned cleanup. SQLite connections and leaf directory handles close before
+removal. The existing emitter schemas, rendering, receipts, retry state, and publication lifecycle
+remain the owners of logical journal behavior.
 
-0. Make module import independent of POSIX temporary-stream probing. Capture trusted syscall
-   bindings separately from runtime storage capability checks and bind a platform-correct owned
-   stream implementation. Preserve Syslog's attestation; do not use delegated wrapper attributes
-   as an unchecked substitute for trusted methods. Require `pytest --collect-only` to succeed on
-   Windows before inventorying execution failures.
+The Windows-only `windows_journals.py` and `windows_journal_directory.py` modules connect these
+operations to Security/Sysmon and Bash/Snort directory lifecycles. Syslog retains its attested
+operation registry and uses a Windows stream facade with explicit methods. Its private anonymous
+storage uses delete-pending files; duplicate descriptors retain the same kernel object. Windows
+positioned reads serialize with the journal's ordinary reads, writes, and seeks, save the shared
+file pointer, and restore it before releasing the lock. No pathname reopen is needed.
 
-1. Introduce a small internal protected-filesystem interface with owned directory/file handles,
-   immutable volume/file identity, metadata inspection, no-follow child open/create, exclusive
-   temporary creation, binary read/write, offset reads, flush, directory enumeration, atomic
-   child publication, and identity-checked removal. Resource objects own and close handles;
-   copied numeric descriptors must not imply ownership. Preserve distinct errors for absent,
-   occupied, unsafe, unsupported, and indeterminate operations. Keep current checkpoint schemas
-   free of runtime handles, ACL blobs, or platform-specific identity encodings.
-2. Implement the POSIX adapter using the existing descriptor-relative operations. Move shared
-   operations behind the interface first and prove unchanged evidence, publication receipts,
-   failure recovery, and cleanup. Do not monkeypatch Python's global os module or emulate it with
-   a broad compatibility shim. Make syscall/capability bindings explicit so existing exact-owner
-   and Syslog attestation contracts remain enforceable.
-3. Implement the native adapter with typed ctypes bindings loaded only on Windows. Use native
-   directory handles and handle-relative single-component opens through NtCreateFile; reject
-   reparse points on every opened component. Obtain volume/file identity and attributes from the
-   opened handles. Use native handle-based rename/disposition for publication/removal, with
-   deliberate sharing modes and retained handles preventing parent substitution. Use synchronous
-   binary handles; serialize seek/read only for exclusively owned handles, or use an explicit
-   positioned-read operation when shared. Do not replace secure opens with check-then-open path
-   resolution. Microsoft documents directory-relative RootDirectory semantics and explicit
-   reparse-point opening in [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile),
-   and handle-based rename/deletion in
-   [SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle).
-4. Establish real Windows ownership using process-token SIDs and security descriptors. Create
-   private spool/workspace leaves with protected DACLs granting the owning user, SYSTEM, and
-   administrators access; inspect existing protected objects and reject unexpected write/delete
-   principals. Validate ancestry against replacement rights, including parent delete-child
-   access. Do not interpret synthetic st_uid or chmod bits as ACL proof. Restrict SQLite journals
-   to the protected private directory and preserve schema/identity checks. Windows file access
-   is defined by [security descriptors and access rights](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
-5. Preserve regular-file flushing and atomic replacement. Keep directory-entry power-loss
-   durability explicitly weaker on Windows; do not report POSIX-equivalent durability merely
-   because a native handle opens. Probe required capabilities once before generation. Native
-   file flushing requires a suitable writable handle; see
-   [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
-6. Migrate checkpoint store/control/spools and every enabled emitter's private journal/publication
-   operations through these owners. Prioritize Windows/Sysmon, then Syslog, Snort, bash history,
-   and remaining paths found by CI. Preserve source-finalization lifecycle, exact receipts,
-   rollback/lost-return adoption, and bounded spool retention. Close SQLite connections and
-   borrowed views before unlink/rename; do not hide leaked handles with unbounded retry loops.
+Native API references:
 
-## Test and acceptance requirements
+- [NtCreateFile and RootDirectory semantics](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)
+- [Native file rename information](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)
+- [CompareObjectHandles](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-compareobjecthandles)
+- [Handle-based file information and deletion](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)
 
-- Start from native Windows CI logs captured by the groundwork PR. Fix collection portability
-  before execution and classify failures by missing primitives, protected publication, path/text
-  conventions, or genuinely POSIX-specific tests.
-- Run common backend contract tests on macOS, Linux, and native Windows: exact identity,
-  exclusive creation, binary newline/control-byte preservation, parent/file substitution,
-  occupied destination, links and reparse points, invalid types, ACL rejection, lock ownership,
-  descriptor cleanup, and retry after failed publication. Native junction/reparse tests must run
-  without relying on administrator-only symlink creation. Keep POSIX-specific mode/signal tests
-  explicitly scoped rather than skipping portable source behavior.
-- Add injected failures before and after journal creation and publication to prove that lost
-  returns preserve ownership and retries cannot delete or overwrite another actor's artifacts.
-  Cover changes to ACLs/ancestry and SQLite handle-sharing failures. Keep broad expensive fault
-  matrices in the release tier; narrow ownership and lifecycle regressions stay routine.
-- Pass the unmarked short checkpoint smoke test on actual Windows: first collection checkpoint,
-  CLI suspension, unchanged recovery index after verification, fresh-process resume, exact bundle
-  bytes against a same-host uninterrupted control, nonempty Windows/Zeek evidence, and cleanup.
-- Pass the entire routine suite on both Linux and Windows, with fail-fast disabled and no
-  continue-on-error. Run the same suite locally on macOS. Run affected POSIX slow publication and
-  checkpoint tests to ensure the shared-interface migration preserves existing guarantees.
-- Make only host-platform filesystem behavior changes; generated event truth and checkpoint
-  schema stay unchanged. Update the internal behavior declaration when its tracked surface
-  changes, and verify compatibility with preserved checkpoints from the baseline build.
+## Ownership and privacy
 
-## Rollout
+Private directories and files receive protected DACLs granting access to the current user,
+SYSTEM, and Administrators. Existing objects are checked through their security descriptors;
+synthetic POSIX owner IDs and mode bits are not accepted as Windows security evidence. Private
+objects reject access granted to outside principals, including read access. Ancestors reject
+outside rights that could replace existing protected entries or change their security, while
+allowing ordinary creation of new siblings in a temporary root.
 
-Keep #419 draft until the backend and Windows routine gate pass. Update the worklog with exact
-commit SHAs, runner/Python versions, failing/passing counts, justified platform exclusions, and
-smoke-test runtime. Replace interim native-Windows caveats with the supported local-NTFS scope
-only after validation. Main already requires Required CI and Required Release CI. Dev currently
-has no protection: establish Required CI enforcement there as part of activating Windows support,
-preserving any protections added in the meantime. Broad release slow/Python-version portability
-remains Linux-only; routine CI remains Python 3.12. No feature-branch package version bump.
+The current token's default object owner can be Administrators for elevated processes. It is
+accepted only within the trusted privileged principal set. OWNER RIGHTS entries are evaluated
+only after authenticating the object's owner. Windows-managed ancestors may also be owned by
+TrustedInstaller. Null DACLs, unexpected owners, and unsupported ACE types fail closed.
+
+See Microsoft's [file security model](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
+and [special identities](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-special-identities-groups).
+
+## Durability and lock ownership
+
+Regular-file writes still flush before publication. Windows uses writable handles for
+`FlushFileBuffers`, including final-output reconciliation. POSIX read-only opens and strict
+`fsync` failure propagation remain unchanged.
+
+Windows deliberately omits POSIX directory `fsync`. Atomic publication and integrity checks
+remain, but directory-entry persistence across sudden power loss has a weaker guarantee than
+on the supported POSIX path. A successful checkpoint must not be described as providing
+POSIX-equivalent power-loss durability on Windows. See
+[FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+
+Windows process-owner checks use psutil's native process query instead of `os.kill(pid, 0)`.
+An inaccessible or indeterminate process cannot justify reclaiming its lock. The earlier CI
+groundwork introduced this shared psutil query; the native-backend implementation preserves it.
+Checkpoint byte I/O is binary, and verification retains the original index/segment integrity
+checks and schema.
+
+## Other portability repairs
+
+Logical configuration, pack, and installed-skill references use slash-separated paths on Windows.
+Native filesystem paths remain `Path` objects. Windows skill cleanup uses the same logical keys
+as its installation manifest. The Windows dependency set includes timezone data. Windows-only
+paths handle negative epoch conversion, CRLF parsing, Bash byte accounting, and writable sorted
+export handles without changing the POSIX implementations.
+
+Tests use portable fixture paths and text encodings. POSIX-only signal/timer/mode contracts have
+explicit platform reasons; portable generation, checkpoint, and publication behavior still runs
+on Windows. Native regressions cover binary data, Unicode names, ACL rejection, file identity,
+exclusive publication, junction rejection, pinned ancestors, anonymous stream identity, ordinary
+versus exact evidence, and journal cleanup.
+
+## CI and acceptance evidence
+
+The routine Python 3.12 matrix runs `uv run pytest --no-cov` on Ubuntu and native Windows for
+PRs and pushes to `dev` and `main`, with matrix fail-fast disabled. `Required CI` requires lint
+and every test entry to succeed. One unmarked real CLI smoke test covers generation, a first
+collection-hour checkpoint, cooperative CLI suspension, verification without index mutation,
+fresh-process resume, nonempty Windows/Zeek evidence, byte equality with uninterrupted output,
+and checkpoint workspace cleanup. The same test runs during ordinary local macOS testing.
+
+The [worklog](../worklog/2026-09-14-windows-ci-checkpoints.md) records exact CI revisions,
+failure inventories, validation counts, and completion status. The first native run stopped at
+257 collection errors from a shared temporary-stream import assumption. After that fix, the
+full routine inventory exposed 468 failures; subsequent native storage and path repairs reduced
+this to 39 while the checkpoint smoke test and full Linux suite passed. Final acceptance requires
+zero Windows failures and successful Linux/macOS validation, not merely a passing native probe.
+
+Repository settings were inspected without modification. `main` requires `Required CI` and
+`Required Release CI`. `dev` has no branch protection or effective rules, so workflow failure
+alone does not enforce a merge block there. PR #419 targets `dev`; merging remains a manual
+maintainer action. No merge, release, or package version bump is part of implementation.

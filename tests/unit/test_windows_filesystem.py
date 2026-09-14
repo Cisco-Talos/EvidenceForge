@@ -42,7 +42,10 @@ def test_private_binary_file_and_handle_relative_publication(tmp_path: Path) -> 
         os.close(parent)
 
 
-def test_exclusive_create_and_nonreplacing_rename_preserve_existing_bytes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("truncate", [False, True])
+def test_exclusive_create_and_nonreplacing_rename_preserve_existing_bytes(
+    tmp_path: Path, truncate: bool
+) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 
     parent = filesystem.open_directory(tmp_path)
@@ -54,7 +57,11 @@ def test_exclusive_create_and_nonreplacing_rename_preserve_existing_bytes(tmp_pa
             finally:
                 os.close(descriptor)
         with pytest.raises(FileExistsError):
-            filesystem.open_child(parent, "target", os.O_RDWR | os.O_CREAT | os.O_EXCL)
+            filesystem.open_child(
+                parent,
+                "target",
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | (os.O_TRUNC if truncate else 0),
+            )
         with pytest.raises(FileExistsError):
             filesystem.replace_child(parent, "source", parent, "target", replace=False)
         assert (tmp_path / "source").read_bytes() == b"source"

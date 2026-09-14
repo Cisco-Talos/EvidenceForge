@@ -234,3 +234,17 @@ Run 34856079894 (`709b4766`) completed:
   file, matching its intended single-sensor test setup.
 - All 197 affected slow Bash/Snort checks pass locally again. Ruff, behavior
   manifest revision 88, and the POSIX structural audit pass.
+- Run 34859531009 (`7160bfc6`) passed all 23 native filesystem preflight checks.
+  The full Linux and Windows routine suites started successfully.
+- Fresh macOS routine validation at `7160bfc6`: 8,639 passed, 50 skipped,
+  2,019 deselected, 309.31s. The 23 native Windows contracts are explicitly
+  excluded on macOS. The checkpoint smoke passed again.
+- Review found that combining Windows `O_EXCL` with `O_TRUNC` could override
+  exclusive creation. Native disposition selection now keeps exclusive-create
+  precedence, with a regression requiring existing bytes to remain unchanged.
+- Replaced the deferred-backend design plan with actual architecture, host scope,
+  ACL/handle contracts, and directory power-loss durability limits. Added a short
+  platform note at the README quick start.
+- Rechecked repository settings: main requires Required CI and Required Release
+  CI; dev is unprotected and both branches have no effective ruleset entries.
+  No repository settings were changed.

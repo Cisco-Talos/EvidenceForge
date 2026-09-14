@@ -432,7 +432,7 @@ def _open_native(
     disposition = _FILE_OPEN
     if flags & os.O_CREAT:
         disposition = _FILE_CREATE if flags & os.O_EXCL else _FILE_OPEN_IF
-    if flags & os.O_TRUNC:
+    if flags & os.O_TRUNC and disposition != _FILE_CREATE:
         disposition = _FILE_OVERWRITE_IF if flags & os.O_CREAT else _FILE_OVERWRITE
     options = _FILE_OPEN_REPARSE_POINT | _FILE_SYNCHRONOUS_IO_NONALERT
     if temporary:

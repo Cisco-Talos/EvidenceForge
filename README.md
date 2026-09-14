@@ -143,6 +143,12 @@ parser support.
 
 ## Quick Start
 
+macOS and Linux are the primary supported host platforms. Native Windows runs Python directly,
+without WSL; generation output, checkpoint workspaces, and temporary storage must use local NTFS
+paths without junctions or other reparse points. Windows checkpoint directory durability across
+power loss is weaker than on POSIX. See [Windows platform details](docs/design/native-windows-filesystem.md)
+for tested runtimes and filesystem limits.
+
 ```bash
 # Install EvidenceForge from the source checkout
 git clone https://github.com/Cisco-Talos/EvidenceForge.git
