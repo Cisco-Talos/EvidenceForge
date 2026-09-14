@@ -224,3 +224,13 @@ Run 34856079894 (`709b4766`) completed:
 - Complete Windows logs retained locally at
   `/tmp/eforge-windows-iteration6-clean.log`; successful Linux output at
   `/tmp/eforge-windows-iteration6-linux.log`.
+
+### Native reconciliation follow-up
+
+- Native preflight on run 34858676178 passed 21 checks and exposed a Bash
+  final-output reconciliation flush on a read-only handle. Windows now opens
+  reconciliation files writable in Bash and Snort; POSIX retains the original
+  read-only open. The Snort native comparison fixture now selects a direct output
+  file, matching its intended single-sensor test setup.
+- All 197 affected slow Bash/Snort checks pass locally again. Ruff, behavior
+  manifest revision 88, and the POSIX structural audit pass.

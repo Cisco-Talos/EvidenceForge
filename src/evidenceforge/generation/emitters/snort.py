@@ -3670,7 +3670,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             descriptor = _open_regular_nofollow(
                 directory_descriptor,
                 output_path.name,
-                os.O_RDONLY,
+                os.O_RDWR if os.name == "nt" else os.O_RDONLY,
             )
             try:
                 fsync_host_descriptor(descriptor)

@@ -3038,7 +3038,7 @@ class _SingleHistoryWriter:
             descriptor = _open_regular_nofollow(
                 directory_descriptor,
                 self.output_path.name,
-                os.O_RDONLY,
+                os.O_RDWR if os.name == "nt" else os.O_RDONLY,
             )
             try:
                 digest, size = _hash_descriptor(descriptor, expected_size=expected_size)

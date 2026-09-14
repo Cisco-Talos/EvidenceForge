@@ -310,7 +310,8 @@ def test_native_exact_journals_match_ordinary_evidence_and_clean_up(
     bundles: list[dict[str, bytes]] = []
     for exact in (False, True):
         output = tmp_path / ("exact" if exact else "ordinary")
-        emitter = emitter_type(load_format(provider), output, buffer_size=1)
+        target = output / "snort.log" if provider == "snort_alert" else output
+        emitter = emitter_type(load_format(provider), target, buffer_size=1)
         try:
             if exact:
                 authority = ExactPublicationAuthority(capacity=1)
