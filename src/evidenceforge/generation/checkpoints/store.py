@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import psutil
 from pydantic import ValidationError
+
+from evidenceforge.utils.files import fsync_directory
 
 from .errors import (
     CheckpointCompatibilityError,
@@ -98,15 +101,7 @@ def _safe_relative_path(value: str) -> PurePosixPath:
 
 
 def _sync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _sync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags = (os.O_RDWR if os.name == "nt" else os.O_RDONLY) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
@@ -115,7 +110,9 @@ def _sync_directory(path: Path) -> None:
 
 
 def _write_new_file(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    descriptor = os.open(
+        path, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, mode
+    )
     try:
         view = memoryview(payload)
         while view:
@@ -133,21 +130,23 @@ def _atomic_replace(path: Path, payload: bytes) -> None:
     try:
         _write_new_file(temporary, payload)
         os.replace(temporary, path)
-        _sync_directory(path.parent)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def _process_is_alive(pid: int) -> bool:
+    """Probe ownership without signaling a process on any host platform."""
+
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        return psutil.Process(pid).is_running()
+    except psutil.NoSuchProcess:
         return False
-    except PermissionError:
+    except (psutil.AccessDenied, OSError):
+        # Uncertain ownership must never authorize reclamation.
         return True
-    return True
 
 
 class RunLock:
@@ -172,7 +171,7 @@ class RunLock:
         while True:
             try:
                 _write_new_file(self.path, payload)
-                _sync_directory(self.workspace)
+                fsync_directory(self.workspace)
                 self._owned = True
                 return
             except FileExistsError:
@@ -193,13 +192,13 @@ class RunLock:
                 except FileNotFoundError:
                     continue
                 stale.unlink(missing_ok=True)
-                _sync_directory(self.workspace)
+                fsync_directory(self.workspace)
 
     def _read_owner(self) -> dict[str, object]:
         try:
             descriptor = os.open(
                 self.path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0),
             )
             try:
                 info = os.fstat(descriptor)
@@ -207,7 +206,7 @@ class RunLock:
                     raise CheckpointLockError("generation output lock is not a regular file")
                 if hasattr(os, "getuid") and info.st_uid != os.getuid():
                     raise CheckpointLockError("generation output lock has an unsafe owner")
-                if info.st_mode & 0o022:
+                if os.name == "posix" and info.st_mode & 0o022:
                     raise CheckpointLockError("generation output lock is externally writable")
                 raw = os.read(descriptor, _MAX_LOCK_BYTES + 1)
             finally:
@@ -268,7 +267,7 @@ class RunLock:
             self._owned = False
             raise CheckpointLockError("generation lock ownership changed before release")
         self.path.unlink()
-        _sync_directory(self.workspace)
+        fsync_directory(self.workspace)
         self._owned = False
 
     def __enter__(self) -> RunLock:
@@ -370,7 +369,7 @@ class IncrementalCheckpointStore:
             raise CheckpointFilesystemError(f"checkpoint path is not a real directory: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise CheckpointFilesystemError(f"checkpoint directory has an unsafe owner: {path}")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointFilesystemError(f"checkpoint directory is group/world writable: {path}")
 
     def _probe_filesystem(self) -> None:
@@ -380,11 +379,11 @@ class IncrementalCheckpointStore:
             _write_new_file(probe, b"checkpoint-probe")
             os.replace(probe, replacement)
             _sync_file(replacement)
-            _sync_directory(self.workspace)
+            fsync_directory(self.workspace)
         except OSError as error:
             raise CheckpointFilesystemError(
-                "checkpoint filesystem cannot guarantee atomic rename and durable file/directory "
-                "sync; use another filesystem or --checkpoint-hours 0"
+                "checkpoint filesystem does not support required atomic rename or synchronization; "
+                "use another filesystem or --checkpoint-hours 0"
             ) from error
         finally:
             probe.unlink(missing_ok=True)
@@ -460,7 +459,7 @@ class IncrementalCheckpointStore:
                     )
             else:
                 os.replace(temporary, path)
-            _sync_directory(directory)
+            fsync_directory(directory)
         finally:
             temporary.unlink(missing_ok=True)
         return relative, True
@@ -681,7 +680,7 @@ class IncrementalCheckpointStore:
                 raise CheckpointFilesystemError(f"checkpoint sequence already exists: {sequence}")
             self._validate_protected_directory(final)
             shutil.rmtree(final)
-            _sync_directory(self.recovery)
+            fsync_directory(self.recovery)
         pending.mkdir(mode=0o700)
         head_refs: list[ParticipantHead] = []
         try:
@@ -702,7 +701,7 @@ class IncrementalCheckpointStore:
                         referenced_segments=head.referenced_segments,
                     )
                 )
-            _sync_directory(heads_directory)
+            fsync_directory(heads_directory)
             self._synchronize_publication("heads_durable", sequence)
             manifest = CheckpointManifest(
                 sequence=sequence,
@@ -718,9 +717,9 @@ class IncrementalCheckpointStore:
             )
             manifest_payload = _canonical_json(manifest.model_dump(mode="json"))
             _write_new_file(pending / _MANIFEST_NAME, manifest_payload)
-            _sync_directory(pending)
+            fsync_directory(pending)
             os.replace(pending, final)
-            _sync_directory(self.recovery)
+            fsync_directory(self.recovery)
             self._synchronize_publication("recovery_published", sequence)
             self._publish_index(manifest, manifest_payload)
             self._synchronize_publication("index_published", sequence)
@@ -758,7 +757,7 @@ class IncrementalCheckpointStore:
                 raise CheckpointCorruptionError("checkpoint recovery index is not a regular file")
             if hasattr(os, "getuid") and info.st_uid != os.getuid():
                 raise CheckpointCorruptionError("checkpoint recovery index has an unsafe owner")
-            if info.st_mode & 0o022:
+            if os.name == "posix" and info.st_mode & 0o022:
                 raise CheckpointCorruptionError("checkpoint recovery index is externally writable")
             document = json.loads(self.index_path.read_bytes())
         except FileNotFoundError:
@@ -803,7 +802,7 @@ class IncrementalCheckpointStore:
         directories = self._recovery_directories()
         for stale in directories[2:]:
             shutil.rmtree(stale)
-        _sync_directory(self.recovery)
+        fsync_directory(self.recovery)
 
     def collect_garbage(self) -> None:
         """Remove objects unreferenced by either recovery outside checkpoint pauses."""
@@ -903,7 +902,7 @@ class IncrementalCheckpointStore:
             raise CheckpointCorruptionError(f"checkpoint object is not a regular file: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise CheckpointCorruptionError(f"checkpoint object has an unsafe owner: {path}")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointCorruptionError(f"checkpoint object is externally writable: {path}")
         payload = path.read_bytes()
         if len(payload) != expected_size or _sha256(payload) != expected_hash:

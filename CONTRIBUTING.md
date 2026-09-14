@@ -226,3 +226,16 @@ you can do:
 - Improve documentation or add tutorials.
 
 Thanks again for your interest in contributing to EvidenceForge!
+
+### Native Windows CI groundwork
+
+Routine CI runs Python 3.12 on Ubuntu and native Windows, with `uv run pytest --no-cov`.
+The routine suite includes a short real generation, checkpoint, cooperative suspension,
+verification, and fresh-process resume comparison against uninterrupted output. The same test
+runs during normal local macOS testing. Broad checkpoint fault/interruption tests remain in the
+Linux slow release gate for PRs into main.
+
+The Windows matrix entry is currently groundwork for native host support. Protected output
+journals still require POSIX capabilities; the draft Windows CI change must remain unmerged until
+a native filesystem backend preserves those contracts and the Windows suite passes. Do not
+blanket-skip portable failures or disable publication protections to make the job green.

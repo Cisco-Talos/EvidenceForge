@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 81
+current_revision: 82
 history_start_revision: 1
-behavior_surface_sha256: d812799a7e7f1f69a13d4103b00060e0644087186563eb516d8ed9c58bc1a5ec
+behavior_surface_sha256: 303e3e6907c741d40efe6e10dd9591ba632521d94206ac108acb66fef964ec49
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -742,3 +742,10 @@ changes:
       - ssh-session-lifecycle
     formats: []
     summary: Retire ended identities only at the sealed engine frontier, preserve exact SSH source instances through deferred close and PID reuse, and omit unauthenticated source-process placeholders
+  - revision: 82
+    id: native-windows-checkpoint-io
+    impact: none
+    domains:
+      - checkpoint-filesystem
+    formats: []
+    summary: Centralize host-platform directory syncing and preserve generated evidence semantics while enabling native Windows checkpoint I/O

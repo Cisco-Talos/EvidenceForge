@@ -60,6 +60,9 @@ from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILEN
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.profiling import GenerationProfiler
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
+from tests.support.output_equivalence import (
+    deterministic_bundle_files as _deterministic_bundle_files,
+)
 
 runner = CliRunner()
 
@@ -97,15 +100,6 @@ def _configure_mock_generation(
     engine.generate.side_effect = fake_generate
     mock_engine_class.return_value = engine
     return engine
-
-
-def _deterministic_bundle_files(root: Path) -> dict[str, bytes]:
-    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file() and path.name not in ignored
-    }
 
 
 def test_generation_progress_uses_fifteen_minute_speed_window():
@@ -1157,9 +1151,9 @@ class TestGenerateCheckpointResume:
     @pytest.mark.parametrize(
         ("interrupt_signal", "checkpoint_hour", "duration"),
         [
-            (signal.SIGKILL, 1, "1h"),
+            (getattr(signal, "SIGKILL", None), 1, "1h"),
             (signal.SIGINT, 9, "2h"),
-            (signal.SIGKILL, 10, "2h"),
+            (getattr(signal, "SIGKILL", None), 10, "2h"),
         ],
         ids=("sigkill-warmup", "sigint-collection", "sigkill-tail"),
     )
@@ -1172,6 +1166,9 @@ class TestGenerateCheckpointResume:
         tmp_path: Path,
     ) -> None:
         """A post-commit signal should resume portably to exact deterministic bundle bytes."""
+
+        if os.name != "posix":
+            pytest.skip("Exercises POSIX signal interruption semantics")
 
         scenario = tmp_path / "scenario.yaml"
         scenario.write_text(

@@ -112,3 +112,13 @@ def _normalize_json_value(value: Any, root: Path) -> Any:
 
 def _normalize_text_record(record: str, root: Path) -> str:
     return record.replace(str(root), "<OUTPUT_ROOT>")
+
+
+def deterministic_bundle_files(root: Path) -> dict[str, bytes]:
+    """Snapshot every deterministic bundle member, excluding run diagnostics."""
+    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }

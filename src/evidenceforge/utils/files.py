@@ -622,3 +622,19 @@ def validate_output_path(path: Path | str) -> Path:
             raise PermissionError(f"Parent directory not writable: {parent}")
 
     return path
+
+
+def fsync_directory(path: Path) -> None:
+    """Sync directory entries on POSIX; Windows only supports regular-file flushing.
+
+    Windows callers still flush files and publish them with atomic replacement,
+    but cannot claim POSIX directory-entry durability after power loss.
+    """
+
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

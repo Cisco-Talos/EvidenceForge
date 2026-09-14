@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge.utils.files import fsync_directory
+
 from .errors import CheckpointError, CheckpointFilesystemError, CheckpointLockError
 from .models import CheckpointCursor
 from .store import IncrementalCheckpointStore
@@ -70,18 +72,12 @@ def _canonical_json(model: BaseModel) -> bytes:
     ).encode("utf-8")
 
 
-def _sync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _atomic_write(path: Path, payload: bytes) -> None:
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
+        )
         try:
             view = memoryview(payload)
             while view:
@@ -93,7 +89,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
         finally:
             os.close(descriptor)
         os.replace(temporary, path)
-        _sync_directory(path.parent)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -103,7 +99,9 @@ def _atomic_create(path: Path, payload: bytes) -> bool:
 
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
+        )
         try:
             view = memoryview(payload)
             while view:
@@ -122,7 +120,7 @@ def _atomic_create(path: Path, payload: bytes) -> bool:
             raise CheckpointFilesystemError(
                 "checkpoint control requests require atomic same-filesystem hard links"
             ) from error
-        _sync_directory(path.parent)
+        fsync_directory(path.parent)
         return True
     finally:
         temporary.unlink(missing_ok=True)
@@ -130,7 +128,9 @@ def _atomic_create(path: Path, payload: bytes) -> bool:
 
 def _read_model(path: Path, model_type: type[BaseModel]) -> BaseModel | None:
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
+        )
     except FileNotFoundError:
         return None
     try:
@@ -139,7 +139,7 @@ def _read_model(path: Path, model_type: type[BaseModel]) -> BaseModel | None:
             raise CheckpointFilesystemError(f"checkpoint control path is unsafe: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise CheckpointFilesystemError(f"checkpoint control path has an unsafe owner: {path}")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointFilesystemError(
                 f"checkpoint control path is externally writable: {path}"
             )
@@ -172,7 +172,7 @@ def clear_controller_record(store: IncrementalCheckpointStore) -> None:
 
     for name in (_CONTROL_NAME, _SUSPEND_REQUEST_NAME, _SUSPENDED_NAME):
         (store.workspace / name).unlink(missing_ok=True)
-    _sync_directory(store.workspace)
+    fsync_directory(store.workspace)
 
 
 def read_controller_record(
@@ -245,7 +245,7 @@ def mark_suspended(
     )
     _atomic_write(store.workspace / _SUSPENDED_NAME, _canonical_json(record))
     (store.workspace / _SUSPEND_REQUEST_NAME).unlink(missing_ok=True)
-    _sync_directory(store.workspace)
+    fsync_directory(store.workspace)
     return record
 
 

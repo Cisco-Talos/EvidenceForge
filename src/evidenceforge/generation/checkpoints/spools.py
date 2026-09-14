@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from evidenceforge.utils.files import fsync_directory
+
 from .errors import CheckpointCorruptionError, CheckpointFilesystemError
 from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
@@ -195,7 +197,7 @@ class AppendOnlySpoolParticipant:
             raise CheckpointFilesystemError(f"append-only spool was truncated: {path}")
         if prior.device is not None and (info.st_dev, info.st_ino) != (prior.device, prior.inode):
             raise CheckpointFilesystemError(f"append-only spool identity changed: {path}")
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
@@ -220,10 +222,9 @@ class AppendOnlySpoolParticipant:
             chunk_count = prior.chunk_count
             chain = prior.chain_sha256
             try:
+                os.lseek(descriptor, offset, os.SEEK_SET)
                 while offset < opened.st_size:
-                    body = os.pread(
-                        descriptor, min(self._chunk_size, opened.st_size - offset), offset
-                    )
+                    body = os.read(descriptor, min(self._chunk_size, opened.st_size - offset))
                     if not body:
                         raise CheckpointFilesystemError(
                             f"append-only spool read made no progress: {path}"
@@ -298,7 +299,9 @@ class AppendOnlySpoolParticipant:
         if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode):
             raise CheckpointFilesystemError(f"append-spool restore parent is unsafe: {path.parent}")
         temporary = path.with_name(f".{path.name}.checkpoint-{uuid.uuid4().hex}")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
+        )
         try:
             for payload in payloads:
                 view = memoryview(payload)
@@ -312,11 +315,7 @@ class AppendOnlySpoolParticipant:
             os.close(descriptor)
         try:
             os.replace(temporary, path)
-            parent_descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(parent_descriptor)
-            finally:
-                os.close(parent_descriptor)
+            fsync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -432,7 +431,9 @@ class ImmutableSpoolFilesParticipant:
             raise CheckpointFilesystemError(f"immutable spool is not a regular file: {path}")
         if hasattr(os, "getuid") and before.st_uid != os.getuid():
             raise CheckpointFilesystemError(f"immutable spool has an unsafe owner: {path}")
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(
+            path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
+        )
         try:
             opened = os.fstat(descriptor)
             if (opened.st_dev, opened.st_ino, opened.st_size) != (
@@ -444,7 +445,7 @@ class ImmutableSpoolFilesParticipant:
             chunks: list[bytes] = []
             offset = 0
             while offset < opened.st_size:
-                chunk = os.pread(descriptor, min(4 * 1024 * 1024, opened.st_size - offset), offset)
+                chunk = os.read(descriptor, min(4 * 1024 * 1024, opened.st_size - offset))
                 if not chunk:
                     raise CheckpointFilesystemError(
                         f"immutable spool read made no progress: {path}"
