@@ -823,6 +823,7 @@ class IncrementalCheckpointStore:
             self._windows_io.write_atomic(
                 self.index_path, (_canonical_json({"recoveries": entries}),), commit_point=True
             )
+            self._windows_io.can_reclaim = True
             return
         _atomic_replace(self.index_path, _canonical_json({"recoveries": entries}))
 

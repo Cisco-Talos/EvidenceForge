@@ -349,3 +349,33 @@ crash-image tests are being added next. This entry is progress, not acceptance.
   runner details, crash-image coverage, and instrumented CLI checkpoint timings;
   its timeout cleanup also terminates and waits for subprocess descendants.
   Final revision CI is still pending; these entries do not claim full acceptance.
+
+### Write-through validation at 8bf08865
+
+[Run 34889159668](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34889159668)
+uses the final production implementation and test module without a duplicate native preflight.
+
+- Windows Server 2025 build 26100, Python 3.12.10 AMD64, runner image
+  `win25-vs2026` / `20260907.229.1`, fixed local NTFS validated through a native handle.
+- The focused durability gate passed all four slow tests in 113.32s (115.55s
+  including the driver). It examined 151 interruption points × six persistence
+  profiles = 906 crash cases, representing 137 distinct disk images. Both
+  deliberately broken protocols failed recovery as required.
+- Instrumented real CLI checkpoint publication times: sequence 0 = 0.297s,
+  sequence 1 = 0.516s, sequence 2 = 0.359s. Tracing overhead is included; these
+  figures describe this small scenario, not general generation throughput.
+- The final local macOS routine run passed: 8,644 passed, 66 skipped, 2,023
+  deselected (327.28s). The 15 Windows-only barrier contracts are included in
+  routine Windows collection and explicitly skipped on macOS/Linux.
+- Full Linux/Windows routine results and final merge-check status are pending.
+
+### Reclamation after an uncertain publisher exits
+
+Final review identified a cross-process uncertainty case: after repeated index
+publication errors, a fresh process could read complete cached index bytes that
+no longer name the last acknowledged point. Windows now defers recovery rotation
+and object GC until that store successfully publishes a new durable index. A
+native regression injects two successive errors after index replacement, checks
+that fresh inspection/GC preserve the original recovery and its unique input,
+then confirms that successful publication enables normal reclamation. This changes
+only the Windows reclamation branch; POSIX implementations remain identical.

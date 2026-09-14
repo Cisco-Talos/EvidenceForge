@@ -84,6 +84,8 @@ once per store before a new acknowledgment; copies stream in 1 MiB chunks. Windo
 close before replacing the file they authenticated. An uncertain index publication stops
 further publication and reclamation on that store. Recovery retention and garbage collection
 use the recovery index, and removing an object invalidates its cached durability proof.
+A fresh store defers reclamation until its own index publication succeeds: reading a complete
+index left by an earlier process cannot establish that an uncertain rename became durable.
 Suspension records and restored append spools use the same Windows publication primitives.
 Consumed control names are retired by write-through rename before deleting their tombstones,
 so a lost cleanup deletion cannot resurrect an already-consumed suspension request.
@@ -111,6 +113,9 @@ commits. Profiles discard, retain, reorder, or partially persist unsynchronized 
 including 512-byte and 4-KiB torn writes. Directory renames do not implicitly flush descendants.
 Materialized crash images are checked by the production recovery reader. Deliberately missing
 write-through protection and inverted index/recovery ordering must fail this contract.
+The storage-fault simulation approach follows
+[SQLite's crash testing](https://www.sqlite.org/testing.html#crash_testing); the model observes
+the production publication sequence rather than implementing another commit algorithm.
 
 After acknowledgment the selected recovery must be that checkpoint or a newer complete one;
 falling back to an older point is a test failure. Before acknowledgment, either the previous
@@ -124,8 +129,8 @@ control, and confirm workspace removal. A second interruption exercises spool re
 Process termination only controls the experiment; the model, not surviving OS cache contents,
 defines what survives the simulated power loss.
 
-These are **write-through checkpoint publication tests using native APIs and simulated
-power-loss recovery**, not physical Windows/disk power-cycle tests. The dedicated 20-minute
+This is **write-through checkpoint publication validated by native API tests and simulated
+power-loss recovery**, not physical Windows/disk power-cycle certification. The dedicated 20-minute
 Windows CI job runs the focused slow module without coverage on PRs and pushes to dev/main,
 rejects skipped/empty test execution, and contributes to `Required CI`. Failure artifacts retain
 operation traces, crash profiles, subprocess output, and runner/filesystem metadata. The broad
@@ -154,8 +159,9 @@ versus exact evidence, and journal cleanup.
 ## CI and acceptance evidence
 
 The routine Python 3.12 matrix runs `uv run pytest --no-cov` on Ubuntu and native Windows for
-PRs and pushes to `dev` and `main`, with matrix fail-fast disabled. `Required CI` requires lint
-and every test entry to succeed. One unmarked real CLI smoke test covers generation, a first
+PRs and pushes to `dev` and `main`, with matrix fail-fast disabled. `Required CI` requires lint,
+every routine test entry, and the Windows durability job to succeed. One unmarked real CLI
+smoke test covers generation, a first
 collection-hour checkpoint, cooperative CLI suspension, verification without index mutation,
 fresh-process resume, nonempty Windows/Zeek evidence, byte equality with uninterrupted output,
 and checkpoint workspace cleanup. The same test runs during ordinary local macOS testing.

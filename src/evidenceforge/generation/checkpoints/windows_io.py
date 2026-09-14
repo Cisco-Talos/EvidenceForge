@@ -30,6 +30,7 @@ class WindowsCheckpointIO:
         self._durable: dict[Path, str] = {}
         self.durable_catalogs: set[str] = set()
         self._uncertain = False
+        self.can_reclaim = False
 
     def require_healthy(self) -> None:
         """Prevent publication and reclamation after an uncertain index update."""

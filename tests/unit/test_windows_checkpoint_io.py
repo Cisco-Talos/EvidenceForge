@@ -247,7 +247,9 @@ def test_native_sharing_violation_keeps_the_old_index_and_closes_publication_han
     assert path.read_bytes() == b"retry in a fresh store"
 
 
-def _commit_small(store: IncrementalCheckpointStore, sequence: int) -> None:
+def _commit_small(
+    store: IncrementalCheckpointStore, sequence: int, *, resolved_scenario: bytes = b"resolved"
+) -> None:
     from evidenceforge.generation.checkpoints.models import CheckpointCursor
     from evidenceforge.generation.checkpoints.store import HeadDraft
 
@@ -261,7 +263,7 @@ def _commit_small(store: IncrementalCheckpointStore, sequence: int) -> None:
             completed_simulated_hours=sequence + 1,
             next_hour=f"2026-01-01T0{sequence + 1}:00:00+00:00",
         ),
-        resolved_scenario=b"resolved",
+        resolved_scenario=resolved_scenario,
         inherited_catalogs=(),
         new_segments=(),
         heads=(HeadDraft(owner="engine", schema_version="1", payload=b"head"),),
@@ -282,6 +284,45 @@ def test_rotation_preserves_indexed_points_when_a_newer_unindexed_directory_exis
     assert not unindexed.exists()
     assert (store.recovery / "00000000000000000000").exists()
     assert store.recover(read_only=True).manifest.sequence == 1
+
+
+def test_fresh_store_preserves_recovery_after_repeated_uncertain_index_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    _commit_small(store, 0, resolved_scenario=b"original acknowledged input")
+    original = store.recover(read_only=True)
+    dependency = store.workspace / original.manifest.resolved_scenario_relative_path
+    recovery_directory = store.workspace / original.checkpoint_directory
+
+    def interrupted_commit(sequence: int) -> None:
+        candidate = IncrementalCheckpointStore(store.output_root)
+        rename = candidate._windows_io._rename
+
+        def fail_after_index(source: Path, target: Path, **kwargs: object) -> None:
+            rename(source, target, **kwargs)
+            if target == candidate.index_path:
+                raise OSError("index completion is indeterminate")
+
+        monkeypatch.setattr(candidate._windows_io, "_rename", fail_after_index)
+        with pytest.raises(OSError, match="indeterminate"):
+            _commit_small(candidate, sequence)
+
+    for sequence in (1, 2):
+        interrupted_commit(sequence)
+    # CURRENT's cached bytes no longer mention the last acknowledged point.
+    # Neither a read nor an inspection can authorize deleting that point.
+    restarted = IncrementalCheckpointStore(store.output_root)
+    assert restarted.recover(read_only=True).manifest.sequence == 2
+    restarted._rotate_recoveries()
+    restarted.collect_garbage()
+    assert recovery_directory.exists()
+    assert dependency.exists()
+    _commit_small(restarted, 3)
+    restarted.collect_garbage()
+    assert not recovery_directory.exists()
+    assert not dependency.exists()
+    assert restarted.recover(read_only=True).manifest.sequence == 3
 
 
 def test_uncertain_index_blocks_store_commit_gc_and_workspace_removal(

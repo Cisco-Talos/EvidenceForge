@@ -66,6 +66,8 @@ def prepare_dependencies(
 def rotate_recoveries(store: IncrementalCheckpointStore) -> None:
     """Remove only recovery directories absent from the confirmed recovery index."""
     store._windows_io.require_healthy()
+    if not store._windows_io.can_reclaim:
+        return
     entries = store.recovery_index_entries(read_only=True)
     retained = {sequence for sequence, _digest in entries}
     for path in store._recovery_directories():
@@ -78,6 +80,11 @@ def collect_garbage(store: IncrementalCheckpointStore) -> None:
     store.initialize()
     operations = store._windows_io
     operations.require_healthy()
+    # A fresh process can see an index whose publisher reported an error after
+    # rename. Reading complete cached bytes does not confirm its durability.
+    # Preserve all candidates until this store publishes a confirmed new index.
+    if not operations.can_reclaim:
+        return
     retained: set[str] = set()
     entries = store.recovery_index_entries(read_only=True)
     if not entries:
