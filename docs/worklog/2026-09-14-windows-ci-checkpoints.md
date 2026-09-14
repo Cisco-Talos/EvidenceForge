@@ -116,3 +116,13 @@ while retaining Python's underlying temporary-file cleanup owner. Syslog's exist
 selection is unchanged. Regression coverage exercises wrapper ownership, binary bytes, cleanup,
 and unchanged POSIX registry selection. Runtime publication capability guards remain intact while
 the next native CI run inventories execution failures.
+
+Import fix `ad7e0ca8` is pushed. Local macOS validation: **8,637 passed, 27 skipped,
+2,019 deselected** in 336.80 seconds; all 110 affected slow Syslog tests also pass.
+Both new stream regressions and required Ruff checks pass. Hosted run:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34850219906.
+
+The next isolated component is a Windows-only local-NTFS handle/ACL module, with native
+regressions for ownership, binary I/O, directory pinning, atomic replacement, junction rejection,
+and duplicate-versus-reopened handle identity. It is not connected to production callers yet;
+native CI must validate these operations before the journal integration is considered usable.
