@@ -643,8 +643,11 @@ def fsync_directory(path: Path) -> None:
 def open_host_file(*args: Any, **kwargs: Any) -> int:
     """Use native no-follow binary file handles on Windows; retain POSIX os.open."""
     if os.name == "nt":
-        from evidenceforge.utils.windows_filesystem import open_file
+        from evidenceforge.utils.windows_filesystem import open_child, open_file
 
+        parent = kwargs.pop("dir_fd", None)
+        if parent is not None:
+            return open_child(parent, *args, **kwargs)
         return open_file(*args, **kwargs)
     return os.open(*args, **kwargs)
 
@@ -656,3 +659,50 @@ def mkdir_private_host(path: Path, *, parents: bool = False, exist_ok: bool = Fa
 
         return mkdir_private(path, parents=parents, exist_ok=exist_ok)
     path.mkdir(parents=parents, exist_ok=exist_ok, mode=0o700)
+
+
+def fsync_host_descriptor(descriptor: int) -> None:
+    """Flush native Windows files or retain strict POSIX descriptor synchronization."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import flush_file
+
+        return flush_file(descriptor)
+    os.fsync(descriptor)
+
+
+def stat_host_entry(*args: Any, **kwargs: Any) -> os.stat_result:
+    """Inspect a Windows relative entry through its parent handle; retain POSIX stat."""
+    if os.name == "nt" and kwargs.get("dir_fd") is not None:
+        from evidenceforge.utils.windows_filesystem import child_stat
+
+        return child_stat(kwargs["dir_fd"], args[0], directory=None)
+    return os.stat(*args, **kwargs)
+
+
+def unlink_host_entry(*args: Any, **kwargs: Any) -> None:
+    """Unlink a Windows relative entry through its handle; retain POSIX unlink."""
+    if os.name == "nt" and kwargs.get("dir_fd") is not None:
+        from evidenceforge.utils.windows_filesystem import remove_child
+
+        return remove_child(kwargs["dir_fd"], args[0])
+    os.unlink(*args, **kwargs)
+
+
+def rename_host_entry(*args: Any, **kwargs: Any) -> None:
+    """Publish a Windows file through pinned parent handles; retain POSIX rename."""
+    if os.name == "nt" and kwargs.get("src_dir_fd") is not None:
+        from evidenceforge.utils.windows_filesystem import replace_child
+
+        return replace_child(kwargs["src_dir_fd"], args[0], kwargs["dst_dir_fd"], args[1])
+    os.rename(*args, **kwargs)
+
+
+def chmod_private_host(descriptor: int, mode: int) -> None:
+    """Validate an already-private Windows ACL or retain POSIX fchmod."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import require_private
+
+        if mode != 0o600:
+            raise ValueError("Native private-file mode must be 0600")
+        return require_private(descriptor)
+    os.fchmod(descriptor, mode)

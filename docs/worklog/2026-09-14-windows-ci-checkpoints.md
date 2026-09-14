@@ -180,3 +180,27 @@ CI commands remain unchanged. No emitter journal has yet been redirected to the 
 - macOS Syslog slow checks: 110 passed (5.72s). Affected checkpoint and stream
   routine checks: 144 passed (30.19s). Ruff checks pass. Generation behavior
   revision 86 records the OS-specific routing; no package version change.
+
+### Bash-history/Snort isolation and POSIX validation
+
+- Added a native directory lifecycle used only by Windows Bash-history and Snort
+  paths, retaining their existing row, receipt, SQLite, filtering, and rendering
+  code. Relative opens/stat/unlink/rename and descriptor sync use transparent host
+  wrappers; POSIX wrappers call the original os operation with the same arguments.
+- Added Windows ordinary-versus-exact byte and cleanup checks for Bash-history,
+  Snort, and Syslog, plus distinct file/directory identity and unsupported-open-flag
+  regressions. Native private ACL checks also reject outside read access.
+- Native preflight on run 34856079894: all 17 checks passed; full Windows/Linux
+  routine suites still running before the next push. Keep this run's complete
+  failure inventory before superseding it.
+- Local macOS 26.6.2 arm64, Python 3.12.9: 197 affected slow Bash/Snort tests
+  passed (11.72s). Full routine suite passed: 8,639 passed, 48 skipped,
+  2,019 deselected, 324.75s. Two additional Windows-only tests were added after
+  that run collected its tests; they do not execute on macOS.
+- Structural POSIX audit against 65212a99: 1,389 of 1,390 existing functions in
+  changed Python modules have identical ASTs after selecting the POSIX branch
+  and expanding transparent wrappers. The remaining Splunk monitor formatting
+  change preserves the same POSIX string conversion. A macOS import probe also
+  verified that none of the native Windows filesystem/journal modules loads.
+- Generation behavior revision 87 records Windows-only storage routing. Ruff
+  checks and behavior-manifest validation passed. No package version change.

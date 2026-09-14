@@ -64,6 +64,14 @@ from evidenceforge.generation.emitters.base import (
 from evidenceforge.generation.emitters.verification_resources import VerificationResources
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.ids_filtering import IdsAlertCandidate, IdsAlertFilterEngine
+from evidenceforge.utils.files import (
+    chmod_private_host,
+    fsync_host_descriptor,
+    open_host_file,
+    rename_host_entry,
+    stat_host_entry,
+    unlink_host_entry,
+)
 
 _DEFAULT_JOURNAL_ROW_CAPACITY = 2_000_000
 _DEFAULT_JOURNAL_BYTE_CAPACITY = 2 * 1024 * 1024 * 1024
@@ -102,6 +110,10 @@ def _effective_user_id() -> int | None:
 
 def _open_directory_nofollow(path: Path, *, create: bool) -> int:
     """Open a directory by walking every component without following links."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_directory
+
+        return open_directory(path, create=create)
 
     absolute = _lexical_absolute(path)
     if os.open not in os.supports_dir_fd:  # pragma: no cover - non-POSIX fallback
@@ -117,13 +129,13 @@ def _open_directory_nofollow(path: Path, *, create: bool) -> int:
                 metadata = os.lstat(current)
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 raise ExactPublicationError(f"Unsafe Snort directory ancestry: {current}")
-        return os.open(absolute, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        return open_host_file(absolute, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
 
-    descriptor = os.open(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+    descriptor = open_host_file(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
     try:
         for component in absolute.parts[1:]:
             try:
-                next_descriptor = os.open(
+                next_descriptor = open_host_file(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                     dir_fd=descriptor,
@@ -136,8 +148,8 @@ def _open_directory_nofollow(path: Path, *, create: bool) -> int:
                 except FileExistsError:
                     pass
                 else:
-                    os.fsync(descriptor)
-                next_descriptor = os.open(
+                    fsync_host_descriptor(descriptor)
+                next_descriptor = open_host_file(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                     dir_fd=descriptor,
@@ -161,7 +173,7 @@ def _safe_file_metadata(
     label: str,
 ) -> os.stat_result | None:
     try:
-        metadata = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        metadata = stat_host_entry(name, dir_fd=directory_descriptor, follow_symlinks=False)
     except FileNotFoundError:
         return None
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -170,7 +182,7 @@ def _safe_file_metadata(
 
 
 def _open_regular_nofollow(directory_descriptor: int, name: str, flags: int) -> int:
-    descriptor = os.open(name, flags | _NOFOLLOW, dir_fd=directory_descriptor)
+    descriptor = open_host_file(name, flags | _NOFOLLOW, dir_fd=directory_descriptor)
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode):
         os.close(descriptor)
@@ -198,6 +210,9 @@ def _read_descriptor_exact(descriptor: int, expected_size: int) -> bytes:
 
 def _directory_path_limits(directory_descriptor: int) -> tuple[int, int]:
     """Return bounded component and pathname limits for one pinned directory."""
+    if os.name == "nt":
+        # This backend accepts local NTFS only: 255 UTF-16 code units per component.
+        return 255, 32767
 
     fpathconf = getattr(os, "fpathconf", None)
     if fpathconf is None:  # pragma: no cover - exact POSIX gate rejects this platform
@@ -226,6 +241,8 @@ def _validate_component_capacity(component: str, name_max: int, *, label: str) -
     ):
         raise ExactPublicationError(f"Unsafe Snort {label} component")
     encoded_bytes = len(os.fsencode(component))
+    if os.name == "nt":
+        encoded_bytes = len(component.encode("utf-16-le")) // 2
     if encoded_bytes > name_max:
         raise ExactPublicationError(
             f"Snort {label} component exceeds NAME_MAX ({encoded_bytes} > {name_max})"
@@ -236,6 +253,8 @@ def _validate_path_capacity(path: Path, path_max: int, *, label: str) -> None:
     """Reject an absolute pathname that cannot include its terminating NUL."""
 
     encoded_bytes = len(os.fsencode(os.fspath(_lexical_absolute(path)))) + 1
+    if os.name == "nt":
+        encoded_bytes = len(str(_lexical_absolute(path)).encode("utf-16-le")) // 2 + 1
     if encoded_bytes > path_max:
         raise ExactPublicationError(
             f"Snort {label} path exceeds PATH_MAX ({encoded_bytes} > {path_max})"
@@ -255,7 +274,7 @@ def _create_private_file(
         name = f"{prefix}{secrets.token_hex(16)}{suffix}"
         _validate_component_capacity(name, name_max, label="private")
         try:
-            descriptor = os.open(
+            descriptor = open_host_file(
                 name,
                 os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
                 0o600,
@@ -283,6 +302,10 @@ def _connect_existing_journal(journal_path: Path) -> sqlite3.Connection:
 
 def _validate_private_spool_ancestry(path: Path) -> None:
     """Require root-or-process-owned, sticky-safe private-spool ancestry."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journals import validate_ancestry
+
+        return validate_ancestry(path)
 
     effective_user = _effective_user_id()
     current = path
@@ -326,6 +349,10 @@ def _validate_existing_private_spool_ancestor(path: Path) -> None:
 
 def _open_private_spool_root(base_dir: Path) -> tuple[Path, int]:
     """Open a trusted spool root outside the public output ancestry."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journal_directory import open_spool_root
+
+        return open_spool_root(base_dir)
 
     configured = os.environ.get(_SPOOL_DIRECTORY_ENVIRONMENT)
     spool_root = _real_absolute(
@@ -354,6 +381,10 @@ def _open_private_spool_root(base_dir: Path) -> tuple[Path, int]:
 
 def _require_exact_journal_capabilities(base_dir: Path) -> None:
     """Fail exact admission closed without the required POSIX filesystem contract."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journals import require_capabilities
+
+        return require_capabilities()
 
     supports_dir_fd = getattr(os, "supports_dir_fd", frozenset())
     supports_follow_symlinks = getattr(os, "supports_follow_symlinks", frozenset())
@@ -391,7 +422,7 @@ def _require_exact_journal_capabilities(base_dir: Path) -> None:
         break
     try:
         os.listdir(descriptor)
-        os.fsync(descriptor)
+        fsync_host_descriptor(descriptor)
     except (OSError, TypeError, NotImplementedError) as error:
         raise ExactPublicationError(
             "Exact Snort publication requires descriptor listing and directory fsync"
@@ -401,7 +432,7 @@ def _require_exact_journal_capabilities(base_dir: Path) -> None:
     _spool_root, spool_descriptor = _open_private_spool_root(base_dir)
     try:
         os.listdir(spool_descriptor)
-        os.fsync(spool_descriptor)
+        fsync_host_descriptor(spool_descriptor)
     finally:
         os.close(spool_descriptor)
 
@@ -428,6 +459,12 @@ class _PrivateJournalDirectory:
 
     def create(self) -> None:
         """Allocate ownership incrementally so every failure remains retryable."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.create(self, prefix=_SPOOL_DIRECTORY_PREFIX)
+            self.validate()
+            return
 
         if self._closed:
             raise ExactPublicationError("Snort private spool is already terminal")
@@ -455,6 +492,10 @@ class _PrivateJournalDirectory:
 
     def _retained_identity(self) -> tuple[os.stat_result, os.stat_result, os.stat_result]:
         """Open or revalidate every retained spelling of the private directory."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            return windows_journal_directory.retained_identity(self)
 
         if self._closed or self._unlinked:
             raise ExactPublicationError("Snort private spool is already terminal")
@@ -463,12 +504,12 @@ class _PrivateJournalDirectory:
         name = self._directory_name
         if path is None or parent is None or name is None:
             raise ExactPublicationError("Snort private spool lost its identity")
-        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        current = stat_host_entry(name, dir_fd=parent, follow_symlinks=False)
         if not stat.S_ISDIR(current.st_mode):
             raise ExactPublicationError("Snort private spool identity changed")
         descriptor = self._directory_descriptor
         if descriptor is None:
-            descriptor = os.open(
+            descriptor = open_host_file(
                 name,
                 os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                 dir_fd=parent,
@@ -497,6 +538,11 @@ class _PrivateJournalDirectory:
 
     def _finish_initialization(self) -> None:
         """Complete or retry validation of a newly allocated private directory."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.finish_initialization(self)
+            return
 
         _current, retained, _reopened = self._retained_identity()
         effective_user = _effective_user_id()
@@ -528,6 +574,12 @@ class _PrivateJournalDirectory:
         return self._directory_descriptor
 
     def validate(self) -> None:
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.validate(self)
+            return
+
         initialization_error = self._initialization_error
         if initialization_error is not None:
             self._initialization_error = None
@@ -550,20 +602,31 @@ class _PrivateJournalDirectory:
                     raise ExactPublicationError("Snort exact private spool lost owner or mode 0700")
 
     def require_exact_guarantees(self) -> None:
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.require_exact_guarantees(self)
+            return
+
         self.validate()
         if self.path is None or self._parent_descriptor is None:
             raise ExactPublicationError("Snort exact private spool lost its ownership")
         _validate_private_spool_ancestry(self.path.parent)
-        os.fsync(self.directory_descriptor)
-        os.fsync(self._parent_descriptor)
+        fsync_host_descriptor(self.directory_descriptor)
+        fsync_host_descriptor(self._parent_descriptor)
         self._strict_exact = True
         self.validate()
 
     def fsync(self) -> None:
-        os.fsync(self.directory_descriptor)
+        fsync_host_descriptor(self.directory_descriptor)
 
     def close(self) -> None:
         """Retryably remove the empty private directory and persist its parent."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.close(self, remove_owned_companions=False)
+            return
 
         if self._closed:
             return
@@ -581,7 +644,7 @@ class _PrivateJournalDirectory:
             return
         if not self._unlinked:
             try:
-                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                current = stat_host_entry(name, dir_fd=parent, follow_symlinks=False)
             except FileNotFoundError:
                 self._unlinked = True
             else:
@@ -598,7 +661,7 @@ class _PrivateJournalDirectory:
                     raise ExactPublicationError("Snort private spool changed during cleanup")
                 descriptor = self._directory_descriptor
                 if descriptor is None:
-                    descriptor = os.open(
+                    descriptor = open_host_file(
                         name,
                         os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                         dir_fd=parent,
@@ -610,7 +673,7 @@ class _PrivateJournalDirectory:
                     self._remove_directory(parent, name, path)
                 except BaseException:
                     try:
-                        os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        stat_host_entry(name, dir_fd=parent, follow_symlinks=False)
                     except FileNotFoundError:
                         self._unlinked = True
                     raise
@@ -626,13 +689,18 @@ class _PrivateJournalDirectory:
         self._closed = True
 
     def _remove_directory(self, parent: int, name: str, path: Path) -> None:
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import remove_child
+
+            return remove_child(parent, name, directory=True, expected_identity=self._identity)
+
         if os.rmdir in os.supports_dir_fd:
             os.rmdir(name, dir_fd=parent)
         else:  # pragma: no cover - non-POSIX fallback
             os.rmdir(path)
 
     def _fsync_parent(self, parent: int) -> None:
-        os.fsync(parent)
+        fsync_host_descriptor(parent)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1478,7 +1546,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                 label="private journal",
             )
             try:
-                descriptor = os.open(
+                descriptor = open_host_file(
                     journal_filename,
                     os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
                     0o600,
@@ -1508,7 +1576,7 @@ class SnortEmitter(SensorMultiplexEmitter):
             try:
                 if not stat.S_ISREG(created.st_mode) or created.st_nlink != 1:
                     raise ExactPublicationError("Snort private journal is not a regular file")
-                os.fchmod(descriptor, 0o600)
+                chmod_private_host(descriptor, 0o600)
             except BaseException:
                 os.close(descriptor)
                 raise
@@ -1554,11 +1622,15 @@ class SnortEmitter(SensorMultiplexEmitter):
                     "Snort journal path changed before SQLite opened"
                 ) from error
             retained = os.fstat(descriptor)
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import require_private
+
+                require_private(descriptor)
             if (
                 current is None
                 or current.st_nlink != 1
                 or retained.st_nlink != 1
-                or stat.S_IMODE(current.st_mode) != 0o600
+                or (os.name != "nt" and stat.S_IMODE(current.st_mode) != 0o600)
                 or (int(current.st_dev), int(current.st_ino)) != journal_identity
                 or (int(retained.st_dev), int(retained.st_ino)) != journal_identity
             ):
@@ -3601,10 +3673,10 @@ class SnortEmitter(SensorMultiplexEmitter):
                 os.O_RDONLY,
             )
             try:
-                os.fsync(descriptor)
+                fsync_host_descriptor(descriptor)
             finally:
                 os.close(descriptor)
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             os.close(directory_descriptor)
         self._refresh_output_route_unlocked(state_snapshot)
@@ -3632,22 +3704,22 @@ class SnortEmitter(SensorMultiplexEmitter):
             )
             temporary = os.fstat(temporary_descriptor)
             temporary_identity = (int(temporary.st_dev), int(temporary.st_ino))
-            os.fchmod(temporary_descriptor, 0o600)
+            chmod_private_host(temporary_descriptor, 0o600)
             view = memoryview(payload)
             while view:
                 written = os.write(temporary_descriptor, view)
                 view = view[written:]
-            os.fsync(temporary_descriptor)
+            fsync_host_descriptor(temporary_descriptor)
             os.close(temporary_descriptor)
             temporary_descriptor = None
-            os.rename(
+            rename_host_entry(
                 temporary_name,
                 output_path.name,
                 src_dir_fd=directory_descriptor,
                 dst_dir_fd=directory_descriptor,
             )
             temporary_name = None
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             if temporary_descriptor is not None:
                 os.close(temporary_descriptor)
@@ -3661,8 +3733,8 @@ class SnortEmitter(SensorMultiplexEmitter):
                     int(metadata.st_dev),
                     int(metadata.st_ino),
                 ):
-                    os.unlink(temporary_name, dir_fd=directory_descriptor)
-                    os.fsync(directory_descriptor)
+                    unlink_host_entry(temporary_name, dir_fd=directory_descriptor)
+                    fsync_host_descriptor(directory_descriptor)
             os.close(directory_descriptor)
         self._reconcile_output(sensor, _sha256(payload), len(payload))
 
@@ -4105,7 +4177,7 @@ class SnortEmitter(SensorMultiplexEmitter):
                     self._unlink_cleanup_journal(directory_descriptor, journal_filename)
                 except BaseException:
                     try:
-                        os.stat(
+                        stat_host_entry(
                             journal_filename,
                             dir_fd=directory_descriptor,
                             follow_symlinks=False,
@@ -4146,16 +4218,16 @@ class SnortEmitter(SensorMultiplexEmitter):
         self._journal_unlinked = False
 
     def _unlink_cleanup_journal(self, directory_descriptor: int, name: str) -> None:
-        os.unlink(name, dir_fd=directory_descriptor)
+        unlink_host_entry(name, dir_fd=directory_descriptor)
 
     def _close_spool_connection(self, connection: sqlite3.Connection) -> None:
         connection.close()
 
     def _unlink_cleanup_companion(self, directory_descriptor: int, name: str) -> None:
-        os.unlink(name, dir_fd=directory_descriptor)
+        unlink_host_entry(name, dir_fd=directory_descriptor)
 
     def _fsync_cleanup_directory(self, directory_descriptor: int) -> None:
-        os.fsync(directory_descriptor)
+        fsync_host_descriptor(directory_descriptor)
 
     def _compact_terminal_journal_unlocked(self) -> bool:
         connection = self._spool_connection

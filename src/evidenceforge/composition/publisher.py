@@ -75,6 +75,13 @@ def effective_publisher(
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import write_private_atomic
+
+        try:
+            return write_private_atomic(path, content)
+        except OSError as exc:
+            raise PackError(f"unable to write publisher configuration {path}: {exc}") from exc
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.parent.is_symlink() or path.is_symlink():
         raise PackError(f"publisher configuration path cannot contain a symlink: {path}")

@@ -116,7 +116,8 @@ def test_native_directory_open_rejects_junction_without_following_target(tmp_pat
         junction.rmdir()
 
 
-def test_private_directory_rejects_external_write_acl(tmp_path: Path) -> None:
+@pytest.mark.parametrize("rights", ["W", "R"])
+def test_private_directory_rejects_external_access_acl(tmp_path: Path, rights: str) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
 
     parent = filesystem.open_directory(tmp_path)
@@ -126,7 +127,7 @@ def test_private_directory_rejects_external_write_acl(tmp_path: Path) -> None:
         descriptor = filesystem.open_child(parent, "private", os.O_RDONLY, directory=True)
         filesystem.require_private(descriptor)
         subprocess.run(
-            ["icacls", str(tmp_path / "private"), "/grant", "*S-1-1-0:(W)"],
+            ["icacls", str(tmp_path / "private"), "/grant", f"*S-1-1-0:({rights})"],
             check=True,
             capture_output=True,
             timeout=10,
@@ -250,3 +251,117 @@ def test_native_directory_pin_prevents_ancestor_rename(tmp_path: Path) -> None:
         assert leaf.is_dir()
     finally:
         os.close(descriptor)
+
+
+@pytest.mark.parametrize("provider", ["bash_history", "snort_alert", "syslog"])
+def test_native_exact_journals_match_ordinary_evidence_and_clean_up(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import UTC, datetime
+
+    from evidenceforge.formats.loader import load_format
+    from evidenceforge.generation.emitters.base import ExactPublicationAuthority
+    from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
+    from evidenceforge.generation.emitters.snort import SnortEmitter
+    from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+    spool = tmp_path / "spools"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", str(spool))
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    event: dict[str, object]
+    if provider == "bash_history":
+        emitter_type = BashHistoryEmitter
+        event = {
+            "timestamp": timestamp,
+            "username": "alice",
+            "hostname": "linux01",
+            "host_fqdn": "linux01.example.test",
+            "command": "echo native-evidence",
+        }
+    elif provider == "snort_alert":
+        emitter_type = SnortEmitter
+        event = {
+            "timestamp": timestamp,
+            "gid": 1,
+            "sid": 1001,
+            "rev": 1,
+            "message": "native-evidence",
+            "classification": "misc-activity",
+            "priority": 2,
+            "protocol": "TCP",
+            "src_ip": "10.0.0.1",
+            "src_port": 50000,
+            "dst_ip": "10.0.0.2",
+            "dst_port": 443,
+            "_ids_origin": "raw",
+        }
+    else:
+        emitter_type = SyslogEmitter
+        event = {
+            "timestamp": timestamp,
+            "hostname": "linux01",
+            "_host_fqdn": "linux01.example.test",
+            "app_name": "sshd",
+            "pid": 1234,
+            "facility": 10,
+            "severity": 6,
+            "message": "native-evidence",
+        }
+    bundles: list[dict[str, bytes]] = []
+    for exact in (False, True):
+        output = tmp_path / ("exact" if exact else "ordinary")
+        emitter = emitter_type(load_format(provider), output, buffer_size=1)
+        try:
+            if exact:
+                authority = ExactPublicationAuthority(capacity=1)
+                batch = authority.issue_batch()
+                batch.publish(lambda emitter=emitter: emitter.emit_event(event))
+                batch.release_no_fail()
+            else:
+                emitter.emit_event(event)
+        finally:
+            emitter.close()
+        files = {
+            path.relative_to(output).as_posix(): path.read_bytes()
+            for path in output.rglob("*")
+            if path.is_file()
+        }
+        assert any(b"native-evidence" in payload for payload in files.values())
+        bundles.append(files)
+    assert bundles[0] == bundles[1]
+    if spool.exists():
+        assert list(spool.iterdir()) == []
+
+
+def test_native_metadata_distinguishes_independent_files_and_directories(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    parent = filesystem.open_directory(tmp_path)
+    try:
+        identities: set[tuple[int, int]] = set()
+        for name, directory in (("one", False), ("two", False), ("directory", True)):
+            descriptor = filesystem.open_child(
+                parent, name, os.O_RDWR | os.O_CREAT | os.O_EXCL, directory=directory
+            )
+            try:
+                metadata = os.fstat(descriptor)
+                assert metadata.st_ino != 0
+                identity = (int(metadata.st_dev), int(metadata.st_ino))
+                assert identity not in identities
+                identities.add(identity)
+                inspected = filesystem.child_stat(parent, name, directory=directory)
+                assert (int(inspected.st_dev), int(inspected.st_ino)) == identity
+            finally:
+                os.close(descriptor)
+    finally:
+        os.close(parent)
+
+
+def test_native_open_rejects_unsupported_flags_without_mutation(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    path = tmp_path / "retained"
+    path.write_bytes(b"preserve")
+    with pytest.raises(ValueError, match="Unsupported"):
+        filesystem.open_file(path, os.O_WRONLY | os.O_APPEND)
+    assert path.read_bytes() == b"preserve"

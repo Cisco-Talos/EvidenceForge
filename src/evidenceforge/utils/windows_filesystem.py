@@ -342,8 +342,8 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
             raise PermissionError("Windows protected storage has no restrictive DACL")
         acl = ctypes.cast(dacl, ctypes.POINTER(_Acl)).contents
         # An ancestor may allow creating new children, but not replacing existing
-        # children or changing its security. Private leaves permit no outside writes.
-        mutation = 0x500D0040 if ancestry else 0x500D0156
+        # children or changing its security. Private leaves permit no outside access.
+        mutation = 0x500D0040 if ancestry else 0xFFFFFFFF
         for index in range(acl.AceCount):
             pointer = wintypes.LPVOID()
             _require(_get_ace(dacl, index, ctypes.byref(pointer)))
@@ -357,7 +357,7 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
             principal = _sid(pointer.value + _AllowedAce.SidStart.offset)
             if principal not in trusted | {"S-1-3-4"} and ace.Mask & mutation:
                 raise PermissionError(
-                    "Windows protected storage allows another principal to mutate it: "
+                    "Windows protected storage allows another principal to access it: "
                     f"SID={principal}, mask=0x{ace.Mask:08x}, ancestry={ancestry}"
                 )
     finally:
@@ -386,6 +386,18 @@ def _open_native(
     extra_access: int = 0,
     temporary: bool = False,
 ) -> int:
+    supported_flags = (
+        os.O_RDONLY
+        | os.O_WRONLY
+        | os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_TRUNC
+        | os.O_BINARY
+        | os.O_NOINHERIT
+    )
+    if flags & ~supported_flags:
+        raise ValueError("Unsupported native Windows protected-file flags")
     if root is not None:
         _component(name)
     buffer = ctypes.create_unicode_buffer(name)
@@ -694,7 +706,7 @@ def temporary_descriptor() -> int:
 
 
 def require_temporary(descriptor: int) -> None:
-    """Verify real native cleanup ownership, single-link type, and the private ACL."""
+    """Verify native delete-pending ownership, zero links, and the private ACL."""
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 0:
         raise PermissionError("Windows temporary storage is not one private regular file")
@@ -776,3 +788,67 @@ def read_private_file(path: Path) -> bytes:
             return stream.read()
     finally:
         os.close(descriptor)
+
+
+def validate_future_file(path: Path) -> None:
+    """Validate existing ancestry and a regular leaf without creating missing paths."""
+    path = Path(os.path.abspath(path))
+    ancestor = path.parent
+    while True:
+        try:
+            descriptor = open_directory(ancestor)
+            break
+        except FileNotFoundError:
+            ancestor = ancestor.parent
+    try:
+        if ancestor == path.parent:
+            try:
+                child_stat(descriptor, path.name)
+            except FileNotFoundError:
+                pass
+    finally:
+        os.close(descriptor)
+
+
+def write_private_atomic(path: Path, content: bytes) -> None:
+    """Publish fully flushed private bytes through one retained parent handle."""
+    absolute = Path(os.path.abspath(path))
+    parent = open_directory(absolute.parent, create=True)
+    descriptor = None
+    name = None
+    identity = None
+    try:
+        for _attempt in range(128):
+            candidate = f".{absolute.name}.{secrets.token_hex(16)}"
+            try:
+                descriptor = open_child(parent, candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            except FileExistsError:
+                continue
+            name = candidate
+            metadata = os.fstat(descriptor)
+            identity = (int(metadata.st_dev), int(metadata.st_ino))
+            break
+        else:
+            raise FileExistsError("Unable to allocate private Windows publication storage")
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("Windows private publication made no progress")
+            view = view[written:]
+        flush_file(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        replace_child(parent, name, parent, absolute.name)
+        name = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            if name is not None:
+                try:
+                    remove_child(parent, name, expected_identity=identity)
+                except FileNotFoundError:
+                    pass
+        finally:
+            os.close(parent)

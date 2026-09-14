@@ -59,6 +59,13 @@ from evidenceforge.generation.emitters.base import (
     stage_exact_publication_row,
 )
 from evidenceforge.generation.emitters.verification_resources import VerificationResources
+from evidenceforge.utils.files import (
+    fsync_host_descriptor,
+    open_host_file,
+    rename_host_entry,
+    stat_host_entry,
+    unlink_host_entry,
+)
 from evidenceforge.utils.paths import sanitize_path_component
 
 logger = logging.getLogger(__name__)
@@ -251,6 +258,9 @@ def _private_file_prototypes(base_dir: Path, output_path: Path) -> tuple[str, ..
 
 def _directory_path_limits(directory_descriptor: int) -> tuple[int | None, int | None]:
     """Read bounded filesystem limits from one safely opened directory."""
+    if os.name == "nt":
+        # This backend accepts local NTFS only: 255 UTF-16 code units per component.
+        return 255, 32767
 
     fpathconf = getattr(os, "fpathconf", None)
     if fpathconf is None:  # pragma: no cover - non-POSIX fallback
@@ -279,6 +289,8 @@ def _validate_component_capacity(component: str, name_max: int | None, *, label:
     ):
         raise ExactPublicationError(f"Unsafe Bash history {label} component")
     encoded_bytes = len(os.fsencode(component))
+    if os.name == "nt":
+        encoded_bytes = len(component.encode("utf-16-le")) // 2
     if name_max is not None and encoded_bytes > name_max:
         raise ExactPublicationError(
             f"Bash history {label} component exceeds NAME_MAX ({encoded_bytes} > {name_max})"
@@ -289,6 +301,8 @@ def _validate_path_capacity(path: Path, path_max: int | None, *, label: str) -> 
     """Reject a derived absolute pathname that cannot include its terminating NUL."""
 
     encoded_bytes = len(os.fsencode(os.fspath(_lexical_absolute(path)))) + 1
+    if os.name == "nt":
+        encoded_bytes = len(str(_lexical_absolute(path)).encode("utf-16-le")) // 2 + 1
     if path_max is not None and encoded_bytes > path_max:
         raise ExactPublicationError(
             f"Bash history {label} path exceeds PATH_MAX ({encoded_bytes} > {path_max})"
@@ -387,6 +401,10 @@ def _validate_parent_capacity(
 
 def _open_directory_nofollow(path: Path, *, create: bool) -> int:
     """Open a directory by walking every component with no-follow semantics."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_directory
+
+        return open_directory(path, create=create)
 
     absolute = _lexical_absolute(path)
     if os.open not in os.supports_dir_fd:
@@ -402,13 +420,13 @@ def _open_directory_nofollow(path: Path, *, create: bool) -> int:
                 metadata = os.lstat(current)
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
                 raise ExactPublicationError(f"Unsafe Bash history directory ancestry: {current}")
-        return os.open(absolute, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        return open_host_file(absolute, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
 
-    descriptor = os.open(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+    descriptor = open_host_file(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
     try:
         for component in absolute.parts[1:]:
             try:
-                next_descriptor = os.open(
+                next_descriptor = open_host_file(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                     dir_fd=descriptor,
@@ -421,8 +439,8 @@ def _open_directory_nofollow(path: Path, *, create: bool) -> int:
                 except FileExistsError:
                     pass
                 else:
-                    os.fsync(descriptor)
-                next_descriptor = os.open(
+                    fsync_host_descriptor(descriptor)
+                next_descriptor = open_host_file(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                     dir_fd=descriptor,
@@ -441,6 +459,15 @@ def _open_directory_nofollow(path: Path, *, create: bool) -> int:
 
 def _validate_future_output_path(base_dir: Path, output_path: Path) -> None:
     """Reject existing symlink ancestry or a non-regular final output."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import validate_future_file
+
+        base, candidate = _require_contained(base_dir, output_path)
+        _validate_derived_path_capacity(base, candidate)
+        try:
+            return validate_future_file(candidate)
+        except OSError as error:
+            raise ExactPublicationError(f"Unsafe Bash history output path: {candidate}") from error
 
     base, candidate = _require_contained(base_dir, output_path)
     _validate_derived_path_capacity(base, candidate)
@@ -463,7 +490,7 @@ def _validate_future_output_path(base_dir: Path, output_path: Path) -> None:
         for component in relative_parent.parts:
             current /= component
             try:
-                next_descriptor = os.open(
+                next_descriptor = open_host_file(
                     component,
                     os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                     dir_fd=descriptor,
@@ -477,7 +504,7 @@ def _validate_future_output_path(base_dir: Path, output_path: Path) -> None:
             os.close(descriptor)
             descriptor = next_descriptor
         try:
-            metadata = os.stat(candidate.name, dir_fd=descriptor, follow_symlinks=False)
+            metadata = stat_host_entry(candidate.name, dir_fd=descriptor, follow_symlinks=False)
         except FileNotFoundError:
             return
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -490,7 +517,7 @@ def _safe_file_metadata(
     directory_descriptor: int, name: str, *, label: str
 ) -> os.stat_result | None:
     try:
-        metadata = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        metadata = stat_host_entry(name, dir_fd=directory_descriptor, follow_symlinks=False)
     except FileNotFoundError:
         return None
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -499,7 +526,7 @@ def _safe_file_metadata(
 
 
 def _open_regular_nofollow(directory_descriptor: int, name: str, flags: int) -> int:
-    descriptor = os.open(name, flags | _NOFOLLOW, dir_fd=directory_descriptor)
+    descriptor = open_host_file(name, flags | _NOFOLLOW, dir_fd=directory_descriptor)
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode):
         os.close(descriptor)
@@ -515,7 +542,7 @@ def _create_private_file(directory_descriptor: int, prefix: str, suffix: str) ->
         name = f"{prefix}{secrets.token_hex(16)}{suffix}"
         _validate_component_capacity(name, name_max, label="private")
         try:
-            descriptor = os.open(
+            descriptor = open_host_file(
                 name,
                 os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
                 0o600,
@@ -616,7 +643,7 @@ def _effective_user_id() -> int | None:
 def _verify_directory_fsync(descriptor: int) -> None:
     """Probe durable directory-fsync support for exact journal admission."""
 
-    os.fsync(descriptor)
+    fsync_host_descriptor(descriptor)
 
 
 def _verify_descriptor_listing(descriptor: int) -> None:
@@ -628,13 +655,13 @@ def _verify_descriptor_listing(descriptor: int) -> None:
 def _verify_descriptor_relative_access(descriptor: int) -> None:
     """Probe actual openat/statat support without mutating the spool filesystem."""
 
-    reopened = os.open(
+    reopened = open_host_file(
         ".",
         os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
         dir_fd=descriptor,
     )
     try:
-        metadata = os.stat(".", dir_fd=descriptor, follow_symlinks=False)
+        metadata = stat_host_entry(".", dir_fd=descriptor, follow_symlinks=False)
         retained = os.fstat(reopened)
         if not stat.S_ISDIR(metadata.st_mode) or (int(metadata.st_dev), int(metadata.st_ino)) != (
             int(retained.st_dev),
@@ -649,6 +676,10 @@ def _verify_descriptor_relative_access(descriptor: int) -> None:
 
 def _require_exact_journal_capabilities() -> None:
     """Fail exact admission closed without the required POSIX filesystem contract."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journals import require_capabilities
+
+        return require_capabilities()
 
     supports_dir_fd = getattr(os, "supports_dir_fd", frozenset())
     required_dir_fd = (os.open, os.mkdir, os.stat, os.unlink, os.rmdir, os.rename)
@@ -707,6 +738,10 @@ def _require_exact_journal_capabilities() -> None:
 
 def _validate_private_spool_ancestry(path: Path) -> None:
     """Require a no-follow spool ancestry controlled by root or this process user."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journals import validate_ancestry
+
+        return validate_ancestry(path)
 
     effective_user = _effective_user_id()
     current = path
@@ -755,6 +790,10 @@ def _validate_existing_private_spool_ancestor(path: Path) -> None:
 
 def _open_private_spool_root(base_dir: Path) -> tuple[Path, int]:
     """Open a trusted spool root that is disjoint from the public output tree."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journal_directory import open_spool_root
+
+        return open_spool_root(base_dir)
 
     configured = os.environ.get(_SPOOL_DIRECTORY_ENVIRONMENT)
     if configured:
@@ -815,6 +854,12 @@ class _PrivateJournalDirectory:
         self._initialization_pending = False
         self._initialization_error: BaseException | None = None
 
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.create(self, prefix=_SPOOL_DIRECTORY_PREFIX)
+            return
+
         spool_root, parent_descriptor = _open_private_spool_root(self._base_dir)
         try:
             created_path = Path(tempfile.mkdtemp(prefix=_SPOOL_DIRECTORY_PREFIX, dir=spool_root))
@@ -838,6 +883,10 @@ class _PrivateJournalDirectory:
 
     def _retained_identity(self) -> tuple[os.stat_result, os.stat_result, os.stat_result]:
         """Open or revalidate every retained spelling of the private directory."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            return windows_journal_directory.retained_identity(self)
 
         if self._closed or self._unlinked:
             raise ExactPublicationError("Bash history private spool is already terminal")
@@ -846,7 +895,7 @@ class _PrivateJournalDirectory:
         directory_name = self._directory_name
         if path is None or parent_descriptor is None or directory_name is None:
             raise ExactPublicationError("Bash history private spool lost its identity")
-        current = os.stat(
+        current = stat_host_entry(
             directory_name,
             dir_fd=parent_descriptor,
             follow_symlinks=False,
@@ -855,7 +904,7 @@ class _PrivateJournalDirectory:
             raise ExactPublicationError("Bash history private spool identity changed")
         directory_descriptor = self._directory_descriptor
         if directory_descriptor is None:
-            directory_descriptor = os.open(
+            directory_descriptor = open_host_file(
                 directory_name,
                 os.O_RDONLY | _DIRECTORY | _NOFOLLOW,
                 dir_fd=parent_descriptor,
@@ -884,6 +933,11 @@ class _PrivateJournalDirectory:
 
     def _finish_initialization(self) -> None:
         """Complete or retry validation of a newly allocated private directory."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.finish_initialization(self)
+            return
 
         _current, retained, _reopened = self._retained_identity()
         effective_user = _effective_user_id()
@@ -916,6 +970,11 @@ class _PrivateJournalDirectory:
 
     def validate(self) -> None:
         """Fail closed if the protected journal directory identity changes."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.validate(self)
+            return
 
         initialization_error = self._initialization_error
         if initialization_error is not None:
@@ -943,6 +1002,11 @@ class _PrivateJournalDirectory:
 
     def require_exact_guarantees(self) -> None:
         """Upgrade this route to repeated exact-publication trust validation."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.require_exact_guarantees(self)
+            return
 
         if self._strict_exact:
             self.validate()
@@ -975,10 +1039,15 @@ class _PrivateJournalDirectory:
     def fsync(self) -> None:
         """Durably persist private journal directory changes."""
 
-        os.fsync(self.directory_descriptor)
+        fsync_host_descriptor(self.directory_descriptor)
 
     def close(self) -> None:
         """Retryably unlink one empty private directory and fsync its parent."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journal_directory
+
+            windows_journal_directory.close(self, remove_owned_companions=True)
+            return
 
         if self._closed:
             return
@@ -1006,7 +1075,7 @@ class _PrivateJournalDirectory:
                     raise ExactPublicationError(
                         "Bash history private spool retained an unowned file"
                     )
-                metadata = os.stat(
+                metadata = stat_host_entry(
                     retained_name,
                     dir_fd=directory_descriptor,
                     follow_symlinks=False,
@@ -1018,12 +1087,12 @@ class _PrivateJournalDirectory:
                 self._unlink_retained_component(directory_descriptor, retained_name)
                 removed_stale = True
             if removed_stale:
-                os.fsync(directory_descriptor)
+                fsync_host_descriptor(directory_descriptor)
             try:
                 self._remove_directory(parent_descriptor, directory_name, path)
             except BaseException:
                 try:
-                    current = os.stat(
+                    current = stat_host_entry(
                         directory_name,
                         dir_fd=parent_descriptor,
                         follow_symlinks=False,
@@ -1075,6 +1144,12 @@ class _PrivateJournalDirectory:
         path: Path,
     ) -> None:
         """Fault-injection seam for private-directory removal."""
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import remove_child
+
+            return remove_child(
+                parent_descriptor, directory_name, directory=True, expected_identity=self._identity
+            )
 
         if os.rmdir in os.supports_dir_fd:
             os.rmdir(directory_name, dir_fd=parent_descriptor)
@@ -1084,12 +1159,12 @@ class _PrivateJournalDirectory:
     def _unlink_retained_component(self, directory_descriptor: int, name: str) -> None:
         """Fault-injection seam for a route-owned residual SQLite component."""
 
-        os.unlink(name, dir_fd=directory_descriptor)
+        unlink_host_entry(name, dir_fd=directory_descriptor)
 
     def _fsync_parent(self, parent_descriptor: int) -> None:
         """Fault-injection seam for private-directory durability."""
 
-        os.fsync(parent_descriptor)
+        fsync_host_descriptor(parent_descriptor)
 
 
 def _extract_epoch(entry: str) -> int:
@@ -2174,7 +2249,7 @@ class _SingleHistoryWriter:
                     "Bash history journal could not be opened without creating another file"
                 ) from error
             journal_directory.validate()
-            current = os.stat(
+            current = stat_host_entry(
                 journal_name,
                 dir_fd=journal_directory_descriptor,
                 follow_symlinks=False,
@@ -2281,9 +2356,9 @@ class _SingleHistoryWriter:
                                 )
                                 is not None
                             ):
-                                os.unlink(companion, dir_fd=journal_directory_descriptor)
-                        os.unlink(journal_name, dir_fd=journal_directory_descriptor)
-                        os.fsync(journal_directory_descriptor)
+                                unlink_host_entry(companion, dir_fd=journal_directory_descriptor)
+                        unlink_host_entry(journal_name, dir_fd=journal_directory_descriptor)
+                        fsync_host_descriptor(journal_directory_descriptor)
                 except FileNotFoundError:
                     pass
             raise
@@ -2623,7 +2698,7 @@ class _SingleHistoryWriter:
                         raise ExactPublicationError(
                             "Bash history export exceeded its charged expected size"
                         )
-                    os.fsync(temporary_descriptor)
+                    fsync_host_descriptor(temporary_descriptor)
                     metadata = os.fstat(temporary_descriptor)
                     if (int(metadata.st_dev), int(metadata.st_ino)) != temporary_identity:
                         raise ExactPublicationError(
@@ -2632,7 +2707,7 @@ class _SingleHistoryWriter:
                 finally:
                     os.close(temporary_descriptor)
             expected_digest = expected_digest_builder.hexdigest()
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
 
             sealed_plan = _ExportPlan(
                 max_sequence=max_sequence,
@@ -2700,8 +2775,8 @@ class _SingleHistoryWriter:
                                 raise ExactPublicationError(
                                     "Bash history export temporary identity changed"
                                 )
-                            os.unlink(temporary_name, dir_fd=directory_descriptor)
-                            os.fsync(directory_descriptor)
+                            unlink_host_entry(temporary_name, dir_fd=directory_descriptor)
+                            fsync_host_descriptor(directory_descriptor)
                     except FileNotFoundError:
                         pass
                 self._budget.rollback_export_plan(working_bytes)
@@ -2941,8 +3016,8 @@ class _SingleHistoryWriter:
                 plan.temporary_inode,
             ):
                 raise ExactPublicationError("Bash history export temporary identity changed")
-            os.unlink(plan.temporary_name, dir_fd=directory_descriptor)
-            os.fsync(directory_descriptor)
+            unlink_host_entry(plan.temporary_name, dir_fd=directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             os.close(directory_descriptor)
 
@@ -2969,10 +3044,10 @@ class _SingleHistoryWriter:
                 digest, size = _hash_descriptor(descriptor, expected_size=expected_size)
                 if digest != expected_digest or size != expected_size:
                     raise ExactPublicationError("Bash history output changed during reconciliation")
-                os.fsync(descriptor)
+                fsync_host_descriptor(descriptor)
             finally:
                 os.close(descriptor)
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             os.close(directory_descriptor)
 
@@ -2988,7 +3063,7 @@ class _SingleHistoryWriter:
                 is not None
             ):
                 raise ExactPublicationError("Bash history output appeared during clear-only export")
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             os.close(directory_descriptor)
 
@@ -3031,13 +3106,13 @@ class _SingleHistoryWriter:
                 plan.temporary_inode,
             ):
                 raise ExactPublicationError("Bash history export temporary identity changed")
-            os.rename(
+            rename_host_entry(
                 plan.temporary_name,
                 self.output_path.name,
                 src_dir_fd=directory_descriptor,
                 dst_dir_fd=directory_descriptor,
             )
-            os.fsync(directory_descriptor)
+            fsync_host_descriptor(directory_descriptor)
         finally:
             os.close(directory_descriptor)
 
@@ -3143,12 +3218,12 @@ class _SingleHistoryWriter:
     def _fsync_cleanup_directory(self, directory_descriptor: int) -> None:
         """Fault-injection seam for retryable terminal directory durability."""
 
-        os.fsync(directory_descriptor)
+        fsync_host_descriptor(directory_descriptor)
 
     def _unlink_cleanup_journal(self, directory_descriptor: int, journal_name: str) -> None:
         """Fault-injection seam for retryable terminal journal unlink."""
 
-        os.unlink(journal_name, dir_fd=directory_descriptor)
+        unlink_host_entry(journal_name, dir_fd=directory_descriptor)
 
     @property
     def event_count(self) -> int:
