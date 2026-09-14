@@ -379,3 +379,40 @@ native regression injects two successive errors after index replacement, checks
 that fresh inspection/GC preserve the original recovery and its unique input,
 then confirms that successful publication enables normal reclamation. This changes
 only the Windows reclamation branch; POSIX implementations remain identical.
+
+### Final implementation validation at 730ef96d
+
+[Run 34890511405](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34890511405)
+tests the conservative reclamation refinement along with the complete write-through path.
+
+- macOS 26.6.2 arm64 / Python 3.12.9: full routine suite **8,644 passed,
+  67 skipped, 2,023 deselected**, 331.83s. The four affected slow CLI
+  suspension/interruption/relocation checks also passed without coverage (100.45s).
+- Windows durability: **4 passed**, 132.88s (135.30s including the driver).
+  The 906-case / 137-distinct-image matrix and all CLI recovery cases passed again.
+  Instrumented checkpoint publications took 0.375s, 0.547s, and 0.484s. The
+  Windows host, Python, NTFS validation, and runner image match the preceding run.
+- Ruff lint/format, generation behavior revision 89, and the 110-function POSIX
+  structural comparison pass. Native checkpoint/filesystem modules remain
+  unloaded on macOS. Package declarations and the Linux release workflow are
+  unchanged from the extension baseline.
+- Linux / Python 3.12.14: **8,644 passed, 67 skipped, 2,023 deselected**, 878.90s.
+- Native Windows / Python 3.12.10: **8,681 passed, 30 skipped, 2,023 deselected**,
+  1,344.19s. The entire job took **22m 57s**, within the unchanged 25-minute
+  timeout. All 16 native checkpoint contracts passed, including the two uncertain
+  publisher restarts, post-rename metadata-flush failure, and ACL/reparse rejection.
+- The routine checkpoint smoke passed on all three hosts. **Required CI passed**
+  with lint, both routine matrix entries, and Windows checkpoint durability green.
+- Complete local logs are retained as `/tmp/eforge-write-through-windows5-clean.log`,
+  `/tmp/eforge-write-through-linux5-clean.log`,
+  `/tmp/eforge-write-through-durability5-clean.log`, and
+  `/tmp/eforge-write-through-macos-final-730ef96d.log`.
+
+The final cleanup moves the 16 unmarked native API contracts to
+`tests/integration/test_windows_checkpoint_io.py`, matching the repository's
+file-I/O test organization. No production code changes follow the validated
+implementation. The [PR validation section](https://github.com/Cisco-Talos/EvidenceForge/pull/419)
+records the fresh checks at the final PR revision after this documentation/test-location
+cleanup. Package version, checkpoint schemas, generated evidence, POSIX implementations,
+release workflows, and repository protections remain unchanged by the extension.
+No merge or release was performed.

@@ -166,17 +166,23 @@ collection-hour checkpoint, cooperative CLI suspension, verification without ind
 fresh-process resume, nonempty Windows/Zeek evidence, byte equality with uninterrupted output,
 and checkpoint workspace cleanup. The same test runs during ordinary local macOS testing.
 
-The [worklog](../worklog/2026-09-14-windows-ci-checkpoints.md) records exact CI revisions,
-failure inventories, validation counts, and completion status. The first native run stopped at
-257 collection errors from a shared temporary-stream import assumption. After that fix, the
-full routine inventory exposed 468 failures; subsequent native storage and path repairs reduced
-this to 39 while the checkpoint smoke test and full Linux suite passed.
+The complete write-through implementation at `730ef96d` passed
+[run 34890511405](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34890511405):
+native Windows **8,681 passed, 30 skipped** and Linux **8,644 passed, 67 skipped**, with
+2,023 slow/soak cases deselected. Local macOS passed **8,644 tests, 67 skipped**. The Windows
+routine job took 22m 57s, within its existing 25-minute timeout. All 16 routine native
+checkpoint contracts, the checkpoint smoke on all three hosts, lint, and `Required CI` passed.
 
-[Run 34859531009](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34859531009)
-at `7160bfc6` passed the complete routine matrix: Windows **8,659 passed, 30 skipped** and Linux
-**8,639 passed, 50 skipped**, with 2,019 slow/soak tests deselected on each. The same revision's
-local macOS routine run passed **8,639 tests, 50 skipped**. The real checkpoint smoke passed on
-all three hosts. The worklog records subsequent final cleanup validation.
+The dedicated Windows durability gate passed all four slow cases in 132.88s: 906 crash cases
+across 151 interruption points and six profiles, representing 137 distinct storage images,
+plus negative controls and real CLI recovery. Instrumented checkpoint publication times were
+0.375s, 0.547s, and 0.484s for the small scenario. The tested Windows host was Server 2025
+build 26100 / Python 3.12.10 on fixed local NTFS; macOS used 26.6.2 arm64 / Python 3.12.9,
+and Linux CI used Python 3.12.14.
+
+The [worklog](../worklog/2026-09-14-windows-ci-checkpoints.md) retains exact revisions, failure
+inventories, and validation results. The [PR validation section](https://github.com/Cisco-Talos/EvidenceForge/pull/419)
+records the final revision's repeated gates after documentation and test-location cleanup.
 
 Repository settings were inspected without modification. `main` requires `Required CI` and
 `Required Release CI`. `dev` has no branch protection or effective rules, so workflow failure

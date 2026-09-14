@@ -1,4 +1,4 @@
-"""Native Windows checkpoint barriers and publication failure contracts."""
+"""Routine native Windows checkpoint barriers and publication failure contracts."""
 
 import ctypes
 import errno
