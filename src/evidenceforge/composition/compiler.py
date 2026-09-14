@@ -19,6 +19,7 @@ from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import LoadedSourceGraph, load_scenario_source_graph
 from evidenceforge.utils.assets import EMAIL_CORPUS_MAX_SOURCE_BYTES
+from evidenceforge.utils.host_paths import logical_path
 from evidenceforge.utils.paths import read_text_file_beneath
 from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.utils.yaml_loader import load_yaml_file
@@ -197,7 +198,7 @@ def _load_project_overlays(project_root: Path) -> dict[str, Any]:
         resolved = path.resolve()
         if not resolved.is_relative_to(overlay_root.resolve()):
             raise PackError(f"project configuration overlay escapes project root: {path}")
-        overlays[str(path.relative_to(overlay_root))] = load_yaml_file(path) or {}
+        overlays[logical_path(path.relative_to(overlay_root))] = load_yaml_file(path) or {}
     return overlays
 
 
@@ -309,7 +310,7 @@ def _load_packaged_defaults() -> dict[str, Any]:
     ]
     signature = tuple(
         (
-            str(path.relative_to(config_root)),
+            logical_path(path.relative_to(config_root)),
             path.stat().st_mtime_ns,
             path.stat().st_size,
         )
@@ -324,7 +325,7 @@ def _load_packaged_defaults() -> dict[str, Any]:
         relative = path.relative_to(config_root)
         if path.is_symlink():
             raise PackError(f"packaged configuration cannot be a symlink: {path}")
-        defaults[str(relative)] = load_yaml_file(path)
+        defaults[logical_path(relative)] = load_yaml_file(path)
     with _PACKAGED_DEFAULTS_LOCK:
         _PACKAGED_DEFAULTS_SIGNATURE = signature
         _PACKAGED_DEFAULTS_SNAPSHOT = copy.deepcopy(defaults)

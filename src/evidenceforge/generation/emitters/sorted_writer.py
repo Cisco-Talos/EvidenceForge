@@ -470,7 +470,9 @@ class ExternalSortedLineWriter:
         merge_path = Path(raw_merge_path)
         try:
             self._merge_runs_unlocked(self._run_paths, merge_path)
-            with merge_path.open("rb") as stream:
+            # Windows FlushFileBuffers requires a writable handle. Keep the
+            # existing read-only POSIX flush path unchanged.
+            with merge_path.open("r+b" if os.name == "nt" else "rb") as stream:
                 os.fsync(stream.fileno())
             os.replace(merge_path, self.output_path)
             fsync_directory(self.output_path.parent)

@@ -48,11 +48,23 @@ jobs:
           --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
 
   tests:
-    name: Tests (Python 3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    name: Tests (${{ matrix.os }}, Python 3.12)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            timeout_minutes: 25
+          - os: windows-latest
+            timeout_minutes: 45
+    timeout-minutes: ${{ matrix.timeout_minutes }}
 
     steps:
+      - name: Preserve repository bytes on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -73,10 +85,46 @@ jobs:
       - name: Run tests without coverage
         run: uv run pytest --no-cov
 
+  windows-checkpoint-durability:
+    name: Windows checkpoint durability
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Preserve repository bytes on Windows
+        run: git config --global core.autocrlf false
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Test simulated power-loss recovery
+        run: uv run python scripts/check_windows_checkpoint_durability.py
+
+      - name: Upload durability failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-checkpoint-durability-failure
+          path: .artifacts/windows-checkpoint-durability/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
   ci-required:
     name: Required CI
     runs-on: ubuntu-latest
-    needs: [lint, tests]
+    needs: [lint, tests, windows-checkpoint-durability]
     if: always()
 
     steps:
@@ -89,5 +137,10 @@ jobs:
 
           if [ "${{ needs.tests.result }}" != "success" ]; then
             echo "Tests finished with result: ${{ needs.tests.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.windows-checkpoint-durability.result }}" != "success" ]; then
+            echo "Windows checkpoint durability finished with result: ${{ needs.windows-checkpoint-durability.result }}"
             exit 1
           fi

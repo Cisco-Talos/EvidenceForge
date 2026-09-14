@@ -164,10 +164,20 @@ two recovery manifests and bounded live heads, shared content-addressed segments
 and a single-run lock. The resource forecast reports this separately as `Projected checkpoint
 workspace` and includes it once in projected peak working disk.
 
-Checkpoint publication requires protected ownership, no symlinks or path traversal, atomic rename,
-and durable file and directory synchronization. Preflight fails when the filesystem cannot provide
-those guarantees; use another filesystem or explicitly pass `--checkpoint-hours 0`. A demonstrably
-stale lock may be reclaimed, but concurrent generation against the same output root is rejected.
+On macOS and Linux, checkpoint publication requires protected ownership, no symlinks or path
+traversal, atomic rename, and durable file and directory synchronization. Preflight fails when
+the filesystem cannot provide those guarantees; use another filesystem or explicitly pass
+`--checkpoint-hours 0`. A demonstrably stale lock may be reclaimed, but concurrent generation
+against the same output root is rejected.
+
+Native Windows checkpoint I/O uses binary file descriptors, file flushing, and atomic replacement.
+Directory synchronization is omitted because Python's Windows file API cannot perform the POSIX
+directory-sync operation; this does not provide the same directory-entry durability after power
+loss. POSIX mode/UID checks do not establish Windows ACL protection. A native protected filesystem
+backend is still required for Windows generation: Windows/Sysmon and Syslog output journals retain
+their POSIX capability checks. The native Windows CI job currently measures this compatibility gap;
+it does not establish Windows support. Disabling checkpoints does not bypass the output-journal
+requirements. Use macOS or Linux (including WSL on a Windows host) for generation in the meantime.
 
 The newest corrupt recovery point produces a warning and falls back to the previous valid point.
 Tampering, incompatible run inputs, unsupported schemas, failed hydration, and unsafe ownership are

@@ -3,6 +3,7 @@
 
 """Contracts for explicit pack publisher identity configuration."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -71,7 +72,16 @@ def test_publisher_replacement_requires_force_and_writes_private_file(
     set_publisher(tmp_path, second, scope="project", force=True)
 
     assert effective_publisher(tmp_path) == (second, "project")
-    assert path.stat().st_mode & 0o777 == 0o600
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_file, require_private
+
+        descriptor = open_file(path, os.O_RDONLY)
+        try:
+            require_private(descriptor)
+        finally:
+            os.close(descriptor)
+    else:
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_missing_and_symlinked_publisher_configuration_fail_safely(

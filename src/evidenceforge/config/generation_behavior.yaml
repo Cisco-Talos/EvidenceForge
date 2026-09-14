@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 81
+current_revision: 89
 history_start_revision: 1
-behavior_surface_sha256: d812799a7e7f1f69a13d4103b00060e0644087186563eb516d8ed9c58bc1a5ec
+behavior_surface_sha256: 120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -742,3 +742,59 @@ changes:
       - ssh-session-lifecycle
     formats: []
     summary: Retire ended identities only at the sealed engine frontier, preserve exact SSH source instances through deferred close and PID reuse, and omit unauthenticated source-process placeholders
+  - revision: 82
+    id: native-windows-checkpoint-io
+    impact: none
+    domains:
+      - checkpoint-filesystem
+    formats: []
+    summary: Centralize host-platform directory syncing and preserve generated evidence semantics while enabling native Windows checkpoint I/O
+  - revision: 83
+    id: native-windows-temporary-stream-import
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Adapt Windows temporary-file wrappers while preserving the existing POSIX stream implementation and generated evidence
+  - revision: 84
+    id: native-windows-sorted-export-flush
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Use writable file-flush handles on Windows while preserving the read-only POSIX publication implementation
+  - revision: 85
+    id: native-windows-journal-and-host-path-adapters
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Route native Windows private journals and logical configuration references through host adapters while retaining existing POSIX implementations
+  - revision: 86
+    id: native-windows-pack-and-syslog-filesystem
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Adapt protected pack publication, Syslog journal storage, and checkpoint file handles on Windows while preserving POSIX operations
+  - revision: 87
+    id: native-windows-bash-snort-filesystem
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Route Bash-history and Snort private journal storage through native Windows operations while retaining POSIX lifecycle and rendering implementations
+  - revision: 88
+    id: native-windows-journal-reconciliation-flush
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Use writable Windows journal output reconciliation handles while preserving original POSIX read-only opens
+  - revision: 89
+    id: native-windows-checkpoint-write-through
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Publish Windows checkpoint dependencies and recovery indexes through native write-through handles without changing POSIX operations or evidence semantics

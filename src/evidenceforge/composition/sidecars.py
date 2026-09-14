@@ -18,6 +18,7 @@ from evidenceforge.events.ground_truth import GROUND_TRUTH_JSON_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.profiling import GENERATION_PROFILE_FILENAME
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
+from evidenceforge.utils.host_paths import logical_path
 
 from .artifacts import GENERATION_MANIFEST_FILENAME, RESOLVED_SCENARIO_FILENAME
 
@@ -119,7 +120,7 @@ class SidecarRegistry:
                 if candidate.is_symlink():
                     raise PermissionError(f"generated bundle contains a symlink: {candidate}")
                 if candidate.is_file():
-                    relative = str(candidate.relative_to(root))
+                    relative = logical_path(candidate.relative_to(root))
                     hashes[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
         return dict(sorted(hashes.items()))
 

@@ -18,6 +18,8 @@ from importlib.machinery import ModuleSpec
 from types import FunctionType, ModuleType
 from typing import Any
 
+from evidenceforge.utils.host_paths import logical_path
+
 _CURRENT_EFFECTIVE_CONFIG: ContextVar[Any | None] = ContextVar(
     "evidenceforge_effective_config",
     default=None,
@@ -459,7 +461,7 @@ def packaged_default_document(path: Any) -> tuple[bool, Any]:
     config_root = get_config_directory().resolve()
     if not resolved_path.is_relative_to(config_root):
         return False, None
-    relative_path = str(resolved_path.relative_to(config_root))
+    relative_path = logical_path(resolved_path.relative_to(config_root))
     if relative_path not in effective.packaged_defaults:
         return False, None
     value = effective.packaged_defaults[relative_path]

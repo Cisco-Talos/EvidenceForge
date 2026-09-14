@@ -17,7 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import psutil
 from pydantic import ValidationError
+
+from evidenceforge.utils.files import fsync_directory, open_host_file
+from evidenceforge.utils.files import mkdir_private_host as _mkdir_private_host
 
 from .errors import (
     CheckpointCompatibilityError,
@@ -97,17 +101,41 @@ def _safe_relative_path(value: str) -> PurePosixPath:
     return relative
 
 
+def mkdir_private_host(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    """Select checkpoint directory publication without changing POSIX operations."""
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        WindowsCheckpointIO().mkdir(path, parents=parents, exist_ok=exist_ok)
+        return
+    _mkdir_private_host(path, parents=parents, exist_ok=exist_ok)
+
+
+def _replace_checkpoint_path(source: Path, target: Path, *, directory: bool = False) -> None:
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        operations = WindowsCheckpointIO()
+        if directory:
+            operations.replace_directory(source, target)
+        else:
+            operations._rename(source, target, replace=True, directory=False)
+        return
+    os.replace(source, target)
+
+
+def _remove_checkpoint_tree(path: Path) -> None:
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        WindowsCheckpointIO().remove_tree(path)
+        return
+    shutil.rmtree(path)
+
+
 def _sync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _sync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    descriptor = os.open(path, flags)
+    flags = (os.O_RDWR if os.name == "nt" else os.O_RDONLY) | getattr(os, "O_BINARY", 0)
+    descriptor = open_host_file(path, flags)
     try:
         os.fsync(descriptor)
     finally:
@@ -115,7 +143,14 @@ def _sync_directory(path: Path) -> None:
 
 
 def _write_new_file(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        WindowsCheckpointIO().write_new(path, payload, mode=mode)
+        return
+    descriptor = open_host_file(
+        path, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, mode
+    )
     try:
         view = memoryview(payload)
         while view:
@@ -132,22 +167,24 @@ def _atomic_replace(path: Path, payload: bytes) -> None:
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
         _write_new_file(temporary, payload)
-        os.replace(temporary, path)
-        _sync_directory(path.parent)
+        _replace_checkpoint_path(temporary, path)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def _process_is_alive(pid: int) -> bool:
+    """Probe ownership without signaling a process on any host platform."""
+
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        return psutil.Process(pid).is_running()
+    except psutil.NoSuchProcess:
         return False
-    except PermissionError:
+    except (psutil.AccessDenied, OSError):
+        # Uncertain ownership must never authorize reclamation.
         return True
-    return True
 
 
 class RunLock:
@@ -161,7 +198,7 @@ class RunLock:
     def acquire(self) -> None:
         """Acquire the run lock, reclaiming only a demonstrably dead local owner."""
 
-        self.workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private_host(self.workspace, parents=True, exist_ok=True)
         payload = _canonical_json(
             {
                 "hostname": socket.gethostname(),
@@ -172,7 +209,7 @@ class RunLock:
         while True:
             try:
                 _write_new_file(self.path, payload)
-                _sync_directory(self.workspace)
+                fsync_directory(self.workspace)
                 self._owned = True
                 return
             except FileExistsError:
@@ -189,17 +226,17 @@ class RunLock:
                     ) from None
                 stale = self.path.with_name(f".{_LOCK_NAME}.stale-{uuid.uuid4().hex}")
                 try:
-                    os.replace(self.path, stale)
+                    _replace_checkpoint_path(self.path, stale)
                 except FileNotFoundError:
                     continue
                 stale.unlink(missing_ok=True)
-                _sync_directory(self.workspace)
+                fsync_directory(self.workspace)
 
     def _read_owner(self) -> dict[str, object]:
         try:
-            descriptor = os.open(
+            descriptor = open_host_file(
                 self.path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0),
             )
             try:
                 info = os.fstat(descriptor)
@@ -207,7 +244,7 @@ class RunLock:
                     raise CheckpointLockError("generation output lock is not a regular file")
                 if hasattr(os, "getuid") and info.st_uid != os.getuid():
                     raise CheckpointLockError("generation output lock has an unsafe owner")
-                if info.st_mode & 0o022:
+                if os.name == "posix" and info.st_mode & 0o022:
                     raise CheckpointLockError("generation output lock is externally writable")
                 raw = os.read(descriptor, _MAX_LOCK_BYTES + 1)
             finally:
@@ -268,7 +305,7 @@ class RunLock:
             self._owned = False
             raise CheckpointLockError("generation lock ownership changed before release")
         self.path.unlink()
-        _sync_directory(self.workspace)
+        fsync_directory(self.workspace)
         self._owned = False
 
     def __enter__(self) -> RunLock:
@@ -296,6 +333,10 @@ class IncrementalCheckpointStore:
         self.lock = RunLock(self.workspace)
         self._initialized = False
         self._publication_synchronization_hook = publication_synchronization_hook
+        if os.name == "nt":
+            from .windows_io import WindowsCheckpointIO
+
+            self._windows_io = WindowsCheckpointIO()
 
     def _synchronize_publication(self, stage: str, sequence: int) -> None:
         """Invoke an explicitly installed test barrier at a publication seam."""
@@ -312,12 +353,14 @@ class IncrementalCheckpointStore:
     def initialize(self) -> None:
         """Create and validate the protected checkpoint workspace."""
 
+        if os.name == "nt":
+            self._windows_io.require_healthy()
         if self._initialized:
             return
         self._validate_output_root()
-        self.workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.objects.mkdir(mode=0o700, exist_ok=True)
-        self.recovery.mkdir(mode=0o700, exist_ok=True)
+        mkdir_private_host(self.workspace, parents=True, exist_ok=True)
+        mkdir_private_host(self.objects, exist_ok=True)
+        mkdir_private_host(self.recovery, exist_ok=True)
         self._validate_protected_directory(self.workspace)
         self._validate_protected_directory(self.objects)
         self._validate_protected_directory(self.recovery)
@@ -361,16 +404,37 @@ class IncrementalCheckpointStore:
                     f"checkpoint output ancestry cannot contain symlinks: {path}"
                 )
         if create:
+            if os.name == "nt":
+                from .windows_io import WindowsCheckpointIO
+
+                WindowsCheckpointIO().mkdir(
+                    self.output_root, parents=True, exist_ok=True, private=False
+                )
+                return
             self.output_root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _validate_protected_directory(path: Path) -> None:
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import open_directory, require_private
+
+            try:
+                descriptor = open_directory(path)
+                try:
+                    require_private(descriptor)
+                finally:
+                    os.close(descriptor)
+            except OSError as error:
+                raise CheckpointFilesystemError(
+                    f"checkpoint directory is unsafe: {path}"
+                ) from error
+            return
         info = path.lstat()
         if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
             raise CheckpointFilesystemError(f"checkpoint path is not a real directory: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise CheckpointFilesystemError(f"checkpoint directory has an unsafe owner: {path}")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointFilesystemError(f"checkpoint directory is group/world writable: {path}")
 
     def _probe_filesystem(self) -> None:
@@ -378,13 +442,13 @@ class IncrementalCheckpointStore:
         replacement = self.workspace / f".probe-replaced-{uuid.uuid4().hex}"
         try:
             _write_new_file(probe, b"checkpoint-probe")
-            os.replace(probe, replacement)
+            _replace_checkpoint_path(probe, replacement)
             _sync_file(replacement)
-            _sync_directory(self.workspace)
+            fsync_directory(self.workspace)
         except OSError as error:
             raise CheckpointFilesystemError(
-                "checkpoint filesystem cannot guarantee atomic rename and durable file/directory "
-                "sync; use another filesystem or --checkpoint-hours 0"
+                "checkpoint filesystem does not support required atomic rename or synchronization; "
+                "use another filesystem or --checkpoint-hours 0"
             ) from error
         finally:
             probe.unlink(missing_ok=True)
@@ -438,7 +502,7 @@ class IncrementalCheckpointStore:
         payload: bytes,
     ) -> tuple[str, bool]:
         directory = self.objects / category / digest[:2]
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private_host(directory, parents=True, exist_ok=True)
         path = directory / f"{digest}{suffix}"
         relative = path.relative_to(self.workspace).as_posix()
         if path.exists():
@@ -449,6 +513,8 @@ class IncrementalCheckpointStore:
                 raise CheckpointCorruptionError(
                     f"checkpoint object digest collision or tampering detected: {relative}"
                 )
+            if os.name == "nt":
+                self._windows_io.ensure_file(path, size=len(payload), digest=digest)
             return relative, False
         temporary = directory / f".{digest}.pending-{uuid.uuid4().hex}"
         try:
@@ -459,10 +525,12 @@ class IncrementalCheckpointStore:
                         f"checkpoint object changed during publication: {relative}"
                     )
             else:
-                os.replace(temporary, path)
-            _sync_directory(directory)
+                _replace_checkpoint_path(temporary, path)
+            fsync_directory(directory)
         finally:
             temporary.unlink(missing_ok=True)
+        if os.name == "nt":
+            self._windows_io._durable[path] = digest
         return relative, True
 
     @staticmethod
@@ -673,6 +741,10 @@ class IncrementalCheckpointStore:
         else:
             resolved_digest, resolved_path = resolved_scenario_reference
 
+        if os.name == "nt":
+            from .windows_store import prepare_dependencies
+
+            prepare_dependencies(self, segment_catalogs, resolved_path, resolved_digest)
         pending = self.recovery / f".pending-{sequence:020d}-{uuid.uuid4().hex}"
         final = self.recovery / f"{sequence:020d}"
         if final.exists():
@@ -680,13 +752,13 @@ class IncrementalCheckpointStore:
             if sequence in indexed_sequences:
                 raise CheckpointFilesystemError(f"checkpoint sequence already exists: {sequence}")
             self._validate_protected_directory(final)
-            shutil.rmtree(final)
-            _sync_directory(self.recovery)
-        pending.mkdir(mode=0o700)
+            _remove_checkpoint_tree(final)
+            fsync_directory(self.recovery)
+        mkdir_private_host(pending)
         head_refs: list[ParticipantHead] = []
         try:
             heads_directory = pending / "heads"
-            heads_directory.mkdir(mode=0o700)
+            mkdir_private_host(heads_directory)
             for head in sorted(heads, key=lambda item: item.owner):
                 filename = f"{head.owner}.bin"
                 path = heads_directory / filename
@@ -702,7 +774,7 @@ class IncrementalCheckpointStore:
                         referenced_segments=head.referenced_segments,
                     )
                 )
-            _sync_directory(heads_directory)
+            fsync_directory(heads_directory)
             self._synchronize_publication("heads_durable", sequence)
             manifest = CheckpointManifest(
                 sequence=sequence,
@@ -718,9 +790,9 @@ class IncrementalCheckpointStore:
             )
             manifest_payload = _canonical_json(manifest.model_dump(mode="json"))
             _write_new_file(pending / _MANIFEST_NAME, manifest_payload)
-            _sync_directory(pending)
-            os.replace(pending, final)
-            _sync_directory(self.recovery)
+            fsync_directory(pending)
+            _replace_checkpoint_path(pending, final, directory=True)
+            fsync_directory(self.recovery)
             self._synchronize_publication("recovery_published", sequence)
             self._publish_index(manifest, manifest_payload)
             self._synchronize_publication("index_published", sequence)
@@ -734,7 +806,7 @@ class IncrementalCheckpointStore:
             return manifest
         finally:
             if pending.exists():
-                shutil.rmtree(pending)
+                _remove_checkpoint_tree(pending)
 
     def _publish_index(self, manifest: CheckpointManifest, payload: bytes) -> None:
         entries: list[dict[str, object]] = [
@@ -747,6 +819,12 @@ class IncrementalCheckpointStore:
                 entries.append({"manifest_sha256": manifest_sha256, "sequence": sequence})
                 if len(entries) == 2:
                     break
+        if os.name == "nt":
+            self._windows_io.write_atomic(
+                self.index_path, (_canonical_json({"recoveries": entries}),), commit_point=True
+            )
+            self._windows_io.can_reclaim = True
+            return
         _atomic_replace(self.index_path, _canonical_json({"recoveries": entries}))
 
     def _read_index(self) -> list[tuple[int, str]]:
@@ -758,9 +836,14 @@ class IncrementalCheckpointStore:
                 raise CheckpointCorruptionError("checkpoint recovery index is not a regular file")
             if hasattr(os, "getuid") and info.st_uid != os.getuid():
                 raise CheckpointCorruptionError("checkpoint recovery index has an unsafe owner")
-            if info.st_mode & 0o022:
+            if os.name == "posix" and info.st_mode & 0o022:
                 raise CheckpointCorruptionError("checkpoint recovery index is externally writable")
-            document = json.loads(self.index_path.read_bytes())
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import read_private_file
+
+                document = json.loads(read_private_file(self.index_path))
+            else:
+                document = json.loads(self.index_path.read_bytes())
         except FileNotFoundError:
             return []
         except (OSError, json.JSONDecodeError) as error:
@@ -800,14 +883,24 @@ class IncrementalCheckpointStore:
         return tuple(self._read_index())
 
     def _rotate_recoveries(self) -> None:
+        if os.name == "nt":
+            from .windows_store import rotate_recoveries
+
+            rotate_recoveries(self)
+            return
         directories = self._recovery_directories()
         for stale in directories[2:]:
             shutil.rmtree(stale)
-        _sync_directory(self.recovery)
+        fsync_directory(self.recovery)
 
     def collect_garbage(self) -> None:
         """Remove objects unreferenced by either recovery outside checkpoint pauses."""
 
+        if os.name == "nt":
+            from .windows_store import collect_garbage
+
+            collect_garbage(self)
+            return
         self.initialize()
         directories = self._recovery_directories()
         retained_paths: set[str] = set()
@@ -903,9 +996,19 @@ class IncrementalCheckpointStore:
             raise CheckpointCorruptionError(f"checkpoint object is not a regular file: {path}")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise CheckpointCorruptionError(f"checkpoint object has an unsafe owner: {path}")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointCorruptionError(f"checkpoint object is externally writable: {path}")
-        payload = path.read_bytes()
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import read_private_file
+
+            try:
+                payload = read_private_file(path)
+            except PermissionError as error:
+                raise CheckpointCorruptionError(
+                    f"checkpoint object has an unsafe owner or is externally writable: {path}"
+                ) from error
+        else:
+            payload = path.read_bytes()
         if len(payload) != expected_size or _sha256(payload) != expected_hash:
             raise CheckpointCorruptionError(
                 f"checkpoint object failed integrity validation: {path}"
@@ -1061,6 +1164,8 @@ class IncrementalCheckpointStore:
     def remove_workspace(self) -> None:
         """Remove checkpoint infrastructure after successful bundle publication."""
 
+        if os.name == "nt":
+            self._windows_io.require_healthy()
         if not self.workspace.exists():
             return
         self._validate_protected_directory(self.workspace)

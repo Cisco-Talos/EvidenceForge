@@ -1,9 +1,6 @@
 name: Release Slow Tests
 
 on:
-  # Temporary one-run dev trigger for the four-shard validation trial.
-  push:
-    branches: [dev]
   pull_request:
     branches: [main]
 

@@ -460,6 +460,12 @@ def _make_security_registry() -> tuple[
     trusted_json = json
     module_namespace = globals()
     trusted_factory = tempfile.TemporaryFile
+    if os.name == "nt":
+        # Windows TemporaryFile delegates fileno/flush/closed through an instance
+        # wrapper. Keep its cleanup owner alive behind explicit registry methods.
+        from evidenceforge.utils.windows_streams import temporary_stream
+
+        trusted_factory = temporary_stream
     trusted_factory_code = trusted_factory.__code__
     trusted_mkstemp_inner = tempfile._mkstemp_inner
     prototype = trusted_factory(mode="w+b")
@@ -790,6 +796,14 @@ def _secure_open(
     _operation: Callable[..., int] = _SYSLOG_SECURITY_REGISTRY.os_open,
     **kwargs: Any,
 ) -> int:
+    if os.name == "nt":
+        from evidenceforge.utils import windows_filesystem as filesystem
+
+        parent = kwargs.pop("dir_fd", None)
+        if parent is not None:
+            return filesystem.open_child(parent, *args, **kwargs)
+        return filesystem.open_file(*args, **kwargs)
+
     return _operation(*args, **kwargs)
 
 
@@ -838,6 +852,13 @@ def _secure_stat(
     _operation: Callable[..., os.stat_result] = _SYSLOG_SECURITY_REGISTRY.os_stat,
     **kwargs: Any,
 ) -> os.stat_result:
+    if os.name == "nt":
+        from evidenceforge.utils import windows_filesystem as filesystem
+
+        parent = kwargs.get("dir_fd")
+        if parent is not None:
+            return filesystem.child_stat(parent, args[0], directory=None)
+
     return _operation(*args, **kwargs)
 
 
@@ -864,6 +885,11 @@ def _secure_pread(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int, int], bytes] | None = _SYSLOG_SECURITY_REGISTRY.os_pread,
 ) -> bytes:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import pread
+
+        return pread(descriptor, count, offset)
+
     if _operation is None:
         raise ExactPublicationError("Syslog exact publication requires descriptor pread")
     return _operation(descriptor, count, offset)
@@ -879,6 +905,11 @@ def _secure_read(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int], bytes] = _SYSLOG_SECURITY_REGISTRY.os_read,
 ) -> bytes:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import read
+
+        return read(descriptor, count)
+
     return _operation(descriptor, count)
 
 
@@ -892,6 +923,11 @@ def _secure_write(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, bytes], int] = _SYSLOG_SECURITY_REGISTRY.os_write,
 ) -> int:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import write
+
+        return write(descriptor, payload)
+
     return _operation(descriptor, payload)
 
 
@@ -906,6 +942,11 @@ def _secure_lseek(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int, int, int], int] = _SYSLOG_SECURITY_REGISTRY.os_lseek,
 ) -> int:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import lseek
+
+        return lseek(descriptor, offset, whence)
+
     return _operation(descriptor, offset, whence)
 
 
@@ -918,6 +959,11 @@ def _secure_fsync(
     ] = _SYSLOG_SECURITY_ATTESTATION,
     _operation: Callable[[int], None] = _SYSLOG_SECURITY_REGISTRY.os_fsync,
 ) -> None:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import flush_file
+
+        return flush_file(descriptor)
+
     _operation(descriptor)
 
 
@@ -970,6 +1016,10 @@ def _same_open_description(
     _set_blocking: Callable[[int, bool], None] = _SYSLOG_SECURITY_REGISTRY.os_set_blocking,
 ) -> bool:
     """Check whether two descriptors share one open description."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import same_open_file
+
+        return same_open_file(first, second)
 
     original = _get_blocking(first)
     if _get_blocking(second) is not original:
@@ -1178,22 +1228,28 @@ def _descriptor_owner_snapshot(
             int(guard_metadata.st_ino),
         ) != identity:
             raise ExactPublicationError(f"Syslog {label} descriptor ownership changed")
-        blocking = _get_blocking(descriptor)
-        if type(blocking) is not bool or _get_blocking(guard_descriptor) is not blocking:
-            raise ExactPublicationError(f"Syslog {label} open-description ownership changed")
-        _set_blocking(descriptor, not blocking)
-        try:
-            if _get_blocking(guard_descriptor) is blocking:
+        if os.name == "nt":
+            if not _same_open_description(descriptor, guard_descriptor):
                 raise ExactPublicationError(f"Syslog {label} open-description ownership changed")
-        finally:
-            _set_blocking(descriptor, blocking)
-            if (
-                _get_blocking(descriptor) is not blocking
-                or _get_blocking(guard_descriptor) is not blocking
-            ):
-                raise ExactPublicationError(
-                    f"Syslog {label} open-description flags were not restored"
-                )
+        else:
+            blocking = _get_blocking(descriptor)
+            if type(blocking) is not bool or _get_blocking(guard_descriptor) is not blocking:
+                raise ExactPublicationError(f"Syslog {label} open-description ownership changed")
+            _set_blocking(descriptor, not blocking)
+            try:
+                if _get_blocking(guard_descriptor) is blocking:
+                    raise ExactPublicationError(
+                        f"Syslog {label} open-description ownership changed"
+                    )
+            finally:
+                _set_blocking(descriptor, blocking)
+                if (
+                    _get_blocking(descriptor) is not blocking
+                    or _get_blocking(guard_descriptor) is not blocking
+                ):
+                    raise ExactPublicationError(
+                        f"Syslog {label} open-description flags were not restored"
+                    )
     finally:
         _release(lock)
     return descriptor, identity
@@ -1408,20 +1464,23 @@ def _retire_descriptor_owner(
                 )
             else:
                 if (int(metadata.st_dev), int(metadata.st_ino)) == identity:
-                    blocking = _get_blocking(descriptor)
-                    if type(blocking) is bool and _get_blocking(guard_descriptor) is blocking:
-                        _set_blocking(descriptor, not blocking)
-                        try:
-                            primary_is_owned = _get_blocking(guard_descriptor) is not blocking
-                        finally:
-                            _set_blocking(descriptor, blocking)
-                            if (
-                                _get_blocking(descriptor) is not blocking
-                                or _get_blocking(guard_descriptor) is not blocking
-                            ):
-                                raise ExactPublicationError(
-                                    f"Syslog {label} open-description flags were not restored"
-                                )
+                    if os.name == "nt":
+                        primary_is_owned = _same_open_description(descriptor, guard_descriptor)
+                    else:
+                        blocking = _get_blocking(descriptor)
+                        if type(blocking) is bool and _get_blocking(guard_descriptor) is blocking:
+                            _set_blocking(descriptor, not blocking)
+                            try:
+                                primary_is_owned = _get_blocking(guard_descriptor) is not blocking
+                            finally:
+                                _set_blocking(descriptor, blocking)
+                                if (
+                                    _get_blocking(descriptor) is not blocking
+                                    or _get_blocking(guard_descriptor) is not blocking
+                                ):
+                                    raise ExactPublicationError(
+                                        f"Syslog {label} open-description flags were not restored"
+                                    )
                 if not primary_is_owned:
                     pending_error = ExactPublicationError(
                         f"Syslog {label} open-description ownership changed"
@@ -2231,6 +2290,12 @@ class SyslogEmitter(HostMultiplexEmitter):
         _directory: int = _SYSLOG_SECURITY_REGISTRY.directory,
     ) -> None:
         """Fail closed when portable descriptor-relative safety is unavailable."""
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import open_directory
+
+            descriptor = open_directory(Path(tempfile.gettempdir()))
+            os.close(descriptor)
+            return
 
         required_dir_fd = (_open, _mkdir, _stat)
         if (
@@ -2253,6 +2318,11 @@ class SyslogEmitter(HostMultiplexEmitter):
         try:
             descriptor = _stream_descriptor(stream)
             metadata = _secure_fstat(descriptor)
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import require_temporary
+
+                require_temporary(descriptor)
+                return stream, cls._filesystem_identity(metadata)
             effective_uid = _secure_geteuid()
             if (
                 not _secure_isreg(metadata.st_mode)
@@ -2312,6 +2382,10 @@ class SyslogEmitter(HostMultiplexEmitter):
             metadata = _secure_fstat(descriptor)
         except (OSError, ValueError) as error:
             raise ExactPublicationError(f"Syslog {label} descriptor disappeared") from error
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import require_temporary
+
+            require_temporary(descriptor)
         if (
             cls._filesystem_identity(metadata) != expected_identity
             or not _secure_isreg(metadata.st_mode)
@@ -2398,6 +2472,11 @@ class SyslogEmitter(HostMultiplexEmitter):
         _nofollow: int = _SYSLOG_SECURITY_REGISTRY.nofollow,
     ) -> tuple[int, tuple[int, int]]:
         """Open one absolute directory through no-follow descriptor-relative steps."""
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import open_directory
+
+            descriptor = open_directory(path, create=create)
+            return descriptor, cls._filesystem_identity(os.fstat(descriptor))
 
         cls._require_descriptor_primitives()
         absolute = Path(_secure_abspath(path))
@@ -4385,6 +4464,8 @@ class SyslogEmitter(HostMultiplexEmitter):
     ) -> None:
         """Create and retain the no-replace public fd as one internal phase."""
 
+        if os.name == "nt":
+            _open = _secure_open
         owner = append.descriptor_owner
         if type(owner) is not _owner_type:
             raise ExactPublicationError("Syslog public file owner type changed")
@@ -4480,22 +4561,28 @@ class SyslogEmitter(HostMultiplexEmitter):
                 int(guard_metadata.st_ino),
             ) != acquired_identity or _get_inheritable(guard_descriptor):
                 raise ExactPublicationError("Syslog public guard descriptor changed")
-            blocking = _get_blocking(descriptor)
-            if type(blocking) is not bool or _get_blocking(guard_descriptor) is not blocking:
-                raise ExactPublicationError("Syslog public open-description ownership changed")
-            _set_blocking(descriptor, not blocking)
-            try:
-                if _get_blocking(guard_descriptor) is blocking:
+            if os.name == "nt":
+                if not _same_open_description(descriptor, guard_descriptor):
                     raise ExactPublicationError("Syslog public open-description ownership changed")
-            finally:
-                _set_blocking(descriptor, blocking)
-                if (
-                    _get_blocking(descriptor) is not blocking
-                    or _get_blocking(guard_descriptor) is not blocking
-                ):
-                    raise ExactPublicationError(
-                        "Syslog public open-description flags were not restored"
-                    )
+            else:
+                blocking = _get_blocking(descriptor)
+                if type(blocking) is not bool or _get_blocking(guard_descriptor) is not blocking:
+                    raise ExactPublicationError("Syslog public open-description ownership changed")
+                _set_blocking(descriptor, not blocking)
+                try:
+                    if _get_blocking(guard_descriptor) is blocking:
+                        raise ExactPublicationError(
+                            "Syslog public open-description ownership changed"
+                        )
+                finally:
+                    _set_blocking(descriptor, blocking)
+                    if (
+                        _get_blocking(descriptor) is not blocking
+                        or _get_blocking(guard_descriptor) is not blocking
+                    ):
+                        raise ExactPublicationError(
+                            "Syslog public open-description flags were not restored"
+                        )
             append.file_identity = acquired_identity
         finally:
             _release(lock)

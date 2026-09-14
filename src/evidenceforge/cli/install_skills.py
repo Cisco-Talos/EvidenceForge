@@ -29,6 +29,7 @@ import shutil
 from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
+from evidenceforge.utils.host_paths import logical_path
 
 CHATGPT_SKILL_NAMES = (
     "scenario",
@@ -199,7 +200,7 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
     # The directory structure mirrors the installed layout, so relative paths
     # map directly to target paths.
     for md_file in sorted(skills_dir.rglob("*.md")):
-        rel_path = str(md_file.relative_to(skills_dir))
+        rel_path = logical_path(md_file.relative_to(skills_dir))
         manifest[rel_path] = md_file
 
     # Persona YAML files are NOT installed here. Skills that need persona
@@ -323,7 +324,7 @@ def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str
 
     for path in sorted(eforge_dir.rglob("*")):
         if path.is_file():
-            rel = str(path.relative_to(eforge_dir))
+            rel = logical_path(path.relative_to(eforge_dir))
             if rel not in manifest:
                 path.unlink()
                 removed.append(rel)

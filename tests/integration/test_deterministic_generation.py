@@ -145,9 +145,16 @@ def test_profile_metric_failure_degrades_report_without_failing_generation(
     )
     assert profile_document.generation_status == "completed"
     assert profile_document.degraded
-    assert profile_document.warnings == (
+    expected_warnings = (
         "Unable to capture final emitter profile metrics: injected metric-provider failure",
     )
+    if os.name == "nt":
+        assert profile_document.sampler == "unavailable"
+        expected_warnings = (
+            "ITIMER_PROF sampling is unavailable; coarse metrics remain enabled",
+            *expected_warnings,
+        )
+    assert profile_document.warnings == expected_warnings
 
 
 def _linux_smb_scenario_path() -> Path:

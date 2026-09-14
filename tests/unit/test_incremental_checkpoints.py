@@ -8,6 +8,7 @@ import os
 import random
 import socket
 import sqlite3
+import subprocess
 import time
 from collections import Counter, deque
 from dataclasses import replace
@@ -4361,7 +4362,15 @@ def test_store_rejects_externally_writable_segment(tmp_path: Path) -> None:
     store = IncrementalCheckpointStore(tmp_path / "output")
     manifest = _commit(store, sequence=0, hour=6, payload=b"first")
     segment_path = store.workspace / store.segment_references(manifest)[0].relative_path
-    segment_path.chmod(0o666)
+    if os.name == "nt":
+        subprocess.run(
+            ["icacls", str(segment_path), "/grant", "*S-1-1-0:(W)"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+    else:
+        segment_path.chmod(0o666)
 
     with pytest.raises(CheckpointCorruptionError, match="externally writable"):
         store.recover(expected_fingerprint=_FINGERPRINT)

@@ -47,8 +47,12 @@ def compare_generated_outputs(before: Path, after: Path) -> OutputEquivalenceRes
     before_artifacts = _event_artifacts(before)
     after_artifacts = _event_artifacts(after)
 
-    missing = tuple(sorted(str(path) for path in before_artifacts.keys() - after_artifacts.keys()))
-    extra = tuple(sorted(str(path) for path in after_artifacts.keys() - before_artifacts.keys()))
+    missing = tuple(
+        sorted(path.as_posix() for path in before_artifacts.keys() - after_artifacts.keys())
+    )
+    extra = tuple(
+        sorted(path.as_posix() for path in after_artifacts.keys() - before_artifacts.keys())
+    )
     shared_paths = sorted(before_artifacts.keys() & after_artifacts.keys())
 
     byte_differences = []
@@ -57,11 +61,11 @@ def compare_generated_outputs(before: Path, after: Path) -> OutputEquivalenceRes
         before_path = before_artifacts[relative_path]
         after_path = after_artifacts[relative_path]
         if before_path.read_bytes() != after_path.read_bytes():
-            byte_differences.append(str(relative_path))
+            byte_differences.append(relative_path.as_posix())
         if _normalized_record_multiset(before_path, before) != _normalized_record_multiset(
             after_path, after
         ):
-            normalized_differences.append(str(relative_path))
+            normalized_differences.append(relative_path.as_posix())
 
     return OutputEquivalenceResult(
         byte_identical=not missing and not extra and not byte_differences,
@@ -112,3 +116,13 @@ def _normalize_json_value(value: Any, root: Path) -> Any:
 
 def _normalize_text_record(record: str, root: Path) -> str:
     return record.replace(str(root), "<OUTPUT_ROOT>")
+
+
+def deterministic_bundle_files(root: Path) -> dict[str, bytes]:
+    """Snapshot every deterministic bundle member, excluding run diagnostics."""
+    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }

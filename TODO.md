@@ -58,6 +58,14 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
+  Windows/Linux routine CI and local macOS validation in PR #419. Existing POSIX implementations
+  remain in place. See [platform details](docs/design/native-windows-filesystem.md) and the
+  [validation worklog](docs/worklog/2026-09-14-windows-ci-checkpoints.md).
+- [ ] **P2** Require `Required CI` through dev branch protection. The workflow aggregates Linux,
+  Windows, and lint successfully, but dev currently has no protection or effective branch rules.
+  Main already requires `Required CI` and `Required Release CI`; preserve those protections.
+
 - [x] **P1** Add source-instance-aware evidence reachability validation so impossible persistent
   SMB output selections fail before generation, invisible authored behavior produces actionable
   warnings, and runtime `--formats` narrowing rechecks the same canonical contracts. See the
