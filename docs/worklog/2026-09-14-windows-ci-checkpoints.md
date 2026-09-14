@@ -204,3 +204,23 @@ CI commands remain unchanged. No emitter journal has yet been redirected to the 
   verified that none of the native Windows filesystem/journal modules loads.
 - Generation behavior revision 87 records Windows-only storage routing. Ruff
   checks and behavior-manifest validation passed. No package version change.
+
+### Second complete Windows inventory
+
+Run 34856079894 (`709b4766`) completed:
+
+- Windows: 8,611 passed, 39 failed, 30 skipped, 2,019 deselected, 3 teardown errors;
+  947.52s. The real checkpoint suspension/verify/resume/control smoke test passed.
+- Linux: 8,639 passed, 44 skipped, 2,019 deselected; 851.96s. Smoke passed.
+- Most remaining failures are Snort paths covered by the next committed adapter.
+  Other roots: skill cleanup compared native backslash keys with portable manifest
+  keys and removed newly installed references; elevated process default object
+  owners can be Administrators instead of TokenUser; several assertions assumed
+  slash paths or POSIX profiling availability. Native owner validation now accepts
+  the process token's default owner only within the already-trusted privileged
+  principal set, while retaining restrictive ACL checks.
+- Targeted local checks for these remaining roots: 59 passed, 140 deselected
+  (13.24s). Four slow checkpoint suspension/move/recovery checks passed (100.29s).
+- Complete Windows logs retained locally at
+  `/tmp/eforge-windows-iteration6-clean.log`; successful Linux output at
+  `/tmp/eforge-windows-iteration6-linux.log`.

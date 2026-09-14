@@ -316,7 +316,7 @@ def _json_records(output: Path, filename: str) -> list[dict[str, object]]:
 def _source_bytes(output: Path) -> tuple[tuple[str, bytes], ...]:
     return tuple(
         sorted(
-            (str(path.relative_to(output)), path.read_bytes())
+            (path.relative_to(output).as_posix(), path.read_bytes())
             for path in output.rglob("*")
             if path.is_file() and path.name in _SOURCE_FILENAMES
         )

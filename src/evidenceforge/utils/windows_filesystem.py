@@ -285,18 +285,28 @@ def _sid(pointer: int | None) -> str:
         _local_free(ctypes.cast(value, wintypes.LPVOID))
 
 
-def current_user_sid() -> str:
-    """Read the real owner SID from the process token."""
+def _process_token_sid(information_class: int) -> str:
+    """Read a SID-bearing process token record without interpreting POSIX IDs."""
     token = wintypes.HANDLE()
     _require(_open_token(_current_process(), 0x8, ctypes.byref(token)))
     try:
         size = wintypes.DWORD()
-        _token_info(token, 1, None, 0, ctypes.byref(size))
+        _token_info(token, information_class, None, 0, ctypes.byref(size))
         buffer = ctypes.create_string_buffer(size.value)
-        _require(_token_info(token, 1, buffer, size, ctypes.byref(size)))
+        _require(_token_info(token, information_class, buffer, size, ctypes.byref(size)))
         return _sid(ctypes.c_void_p.from_buffer(buffer).value)
     finally:
         _close_handle(token)
+
+
+def current_user_sid() -> str:
+    """Read the process token's actual account SID."""
+    return _process_token_sid(1)
+
+
+def current_owner_sid() -> str:
+    """Read the process token's default object owner, including elevated tokens."""
+    return _process_token_sid(4)
 
 
 def _private_security_descriptor() -> wintypes.LPVOID:
@@ -308,7 +318,7 @@ def _private_security_descriptor() -> wintypes.LPVOID:
 
 
 def require_private(descriptor: int, *, ancestry: bool = False) -> None:
-    """Validate native ownership and DACL mutation rights on an opened object."""
+    """Validate native token ownership and private access rights on an opened object."""
     owner = wintypes.LPVOID()
     dacl = wintypes.LPVOID()
     security = wintypes.LPVOID()
@@ -334,7 +344,8 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
             # the system volume root on supported Windows installations.
             "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
         }
-        if _sid(owner.value) not in (trusted if ancestry else {user}):
+        private_owners = {user} | ({current_owner_sid()} & trusted)
+        if _sid(owner.value) not in (trusted if ancestry else private_owners):
             raise PermissionError(
                 f"Windows protected storage has an unexpected owner: {_sid(owner.value)}"
             )

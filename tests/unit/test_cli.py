@@ -2417,8 +2417,9 @@ output:
 
         def _fail_on_gt_install(self_path, target):
             nonlocal fault_reached
-            if self_path.name == "GROUND_TRUTH.md" and ".eforge-generation/staged" in str(
-                self_path
+            if (
+                self_path.name == "GROUND_TRUTH.md"
+                and ".eforge-generation/staged" in self_path.as_posix()
             ):
                 fault_reached = True
                 raise OSError("Simulated disk error during GT install")

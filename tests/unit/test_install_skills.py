@@ -55,7 +55,7 @@ EXPECTED_SKILL_FILES = {
     "validate.md",
 }
 EXPECTED_REFERENCE_FILES = {
-    str(path.relative_to(CANONICAL_COMMAND_ROOT))
+    path.relative_to(CANONICAL_COMMAND_ROOT).as_posix()
     for path in (CANONICAL_COMMAND_ROOT / "references").glob("*.md")
 }
 EVIDENCE_REFERENCES = {
@@ -468,7 +468,7 @@ class TestInstallChatGPTSkills:
         for skill_name, expected in EXPECTED_CHATGPT_REFERENCES.items():
             references_dir = tmp_path / f"eforge-{skill_name}" / "references"
             actual = {
-                str(path.relative_to(references_dir.parent))
+                path.relative_to(references_dir.parent).as_posix()
                 for path in references_dir.rglob("*.md")
             }
             assert actual == expected, skill_name
@@ -808,6 +808,6 @@ class TestInstallSkillsCli:
         assert "Legacy EvidenceForge skills" in result.stdout
         # Rich may wrap the long temporary home path at the slash depending on
         # the pytest worker suffix; normalize line wrapping before matching.
-        assert ".codex/skills" in result.stdout.replace("\n", "")
+        assert ".codex/skills" in result.stdout.replace("\n", "").replace("\\", "/")
         assert "These legacy files were not modified" in result.stdout
         assert sentinel.read_text(encoding="utf-8") == "preserve me"
