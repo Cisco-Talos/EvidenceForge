@@ -27,7 +27,7 @@ class WindowsCheckpointIO:
     """Own publication barriers and the known-durable dependency set for a store."""
 
     def __init__(self) -> None:
-        self._durable: set[tuple[Path, str]] = set()
+        self._durable: dict[Path, str] = {}
         self.durable_catalogs: set[str] = set()
         self._uncertain = False
 
@@ -100,6 +100,8 @@ class WindowsCheckpointIO:
         try:
             try:
                 filesystem.remove_child(parent, path.name, directory=directory)
+                self._durable.pop(path, None)
+                self.durable_catalogs.discard(path.stem)
             except FileNotFoundError:
                 pass
         finally:
@@ -203,22 +205,10 @@ class WindowsCheckpointIO:
         self.require_healthy()
         self._rename(source, target, replace=False, directory=True)
 
-    def content_object(self, path: Path, payload: bytes) -> bool:
-        """Publish or authenticate an immutable object, remembering its barrier."""
-        digest = hashlib.sha256(payload).hexdigest()
-        self.mkdir(path.parent, parents=True, exist_ok=True)
-        try:
-            self.write_new(path, payload)
-        except FileExistsError:
-            self.ensure_file(path, size=len(payload), digest=digest)
-            return False
-        self._durable.add((path, digest))
-        return True
-
     def ensure_file(self, path: Path, *, size: int, digest: str) -> None:
         """Authenticate and republish an existing dependency once, with bounded I/O."""
         self.require_healthy()
-        if (path, digest) in self._durable:
+        if self._durable.get(path) == digest:
             return
         descriptor = filesystem.open_file(path, os.O_RDONLY)
         try:
@@ -228,21 +218,34 @@ class WindowsCheckpointIO:
                 raise CheckpointCorruptionError(f"checkpoint dependency changed: {path}")
 
             def chunks() -> Iterator[bytes]:
-                checksum = hashlib.sha256()
-                total = 0
-                while payload := os.read(descriptor, _COPY_CHUNK_BYTES):
-                    total += len(payload)
-                    checksum.update(payload)
-                    yield payload
-                if total != size or checksum.hexdigest() != digest:
-                    raise CheckpointCorruptionError(
-                        f"checkpoint dependency failed integrity: {path}"
-                    )
+                nonlocal descriptor
+                assert descriptor is not None
+                try:
+                    checksum = hashlib.sha256()
+                    total = 0
+                    while payload := os.read(descriptor, _COPY_CHUNK_BYTES):
+                        total += len(payload)
+                        checksum.update(payload)
+                        yield payload
+                    if total != size or checksum.hexdigest() != digest:
+                        raise CheckpointCorruptionError(
+                            f"checkpoint dependency failed integrity: {path}"
+                        )
+                finally:
+                    # Windows cannot replace the destination while this read
+                    # handle remains open, even though it shares delete access.
+                    os.close(descriptor)
+                    descriptor = None
 
-            self.write_atomic(path, chunks())
+            stream = chunks()
+            try:
+                self.write_atomic(path, stream)
+            finally:
+                stream.close()
         finally:
-            os.close(descriptor)
-        self._durable.add((path, digest))
+            if descriptor is not None:
+                os.close(descriptor)
+        self._durable[path] = digest
 
     def remove_tree(self, path: Path) -> None:
         """Reclaim an unreferenced tree without following junctions or symlinks."""

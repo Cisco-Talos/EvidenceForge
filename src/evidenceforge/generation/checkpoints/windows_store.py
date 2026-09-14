@@ -11,20 +11,23 @@ from pydantic import ValidationError
 from evidenceforge.utils import windows_filesystem as filesystem
 
 from .errors import CheckpointCorruptionError
-from .models import CheckpointManifest, SegmentCatalogNode, SegmentCatalogReference
+from .models import SegmentCatalogNode, SegmentCatalogReference
 
 if TYPE_CHECKING:
     from .store import IncrementalCheckpointStore
 
 
-def prepare_dependencies(store: IncrementalCheckpointStore, manifest: CheckpointManifest) -> None:
+def prepare_dependencies(
+    store: IncrementalCheckpointStore,
+    catalogs: tuple[SegmentCatalogReference, ...],
+    resolved_path: str,
+    resolved_digest: str,
+) -> None:
     """Establish barriers for newly referenced and pre-existing immutable dependencies."""
     operations = store._windows_io
     operations.require_healthy()
-    resolved = store.workspace / manifest.resolved_scenario_relative_path
-    operations.ensure_file(
-        resolved, size=resolved.stat().st_size, digest=manifest.resolved_scenario_sha256
-    )
+    resolved = store.workspace / resolved_path
+    operations.ensure_file(resolved, size=resolved.stat().st_size, digest=resolved_digest)
     visiting: set[str] = set()
 
     def adopt(reference: SegmentCatalogReference) -> None:
@@ -56,7 +59,7 @@ def prepare_dependencies(store: IncrementalCheckpointStore, manifest: Checkpoint
         visiting.remove(reference.sha256)
         operations.durable_catalogs.add(reference.sha256)
 
-    for catalog in manifest.segment_catalogs:
+    for catalog in catalogs:
         adopt(catalog)
 
 

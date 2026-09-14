@@ -625,10 +625,11 @@ def validate_output_path(path: Path | str) -> Path:
 
 
 def fsync_directory(path: Path) -> None:
-    """Sync directory entries on POSIX; Windows only supports regular-file flushing.
+    """Sync directory entries on POSIX, preserving strict synchronization errors.
 
-    Windows callers still flush files and publish them with atomic replacement,
-    but cannot claim POSIX directory-entry durability after power loss.
+    This POSIX helper is a no-op on Windows. The Windows checkpoint publisher
+    establishes its namespace barriers with native NTFS write-through operations.
+    Other Windows callers do not acquire that guarantee by calling this helper.
     """
 
     if os.name == "nt":

@@ -505,8 +505,6 @@ class IncrementalCheckpointStore:
         mkdir_private_host(directory, parents=True, exist_ok=True)
         path = directory / f"{digest}{suffix}"
         relative = path.relative_to(self.workspace).as_posix()
-        if os.name == "nt":
-            return relative, self._windows_io.content_object(path, payload)
         if path.exists():
             info = path.lstat()
             if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
@@ -515,6 +513,8 @@ class IncrementalCheckpointStore:
                 raise CheckpointCorruptionError(
                     f"checkpoint object digest collision or tampering detected: {relative}"
                 )
+            if os.name == "nt":
+                self._windows_io.ensure_file(path, size=len(payload), digest=digest)
             return relative, False
         temporary = directory / f".{digest}.pending-{uuid.uuid4().hex}"
         try:
@@ -529,6 +529,8 @@ class IncrementalCheckpointStore:
             fsync_directory(directory)
         finally:
             temporary.unlink(missing_ok=True)
+        if os.name == "nt":
+            self._windows_io._durable[path] = digest
         return relative, True
 
     @staticmethod
@@ -739,6 +741,10 @@ class IncrementalCheckpointStore:
         else:
             resolved_digest, resolved_path = resolved_scenario_reference
 
+        if os.name == "nt":
+            from .windows_store import prepare_dependencies
+
+            prepare_dependencies(self, segment_catalogs, resolved_path, resolved_digest)
         pending = self.recovery / f".pending-{sequence:020d}-{uuid.uuid4().hex}"
         final = self.recovery / f"{sequence:020d}"
         if final.exists():
@@ -788,10 +794,6 @@ class IncrementalCheckpointStore:
             _replace_checkpoint_path(pending, final, directory=True)
             fsync_directory(self.recovery)
             self._synchronize_publication("recovery_published", sequence)
-            if os.name == "nt":
-                from .windows_store import prepare_dependencies
-
-                prepare_dependencies(self, manifest)
             self._publish_index(manifest, manifest_payload)
             self._synchronize_publication("index_published", sequence)
             try:

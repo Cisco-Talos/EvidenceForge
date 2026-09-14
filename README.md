@@ -145,8 +145,8 @@ parser support.
 
 macOS and Linux are the primary supported host platforms. Native Windows runs Python directly,
 without WSL; generation output, checkpoint workspaces, and temporary storage must use local NTFS
-paths without junctions or other reparse points. Windows checkpoint directory durability across
-power loss is weaker than on POSIX. See [Windows platform details](docs/design/native-windows-filesystem.md)
+paths without junctions or other reparse points. Windows checkpoints use native write-through
+publication; CI validates simulated power-loss recovery, not physical hardware guarantees. See [Windows platform details](docs/design/native-windows-filesystem.md)
 for tested runtimes and filesystem limits.
 
 ```bash

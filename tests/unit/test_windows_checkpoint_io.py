@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Native Windows checkpoint I/O")
 
 
@@ -28,7 +30,7 @@ def _mode(handle: int) -> int:
     return mode.value
 
 
-@pytest.mark.parametrize("payload", [b"", bytes(range(256)) + b"\r\n\x1a"])
+@pytest.mark.parametrize("payload", [b"", bytes(range(256)) + b"\r\n\x1a"], ids=["empty", "binary"])
 def test_native_checkpoint_writes_and_renames_use_write_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: bytes
 ) -> None:
@@ -153,3 +155,109 @@ def test_existing_dependencies_are_authenticated_and_republished_once(
         WindowsCheckpointIO().ensure_file(path, size=len(payload), digest="0" * 64)
     assert path.read_bytes() == payload
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_gc_invalidates_durability_proofs_before_the_same_digest_is_reused(tmp_path: Path) -> None:
+    from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
+
+    operations = WindowsCheckpointIO()
+    payload = b"original"
+    digest = hashlib.sha256(payload).hexdigest()
+    path = tmp_path / f"{digest}.json"
+    operations.write_new(path, payload)
+    operations.ensure_file(path, size=len(payload), digest=digest)
+    operations.durable_catalogs.add(digest)
+    operations.unlink(path)
+    assert path not in operations._durable
+    assert digest not in operations.durable_catalogs
+    operations.write_new(path, b"tampered")
+    from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
+
+    with pytest.raises(CheckpointCorruptionError):
+        operations.ensure_file(path, size=len(payload), digest=digest)
+
+
+def test_native_sharing_violation_keeps_the_old_index_and_closes_publication_handles(
+    tmp_path: Path,
+) -> None:
+    from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    operations = WindowsCheckpointIO()
+    path = tmp_path / "CURRENT.json"
+    operations.write_new(path, b"old")
+    descriptor = filesystem.open_file(path, os.O_RDONLY)
+    try:
+        with pytest.raises(PermissionError):
+            operations.write_atomic(path, (b"new",), commit_point=True)
+        assert path.read_bytes() == b"old"
+    finally:
+        os.close(descriptor)
+    WindowsCheckpointIO().write_atomic(path, (b"retry in a fresh store",))
+    assert path.read_bytes() == b"retry in a fresh store"
+
+
+def _commit_small(store: IncrementalCheckpointStore, sequence: int) -> None:
+    from evidenceforge.generation.checkpoints.models import CheckpointCursor
+    from evidenceforge.generation.checkpoints.store import HeadDraft
+
+    store.commit(
+        sequence=sequence,
+        run_id="native-regression",
+        run_fingerprint="a" * 64,
+        checkpoint_hours=1,
+        cursor=CheckpointCursor(
+            phase="collection",
+            completed_simulated_hours=sequence + 1,
+            next_hour=f"2026-01-01T0{sequence + 1}:00:00+00:00",
+        ),
+        resolved_scenario=b"resolved",
+        inherited_catalogs=(),
+        new_segments=(),
+        heads=(HeadDraft(owner="engine", schema_version="1", payload=b"head"),),
+    )
+
+
+def test_rotation_preserves_indexed_points_when_a_newer_unindexed_directory_exists(
+    tmp_path: Path,
+) -> None:
+    from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    _commit_small(store, 0)
+    _commit_small(store, 1)
+    unindexed = store.recovery / "00000000000000000002"
+    store._windows_io.mkdir(unindexed)
+    store._rotate_recoveries()
+    assert not unindexed.exists()
+    assert (store.recovery / "00000000000000000000").exists()
+    assert store.recover(read_only=True).manifest.sequence == 1
+
+
+def test_uncertain_index_blocks_store_commit_gc_and_workspace_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.checkpoints.errors import CheckpointFilesystemError
+    from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+    store = IncrementalCheckpointStore(tmp_path / "output")
+    _commit_small(store, 0)
+    rename = store._windows_io._rename
+
+    def fail_after_index(source: Path, target: Path, **kwargs: object) -> None:
+        rename(source, target, **kwargs)
+        if target == store.index_path:
+            raise OSError("index publication completion is indeterminate")
+
+    monkeypatch.setattr(store._windows_io, "_rename", fail_after_index)
+    with pytest.raises(OSError, match="indeterminate"):
+        _commit_small(store, 1)
+    with pytest.raises(CheckpointFilesystemError):
+        _commit_small(store, 1)
+    with pytest.raises(CheckpointFilesystemError):
+        store.collect_garbage()
+    with pytest.raises(CheckpointFilesystemError):
+        store.remove_workspace()
+    assert (store.recovery / "00000000000000000000").exists()
+    assert store.recover(read_only=True).manifest.sequence == 1

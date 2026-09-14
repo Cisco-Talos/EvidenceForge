@@ -289,3 +289,28 @@ publication prevents further writes or reclamation on that store. Windows cleanu
 uses the authenticated index rather than selecting the newest directory names.
 Native CI first validates the low-level barriers; the storage model and real CLI
 crash-image tests are being added next. This entry is progress, not acceptance.
+
+### Write-through native first pass and simulator construction
+
+- Commit ebdb1611, run 34885042490: Linux and lint passed. Native barrier
+  preflight passed 8 of 9 contracts, including queried write-through mode on
+  actual file and directory rename handles. Existing-object adoption failed
+  with WinError 5 because its reader remained open during replacement. The
+  reader now closes after streaming integrity verification, before rename.
+- The same code's local affected checkpoint tests passed: 148 passed, 9 native
+  skips (32.26s). Four slow CLI suspension/move/recovery tests passed (102.33s).
+- Local routine validation during simulator development: 8,643 passed, 60
+  skipped, 2,023 deselected (324.86s). One additional portable model self-check
+  and two native regressions were added after collection; all five portable
+  model self-checks pass separately.
+- Structural audit versus e012a93: all 79 existing checkpoint-module functions
+  are identical after resolving POSIX branches and transparent wrappers. A
+  macOS CLI import probe confirms Windows filesystem/checkpoint modules remain
+  unloaded. The shared directory-sync docstring is clarified; its code is unchanged.
+- The independent model keys namespace entries by parent object identity and
+  separates namespace barriers from file-data flushes. Actual Windows operation
+  tracing, every-boundary/sector-profile replay, negative controls, and real CLI
+  crash-image resume cases are implemented but await native CI validation.
+- The next iteration also invalidates cached object/catalog durability proofs
+  when Windows GC removes an object. No package version or checkpoint schema
+  changes; generation behavior revision 89 declares host-filesystem-only impact.

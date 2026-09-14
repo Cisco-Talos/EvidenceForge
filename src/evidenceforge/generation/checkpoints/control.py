@@ -166,6 +166,15 @@ def _read_model(path: Path, model_type: type[BaseModel]) -> BaseModel | None:
         os.close(descriptor)
 
 
+def _unlink_control(path: Path) -> None:
+    if os.name == "nt":
+        from .windows_io import WindowsCheckpointIO
+
+        WindowsCheckpointIO().unlink(path)
+        return
+    path.unlink(missing_ok=True)
+
+
 def publish_controller_record(
     store: IncrementalCheckpointStore,
     *,
@@ -177,14 +186,14 @@ def publish_controller_record(
     store.initialize()
     record = CheckpointControllerRecord(run_id=run_id, checkpoint_hours=checkpoint_hours)
     _atomic_write(store.workspace / _CONTROL_NAME, _canonical_json(record))
-    (store.workspace / _SUSPENDED_NAME).unlink(missing_ok=True)
+    _unlink_control(store.workspace / _SUSPENDED_NAME)
 
 
 def clear_controller_record(store: IncrementalCheckpointStore) -> None:
     """Remove checkpoint-control capability for a controller with cadence disabled."""
 
     for name in (_CONTROL_NAME, _SUSPEND_REQUEST_NAME, _SUSPENDED_NAME):
-        (store.workspace / name).unlink(missing_ok=True)
+        _unlink_control(store.workspace / name)
     fsync_directory(store.workspace)
 
 
@@ -259,7 +268,7 @@ def mark_suspended(
         cursor=cursor,
     )
     _atomic_write(store.workspace / _SUSPENDED_NAME, _canonical_json(record))
-    (store.workspace / _SUSPEND_REQUEST_NAME).unlink(missing_ok=True)
+    _unlink_control(store.workspace / _SUSPEND_REQUEST_NAME)
     fsync_directory(store.workspace)
     return record
 

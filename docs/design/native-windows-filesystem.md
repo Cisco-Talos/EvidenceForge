@@ -69,11 +69,65 @@ Regular-file writes still flush before publication. Windows uses writable handle
 `FlushFileBuffers`, including final-output reconciliation. POSIX read-only opens and strict
 `fsync` failure propagation remain unchanged.
 
-Windows deliberately omits POSIX directory `fsync`. Atomic publication and integrity checks
-remain, but directory-entry persistence across sudden power loss has a weaker guarantee than
-on the supported POSIX path. A successful checkpoint must not be described as providing
-POSIX-equivalent power-loss durability on Windows. See
-[FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+Windows checkpoint publication uses a separate `WindowsCheckpointIO` boundary. Its
+file creation and rename handles opt into `FILE_WRITE_THROUGH`; existing native emitter
+callers keep their default I/O behavior. Complete buffered binary contents are explicitly
+flushed before publication, and regular-file metadata is flushed again after rename.
+New checkpoint directories, including missing output/workspace ancestors, are created under
+private staging names and published through write-through directory renames. Directory
+handles close before publication, while retained parent handles preserve path identity.
+
+The commit order is dependencies (resolved input, segments, catalogs), participant heads and
+manifest, recovery-directory publication, then atomic `CURRENT.json` publication. Only then
+may the checkpoint be acknowledged. Existing dependencies are authenticated and republished
+once per store before a new acknowledgment; copies stream in 1 MiB chunks. Windows readers
+close before replacing the file they authenticated. An uncertain index publication stops
+further publication and reclamation on that store. Recovery retention and garbage collection
+use the recovery index, and removing an object invalidates its cached durability proof.
+Suspension records and restored append spools use the same Windows publication primitives.
+
+The POSIX directory-sync helper remains a no-op on Windows; it is not the checkpoint's
+namespace barrier. The native NTFS write-through rename is that barrier. This interpretation
+uses Microsoft's documented [write-through metadata behavior](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew#caching-behavior)
+and [native create options](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile),
+alongside [explicit file flushing](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+No unbuffered I/O, administrative privilege, or whole-volume flush is required.
+
+The durability contract assumes a stable pre-existing filesystem ancestry, local NTFS, and
+storage that honors these flush requests. All ancestors newly created by checkpoint
+initialization receive write-through publication. Physical power-loss certification, hardware
+that ignores flushes, final bundle publication durability, other filesystems, and cross-OS
+checkpoint transfer are outside this contract. The guarantee applies while the checkpoint
+remains retained; successful final generation intentionally removes the workspace.
+
+### Simulated power-loss validation
+
+A test-only observer records actual native checkpoint I/O and the flags requested by its rename
+calls. The independent storage model separates file bytes from parent/name directory entries,
+tracks volatile and durable state, and crashes before/after every operation across three small
+commits. Profiles discard, retain, reorder, or partially persist unsynchronized operations,
+including 512-byte and 4-KiB torn writes. Directory renames do not implicitly flush descendants.
+Materialized crash images are checked by the production recovery reader. Deliberately missing
+write-through protection and inverted index/recovery ordering must fail this contract.
+
+After acknowledgment the selected recovery must be that checkpoint or a newer complete one;
+falling back to an older point is a test failure. Before acknowledgment, either the previous
+complete checkpoint or the new complete point is allowed. Before the first acknowledgment,
+no resumable point is also allowed. Corrupt or incomplete points must never be accepted.
+
+A real fixed-seed CLI run supplies representative crash images before index publication,
+between index publication and acknowledgment, and after acknowledgment. Fresh CLI processes
+verify and resume those images, compare every deterministic bundle file with an uninterrupted
+control, and confirm workspace removal. A second interruption exercises spool restoration.
+Process termination only controls the experiment; the model, not surviving OS cache contents,
+defines what survives the simulated power loss.
+
+These are **write-through checkpoint publication tests using native APIs and simulated
+power-loss recovery**, not physical Windows/disk power-cycle tests. The dedicated 20-minute
+Windows CI job runs the focused slow module without coverage on PRs and pushes to dev/main,
+rejects skipped/empty test execution, and contributes to `Required CI`. Failure artifacts retain
+operation traces, crash profiles, subprocess output, and runner/filesystem metadata. The broad
+Linux release-slow suite is unchanged.
 
 Windows process-owner checks use psutil's native process query instead of `os.kill(pid, 0)`.
 An inaccessible or indeterminate process cannot justify reclaiming its lock. The earlier CI
