@@ -6,13 +6,14 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
-## v2.0.1 (2026-09-13)
+## v2.0.1 (2026-09-14)
 
 This patch corrects foreground process ownership, Linux resolver-health evidence, and short
-Kerberos exchange timing. It simplifies generation ownership and shared policy while preserving
+Kerberos exchange timing, and prevents premature identity retirement from breaking checkpoints
+during long periodic scenarios. It simplifies generation ownership and shared policy while preserving
 public interfaces, authored schemas, output formats, checkpoint representations, and resume
-compatibility policies. Behavior-preserving refactors retain byte-identical evidence; the three
-realism corrections intentionally change affected evidence.
+compatibility policies. Behavior-preserving refactors retain byte-identical evidence; correctness
+fixes intentionally change affected evidence.
 
 **Realism fixes**
 
@@ -26,6 +27,10 @@ realism corrections intentionally change affected evidence.
   processing, preventing short exchanges from exhausting their committed transport interval.
   Preserve valid candidates and unrelated WFP timing, with bounded regressions and FOR668 scenario
   and checkpoint comparisons (`d2671021`).
+- Retire process/session identities against completed simulation work instead of future event
+  timestamps, preventing periodic lookahead from invalidating pending SSH checkpoints. Preserve
+  the exact SSH source process through PID reuse and checkpoint hydration, with existing retention
+  caps and checkpoint representations (`b2948b2f`).
 
 **Process and storyline ownership**
 
@@ -68,6 +73,8 @@ realism corrections intentionally change affected evidence.
   Kerberos corrections retain explicit attribution reports (`ad8a4aa5`, `fd007c7b`).
 - Split the extended release test gate into four deterministic shards while retaining the
   cross-Python checkpoint-portability gate (`e4035435`).
+- Make RDP ancestry checks host-specific and syslog recovery tests independent of filesystem
+  inode and file-descriptor allocation choices (`8358acdb`).
 - Record general entity availability across evidence families as future work and correct the
   FOR668 worklog's trademark reference (`3b3917dc`, `d8a3d252`).
 

@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.0.0 release-candidate validation; post-1.0 quality improvements ongoing
+**Status:** 2.0.1 patch release; post-2.0 quality improvements ongoing
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-10
+**Last Roadmap Review:** 2026-09-14
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -13,6 +13,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and completed-phase details
 ---
 
 ## Completed Milestones
+
+**2.0.1 cleanup and correctness.** Simplified generation ownership and shared infrastructure,
+corrected foreground lifecycle, resolver selection, and Kerberos timing, and repaired long-run
+SSH checkpoint identity retention. See [CHANGELOG.md](CHANGELOG.md#v201-2026-09-14).
 
 **Phase 1: Core Generation.** Pydantic scenario models, StateManager, Windows
 Event Security and Zeek conn.log output, hour-by-hour generation engine, and
