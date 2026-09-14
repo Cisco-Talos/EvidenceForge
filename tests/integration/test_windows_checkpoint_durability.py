@@ -149,7 +149,14 @@ def test_every_publication_boundary_survives_modeled_power_loss(
     assert "run/.eforge-generation/suspended.json" in model.crash().files
     assert sum(counts.values()) > 20
     (tmp_path / "matrix-summary.json").write_text(
-        json.dumps({"cuts": len(publication_trace) + 1, "distinct_images": counts}),
+        json.dumps(
+            {
+                "cuts": len(publication_trace) + 1,
+                "profiles": profiles,
+                "crash_cases": (len(publication_trace) + 1) * len(profiles),
+                "distinct_images": counts,
+            }
+        ),
         encoding="utf-8",
     )
 

@@ -25,6 +25,7 @@ class StorageEvent:
     write_through: bool = False
     sequence: int = -1
     stage: str = ""
+    elapsed_seconds: float = 0.0
 
     def document(self) -> dict[str, object]:
         return {
@@ -35,6 +36,7 @@ class StorageEvent:
             "write_through": self.write_through,
             "sequence": self.sequence,
             "stage": self.stage,
+            "elapsed_seconds": self.elapsed_seconds,
         }
 
     @classmethod

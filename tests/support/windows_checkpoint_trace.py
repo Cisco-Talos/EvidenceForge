@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -129,9 +130,16 @@ def trace_checkpoint_io(
                 record(StorageEvent("unlink", name))
 
         def observed_commit(store: IncrementalCheckpointStore, **kwargs: Any) -> Any:
+            started = time.monotonic()
             manifest = commit(store, **kwargs)
             if relative(store.output_root) is not None:
-                record(StorageEvent("ack", sequence=manifest.sequence))
+                record(
+                    StorageEvent(
+                        "ack",
+                        sequence=manifest.sequence,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
+                )
             return manifest
 
         def observed_stage(store: IncrementalCheckpointStore, stage: str, sequence: int) -> None:

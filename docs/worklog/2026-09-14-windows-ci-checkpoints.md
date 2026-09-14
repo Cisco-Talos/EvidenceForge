@@ -331,3 +331,21 @@ crash-image tests are being added next. This entry is progress, not acceptance.
   resurrect it in a simulated crash. Windows now consumes control names by
   write-through rename before reclaiming tombstones. POSIX unlink behavior is
   unchanged. The model fixture now publishes and consumes an actual request.
+
+### Native durability acceptance and final gate preparation
+
+- At 7ed890d6, [run 34887977622](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34887977622)
+  passed all 13 native barrier contracts and all four focused slow durability
+  cases (116.56s). The real CLI recovered all three publication crash images and
+  the second crash during spool restoration with deterministic bundle equality.
+  Both intentionally broken publication protocols were rejected.
+- The same revision's full local macOS suite passed: 8,644 passed, 64 skipped,
+  2,023 deselected (319.85s). The expanded structural audit confirms all 110
+  existing functions in the affected shared checkpoint/filesystem modules retain
+  their POSIX implementations after resolving OS branches and wrappers.
+- Final gate preparation removes the duplicate native preflight step; native
+  contracts remain routine. Added explicit post-rename metadata-flush failure and
+  write-through ACL/reparse rejection regressions. The focused job now reports
+  runner details, crash-image coverage, and instrumented CLI checkpoint timings;
+  its timeout cleanup also terminates and waits for subprocess descendants.
+  Final revision CI is still pending; these entries do not claim full acceptance.

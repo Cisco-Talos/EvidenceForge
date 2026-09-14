@@ -4,6 +4,7 @@ import ctypes
 import errno
 import hashlib
 import os
+import subprocess
 from ctypes import wintypes
 from pathlib import Path
 
@@ -90,22 +91,34 @@ def test_native_checkpoint_short_writes_and_exclusive_publication(
     assert sorted(item.name for item in tmp_path.iterdir()) == ["request"]
 
 
-@pytest.mark.parametrize("failure", ["zero-write", "disk-full", "flush", "rename", "after-rename"])
+@pytest.mark.parametrize(
+    "failure", ["zero-write", "disk-full", "flush", "rename", "after-rename", "metadata-flush"]
+)
 def test_native_checkpoint_failure_never_acknowledges_or_destroys_previous_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     from evidenceforge.generation.checkpoints.errors import CheckpointFilesystemError
     from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
+    from evidenceforge.utils import windows_filesystem as filesystem
 
     operations = WindowsCheckpointIO()
     path = tmp_path / "CURRENT.json"
     operations.write_new(path, b"old")
     rename = operations._rename
+    flush = filesystem.flush_file
+    flush_count = 0
 
     def fail(*arguments: object, **keywords: object) -> None:
         if failure == "after-rename":
             rename(*arguments, **keywords)
         raise OSError(errno.ENOSPC if failure == "disk-full" else errno.EACCES, failure)
+
+    def fail_metadata_flush(descriptor: int) -> None:
+        nonlocal flush_count
+        flush_count += 1
+        if flush_count == 2:
+            raise OSError(errno.EIO, "metadata flush failed after native rename")
+        flush(descriptor)
 
     if failure == "zero-write":
         monkeypatch.setattr(operations, "_write", lambda *_args: 0)
@@ -113,12 +126,16 @@ def test_native_checkpoint_failure_never_acknowledges_or_destroys_previous_bytes
         monkeypatch.setattr(operations, "_write", fail)
     elif failure == "flush":
         monkeypatch.setattr(operations, "_flush", fail)
+    elif failure == "metadata-flush":
+        monkeypatch.setattr(filesystem, "flush_file", fail_metadata_flush)
     else:
         monkeypatch.setattr(operations, "_rename", fail)
     with pytest.raises(OSError):
         operations.write_atomic(path, (b"new",), commit_point=True)
-    assert path.read_bytes() == (b"new" if failure == "after-rename" else b"old")
-    if "rename" in failure:
+    assert path.read_bytes() == (
+        b"new" if failure in {"after-rename", "metadata-flush"} else b"old"
+    )
+    if "rename" in failure or failure == "metadata-flush":
         with pytest.raises(CheckpointFilesystemError, match="fresh process"):
             operations.unlink(path)
         with pytest.raises(CheckpointFilesystemError):
@@ -126,6 +143,39 @@ def test_native_checkpoint_failure_never_acknowledges_or_destroys_previous_bytes
     else:
         operations.require_healthy()
         assert list(tmp_path.iterdir()) == [path]
+
+
+def test_write_through_checkpoint_boundary_preserves_acl_and_reparse_rejection(
+    tmp_path: Path,
+) -> None:
+    from evidenceforge.generation.checkpoints.windows_io import WindowsCheckpointIO
+
+    operations = WindowsCheckpointIO()
+    private = tmp_path / "private"
+    operations.mkdir(private)
+    subprocess.run(
+        ["icacls", str(private), "/grant", "*S-1-1-0:(R)"],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    with pytest.raises(PermissionError, match="another principal"):
+        operations.mkdir(private, exist_ok=True)
+    target = tmp_path / "target"
+    operations.mkdir(target)
+    junction = tmp_path / "junction"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        check=True,
+        capture_output=True,
+        timeout=10,
+    )
+    try:
+        with pytest.raises(PermissionError, match="reparse"):
+            operations.write_new(junction / "escape.bin", b"not published")
+        assert not list(target.iterdir())
+    finally:
+        junction.rmdir()
 
 
 def test_existing_dependencies_are_authenticated_and_republished_once(
