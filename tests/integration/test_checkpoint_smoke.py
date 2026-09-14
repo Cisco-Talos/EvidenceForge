@@ -42,6 +42,12 @@ def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path) -> No
     sync = tmp_path / "sync"
     sync.mkdir()
     environment = os.environ.copy()
+    for name in (
+        "EFORGE_TEST_CHECKPOINT_SYNC_DIR",
+        "EFORGE_TEST_CHECKPOINT_SYNC_HOUR",
+        "EFORGE_TEST_CHECKPOINT_SYNC_TIMEOUT",
+    ):
+        environment.pop(name, None)
     environment["PYTHONUTF8"] = "1"
     suspended_environment = environment | {
         "EFORGE_TEST_CHECKPOINT_SYNC_DIR": str(sync),

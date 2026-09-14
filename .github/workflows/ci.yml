@@ -78,12 +78,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      # Temporary native-backend iteration preflight; remove after the full
-      # Windows routine suite passes. Linux keeps its existing test command.
-      - name: Validate native Windows filesystem operations
-        if: runner.os == 'Windows'
-        run: uv run pytest tests/unit/test_windows_filesystem.py --no-cov -q
-
       - name: Run tests without coverage
         run: uv run pytest --no-cov
 

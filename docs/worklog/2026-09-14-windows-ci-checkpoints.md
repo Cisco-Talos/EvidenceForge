@@ -248,3 +248,26 @@ Run 34856079894 (`709b4766`) completed:
 - Rechecked repository settings: main requires Required CI and Required Release
   CI; dev is unprotected and both branches have no effective ruleset entries.
   No repository settings were changed.
+- The smoke test now removes inherited synchronization variables before creating
+  either its resume or control environment. It passes locally with deliberately
+  conflicting parent synchronization settings (20.04s); only the initial suspended
+  subprocess receives the test barrier configuration.
+
+### Complete native Windows acceptance
+
+[Run 34859531009](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34859531009)
+at `7160bfc6bbfd9a1c2d854e2a321a8f4e44a1e724` passed:
+
+- Native Windows Server 2025 / Python 3.12.10: **8,659 passed, 30 skipped,
+  2,019 deselected**, 1,255.84s. All 23 extra preflight checks also passed.
+- Linux: **8,639 passed, 50 skipped, 2,019 deselected**, 847.65s.
+- Lint, generation behavior validation, and the Required CI aggregate passed.
+- The checkpoint smoke passed on both CI hosts, as it did locally on macOS.
+- Full Windows logs: `/tmp/eforge-windows-iteration9-clean.log`; Linux logs:
+  `/tmp/eforge-windows-iteration9-linux.log`.
+- Removed the temporary duplicate native preflight step. Native regressions remain
+  in the normal unmarked routine suite, including the added exclusive/truncate
+  contract. The final matrix also validates smoke environment isolation.
+- Durable roadmap now records backend implementation and retains dev branch
+  protection as a separate uncompleted repository administration item. No merge,
+  release, package version bump, or repository settings changes were made.

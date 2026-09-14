@@ -108,8 +108,13 @@ The [worklog](../worklog/2026-09-14-windows-ci-checkpoints.md) records exact CI 
 failure inventories, validation counts, and completion status. The first native run stopped at
 257 collection errors from a shared temporary-stream import assumption. After that fix, the
 full routine inventory exposed 468 failures; subsequent native storage and path repairs reduced
-this to 39 while the checkpoint smoke test and full Linux suite passed. Final acceptance requires
-zero Windows failures and successful Linux/macOS validation, not merely a passing native probe.
+this to 39 while the checkpoint smoke test and full Linux suite passed.
+
+[Run 34859531009](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/34859531009)
+at `7160bfc6` passed the complete routine matrix: Windows **8,659 passed, 30 skipped** and Linux
+**8,639 passed, 50 skipped**, with 2,019 slow/soak tests deselected on each. The same revision's
+local macOS routine run passed **8,639 tests, 50 skipped**. The real checkpoint smoke passed on
+all three hosts. The worklog records subsequent final cleanup validation.
 
 Repository settings were inspected without modification. `main` requires `Required CI` and
 `Required Release CI`. `dev` has no branch protection or effective rules, so workflow failure
