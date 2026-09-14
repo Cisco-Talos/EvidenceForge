@@ -1047,13 +1047,17 @@ def test_syslog_offset_zero_retry_recreates_anonymous_descriptor(
     original_stream = emitter._spool_stream
     assert original_stream is not None and type(original_stream.descriptor) is int
     assert os.fstat(original_stream.descriptor).st_size == 0
-    original_identity = emitter._spool_identity
     os.close(original_stream.descriptor)
 
     monkeypatch.setattr(emitter, "_complete_spool_append", original_complete)
     emitter.flush(force=True)
     assert emitter._spool_stream is not None
-    assert emitter._spool_identity != original_identity
+    # Filesystems may immediately reuse the unlinked file's inode. Recovery
+    # must replace the closed owner; a different inode number is not required.
+    assert original_stream.closed
+    assert emitter._spool_stream is not original_stream
+    metadata = os.fstat(emitter._spool_stream.descriptor)
+    assert emitter._spool_identity == (int(metadata.st_dev), int(metadata.st_ino))
     emitter.close()
     assert _output_path(tmp_path, "default").read_bytes().count(b"fresh-descriptor-retry") == 1
 
@@ -2754,6 +2758,16 @@ def test_syslog_public_owner_close_is_safe_from_same_inode_same_fd_aba(
                     output.parent,
                     os.O_RDONLY | syslog_module._DIRECTORY | syslog_module._NOFOLLOW,
                 )
+            # A lower descriptor may already be free when the parent closes.
+            # Force the intended same-fd ABA instead of relying on os.open's choice.
+            if replacement_descriptor != previous_descriptor:
+                opened_descriptor = replacement_descriptor
+                try:
+                    replacement_descriptor = os.dup2(
+                        opened_descriptor, previous_descriptor, inheritable=False
+                    )
+                finally:
+                    os.close(opened_descriptor)
             assert replacement_descriptor == previous_descriptor
             metadata = os.fstat(replacement_descriptor)
             replacement_identity = (int(metadata.st_dev), int(metadata.st_ino))
