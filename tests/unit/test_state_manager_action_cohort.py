@@ -849,11 +849,13 @@ def test_ended_session_retention_preserves_window_then_expires_all_indexes() -> 
     assert manager.end_session(original, end_time)
 
     manager.set_current_time(end_time + timedelta(hours=47))
+    manager.advance_pid_allocation_watermark(end_time + timedelta(hours=47))
     assert manager.get_session_identity(original) is not None
     assert manager.get_session_identity(resolved) is not None
     assert manager._logon_id_aliases[original] == resolved
 
     manager.set_current_time(end_time + timedelta(hours=48))
+    manager.advance_pid_allocation_watermark(end_time + timedelta(hours=48))
     assert manager.get_session_identity(original) is None
     assert manager.get_session_identity(resolved) is None
     assert not manager._ended_sessions
@@ -1246,6 +1248,7 @@ def test_smb_terminal_session_survives_retention_until_final_ack(
         assert current is not None
         manager.advance_time(far_future - current)
 
+    manager.advance_pid_allocation_watermark(far_future)
     assert manager.authenticates_smb_connection_pin(pin)
     assert manager.authenticates_smb_connection_finalization_result(terminal)
     assert manager.recover_smb_connection_finalization(pin) is terminal
@@ -1256,6 +1259,7 @@ def test_smb_terminal_session_survives_retention_until_final_ack(
         manager.set_current_time(far_future)
     else:
         manager.advance_time(timedelta(0))
+    manager.advance_pid_allocation_watermark(far_future + timedelta(microseconds=1))
     assert manager.get_session_identity(terminal.session_identity.logon_id) is None
     _assert_no_smb_connection_pin_authority(manager)
 

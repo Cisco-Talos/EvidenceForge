@@ -1868,3 +1868,46 @@ def test_persistent_smb_terminal_continuation_guards_and_proof_release(
     finally:
         engine._close_emitters()
     assert _source_bytes(tmp_path) == windows_read_control
+
+
+@pytest.mark.parametrize("seed", [42, 137])
+def test_persistent_smb_client_parent_identity_survives_periodic_lookahead(
+    scenarios_dir: Path, tmp_path: Path, seed: int
+) -> None:
+    """Future ticks cannot change an Explorer client's parent or sampling identity."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    scenario.generation_seed = seed
+    with generation_seed_scope(seed):
+        reset_thread_rng()
+        engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+        try:
+            engine._initialize()
+            actor = scenario.environment.users[0]
+            client = scenario.environment.systems[0]
+            engine.activity_generator.generate_logon(
+                actor, client, engine.start_time + timedelta(minutes=1), logon_type=2
+            )
+            preparation = _prepare_windows_read(engine, scenario)
+            bundle = SmbActivityActionBundle(engine.activity_generator, preparation.request)
+            bundle._adopt_preparation(preparation)
+            arguments = {
+                "share": preparation.share,
+                "selected": preparation.selected,
+                "server": preparation.server,
+                "client_system": preparation.client_system,
+                "auth_protocol": preparation.auth_protocol,
+            }
+            before = bundle._prepare_persistent_client_process(**arguments)
+            assert before.disposition == "reuse"
+            assert before.parent_object_id
+            assert engine.state_manager.get_process(client.hostname, before.parent_pid) is None
+
+            engine.state_manager.set_current_time(engine.start_time + timedelta(days=56))
+            after = bundle._prepare_persistent_client_process(**arguments)
+            # The parent ID participates in the network intent that seeds Zeek
+            # capture loss and file timing. Lookahead must preserve this exact
+            # recipe even though Explorer's bootstrap parent has already exited.
+            assert after == before
+        finally:
+            engine._close_emitters()

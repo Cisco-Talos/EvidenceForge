@@ -393,6 +393,7 @@ def test_action_cohort_accepts_registered_parent_after_bootstrap_handoff_ages_ou
 
     aged_frontier = handoff_close + timedelta(hours=49)
     state.set_current_time(aged_frontier)
+    state.advance_pid_allocation_watermark(aged_frontier)
     registry.advance_watermark(aged_frontier)
     assert registry.get_process(handoff.object_id) is None
     assert state.get_process_identity_by_object_id(handoff.object_id) is None

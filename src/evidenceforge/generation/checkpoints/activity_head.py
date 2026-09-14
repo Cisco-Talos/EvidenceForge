@@ -817,14 +817,18 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 source_system = request.source_system
                 if source_system is None:
                     raise CheckpointError("SSH checkpoint source process has no modeled system")
-                source_identity = generator.state_manager.get_process_identity(
-                    source_system.hostname,
-                    state.source_process.pid,
-                )
+                source_identity = state.source_identity
                 if (
                     source_identity is None
+                    or generator.state_manager.get_process_identity_by_object_id(
+                        source_identity.object_id
+                    )
+                    != source_identity
+                    or source_identity.hostname != source_system.hostname
+                    or source_identity.pid != state.source_process.pid
                     or source_identity.image != state.source_process.image
                     or source_identity.logon_id != state.source_process.logon_id
+                    or source_identity.started_at != state.source_process.start_time
                 ):
                     raise CheckpointError("SSH checkpoint source process lost State authority")
             rows.append(
@@ -1212,6 +1216,7 @@ def _restore_legacy_ssh_lifecycle(
         conn_id=state_row[9],
         uid=state_row[10],
         source_process=source_process,
+        source_identity=source_identity,
         history=state_row[12],
         orig_pkts=state_row[13],
         resp_pkts=state_row[14],

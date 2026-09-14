@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 80
+current_revision: 81
 history_start_revision: 1
-behavior_surface_sha256: 701c1ef2bd7fbc5fd7ea357734b43102d6c43b6901bb67739db86c53a5174f9e
+behavior_surface_sha256: d812799a7e7f1f69a13d4103b00060e0644087186563eb516d8ed9c58bc1a5ec
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -733,3 +733,12 @@ changes:
     formats:
       - windows_event_security
     summary: Reserve source-local processing space before responder Kerberos WFP admission and keep single and paired KDC audit ordering inside the unchanged canonical transport interval
+  - revision: 81
+    id: completed-frontier-identity-retention
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - periodic-generation
+      - ssh-session-lifecycle
+    formats: []
+    summary: Retire ended identities only at the sealed engine frontier, preserve exact SSH source instances through deferred close and PID reuse, and omit unauthenticated source-process placeholders

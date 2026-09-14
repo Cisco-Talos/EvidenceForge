@@ -498,6 +498,7 @@ def test_process_source_bound_survives_parent_termination_and_retention() -> Non
     assert state.end_process(system.hostname, child_pid, child_end)
     retention_cutoff = parent_end + timedelta(hours=48, minutes=1)
     state.set_current_time(retention_cutoff)
+    state.advance_pid_allocation_watermark(retention_cutoff)
     generator.advance_process_state_watermark(retention_cutoff)
 
     assert state.get_process_identity(system.hostname, parent_pid) is None
@@ -506,6 +507,7 @@ def test_process_source_bound_survives_parent_termination_and_retention() -> Non
 
     final_cutoff = child_end + timedelta(hours=49)
     state.set_current_time(final_cutoff)
+    state.advance_pid_allocation_watermark(final_cutoff)
     generator.advance_process_state_watermark(final_cutoff)
 
     assert state.get_process_identity(system.hostname, child_pid) is None

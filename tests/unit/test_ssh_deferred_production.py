@@ -438,9 +438,15 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
     fresh.close_and_read()
 
 
+@pytest.mark.parametrize("modeled_source", [False, True])
+@pytest.mark.parametrize("seed", [42, 137])
+@pytest.mark.parametrize("threaded", [False, True])
 def test_legacy_ssh_checkpoint_resume_is_byte_identical(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    modeled_source: bool,
+    seed: int,
+    threaded: bool,
 ) -> None:
     """A compatibility close hydrates from semantic facts without retaining its open event."""
 
@@ -449,8 +455,8 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
         "_uses_exact_deferred_publication",
         lambda _bundle: False,
     )
-    reset_thread_rng(42)
-    original = _fixture(tmp_path / "original")
+    reset_thread_rng(seed)
+    original = _fixture(tmp_path / "original", threaded=threaded)
     original.generator._scenario_environment = SimpleNamespace(
         systems=[original.source, original.target],
         users=[original.user],
@@ -462,10 +468,15 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
         emit_session_close=True,
         defer_session_close=True,
     )
+    if modeled_source:
+        request, _pid = _modeled_scp_owned_close(original)
     SshSessionActionBundle(request, original.generator).execute()
+    if modeled_source:
+        original.state.set_current_time(_START + timedelta(days=56))
+        original.state.set_current_time(request.time + timedelta(seconds=10))
     assert original.generator.ssh_close_journal_census().legacy_pending == 1
     for emitter in original.generator.dispatcher.emitters.values():
-        emitter.flush()
+        emitter.barrier_flush()
 
     state_seal = StateManagerParticipant(original.state).prepare_checkpoint(0)
     timing_seal = TimingRuntimeParticipant(original.generator.timing_runtime).prepare_checkpoint(0)
@@ -513,7 +524,7 @@ def test_legacy_ssh_checkpoint_resume_is_byte_identical(
     original_bytes = original.frozen_bytes()
 
     reset_thread_rng(999)
-    fresh = _fixture(tmp_path / "fresh")
+    fresh = _fixture(tmp_path / "fresh", threaded=threaded)
     fresh.generator._scenario_environment = SimpleNamespace(
         systems=[fresh.source, fresh.target],
         users=[fresh.user],
