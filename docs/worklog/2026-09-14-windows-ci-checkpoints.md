@@ -160,3 +160,23 @@ CI commands remain unchanged. No emitter journal has yet been redirected to the 
 - macOS affected routine checks: 117 passed, 1 deselected (4.72s). Affected slow
   Security/Sysmon checks: 181 passed (20.58s), without coverage. Ruff check and
   format check passed; generation behavior revision 85 records OS routing only.
+
+### Syslog, pack, and checkpoint filesystem boundaries
+
+- Added Windows-only pack enumeration and exclusive atomic directory publication;
+  macOS pack checks passed (3 routine, 60 slow).
+- Syslog keeps its original POSIX file-description proof and storage operations.
+  Windows uses `CompareObjectHandles`, delete-pending private files, and serialized
+  save/read/restore I/O for opaque journal descriptors. Normal Windows reads,
+  writes, and seeks share the same lock, so positioned reads preserve file offsets.
+- Native checks proved ancestor pinning and exclusive directory publication.
+  Preflight exposed `OWNER RIGHTS` ACL interpretation and the TrustedInstaller
+  ownership of the system root, plus NTFS zero-link metadata after marking a
+  temporary file delete-pending; those checks now use native meanings explicitly.
+- Checkpoint file opens use Windows no-follow binary handles. New Windows
+  workspaces/files receive private ACLs, and recovery checks native ACLs. The
+  externally-writable regression grants real Windows write rights using icacls;
+  its POSIX chmod case is retained.
+- macOS Syslog slow checks: 110 passed (5.72s). Affected checkpoint and stream
+  routine checks: 144 passed (30.19s). Ruff checks pass. Generation behavior
+  revision 86 records the OS-specific routing; no package version change.

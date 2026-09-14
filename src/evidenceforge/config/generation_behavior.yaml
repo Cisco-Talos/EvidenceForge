@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 85
+current_revision: 86
 history_start_revision: 1
-behavior_surface_sha256: 7a9f9eaefe0b66f9f7c5aa7c4ab631d59f9d717aae9a2d6e04a36fc14c457135
+behavior_surface_sha256: 19a27f3e72daf5732e9cc3122e22ea2792bb89e9854a84efa43911b702f3cff2
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -770,3 +770,10 @@ changes:
       - host-filesystem
     formats: []
     summary: Route native Windows private journals and logical configuration references through host adapters while retaining existing POSIX implementations
+  - revision: 86
+    id: native-windows-pack-and-syslog-filesystem
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Adapt protected pack publication, Syslog journal storage, and checkpoint file handles on Windows while preserving POSIX operations

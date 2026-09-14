@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.utils.files import open_host_file
 
 from .errors import CheckpointCorruptionError, CheckpointFilesystemError
 from .packed import dumps, loads
@@ -114,7 +115,7 @@ def _read_file(path: Path, *, offset: int = 0) -> tuple[bytes, os.stat_result]:
         raise CheckpointFilesystemError(f"emitter spool has an unsafe owner: {path}")
     if before.st_size < offset:
         raise CheckpointFilesystemError(f"emitter spool was truncated: {path}")
-    descriptor = os.open(
+    descriptor = open_host_file(
         path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
     )
     try:

@@ -638,3 +638,21 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def open_host_file(*args: Any, **kwargs: Any) -> int:
+    """Use native no-follow binary file handles on Windows; retain POSIX os.open."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_file
+
+        return open_file(*args, **kwargs)
+    return os.open(*args, **kwargs)
+
+
+def mkdir_private_host(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    """Create Windows private ACLs or use the existing POSIX mode-0700 operation."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import mkdir_private
+
+        return mkdir_private(path, parents=parents, exist_ok=exist_ok)
+    path.mkdir(parents=parents, exist_ok=exist_ok, mode=0o700)

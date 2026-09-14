@@ -20,7 +20,7 @@ from typing import Any
 import psutil
 from pydantic import ValidationError
 
-from evidenceforge.utils.files import fsync_directory
+from evidenceforge.utils.files import fsync_directory, mkdir_private_host, open_host_file
 
 from .errors import (
     CheckpointCompatibilityError,
@@ -102,7 +102,7 @@ def _safe_relative_path(value: str) -> PurePosixPath:
 
 def _sync_file(path: Path) -> None:
     flags = (os.O_RDWR if os.name == "nt" else os.O_RDONLY) | getattr(os, "O_BINARY", 0)
-    descriptor = os.open(path, flags)
+    descriptor = open_host_file(path, flags)
     try:
         os.fsync(descriptor)
     finally:
@@ -110,7 +110,7 @@ def _sync_file(path: Path) -> None:
 
 
 def _write_new_file(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
-    descriptor = os.open(
+    descriptor = open_host_file(
         path, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, mode
     )
     try:
@@ -160,7 +160,7 @@ class RunLock:
     def acquire(self) -> None:
         """Acquire the run lock, reclaiming only a demonstrably dead local owner."""
 
-        self.workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private_host(self.workspace, parents=True, exist_ok=True)
         payload = _canonical_json(
             {
                 "hostname": socket.gethostname(),
@@ -196,7 +196,7 @@ class RunLock:
 
     def _read_owner(self) -> dict[str, object]:
         try:
-            descriptor = os.open(
+            descriptor = open_host_file(
                 self.path,
                 (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0),
             )
@@ -314,9 +314,9 @@ class IncrementalCheckpointStore:
         if self._initialized:
             return
         self._validate_output_root()
-        self.workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.objects.mkdir(mode=0o700, exist_ok=True)
-        self.recovery.mkdir(mode=0o700, exist_ok=True)
+        mkdir_private_host(self.workspace, parents=True, exist_ok=True)
+        mkdir_private_host(self.objects, exist_ok=True)
+        mkdir_private_host(self.recovery, exist_ok=True)
         self._validate_protected_directory(self.workspace)
         self._validate_protected_directory(self.objects)
         self._validate_protected_directory(self.recovery)
@@ -364,6 +364,20 @@ class IncrementalCheckpointStore:
 
     @staticmethod
     def _validate_protected_directory(path: Path) -> None:
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import open_directory, require_private
+
+            try:
+                descriptor = open_directory(path)
+                try:
+                    require_private(descriptor)
+                finally:
+                    os.close(descriptor)
+            except OSError as error:
+                raise CheckpointFilesystemError(
+                    f"checkpoint directory is unsafe: {path}"
+                ) from error
+            return
         info = path.lstat()
         if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
             raise CheckpointFilesystemError(f"checkpoint path is not a real directory: {path}")
@@ -437,7 +451,7 @@ class IncrementalCheckpointStore:
         payload: bytes,
     ) -> tuple[str, bool]:
         directory = self.objects / category / digest[:2]
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        mkdir_private_host(directory, parents=True, exist_ok=True)
         path = directory / f"{digest}{suffix}"
         relative = path.relative_to(self.workspace).as_posix()
         if path.exists():
@@ -681,11 +695,11 @@ class IncrementalCheckpointStore:
             self._validate_protected_directory(final)
             shutil.rmtree(final)
             fsync_directory(self.recovery)
-        pending.mkdir(mode=0o700)
+        mkdir_private_host(pending)
         head_refs: list[ParticipantHead] = []
         try:
             heads_directory = pending / "heads"
-            heads_directory.mkdir(mode=0o700)
+            mkdir_private_host(heads_directory)
             for head in sorted(heads, key=lambda item: item.owner):
                 filename = f"{head.owner}.bin"
                 path = heads_directory / filename
@@ -759,7 +773,12 @@ class IncrementalCheckpointStore:
                 raise CheckpointCorruptionError("checkpoint recovery index has an unsafe owner")
             if os.name == "posix" and info.st_mode & 0o022:
                 raise CheckpointCorruptionError("checkpoint recovery index is externally writable")
-            document = json.loads(self.index_path.read_bytes())
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import read_private_file
+
+                document = json.loads(read_private_file(self.index_path))
+            else:
+                document = json.loads(self.index_path.read_bytes())
         except FileNotFoundError:
             return []
         except (OSError, json.JSONDecodeError) as error:
@@ -904,7 +923,17 @@ class IncrementalCheckpointStore:
             raise CheckpointCorruptionError(f"checkpoint object has an unsafe owner: {path}")
         if os.name == "posix" and info.st_mode & 0o022:
             raise CheckpointCorruptionError(f"checkpoint object is externally writable: {path}")
-        payload = path.read_bytes()
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import read_private_file
+
+            try:
+                payload = read_private_file(path)
+            except PermissionError as error:
+                raise CheckpointCorruptionError(
+                    f"checkpoint object has an unsafe owner or is externally writable: {path}"
+                ) from error
+        else:
+            payload = path.read_bytes()
         if len(payload) != expected_size or _sha256(payload) != expected_hash:
             raise CheckpointCorruptionError(
                 f"checkpoint object failed integrity validation: {path}"

@@ -3,6 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,7 @@ def test_temporary_stream_retains_wrapper_owner_and_removes_file(
     wrapper = tempfile.NamedTemporaryFile(mode="w+b", dir=tmp_path)
     path = Path(wrapper.name)
     monkeypatch.setattr(windows_streams.tempfile, "TemporaryFile", lambda **kwargs: wrapper)
+    monkeypatch.setattr(windows_streams, "os", SimpleNamespace(name="posix"))
     stream = windows_streams.temporary_stream()
     try:
         payload = b"first\r\nsecond\n\x1a\x00\xff"

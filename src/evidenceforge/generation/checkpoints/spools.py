@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from evidenceforge.utils.files import fsync_directory
+from evidenceforge.utils.files import fsync_directory, open_host_file
 
 from .errors import CheckpointCorruptionError, CheckpointFilesystemError
 from .packed import dumps, loads
@@ -198,7 +198,7 @@ class AppendOnlySpoolParticipant:
         if prior.device is not None and (info.st_dev, info.st_ino) != (prior.device, prior.inode):
             raise CheckpointFilesystemError(f"append-only spool identity changed: {path}")
         flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
+        descriptor = open_host_file(path, flags)
         opened = os.fstat(descriptor)
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
             os.close(descriptor)
@@ -299,7 +299,7 @@ class AppendOnlySpoolParticipant:
         if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode):
             raise CheckpointFilesystemError(f"append-spool restore parent is unsafe: {path.parent}")
         temporary = path.with_name(f".{path.name}.checkpoint-{uuid.uuid4().hex}")
-        descriptor = os.open(
+        descriptor = open_host_file(
             temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
         )
         try:
@@ -431,7 +431,7 @@ class ImmutableSpoolFilesParticipant:
             raise CheckpointFilesystemError(f"immutable spool is not a regular file: {path}")
         if hasattr(os, "getuid") and before.st_uid != os.getuid():
             raise CheckpointFilesystemError(f"immutable spool has an unsafe owner: {path}")
-        descriptor = os.open(
+        descriptor = open_host_file(
             path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
         )
         try:

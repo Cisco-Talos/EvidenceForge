@@ -1,5 +1,6 @@
 """Explicit stream methods for Windows' delegated temporary-file wrapper."""
 
+import os
 import tempfile
 from typing import BinaryIO
 
@@ -10,6 +11,16 @@ class WindowsTemporaryStream:
     __slots__ = ("_stream",)
 
     def __init__(self, *, mode: str = "w+b") -> None:
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import temporary_descriptor
+
+            descriptor = temporary_descriptor()
+            try:
+                self._stream = os.fdopen(descriptor, mode)
+            except BaseException:
+                os.close(descriptor)
+                raise
+            return
         self._stream: BinaryIO = tempfile.TemporaryFile(mode=mode)
 
     def fileno(self) -> int:

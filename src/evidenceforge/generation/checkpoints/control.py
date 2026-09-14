@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from evidenceforge.utils.files import fsync_directory
+from evidenceforge.utils.files import fsync_directory, open_host_file
 
 from .errors import CheckpointError, CheckpointFilesystemError, CheckpointLockError
 from .models import CheckpointCursor
@@ -75,7 +75,7 @@ def _canonical_json(model: BaseModel) -> bytes:
 def _atomic_write(path: Path, payload: bytes) -> None:
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
-        descriptor = os.open(
+        descriptor = open_host_file(
             temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
         )
         try:
@@ -99,7 +99,7 @@ def _atomic_create(path: Path, payload: bytes) -> bool:
 
     temporary = path.with_name(f".{path.name}.pending-{uuid.uuid4().hex}")
     try:
-        descriptor = os.open(
+        descriptor = open_host_file(
             temporary, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
         )
         try:
@@ -128,7 +128,7 @@ def _atomic_create(path: Path, payload: bytes) -> bool:
 
 def _read_model(path: Path, model_type: type[BaseModel]) -> BaseModel | None:
     try:
-        descriptor = os.open(
+        descriptor = open_host_file(
             path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
         )
     except FileNotFoundError:

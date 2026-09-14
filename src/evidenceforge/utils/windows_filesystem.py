@@ -326,9 +326,18 @@ def require_private(descriptor: int, *, ancestry: bool = False) -> None:
         raise ctypes.WinError(result)
     try:
         user = current_user_sid()
-        trusted = {user, "S-1-5-18", "S-1-5-32-544"}
+        trusted = {
+            user,
+            "S-1-5-18",
+            "S-1-5-32-544",
+            # Windows Modules Installer owns protected OS directories, including
+            # the system volume root on supported Windows installations.
+            "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+        }
         if _sid(owner.value) not in (trusted if ancestry else {user}):
-            raise PermissionError("Windows protected storage has an unexpected owner")
+            raise PermissionError(
+                f"Windows protected storage has an unexpected owner: {_sid(owner.value)}"
+            )
         if not dacl.value:
             raise PermissionError("Windows protected storage has no restrictive DACL")
         acl = ctypes.cast(dacl, ctypes.POINTER(_Acl)).contents
@@ -687,7 +696,7 @@ def temporary_descriptor() -> int:
 def require_temporary(descriptor: int) -> None:
     """Verify real native cleanup ownership, single-link type, and the private ACL."""
     metadata = os.fstat(descriptor)
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 0:
         raise PermissionError("Windows temporary storage is not one private regular file")
     information = _StandardInformation()
     _require(
@@ -737,3 +746,33 @@ def pread(descriptor: int, count: int, offset: int) -> bytes:
             return os.read(descriptor, count)
         finally:
             os.lseek(descriptor, original, os.SEEK_SET)
+
+
+def mkdir_private(path: Path, *, parents: bool = False, exist_ok: bool = False) -> None:
+    """Create a private directory with an explicit ACL, or validate an existing one."""
+    absolute = Path(os.path.abspath(path))
+    parent = open_directory(absolute.parent, create=parents)
+    try:
+        try:
+            mkdir_child(parent, absolute.name)
+        except FileExistsError:
+            if not exist_ok:
+                raise
+        descriptor = open_child(parent, absolute.name, os.O_RDONLY, directory=True)
+        try:
+            require_private(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent)
+
+
+def read_private_file(path: Path) -> bytes:
+    """Read protected recovery bytes from a no-follow, ACL-validated native handle."""
+    descriptor = open_file(path, os.O_RDONLY)
+    try:
+        require_private(descriptor)
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)

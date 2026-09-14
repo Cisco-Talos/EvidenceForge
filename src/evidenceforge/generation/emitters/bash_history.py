@@ -1924,7 +1924,9 @@ class _SingleHistoryWriter:
             return
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         mode = "w" if cleared else "a"
-        with self.output_path.open(mode, encoding="utf-8") as output:
+        with self.output_path.open(
+            mode, encoding="utf-8", newline="\n" if os.name == "nt" else None
+        ) as output:
             for entry in self._ordinary_buffer:
                 output.write(entry)
                 if not entry.endswith("\n"):
