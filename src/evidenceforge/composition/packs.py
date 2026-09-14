@@ -28,6 +28,7 @@ from evidenceforge.utils import (
     ScenarioIncludeBudgetState,
     load_scenario_source_graph,
 )
+from evidenceforge.utils.host_paths import logical_path
 from evidenceforge.utils.yaml_loader import load_yaml_text
 
 from .models import (
@@ -1348,7 +1349,7 @@ class PackRepository:
         }
         orphan_yaml = sorted(all_yaml - semantic_files, key=str)
         if orphan_yaml:
-            names = ", ".join(str(path.relative_to(root)) for path in orphan_yaml)
+            names = ", ".join(logical_path(path.relative_to(root)) for path in orphan_yaml)
             raise PackError(f"pack contains unreferenced semantic YAML file(s): {names}")
         companion_file_bytes: dict[str, bytes] = {}
         for entry in tree_entries:
@@ -1362,7 +1363,7 @@ class PackRepository:
             )
 
         file_bytes = {
-            str(path.relative_to(root)): semantic_bytes_by_path[path]
+            logical_path(path.relative_to(root)): semantic_bytes_by_path[path]
             for path in sorted(semantic_bytes_by_path, key=str)
         }
         source_directories = frozenset(
@@ -1394,7 +1395,7 @@ class PackRepository:
             companion_file_bytes=tuple(sorted(companion_file_bytes.items())),
             source_directories=source_directories,
             payload_files=frozenset(
-                str(path.relative_to(root)) for path in sorted(payload_files, key=str)
+                logical_path(path.relative_to(root)) for path in sorted(payload_files, key=str)
             ),
             catalog_field_origins=catalog_field_origins,
             organization_model_origins=organization_model_origins,

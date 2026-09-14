@@ -146,3 +146,17 @@ keys, adds `tzdata` only for win32, and fixes deterministic fixture bytes/path-b
 and excessively long test IDs. A temporary Windows-only native-filesystem preflight step shortens
 feedback on the adapter; remove it after the full Windows routine gate is green. Existing Linux
 CI commands remain unchanged. No emitter journal has yet been redirected to the new adapter.
+
+### Native journal integration and host-only compatibility repairs
+
+- Native NTFS preflight on run 34853201082 passed all 12 filesystem tests after
+  switching rename to `NtSetInformationFile`. Full routine inventory is ongoing.
+- Security/Sysmon now enter separate Windows filesystem lifecycle functions;
+  existing POSIX bodies, SQLite schemas, candidate/receipt logic, and rendering
+  remain in place. Added native journal allocation/schema/cleanup regressions.
+- Windows logical config references use slash-separated keys. Added Windows-only
+  CRLF reader handling and pre-epoch datetime conversion. Fixed portable test
+  fixtures, Rich terminal expectations, and container monitor path references.
+- macOS affected routine checks: 117 passed, 1 deselected (4.72s). Affected slow
+  Security/Sysmon checks: 181 passed (20.58s), without coverage. Ruff check and
+  format check passed; generation behavior revision 85 records OS routing only.

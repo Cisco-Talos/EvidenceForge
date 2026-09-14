@@ -46,6 +46,8 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.utils.host_paths import logical_path
+
 logger = logging.getLogger(__name__)
 
 _OVERLAY_DIR_NAME = ".eforge/config"
@@ -113,7 +115,7 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
     if overlay_dir is None or not overlay_dir.is_dir():
         return []
     return sorted(
-        str(p.relative_to(overlay_dir)) for p in overlay_dir.rglob("*.yaml") if p.is_file()
+        logical_path(p.relative_to(overlay_dir)) for p in overlay_dir.rglob("*.yaml") if p.is_file()
     )
 
 

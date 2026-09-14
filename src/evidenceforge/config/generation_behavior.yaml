@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 84
+current_revision: 85
 history_start_revision: 1
-behavior_surface_sha256: 056a6164066af1d47c960eba0159781e0ae9fcecf960ace4e0416e46f58f4ffa
+behavior_surface_sha256: 7a9f9eaefe0b66f9f7c5aa7c4ab631d59f9d717aae9a2d6e04a36fc14c457135
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -763,3 +763,10 @@ changes:
       - host-filesystem
     formats: []
     summary: Use writable file-flush handles on Windows while preserving the read-only POSIX publication implementation
+  - revision: 85
+    id: native-windows-journal-and-host-path-adapters
+    impact: none
+    domains:
+      - host-filesystem
+    formats: []
+    summary: Route native Windows private journals and logical configuration references through host adapters while retaining existing POSIX implementations

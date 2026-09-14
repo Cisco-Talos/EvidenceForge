@@ -441,6 +441,10 @@ def _supports_windows_exact_projection_publication(emitter: object) -> bool:
 
 def _require_windows_source_finalization_capabilities() -> None:
     """Fail exact binding before generation without the required POSIX contract."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_journals import require_capabilities
+
+        return require_capabilities()
 
     supports_dir_fd = getattr(os, "supports_dir_fd", frozenset())
     supports_follow_symlinks = getattr(os, "supports_follow_symlinks", frozenset())
@@ -3519,6 +3523,11 @@ class WindowsEventEmitter(LogEmitter):
 
     def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
         """Open the on-disk Windows event spool database while holding _file_lock."""
+        if os.name == "nt" and _windows_source_finalization_bound(self):
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.get_spool_connection(self, provider="Windows")
+
         if self._spool_conn is not None:
             if _windows_source_finalization_bound(self) and self._spool_file_initialization_pending:
                 self._finish_private_journal_initialization_unlocked()
@@ -3620,6 +3629,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _validate_spool_directory_unlocked(self) -> None:
         """Revalidate the owner-only private directory and its pinned identity."""
+        if os.name == "nt" and _windows_source_finalization_bound(self):
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.validate_spool_directory(self)
 
         if not _windows_source_finalization_bound(self):
             if self._spool_dir is None or not self._spool_dir.is_dir():
@@ -3660,6 +3673,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _validate_spool_file_unlocked(self) -> None:
         """Revalidate the SQLite main file without following its directory entry."""
+        if os.name == "nt" and _windows_source_finalization_bound(self):
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.validate_spool_file(self)
 
         if not _windows_source_finalization_bound(self):
             if self._spool_path is None or not self._spool_path.is_file():
@@ -3684,6 +3701,11 @@ class WindowsEventEmitter(LogEmitter):
 
     def _get_spool_dir_unlocked(self) -> Path:
         """Return the local runtime directory used for SQLite spool state."""
+        if os.name == "nt" and _windows_source_finalization_bound(self):
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.get_spool_directory(self, provider="Windows")
+
         if self._spool_dir is not None:
             if _windows_source_finalization_bound(self) and self._spool_initialization_pending:
                 self._finish_private_spool_initialization_unlocked()
@@ -4459,6 +4481,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the exact private journal after terminal source close."""
+        if os.name == "nt" and _windows_source_finalization_bound(self):
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.cleanup_spool(self)
 
         if (
             self._exact_candidate_abort_close_rendering

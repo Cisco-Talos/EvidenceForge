@@ -131,6 +131,7 @@ def test_generation_progress_keeps_zero_percent_bar_visible_in_narrow_terminal()
         force_terminal=True,
         color_system="standard",
         no_color=False,
+        legacy_windows=False,
     )
     progress = _generation_progress(console)
     progress.add_task(
@@ -557,9 +558,9 @@ environment:
         )
 
         assert result.exit_code == EXIT_SUCCESS, result.stdout
-        assert "╭" in result.stdout
+        assert ("┌" if os.name == "nt" else "╭") in result.stdout
         assert "┬" in result.stdout
-        assert "╯" in result.stdout
+        assert ("┘" if os.name == "nt" else "╯") in result.stdout
         for expected in (
             "Compiled storage topology",
             "Volumes",

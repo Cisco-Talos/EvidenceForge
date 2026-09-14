@@ -26,6 +26,7 @@ Each parser reads generated log output and yields structured ParsedRecord object
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from datetime import datetime
@@ -58,6 +59,8 @@ def iter_bounded_text_lines(
                     f"Evaluation record exceeds {max_record_bytes} bytes: {path}:{line_number}"
                 )
             try:
+                if os.name == "nt" and raw.endswith(b"\r\n"):
+                    raw = raw[:-2] + b"\n"
                 yield line_number, raw.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise EvaluationLimitError(

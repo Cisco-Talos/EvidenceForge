@@ -167,6 +167,9 @@ def test_profile_stack_storage_is_bounded(tmp_path: Path) -> None:
     assert profiler.document().dropped_samples == 1
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "getitimer"), reason="POSIX interval timers are unavailable on Windows"
+)
 def test_sampler_restores_prior_signal_handler_and_timer(monkeypatch: pytest.MonkeyPatch) -> None:
     prior_handler = object()
     calls: list[tuple[object, ...]] = []

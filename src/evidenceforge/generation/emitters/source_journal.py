@@ -42,6 +42,10 @@ _DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 
 def preflight_private_spool_root(self: SourceOwner, *, provider: str) -> None:
     """Validate configured exact-spool trust and disjointness before generation."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.preflight_private_spool_root(self, provider=provider)
 
     configured = os.environ.get("EFORGE_SPOOL_DIR")
     root = Path(
@@ -66,6 +70,10 @@ def adopt_private_journal_descriptor_unlocked(
     self: SourceOwner, descriptor: int, *, provider: str
 ) -> None:
     """Retain the identity returned by one exclusive journal create."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.adopt_private_journal_descriptor(self, descriptor)
 
     metadata = os.fstat(descriptor)
     effective_user = int(os.geteuid())
@@ -81,6 +89,10 @@ def adopt_private_journal_descriptor_unlocked(
 
 def adopt_private_journal_create_lost_return_unlocked(self: SourceOwner, *, provider: str) -> None:
     """Retain a journal entry created before its exclusive-open return was lost."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.adopt_private_journal_create_lost_return(self)
 
     directory_descriptor = self._spool_directory_descriptor
     filename = self._spool_filename
@@ -102,6 +114,10 @@ def adopt_private_journal_create_lost_return_unlocked(self: SourceOwner, *, prov
 
 def finish_private_journal_initialization_unlocked(self: SourceOwner, *, provider: str) -> None:
     """Retryably create, initialize, and durably publish the retained journal."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.finish_private_journal_initialization(self)
 
     directory_descriptor = self._spool_directory_descriptor
     filename = self._spool_filename
@@ -247,6 +263,10 @@ def validate_initial_spool_schema_unlocked(
 
 def open_directory_nofollow(path: Path, *, create: bool = False, provider: str) -> int:
     """Open every existing absolute directory component without following symlinks."""
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_directory
+
+        return open_directory(path, create=create)
 
     absolute = Path(os.path.abspath(os.fspath(path)))
     descriptor = os.open(absolute.anchor, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
@@ -282,6 +302,10 @@ def open_directory_nofollow(path: Path, *, create: bool = False, provider: str) 
 
 def validate_private_spool_ancestry(cls: type[SourceOwner], path: Path, *, provider: str) -> None:
     """Require root-or-process-owned ancestry with sticky shared roots."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.validate_ancestry(path)
 
     effective_user = int(os.geteuid())
     current = path
@@ -307,6 +331,10 @@ def validate_private_spool_ancestry(cls: type[SourceOwner], path: Path, *, provi
 
 def adopt_private_spool_create_lost_return_unlocked(self: SourceOwner, *, provider: str) -> None:
     """Retain an owner-only leaf created before mkdir's return was lost."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.adopt_private_spool_create_lost_return(self)
 
     root_descriptor = self._spool_root_descriptor
     directory_name = self._spool_directory_name
@@ -328,6 +356,10 @@ def adopt_private_spool_create_lost_return_unlocked(self: SourceOwner, *, provid
 
 def finish_private_spool_initialization_unlocked(self: SourceOwner, *, provider: str) -> None:
     """Retryably pin and durably publish one newly allocated private leaf."""
+    if os.name == "nt":
+        from evidenceforge.utils import windows_journals
+
+        return windows_journals.finish_private_spool_initialization(self)
 
     root_descriptor = self._spool_root_descriptor
     directory_name = self._spool_directory_name

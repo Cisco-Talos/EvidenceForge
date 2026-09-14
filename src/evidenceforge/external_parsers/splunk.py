@@ -763,9 +763,10 @@ def _inputs_conf(staged_logs: tuple[StagedSplunkLog, ...], data_root: Path) -> s
     lines = []
     for log in staged_logs:
         stanza_path = Path("/evidenceforge-data") / log.staged.relative_to(data_root)
+        stanza_text = stanza_path.as_posix() if os.name == "nt" else str(stanza_path)
         lines.extend(
             (
-                f"[monitor://{stanza_path}]",
+                f"[monitor://{stanza_text}]",
                 "disabled = 0",
                 f"index = {SPLUNK_INDEX}",
                 f"sourcetype = {log.sourcetype}",

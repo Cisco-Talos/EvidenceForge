@@ -14,8 +14,16 @@ from evidenceforge.generation.emitters.verification_resources import (
 )
 
 
+def _directory_descriptor(path: Path) -> int:
+    if os.name == "nt":
+        from evidenceforge.utils.windows_filesystem import open_directory
+
+        return open_directory(path)
+    return os.open(path, os.O_RDONLY)
+
+
 def test_disposal_closes_shared_registered_descriptors_once(tmp_path: Path) -> None:
-    descriptor = os.open(tmp_path, os.O_RDONLY)
+    descriptor = _directory_descriptor(tmp_path)
     child = SimpleNamespace(descriptor=descriptor)
     child._verification_resources = VerificationResources(child)
     child._verification_resources.register("descriptor", "descriptor")
@@ -51,7 +59,7 @@ def test_disposal_continues_after_sqlite_failure_and_retains_primary(tmp_path: P
             raise failure
 
     connection = sqlite3.connect(":memory:", factory=FailingConnection)
-    descriptor = os.open(tmp_path, os.O_RDONLY)
+    descriptor = _directory_descriptor(tmp_path)
     owner = SimpleNamespace(connection=connection, descriptor=descriptor)
     resources = VerificationResources(owner)
     resources.register("connection", "connection")

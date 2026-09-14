@@ -167,3 +167,30 @@ def test_native_child_open_rejects_ambiguous_names(tmp_path: Path, name: str) ->
         assert not list(tmp_path.iterdir())
     finally:
         os.close(parent)
+
+
+@pytest.mark.parametrize("provider", ["windows", "sysmon"])
+def test_native_source_journal_keeps_schema_and_removes_private_workspace(
+    tmp_path: Path, provider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.formats.loader import load_format
+    from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+    from evidenceforge.generation.emitters.windows import WindowsEventEmitter
+
+    spool = tmp_path / "spools"
+    monkeypatch.setenv("EFORGE_SPOOL_DIR", str(spool))
+    emitter_type = WindowsEventEmitter if provider == "windows" else SysmonEventEmitter
+    format_name = "windows_event_security" if provider == "windows" else "windows_event_sysmon"
+    emitter = emitter_type(load_format(format_name), tmp_path / "output", source_finalization=True)
+    try:
+        connection = emitter._get_spool_conn_unlocked()
+        directory = emitter._spool_dir
+        assert directory is not None and directory.is_dir()
+        assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+        assert connection.execute("PRAGMA temp_store").fetchone() == (2,)
+        emitter._validate_spool_file_unlocked()
+        emitter._cleanup_spool_unlocked()
+        assert not directory.exists()
+        assert list(spool.iterdir()) == []
+    finally:
+        emitter.close()

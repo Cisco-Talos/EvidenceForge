@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from collections import Counter
 from collections.abc import Iterable, Iterator
@@ -1974,6 +1975,8 @@ class IntentExecutionLedger:
     def _watermark_datetime_locked(self) -> datetime | None:
         if self._watermark_us is None:
             return None
+        if os.name == "nt":
+            return _epoch_us_to_datetime(self._watermark_us)
         return datetime.fromtimestamp(self._watermark_us / 1_000_000, tz=UTC)
 
     def _retained_bytes_locked(self) -> int:
@@ -2018,6 +2021,9 @@ def _datetime_to_epoch_us(value: datetime) -> int:
 def _epoch_us_to_datetime(value: int) -> datetime:
     """Return an exact UTC datetime for one integer microsecond frontier."""
 
+    if os.name == "nt":
+        # The Windows C runtime rejects negative timestamps.
+        return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=value)
     return datetime.fromtimestamp(value / 1_000_000, tz=UTC)
 
 

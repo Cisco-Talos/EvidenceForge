@@ -518,12 +518,24 @@ def list_directory(descriptor: int) -> list[str]:
             offset += entry.NextEntryOffset
 
 
-def remove_child(parent: int, name: str, *, directory: bool = False) -> None:
+def remove_child(
+    parent: int,
+    name: str,
+    *,
+    directory: bool = False,
+    expected_identity: tuple[int, int] | None = None,
+) -> None:
     """Delete the opened child through its handle, rejecting reparse points."""
     descriptor = _open_native(
         name, root=_handle(parent), flags=os.O_RDONLY, directory=directory, extra_access=_DELETE
     )
     try:
+        metadata = os.fstat(descriptor)
+        if (
+            expected_identity is not None
+            and (int(metadata.st_dev), int(metadata.st_ino)) != expected_identity
+        ):
+            raise OSError("Windows file identity changed before deletion")
         delete = wintypes.BYTE(1)
         _require(
             _set_info(
