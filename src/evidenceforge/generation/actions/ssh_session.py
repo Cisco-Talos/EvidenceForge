@@ -763,6 +763,7 @@ class _SshTransportState:
     conn_id: str = ""
     uid: str = ""
     source_process: ProcessContext | None = None
+    source_identity: ProcessIdentity | None = None
     history: str = ""
     orig_pkts: int = 0
     resp_pkts: int = 0
@@ -2403,6 +2404,7 @@ class _SshCloseContinuation:
             conn_id=transaction.conn_id,
             uid=transaction.zeek_uid,
             source_process=source_process,
+            source_identity=source_identity,
             history=transaction.history,
             orig_pkts=transaction.orig_pkts,
             resp_pkts=transaction.resp_pkts,
@@ -3549,6 +3551,7 @@ class SshSessionActionBundle:
             logon_id=session_plan.identity.logon_id,
             session_obj_id=session_plan.identity.object_id,
             source_process=source_process,
+            source_identity=source_identity,
         )
         # This is deliberately the only exact-path invocation. Any custom or
         # malformed event construction fails before State/lifecycle transfer.
@@ -4109,7 +4112,7 @@ class SshSessionActionBundle:
                     (state.close_time - ensure_utc(request.time)).total_seconds(),
                 )
 
-        state.source_process = self._resolve_source_process(source_pid, source_process_image)
+        self._bind_source_process(state, source_pid)
         network_uid = executor.generate_connection(
             src_ip=request.source_ip,
             dst_ip=request.target_system.ip,
@@ -4192,10 +4195,7 @@ class SshSessionActionBundle:
                 (state.close_time - self.request.time).total_seconds(),
             )
         if state.source_process is None and connection.initiating_pid > 0:
-            state.source_process = self._resolve_source_process(
-                connection.initiating_pid,
-                self.request.source_process_image,
-            )
+            self._bind_source_process(state, connection.initiating_pid)
 
     @staticmethod
     def _exact_terminal_result_authenticates(
@@ -4794,33 +4794,46 @@ class SshSessionActionBundle:
         source_pid: int,
         source_process_image: str,
     ) -> ProcessContext | None:
-        """Return source process context when the caller supplied one."""
+        """Return authenticated source context; an image alone cannot identify a PID."""
 
-        source_system = self._source_system()
-        if source_system is not None and source_pid > 0:
-            running = self.executor.state_manager.get_process(
-                source_system.hostname,
-                source_pid,
-            )
-            if running is not None:
-                return ProcessContext(
-                    pid=source_pid,
-                    parent_pid=running.parent_pid,
-                    image=running.image,
-                    command_line=running.command_line,
-                    username=running.username,
-                    logon_id=running.logon_id,
-                    start_time=running.start_time,
-                )
-            if source_process_image:
-                return ProcessContext(
-                    pid=source_pid,
-                    parent_pid=0,
-                    image=source_process_image,
-                    command_line="",
-                    username="",
-                )
-        return None
+        return self._source_process_context(self._resolve_source_identity(source_pid))
+
+    def _resolve_source_identity(self, source_pid: int) -> ProcessIdentity | None:
+        """Bind a live or retained process that spans the requested transport open."""
+
+        system = self._source_system()
+        if system is None or source_pid <= 0:
+            return None
+        manager = self.executor.state_manager
+        if not manager.is_process_active_at(system.hostname, source_pid, self.request.time):
+            return None
+        return manager.get_process_identity(system.hostname, source_pid)
+
+    @staticmethod
+    def _source_process_context(identity: ProcessIdentity | None) -> ProcessContext | None:
+        if identity is None:
+            return None
+        return ProcessContext(
+            pid=identity.pid,
+            parent_pid=identity.parent_pid,
+            image=identity.image,
+            command_line=identity.command_line,
+            username=identity.principal,
+            logon_id=identity.logon_id,
+            start_time=identity.started_at,
+        )
+
+    def _bind_source_process(self, state: _SshTransportState, source_pid: int) -> None:
+        """Keep the exact State identity alongside its source-native projection.
+
+        A one-shot client may be terminal in State before its deferred SSH close
+        is consumed. Its numeric PID can subsequently be reused, even by the same
+        executable and LogonID. Checkpoint capture must retain the original object
+        identity; see test_ssh_checkpoint_keeps_original_process_after_pid_reuse.
+        """
+
+        state.source_identity = self._resolve_source_identity(source_pid)
+        state.source_process = self._source_process_context(state.source_identity)
 
     def _build_session_event(
         self,

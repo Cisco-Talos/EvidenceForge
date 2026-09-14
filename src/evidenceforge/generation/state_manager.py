@@ -13514,6 +13514,10 @@ class StateManager:
 
         Detailed temporal records exist only for the still-open scheduling window.
         Sealed history is represented by one greatest logical position per host.
+        This same completed-work boundary retires ended entity identities. Event
+        time may visit a future periodic tick while earlier SSH closes still need
+        those identities; it is not a safe retirement frontier. See
+        test_pending_ssh_identity_survives_periodic_lookahead.
         """
         admission_epoch = self._reject_mutation_during_action_cohort_claim(
             "advance_pid_allocation_watermark"
@@ -13556,6 +13560,7 @@ class StateManager:
                     del self._transient_pid_reservations[system]
                     self._transient_pid_reservation_counts.pop(system, None)
             self._pid_allocation_watermark = normalized_cutoff
+            self._expire_retained_identities(normalized_cutoff)
             self._materialization_version += 1
 
     def pid_allocator_census(self) -> dict[str, int]:
@@ -21275,16 +21280,18 @@ class StateManager:
     def set_current_time(self, dt: datetime) -> None:
         """Set the current simulation time.
 
+        This is an event cursor, not a completed-work watermark. In particular,
+        periodic storyline expansion can visit future events and then return.
+
         Args:
             dt: New current time
         """
-        normalized = ensure_utc(dt)
+        ensure_utc(dt)
         admission_epoch = self._reject_mutation_during_action_cohort_claim("set_current_time")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim(
                 "set_current_time", admitted_at=admission_epoch
             )
-            self._expire_retained_identities(normalized)
             self.state.current_time = dt
             logger.debug("Set current time to %s", dt)
 
@@ -21320,7 +21327,6 @@ class StateManager:
                 next_time = self.state.current_time + delta
             except OverflowError as exc:
                 raise StateError("Time advancement exceeds the supported datetime range") from exc
-            self._expire_retained_identities(next_time)
             self.state.current_time = next_time
             logger.debug("Advanced time by %s to %s", delta, next_time)
 
