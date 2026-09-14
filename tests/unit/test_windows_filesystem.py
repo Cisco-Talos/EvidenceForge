@@ -116,6 +116,46 @@ def test_native_directory_open_rejects_junction_without_following_target(tmp_pat
         junction.rmdir()
 
 
+def test_private_directory_rejects_external_write_acl(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    parent = filesystem.open_directory(tmp_path)
+    descriptor = None
+    try:
+        filesystem.mkdir_child(parent, "private")
+        descriptor = filesystem.open_child(parent, "private", os.O_RDONLY, directory=True)
+        filesystem.require_private(descriptor)
+        subprocess.run(
+            ["icacls", str(tmp_path / "private"), "/grant", "*S-1-1-0:(W)"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        with pytest.raises(PermissionError, match="another principal"):
+            filesystem.require_private(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def test_handle_relative_unicode_names_preserve_bytes(tmp_path: Path) -> None:
+    from evidenceforge.utils import windows_filesystem as filesystem
+
+    parent = filesystem.open_directory(tmp_path)
+    try:
+        name = "evidence-é-東京.json"
+        descriptor = filesystem.open_child(parent, name, os.O_RDWR | os.O_CREAT | os.O_EXCL)
+        try:
+            os.write(descriptor, b"evidence")
+        finally:
+            os.close(descriptor)
+        assert filesystem.list_directory(parent) == [name]
+        assert (tmp_path / name).read_bytes() == b"evidence"
+    finally:
+        os.close(parent)
+
+
 @pytest.mark.parametrize("name", ["../escape", "other\\file", "file:stream", "NUL", "trailing."])
 def test_native_child_open_rejects_ambiguous_names(tmp_path: Path, name: str) -> None:
     from evidenceforge.utils import windows_filesystem as filesystem
