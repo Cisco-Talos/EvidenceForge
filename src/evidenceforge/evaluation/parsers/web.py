@@ -69,6 +69,11 @@ class WebAccessParser(LogParser):
         return parent.name
 
     def _parse_line(self, raw: str, line_num: int, hostname: str | None = None) -> ParsedRecord:
+        if raw.lstrip().startswith(("{", "[")):
+            from .apache_json import parse_apache_json
+
+            return parse_apache_json(raw, line_num, self.format_name, hostname)
+
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
