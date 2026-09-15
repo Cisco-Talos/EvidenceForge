@@ -7,6 +7,14 @@ description: "Checkpoint inspection, drift verification, and safe resume referen
 Read this reference for interrupted generation, resume compatibility, environment drift, recovery
 wheels, OOB authorization, or a verifier that appears idle.
 
+## Contents
+
+- [Preserve first](#preserve-first)
+- [Interpret compatibility](#interpret-compatibility)
+- [Migration and provenance](#migration-and-provenance)
+- [uv tool recovery builds](#uv-tool-recovery-builds)
+- [Validation metadata upgrades](#validation-metadata-upgrades)
+
 ## Preserve First
 
 Stop the generator before copying or inspecting a bundle. Preserve a filesystem snapshot or backup
@@ -92,3 +100,13 @@ bundle back.
 When a recovery wheel is only an exact-behavior backport, keep using it for that interrupted run.
 Do not replace its immutable release tag or infer that a displayed package version alone identifies
 the source build; compare the recorded build digest.
+
+## Validation metadata upgrades
+
+Compatible recovery recognizes the exact package-owned validation snapshots from the pre-typed-rule
+2.1.0 baseline. It decodes those validation documents in memory only when their native rendering
+templates still match. Stored checkpoint and resolved input documents remain immutable; arbitrary
+old internal rule syntax remains unsupported. The runtime's exact correctness policy applies when
+subsequently evaluating evidence. This decoder does not bypass checkpoint integrity, hydration,
+provenance, or resume-policy checks. Dependency/build drift still means `not-guaranteed` output
+equivalence, even when a particular resumed run matches uninterrupted evidence byte for byte.

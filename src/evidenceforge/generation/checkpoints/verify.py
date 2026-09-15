@@ -109,7 +109,9 @@ def verify_checkpoint_recovery(
         raise CheckpointCompatibilityError(detail)
 
     with tempfile.TemporaryDirectory(prefix="eforge-checkpoint-verify-") as temporary:
-        scratch_root = Path(temporary) / "bundle"
+        # macOS's default temp path can contain the /var -> /private/var alias.
+        # Canonicalize our owned scratch root before emitters verify its ancestry.
+        scratch_root = Path(temporary).resolve() / "bundle"
         scratch_store = IncrementalCheckpointStore(scratch_root)
         controller = IncrementalCheckpointController.for_recovery(
             store=scratch_store,

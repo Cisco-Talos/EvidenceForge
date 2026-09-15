@@ -427,6 +427,11 @@ for file in /runtime-config/filebeat-inputs/*.yml; do
   tmp="$file.tmp"
   awk '
     {{
+      # Staged inputs are uncompressed. Upstream compression auto requires
+      # fingerprint identity, which conflicts with this small-fixture adapter.
+      if ($0 ~ /^[[:space:]]*compression:[[:space:]]*auto[[:space:]]*$/) {{
+        next
+      }}
       print
       if ($0 ~ /^[[:space:]]*-[[:space:]]*type:[[:space:]]*filestream[[:space:]]*$/) {{
         indent = $0

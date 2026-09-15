@@ -108,8 +108,9 @@ fields:
   - name: content_version
     type: integer
     required: false
-    description: "Canonical file content version when available"
-
+    description: Canonical file content version when available
+    constraints:
+      min_value: 0
   - name: src_ip
     type: ip_address
     required: false
@@ -360,3 +361,283 @@ output:
   # Template not used — EcarEmitter builds JSON directly in Python.
   # Kept as an empty placeholder for format loader compatibility.
   template: "{}"
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: ecar.legacy-1
+  message: PROCESS records have pid
+  severity: error
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  checks:
+  - op: presence
+    field: pid
+    present: true
+- id: ecar.legacy-2
+  message: PROCESS/CREATE records have canonical primary tid
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: CREATE
+  checks:
+  - op: presence
+    field: tid
+    present: true
+- id: ecar.legacy-3
+  message: PROCESS/TERMINATE records have canonical primary tid
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: TERMINATE
+  checks:
+  - op: presence
+    field: tid
+    present: true
+- id: ecar.legacy-4
+  message: All records have objectID
+  severity: error
+  when: []
+  checks:
+  - op: presence
+    field: objectID
+    present: true
+- id: ecar.legacy-5
+  message: PROCESS/CREATE has image_path
+  severity: error
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: CREATE
+  checks:
+  - op: presence
+    field: image_path
+    present: true
+- id: ecar.legacy-6
+  message: PROCESS/CREATE has ppid
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: CREATE
+  checks:
+  - op: presence
+    field: ppid
+    present: true
+- id: ecar.legacy-7
+  message: PROCESS/CREATE has command_line
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: CREATE
+  checks:
+  - op: presence
+    field: command_line
+    present: true
+- id: ecar.legacy-8
+  message: THREAD/REMOTE_CREATE has target info
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: THREAD
+  - op: compare
+    field: action
+    relation: eq
+    value: REMOTE_CREATE
+  checks:
+  - op: presence
+    field: target_pid
+    present: true
+  - op: presence
+    field: image_path
+    present: true
+- id: ecar.legacy-9
+  message: PROCESS/OPEN has source image
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - op: compare
+    field: action
+    relation: eq
+    value: OPEN
+  checks:
+  - op: presence
+    field: image_path
+    present: true
+- id: ecar.legacy-10
+  message: FLOW events have network fields
+  severity: error
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: FLOW
+  checks:
+  - op: presence
+    field: src_ip
+    present: true
+  - op: presence
+    field: dst_ip
+    present: true
+- id: ecar.legacy-11
+  message: SERVICE/CREATE has service name
+  severity: error
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: SERVICE
+  - op: compare
+    field: action
+    relation: eq
+    value: CREATE
+  checks:
+  - op: presence
+    field: service_name
+    present: true
+- id: ecar.legacy-12
+  message: USER_SESSION LOGIN has principal
+  severity: warning
+  when:
+  - op: compare
+    field: object
+    relation: eq
+    value: USER_SESSION
+  - op: compare
+    field: action
+    relation: eq
+    value: LOGIN
+  checks:
+  - op: presence
+    field: principal
+    present: true
+- id: ecar.object-action
+  message: Unsupported object/action combination
+  severity: error
+  when: []
+  checks:
+  - op: combination
+    field: object
+    other_field: action
+    pairs:
+    - - PROCESS
+      - CREATE
+    - - PROCESS
+      - TERMINATE
+    - - PROCESS
+      - OPEN
+    - - FILE
+      - CREATE
+    - - FILE
+      - OPEN
+    - - FILE
+      - CLOSE
+    - - FILE
+      - MODIFY
+    - - FILE
+      - DELETE
+    - - FILE
+      - WRITE
+    - - FILE
+      - READ
+    - - FILE
+      - RENAME
+    - - FLOW
+      - OPEN
+    - - FLOW
+      - CLOSE
+    - - FLOW
+      - CONNECT
+    - - FLOW
+      - ACCEPT
+    - - FLOW
+      - SEND
+    - - FLOW
+      - RECEIVE
+    - - REGISTRY
+      - CREATE
+    - - REGISTRY
+      - MODIFY
+    - - REGISTRY
+      - DELETE
+    - - REGISTRY
+      - READ
+    - - REGISTRY
+      - WRITE
+    - - MODULE
+      - LOAD
+    - - MODULE
+      - UNLOAD
+    - - THREAD
+      - CREATE
+    - - THREAD
+      - REMOTE_CREATE
+    - - THREAD
+      - TERMINATE
+    - - USER_SESSION
+      - LOGIN
+    - - USER_SESSION
+      - LOGOUT
+    - - SOCKET
+      - CREATE
+    - - SOCKET
+      - OPEN
+    - - SOCKET
+      - CLOSE
+    - - SOCKET
+      - CONNECT
+    - - SOCKET
+      - ACCEPT
+    - - SOCKET
+      - SEND
+    - - SOCKET
+      - RECEIVE
+    - - DRIVER
+      - LOAD
+    - - DRIVER
+      - UNLOAD
+    - - SERVICE
+      - CREATE
+    - - SERVICE
+      - START
+    - - SERVICE
+      - STOP
+    - - SERVICE
+      - MODIFY
+    - - SERVICE
+      - DELETE

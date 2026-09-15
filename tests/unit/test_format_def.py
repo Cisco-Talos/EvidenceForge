@@ -67,7 +67,6 @@ class TestFieldConstraint:
         assert constraint.min_value is None
         assert constraint.max_value is None
         assert constraint.allowed_values is None
-        assert constraint.json_logic is None
 
     def test_pattern_constraint(self):
         """Test constraint with pattern."""
@@ -99,8 +98,8 @@ class TestFieldConstraint:
     def test_json_logic_constraint(self):
         """Test constraint with JSON Logic rule."""
         rule = {"==": [{"var": "LogonType"}, 3]}
-        constraint = FieldConstraint(json_logic=rule)
-        assert constraint.json_logic == rule
+        with pytest.raises(ValidationError, match="json_logic"):
+            FieldConstraint(json_logic=rule)
 
     def test_extra_fields_rejected(self):
         """Test that extra fields are rejected."""
@@ -337,7 +336,15 @@ class TestFormatDefinition:
             )
         ]
         output = OutputTemplate(format="xml", template="<test/>", file_extension=".xml")
-        validators = [{"==": [{"var": "field1"}, "value"]}]
+        validators = [
+            {
+                "id": "test.equal",
+                "message": "Expected value",
+                "checks": [
+                    {"op": "compare", "field": "field1", "relation": "eq", "value": "value"}
+                ],
+            }
+        ]
 
         fmt = FormatDefinition(
             name="test_format",
@@ -354,7 +361,7 @@ class TestFormatDefinition:
         assert fmt.category == "network"
         assert len(fmt.fields) == 2
         assert len(fmt.variants) == 1
-        assert fmt.validators == validators
+        assert fmt.validators[0].id == "test.equal"
 
     def test_all_categories_valid(self):
         """Test that all valid categories work."""

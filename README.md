@@ -288,6 +288,12 @@ composition and lifecycle contract, see
 
 ## Data Quality Evaluation
 
+Input validation and evidence evaluation are separate. `validate-config`, `validate`, `resolve`,
+and `generate` preflight packaged contracts; `eval` checks emitted records. Acceptance requires
+100% schema compliance and objective record correctness. Realism diagnostics do not relax these
+gates. Existing scenario/overlay/pack interfaces remain supported; rules and thresholds are
+package-owned. See [record validation](docs/reference/RECORD_VALIDATION.md).
+
 EvidenceForge can evaluate a generated bundle across four complementary quality pillars:
 
 | Pillar | Weight | What it measures |

@@ -1,0 +1,430 @@
+[
+  {
+    "format": "ecar",
+    "fields": {
+      "timestamp_ms": 1705312829104,
+      "id": "95883492-1cad-4997-b60a-b965a6d47372",
+      "hostname": "LINUX-01",
+      "object": "FLOW",
+      "action": "CONNECT",
+      "objectID": "2e7e2825-e704-4d88-a2bb-e9a46ec0280a",
+      "src_ip": "10.0.0.10",
+      "src_port": "56946",
+      "dst_ip": "10.0.0.20",
+      "dst_port": "80",
+      "protocol": "tcp",
+      "direction": "INBOUND"
+    }
+  },
+  {
+    "format": "zeek_ntp",
+    "fields": {
+      "ts": 1705314043.39248,
+      "uid": "CPjSUGEohYBd3aBKmOr",
+      "id.orig_h": "10.0.0.10",
+      "id.orig_p": 52113,
+      "id.resp_h": "216.239.35.0",
+      "id.resp_p": 123,
+      "version": 4,
+      "mode": 4,
+      "stratum": 2,
+      "poll": 2048.0,
+      "precision": 1e-06,
+      "root_delay": 0.036214,
+      "root_disp": 0.004971,
+      "ref_id": ".GOOG.",
+      "ref_time": 1705314007.231922,
+      "org_time": 1705314043.249566,
+      "rec_time": 1705314043.252494,
+      "xmt_time": 1705314043.253117,
+      "num_exts": 0
+    }
+  },
+  {
+    "format": "zeek_smb_files",
+    "fields": {
+      "ts": 1705312965.666419,
+      "uid": "CgWAHx2h1prikju2jy",
+      "id.orig_h": "10.20.0.10",
+      "id.orig_p": 62071,
+      "id.resp_h": "10.20.0.20",
+      "id.resp_p": 445,
+      "action": "SMB::FILE_OPEN",
+      "path": "\\\\FS-01\\Team",
+      "name": "Templates\\onboarding.pptx"
+    }
+  },
+  {
+    "format": "zeek_http",
+    "fields": {
+      "ts": 1705312829.027139,
+      "uid": "Cf81BjEAVdnNeJYq7q",
+      "id.orig_h": "10.0.0.10",
+      "id.orig_p": 56946,
+      "id.resp_h": "10.0.0.20",
+      "id.resp_p": 80,
+      "trans_depth": 1,
+      "method": "GET",
+      "host": "LINUX-01",
+      "uri": "/products",
+      "version": "1.1",
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+      "request_body_len": 0,
+      "response_body_len": 41529,
+      "status_code": 200,
+      "status_msg": "OK",
+      "resp_fuids": [
+        "FdWSqWPbUgtoEdn14FS"
+      ],
+      "resp_mime_types": [
+        "text/html"
+      ]
+    }
+  },
+  {
+    "format": "zeek_ssl",
+    "fields": {
+      "ts": 1705312995.741929,
+      "uid": "CLjGH8rfpjWDMbTeLI",
+      "id.orig_h": "10.0.0.20",
+      "id.orig_p": 60067,
+      "id.resp_h": "151.101.64.223",
+      "id.resp_p": 443,
+      "version": "TLSv13",
+      "cipher": "TLS_AES_128_GCM_SHA256",
+      "server_name": "pypi.org",
+      "resumed": true,
+      "established": true,
+      "ssl_history": "CSD"
+    }
+  },
+  {
+    "format": "zeek_smb_mapping",
+    "fields": {
+      "ts": 1705312965.088117,
+      "uid": "CgWAHx2h1prikju2jy",
+      "id.orig_h": "10.20.0.10",
+      "id.orig_p": 62071,
+      "id.resp_h": "10.20.0.20",
+      "id.resp_p": 445,
+      "path": "\\\\FS-01\\Team",
+      "service": "Team",
+      "native_file_system": "NTFS",
+      "share_type": "DISK"
+    }
+  },
+  {
+    "format": "zeek_smtp",
+    "fields": {
+      "ts": 1705314127.446219,
+      "uid": "CEfV6GINSXMbTL22tO",
+      "id.orig_h": "10.0.0.10",
+      "id.orig_p": 54702,
+      "id.resp_h": "10.0.0.20",
+      "id.resp_p": 587,
+      "trans_depth": 1,
+      "helo": "WIN-01.example.test",
+      "mailfrom": "",
+      "rcptto": [],
+      "last_reply": "220 2.0.0 STARTTLS accepted",
+      "path": [],
+      "tls": true,
+      "date": "",
+      "from": "",
+      "to": [],
+      "cc": [],
+      "msg_id": "",
+      "subject": "",
+      "user_agent": "",
+      "fuids": []
+    }
+  },
+  {
+    "format": "zeek_reporter",
+    "fields": {
+      "ts": 1750000000.0,
+      "level": "example",
+      "message": "example",
+      "location": "example"
+    }
+  },
+  {
+    "format": "syslog",
+    "fields": {
+      "pri": 30,
+      "version": 1,
+      "hostname": "LINUX-01",
+      "app_name": "irqbalance",
+      "procid": "7694",
+      "msgid": "-",
+      "structured_data": "-",
+      "message": "IRQ 16 affinity hint keeps vector on CPU 0 (ahci)",
+      "facility": 3,
+      "severity": 6,
+      "syslog_protocol": "rfc5424_legacy",
+      "timestamp": "2024-01-15 10:00:26.077416+00:00",
+      "pid": 7694
+    }
+  },
+  {
+    "format": "zeek_files",
+    "fields": {
+      "ts": 1705312829.05692,
+      "fuid": "FdWSqWPbUgtoEdn14FS",
+      "tx_hosts": [
+        "10.0.0.20"
+      ],
+      "rx_hosts": [
+        "10.0.0.10"
+      ],
+      "conn_uids": [
+        "Cf81BjEAVdnNeJYq7q"
+      ],
+      "source": "HTTP",
+      "depth": 0,
+      "mime_type": "text/html",
+      "duration": 0.006243,
+      "local_orig": true,
+      "is_orig": false,
+      "seen_bytes": 41529,
+      "total_bytes": 41529,
+      "missing_bytes": 0,
+      "overflow_bytes": 0,
+      "timedout": false
+    }
+  },
+  {
+    "format": "zeek_dhcp",
+    "fields": {
+      "ts": 1705312830.038327,
+      "uids": [
+        "CditFQPCIZAElClCi5"
+      ],
+      "client_addr": "10.0.0.10",
+      "server_addr": "10.0.0.11",
+      "assigned_addr": "10.0.0.10",
+      "mac": "3c:97:0e:06:09:d4",
+      "host_name": "WIN-01",
+      "domain": "example.test",
+      "msg_types": [
+        "REQUEST",
+        "ACK"
+      ],
+      "lease_time": 3600.0,
+      "duration": 0.491998
+    }
+  },
+  {
+    "format": "zeek_ocsp",
+    "fields": {
+      "ts": 1705313860.338609,
+      "id": "FYrdbFui90F4vTEazm",
+      "hashAlgorithm": "sha1",
+      "issuerNameHash": "14dcb315ede798d6239ad75e2196634149e19286",
+      "issuerKeyHash": "82cab9f7aea444c2a0bd066ac3020a56d7e01a77",
+      "serialNumber": "7B15FE4D9F95E1F67CA400723012082C",
+      "certStatus": "good",
+      "thisUpdate": 1705302477.0,
+      "nextUpdate": 1705704581.0
+    }
+  },
+  {
+    "format": "zeek_x509",
+    "fields": {
+      "ts": 1705313113.259,
+      "id": "F9wRMQ6OkX33AyFGBFO",
+      "fingerprint": "7debabe84debeb802b9b1e3569031a6cf1a17b20",
+      "certificate.version": 3,
+      "certificate.serial": "2AA21D65A52955D4F7A5B89B7B674C71CE62",
+      "certificate.subject": "CN=example.com",
+      "certificate.issuer": "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
+      "certificate.not_valid_before": 1676875314,
+      "certificate.not_valid_after": 1710744114,
+      "certificate.key_alg": "rsaEncryption",
+      "certificate.sig_alg": "sha256WithRSAEncryption",
+      "certificate.key_type": "rsa",
+      "certificate.key_length": 2048,
+      "certificate.exponent": "65537",
+      "san.dns": [
+        "example.com"
+      ],
+      "basic_constraints.ca": false,
+      "host_cert": true,
+      "client_cert": false
+    }
+  },
+  {
+    "format": "zeek_packet_filter",
+    "fields": {
+      "ts": 1750000000.0,
+      "node": "example",
+      "filter": "example",
+      "init": false,
+      "success": false
+    }
+  },
+  {
+    "format": "zeek_weird",
+    "fields": {
+      "ts": 1750000000.0,
+      "name": "example",
+      "notice": false,
+      "peer": "example"
+    }
+  },
+  {
+    "format": "snort_alert",
+    "fields": {
+      "timestamp": 1750000000.0,
+      "sid": 1,
+      "classification": "example",
+      "priority": 1,
+      "protocol": "TCP",
+      "src_ip": "10.0.0.1",
+      "dst_ip": "10.0.0.1",
+      "message": "example"
+    }
+  },
+  {
+    "format": "cisco_asa",
+    "fields": {
+      "timestamp": "2026-01-15T10:01:21",
+      "pri": 166,
+      "hostname": "edge-fw",
+      "severity": 6,
+      "msg_id": 302015,
+      "message": "Built outbound UDP connection 1067932 for workstations:10.0.0.21/51409 (10.0.0.21/51409) to outside:1.1.1.1/53 (1.1.1.1/53)",
+      "connection_id": 1067932,
+      "src_interface": "workstations",
+      "src_ip": "10.0.0.21",
+      "src_port": 51409,
+      "mapped_src_ip": "10.0.0.21",
+      "mapped_src_port": 51409,
+      "dst_interface": "outside",
+      "dst_ip": "1.1.1.1",
+      "dst_port": 53,
+      "mapped_dst_ip": "1.1.1.1",
+      "mapped_dst_port": 53
+    }
+  },
+  {
+    "format": "proxy_access",
+    "fields": {
+      "timestamp": 1750000000.0,
+      "client_ip": "10.0.0.1",
+      "method": "example",
+      "url": "example",
+      "status_code": 200,
+      "host": "example"
+    }
+  },
+  {
+    "format": "zeek_pe",
+    "fields": {
+      "ts": 1705317648.5865,
+      "id": "FS9HB7aeWi6wL5ZS3X",
+      "machine": "AMD64",
+      "compile_ts": 1557962473,
+      "os": "WINDOWS_NT",
+      "subsystem": "WINDOWS_GUI",
+      "is_exe": true,
+      "is_64bit": true,
+      "uses_aslr": true,
+      "uses_dep": true,
+      "uses_code_integrity": false,
+      "uses_seh": true,
+      "has_import_table": true,
+      "has_export_table": false,
+      "has_cert_table": false,
+      "has_debug_data": true,
+      "section_names": [
+        ".text",
+        ".idata",
+        ".data",
+        ".rsrc",
+        ".reloc"
+      ]
+    }
+  },
+  {
+    "format": "bash_history",
+    "fields": {
+      "timestamp": 1705313110,
+      "username": "bob",
+      "hostname": "LINUX-01.example.test",
+      "command": "curl https://example.com/health > ~/health.txt"
+    }
+  },
+  {
+    "format": "zeek_conn",
+    "fields": {
+      "ts": 1705312829.008139,
+      "uid": "Cf81BjEAVdnNeJYq7q",
+      "id.orig_h": "10.0.0.10",
+      "id.orig_p": 56946,
+      "id.resp_h": "10.0.0.20",
+      "id.resp_p": 80,
+      "proto": "tcp",
+      "service": "http",
+      "duration": 5.654289,
+      "orig_bytes": 1716,
+      "resp_bytes": 340091,
+      "conn_state": "SF",
+      "local_orig": true,
+      "local_resp": true,
+      "missed_bytes": 0,
+      "history": "ShADadTtFf",
+      "orig_pkts": 117,
+      "orig_ip_bytes": 7824,
+      "resp_pkts": 238,
+      "resp_ip_bytes": 352475,
+      "ip_proto": 6
+    }
+  },
+  {
+    "format": "zeek_dns",
+    "fields": {
+      "ts": 1705313110.405053,
+      "uid": "C6WjME1LmRHTLFFfcr",
+      "id.orig_h": "10.0.0.20",
+      "id.orig_p": 39802,
+      "id.resp_h": "208.67.222.222",
+      "id.resp_p": 53,
+      "proto": "udp",
+      "trans_id": 61076,
+      "rtt": 0.012416,
+      "query": "example.com",
+      "qclass": 1,
+      "qclass_name": "C_INTERNET",
+      "qtype": 1,
+      "qtype_name": "A",
+      "rcode": 0,
+      "rcode_name": "NOERROR",
+      "AA": false,
+      "TC": false,
+      "RD": true,
+      "RA": true,
+      "Z": 0,
+      "answers": [
+        "54.230.166.120"
+      ],
+      "TTLs": [
+        201.0
+      ],
+      "rejected": false,
+      "opcode": 0,
+      "opcode_name": "query"
+    }
+  },
+  {
+    "format": "web_access",
+    "fields": {
+      "timestamp": 1750000000.0,
+      "client_ip": "10.0.0.1",
+      "method": "GET",
+      "path": "example",
+      "protocol": "example",
+      "status_code": 200
+    }
+  }
+]

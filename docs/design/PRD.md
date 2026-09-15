@@ -1,3 +1,6 @@
+> Historical design: the JSON Logic sketches below are superseded by
+> [the typed record contract](../reference/RECORD_VALIDATION.md).
+
 # PRD: EvidenceForge
 
 > **Naming conventions:** "EvidenceForge" is the product name, `evidenceforge` is the Python package name, `eforge` is the CLI command name.

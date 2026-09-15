@@ -183,3 +183,8 @@ when the user requests an example or regression fixture.
 Return the exact reference, version rationale, files and exports authored, final digest, validation
 result, consumer-harness result, and specific runtime evidence observed. Identify any intentionally
 empty catalog and why it remains empty.
+
+## Validation policy
+
+Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,
+structured findings, or compatibility with existing projects.

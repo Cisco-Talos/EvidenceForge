@@ -3254,10 +3254,8 @@ class TestWindowsEventEmitter:
         assert "<Task>14339</Task>" in content
         assert '<Data Name="Status">0x18</Data>' in content
 
-    def test_kerberos_preauth_without_source_ip_does_not_keep_source_port(
-        self, format_def, temp_output
-    ):
-        """4771 source port should not survive when the source address is unavailable."""
+    def test_kerberos_preauth_without_source_ip_renders_localhost(self, format_def, temp_output):
+        """4771 should render a missing canonical source as a DC-local request."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         host = HostContext(
             hostname="DC-01",
@@ -3290,8 +3288,8 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         content = temp_output.read_text()
-        assert '<Data Name="IpAddress">-</Data>' in content
-        assert '<Data Name="IpPort">-</Data>' in content
+        assert '<Data Name="IpAddress">::1</Data>' in content
+        assert '<Data Name="IpPort">0</Data>' in content
         assert "49888" not in content
 
     def test_emit_log_cleared(self, format_def, temp_output):

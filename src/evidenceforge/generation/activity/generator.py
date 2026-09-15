@@ -12687,7 +12687,7 @@ class ActivityGenerator:
             source_ip: Source IP for remote attempts. Local failed logons render with no
                 source address in Windows Security.
             target_username: If set, the logon targets this user instead of the actor
-            dc_system: Domain controller to also emit 4625/4776 on (optional)
+            dc_system: Domain controller to also emit 4771/4776 on (optional)
         """
         request = FailedLogonRequest(
             user=user,
@@ -12710,10 +12710,7 @@ class ActivityGenerator:
         source_ip = request.source_ip
         target_username = request.target_username
 
-        local_logon = logon_type in (2, 5, 7, 11)
-        if source_ip == system.ip:
-            source_ip = None
-            local_logon = True
+        local_logon = logon_type in (2, 4, 5, 7, 11)
         if source_ip is None:
             source_ip = "-" if local_logon else system.ip
         auth_source_ip = "-" if local_logon else source_ip
@@ -13017,8 +13014,8 @@ class ActivityGenerator:
 
         remote_linux_source = (
             _get_os_category(system.os) == "linux"
-            and source_ip not in (None, "-")
-            and source_ip != system.ip
+            and auth_source_ip not in (None, "-")
+            and auth_source_ip != system.ip
         )
         is_windows_remote_auth = (
             _get_os_category(system.os) == "windows"
@@ -13138,7 +13135,7 @@ class ActivityGenerator:
 
             if remote_linux_source:
                 pass
-            elif source_ip and source_ip != "-":
+            elif auth_source_ip and auth_source_ip != "-":
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
@@ -13149,7 +13146,7 @@ class ActivityGenerator:
                     facility=10,
                     severity=4,
                     message=(
-                        f"Failed password for {effective_username} from {source_ip} "
+                        f"Failed password for {effective_username} from {auth_source_ip} "
                         f"port {ssh_source_port} ssh2"
                     ),
                 )
@@ -13200,7 +13197,7 @@ class ActivityGenerator:
                 ntlm_delay_ms = rng.randint(3, _FAILED_LOGON_NTLM_VALIDATION_DELAY_MAX_MS)
                 self.generate_ntlm_validation(
                     username=effective_username,
-                    workstation=system.hostname,
+                    workstation=str(failed_profile["workstation_name"]),
                     dc_hostname=dc_system.hostname,
                     time=time + timedelta(milliseconds=ntlm_delay_ms),
                     status=substatus,
@@ -30032,7 +30029,11 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2E0)
         has_source_ip = source_ip not in {"", "-"}
         normalized_source_ip = (
-            f"::ffff:{source_ip}" if has_source_ip and ":" not in source_ip else source_ip
+            f"::ffff:{source_ip}"
+            if has_source_ip and ":" not in source_ip
+            else source_ip
+            if has_source_ip
+            else "::1"
         )
         source_port = (
             self._reserve_kerberos_source_port(source_ip, dc_hostname, time, source_port)
@@ -30080,7 +30081,7 @@ class ActivityGenerator:
                 ticket_options=failure_fields["ticket_options"],
                 ticket_status=status,
                 pre_auth_type=failure_fields["pre_auth_type"],
-                source_ip=normalized_source_ip or "-",
+                source_ip=normalized_source_ip,
                 source_port=source_port,
                 reporting_pid=reporting_pid,
             ),

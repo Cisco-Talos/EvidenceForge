@@ -154,6 +154,7 @@ def run_sof_elk_parser(
     validators: tuple[str, ...],
     timeout_seconds: int = 120,
     runtime: str | None = None,
+    commit: str = SOF_ELK_COMMIT,
     progress_callback: ProgressCallback = _noop_progress,
 ) -> SofElkCombinedResult:
     """Run one Filebeat/Logstash pair for all selected SOF-ELK validators."""
@@ -178,7 +179,7 @@ def run_sof_elk_parser(
         filebeat_data_dir=filebeat_data_dir,
         logstash_data_dir=logstash_data_dir,
         repo_url=SOF_ELK_REPO_URL,
-        commit=SOF_ELK_COMMIT,
+        commit=commit,
         filebeat_image=FILEBEAT_IMAGE,
         logstash_image=LOGSTASH_IMAGE,
         runtime=runtime,

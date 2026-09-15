@@ -332,7 +332,7 @@ class _SingleHostWriter:
             self.buffer.sort(key=self._sort_key)
         self._write_header_unlocked()
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.output_path, "a", encoding="utf-8") as f:
+        with open(self.output_path, "a", encoding="utf-8", newline="\n") as f:
             for entry in self.buffer:
                 f.write(entry)
                 if not entry.endswith("\n"):

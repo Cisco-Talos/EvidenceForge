@@ -1,0 +1,414 @@
+# Developer-owned Snare projections; identity labels always share one scope.
+version: 1
+events:
+- source: windows_event_security
+  event_id: 4624
+  variant: logon
+  aliases:
+    Process ID: ProcessId
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Image: ProcessName
+    Security ID: TargetUserSid
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+    Logon ID: TargetLogonId
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4634
+  variant: logoff
+  aliases:
+    Security ID: TargetUserSid
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+    Logon ID: TargetLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4778
+  variant: rdp_session_reconnect
+  aliases:
+    SourceIp: ClientAddress
+    SourcePort: ClientPort
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4779
+  variant: rdp_session_disconnect
+  aliases:
+    SourceIp: ClientAddress
+    SourcePort: ClientPort
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4688
+  variant: process_creation
+  aliases:
+    New Process ID: NewProcessId
+    New Process Name: NewProcessName
+    Creator Process ID: ProcessId
+    Creator Process Name: ParentProcessName
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4625
+  variant: failed_logon
+  aliases:
+    Process ID: ProcessId
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Image: ProcessName
+    Security ID: TargetUserSid
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4672
+  variant: special_privileges
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4800
+  variant: workstation_locked
+  aliases:
+    Security ID: TargetUserSid
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+    Logon ID: TargetLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4801
+  variant: workstation_unlocked
+  aliases:
+    Security ID: TargetUserSid
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+    Logon ID: TargetLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4689
+  variant: process_termination
+  aliases:
+    Process ID: ProcessId
+    Exit Status: Status
+    Image: ProcessName
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4648
+  variant: explicit_credentials
+  aliases:
+    Process ID: ProcessId
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Image: ProcessName
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4768
+  variant: kerberos_tgt
+  aliases:
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4769
+  variant: kerberos_service_ticket
+  aliases:
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4776
+  variant: ntlm_validation
+  aliases:
+    Account Name: TargetUserName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 5156
+  variant: wfp_connection
+  aliases:
+    SourceIp: SourceAddress
+    DestinationIp: DestAddress
+    DestinationPort: DestPort
+    ProcessId: ProcessID
+    Image: Application
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4771
+  variant: kerberos_preauth_failed
+  aliases:
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Account Name: TargetUserName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 1102
+  variant: log_cleared
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4697
+  variant: service_installed
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4698
+  variant: scheduled_task
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4728
+  variant: group_membership_change
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4720
+  variant: account_created
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4723
+  variant: password_change
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4724
+  variant: password_reset
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4726
+  variant: account_deleted
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4738
+  variant: account_changed
+  aliases:
+    Account Name: TargetUserName
+    Account Domain: TargetDomainName
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4656
+  variant: object_handle_requested
+  aliases:
+    Process ID: ProcessId
+    Image: ProcessName
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4658
+  variant: object_handle_closed
+  aliases:
+    Process ID: ProcessId
+    Image: ProcessName
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4663
+  variant: object_access
+  aliases:
+    Process ID: ProcessId
+    Image: ProcessName
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  decimal_aliases:
+    ProcessId: ProcessId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 5140
+  variant: network_share_access
+  aliases:
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 5145
+  variant: network_share_access_check
+  aliases:
+    SourceIp: IpAddress
+    SourcePort: IpPort
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4699
+  variant: scheduled_task_deleted
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4700
+  variant: scheduled_task_enabled
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_security
+  event_id: 4701
+  variant: scheduled_task_disabled
+  aliases:
+    Security ID: SubjectUserSid
+    Account Name: SubjectUserName
+    Account Domain: SubjectDomainName
+    Logon ID: SubjectLogonId
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 1
+  variant: sysmon_process_create
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 5
+  variant: sysmon_process_terminate
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 8
+  variant: sysmon_create_remote_thread
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 10
+  variant: sysmon_process_access
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 3
+  variant: sysmon_network_connect
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 7
+  variant: sysmon_image_loaded
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 11
+  variant: sysmon_file_create
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 12
+  variant: sysmon_registry_create_delete
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 13
+  variant: sysmon_registry_set_value
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID
+- source: windows_event_sysmon
+  event_id: 22
+  variant: sysmon_dns_query
+  aliases: {}
+  fallback_aliases:
+    Process ID: ExecutionProcessID

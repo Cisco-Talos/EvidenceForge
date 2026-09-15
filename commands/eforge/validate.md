@@ -146,3 +146,5 @@ eforge validate <scenario> --json --oob-host <exact-host>
 
 Validation makes no callback. A fresh matching flag is independently required for each validate,
 resolve, or generate invocation that needs it.
+
+Read `/eforge:references:record-validation` for validation policy and compatibility.

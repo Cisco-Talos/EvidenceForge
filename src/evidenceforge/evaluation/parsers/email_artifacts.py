@@ -34,12 +34,20 @@ class EmailArtifactsParser(LogParser):
             )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             yield ParsedRecord(
                 source_format=self.format_name,
                 raw="",
                 fields={},
                 parse_errors=[str(exc)],
+            )
+            return
+        if not isinstance(payload, dict):
+            yield ParsedRecord(
+                source_format=self.format_name,
+                raw=json.dumps(payload),
+                fields={},
+                parse_errors=["Artifact manifest must be an object"],
             )
             return
         email_section = payload.get("email", {})
@@ -71,13 +79,29 @@ class EmailArtifactsParser(LogParser):
                 )
                 continue
             timestamp = _parse_email_artifact_date(message.get("date"))
-            yield ParsedRecord(
+            record = ParsedRecord(
                 source_format=self.format_name,
                 raw=json.dumps(message, sort_keys=True),
                 fields=message,
                 timestamp=timestamp,
+                parse_errors=(
+                    ["Email artifact date must be a valid RFC email date"]
+                    if message.get("date") not in (None, "") and timestamp is None
+                    else []
+                ),
                 line_number=index,
             )
+            from evidenceforge.evaluation.validation_routes import validate_email_artifact
+
+            record.parse_errors.extend(
+                f"{'.'.join(finding.fields)}: {finding.message}"
+                for finding in validate_email_artifact(record)
+            )
+            if record.parse_errors:
+                # Preserve the raw record and failure count, but do not feed malformed values
+                # into specialized cross-source indexes (for example an unhashable Message-ID).
+                record.fields = {}
+            yield record
 
 
 def _parse_email_artifact_date(value: object) -> datetime | None:

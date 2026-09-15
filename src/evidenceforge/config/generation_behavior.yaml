@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 89
+current_revision: 95
 history_start_revision: 1
-behavior_surface_sha256: 120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c
+behavior_surface_sha256: 8257de43a05cc766305c694351e1159864335f1cd577028a556cc6f344b5ed5c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -798,3 +798,54 @@ changes:
       - host-filesystem
     formats: []
     summary: Publish Windows checkpoint dependencies and recovery indexes through native write-through handles without changing POSIX operations or evidence semantics
+  - revision: 90
+    id: typed-record-validation
+    impact: none
+    domains:
+      - record-validation
+    formats: []
+    summary: Replace record validation contracts without changing rendered evidence.
+  - revision: 91
+    id: evaluator-source-routing
+    impact: none
+    domains:
+      - validation-preflight
+    formats: []
+    summary: Declares parser validation ownership and explicit evaluation failures without changing rendered evidence.
+  - revision: 92
+    id: legacy-validation-snapshot-decoding
+    impact: none
+    domains:
+      - validation-preflight
+    formats: []
+    summary: Decodes recognized legacy validation metadata for compatible checkpoint hydration without changing rendering definitions.
+  - revision: 93
+    id: snare-canonical-field-preservation
+    impact: localized
+    domains:
+      - source-native-projection
+    formats:
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserve canonical Windows fields and repair SOF-ELK Snare aliases; XML and non-Snare evidence are unchanged.
+  - revision: 94
+    id: failed-logon-requester-identity
+    impact: localized
+    domains:
+      - authentication
+      - requester-identity
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+    summary: Preserve failed-logon requester identity independently from the authentication target and domain controller.
+  - revision: 95
+    id: canonical-host-text-newlines
+    impact: localized
+    domains:
+      - checkpoint-resume
+      - source-native-projection
+    formats:
+      - proxy_access
+      - web_access
+    summary: Use canonical LF framing for ordinary host text output so Windows checkpoint resume matches uninterrupted generation.

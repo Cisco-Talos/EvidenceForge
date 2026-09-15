@@ -197,3 +197,18 @@ provenance when recovery occurred. Under an exact resume, deterministic evidence
 ground truth, artifacts, and deterministic sidecars are byte-identical to uninterrupted
 generation. A load-compatible resume makes no byte-equivalence promise; `generation.log` and the
 time-bearing generation manifest retain their established nondeterministic fields in either case.
+
+### Typed-validation snapshot compatibility
+
+The typed-validation runtime recognizes exact immutable validation documents from baseline
+`787fd733` (2.1.0). It promotes recognized legacy rules/schema metadata and evaluation thresholds
+in memory, preserving the stored resolved snapshot and verifying identical native rendering
+templates. Other old internal rule documents receive the existing actionable contract error.
+This is a bounded decoder for package-owned metadata, not a user configuration migration surface.
+
+`exact` still requires the original fingerprint and rejects drift without changing recovery state.
+Default `compatible` performs normal isolated hydration and records the dependency/build transition
+before continuing. The removed JSON Logic dependency remains visible in migration provenance.
+The output-equivalence classification remains `not-guaranteed`; observed byte equality in a
+regression test does not strengthen that guarantee. Corrupt, unsupported, and conflicting recovery
+states retain their existing refusal behavior.

@@ -241,8 +241,7 @@ class TestTierC:
             ),
         ]
 
-        scorer = PlausibilityScorer()
-        tier_c = scorer._score_co_occurrence({"zeek_http": records})
+        tier_c = RecordFidelityScorer()._score_format_constraints({"zeek_http": records})
 
         assert tier_c.score == 100.0
 
@@ -259,8 +258,7 @@ class TestTierC:
             ),
         ]
 
-        scorer = PlausibilityScorer()
-        tier_c = scorer._score_co_occurrence({"zeek_http": records})
+        tier_c = RecordFidelityScorer()._score_format_constraints({"zeek_http": records})
 
         assert tier_c.score < 100.0
 

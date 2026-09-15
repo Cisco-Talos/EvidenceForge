@@ -130,6 +130,11 @@ EXPECTED_CHATGPT_REFERENCES = {
     },
 }
 
+EXPECTED_CHATGPT_REFERENCES = {
+    name: refs | {"references/record-validation.md"}
+    for name, refs in EXPECTED_CHATGPT_REFERENCES.items()
+}
+
 
 class TestInstallSkills:
     """Tests for install_skills() function."""
@@ -486,11 +491,14 @@ class TestInstallChatGPTSkills:
             & scenario_refs
         )
 
-        assert set(_CHATGPT_REFERENCES_BY_SKILL["evaluate"]) == EVIDENCE_REFERENCES
+        assert (
+            set(_CHATGPT_REFERENCES_BY_SKILL["evaluate"]) == EXPECTED_CHATGPT_REFERENCES["evaluate"]
+        )
         assert (
             set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == EXPECTED_CHATGPT_REFERENCES["generate"]
         )
         assert set(_CHATGPT_REFERENCES_BY_SKILL["validate"]) == {
+            "references/record-validation.md",
             "references/project-context.md",
             "references/validation-safety.md",
             "references/validation-storage.md",

@@ -27,18 +27,18 @@ fields:
   - name: tx_hosts
     type: list
     required: true
-    description: "Hosts that transmitted the file (JSON array of IP strings)"
-
+    description: Hosts that transmitted the file (JSON array of IP strings)
+    item_type: string
   - name: rx_hosts
     type: list
     required: true
-    description: "Hosts that received the file (JSON array of IP strings)"
-
+    description: Hosts that received the file (JSON array of IP strings)
+    item_type: string
   - name: conn_uids
     type: list
     required: true
-    description: "Connection UIDs that carried the file (JSON array of C-prefix UID strings)"
-
+    description: Connection UIDs that carried the file (JSON array of C-prefix UID strings)
+    item_type: string
   - name: source
     type: string
     required: true
@@ -57,8 +57,8 @@ fields:
   - name: analyzers
     type: list
     required: false
-    description: "Analyzers that ran on this file (JSON array of strings)"
-
+    description: Analyzers that ran on this file (JSON array of strings)
+    item_type: string
   - name: mime_type
     type: string
     required: false
@@ -67,8 +67,9 @@ fields:
   - name: duration
     type: float
     required: false
-    description: "Transfer duration in seconds"
-
+    description: Transfer duration in seconds
+    constraints:
+      min_value: 0
   - name: local_orig
     type: boolean
     required: false
@@ -82,23 +83,27 @@ fields:
   - name: seen_bytes
     type: integer
     required: true
-    description: "Bytes observed"
-
+    description: Bytes observed
+    constraints:
+      min_value: 0
   - name: total_bytes
     type: integer
     required: false
-    description: "Total bytes expected"
-
+    description: Total bytes expected
+    constraints:
+      min_value: 0
   - name: missing_bytes
     type: integer
     required: true
-    description: "Missing bytes"
-
+    description: Missing bytes
+    constraints:
+      min_value: 0
   - name: overflow_bytes
     type: integer
     required: true
-    description: "Overflow bytes"
-
+    description: Overflow bytes
+    constraints:
+      min_value: 0
   - name: timedout
     type: boolean
     required: true

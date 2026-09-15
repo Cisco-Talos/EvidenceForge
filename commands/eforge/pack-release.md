@@ -29,3 +29,8 @@ set`; never derive identity from a username, hostname, repository, or pack name.
    `eforge pack hydrate publisher:type:name@version --scope project|user --json`.
 
 `.efpack` files are local release artifacts; this skill does not upload to a registry or remote host.
+
+## Validation policy
+
+Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,
+structured findings, or compatibility with existing projects.

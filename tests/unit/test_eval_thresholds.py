@@ -7,7 +7,6 @@ from evidenceforge.evaluation.thresholds import (
     EvalThresholds,
     PillarThresholds,
     SubScoreThreshold,
-    _defaults,
     load_thresholds,
 )
 
@@ -138,10 +137,13 @@ class TestLoadThresholds:
             "storyline_trace_coverage",
         } <= gates
 
-    def test_defaults_fallback(self):
-        """_defaults() should return a valid minimal EvalThresholds."""
-        thresh = _defaults()
-        assert isinstance(thresh, EvalThresholds)
-        assert thresh.overall_minimum == 70.0
-        assert thresh.overall_aspirational == 85.0
-        assert len(thresh.pillars) == 0
+    def test_missing_policy_fails_closed(self, monkeypatch):
+        import pytest
+
+        from evidenceforge.models.exceptions import ConfigurationError
+
+        load_thresholds.cache_clear()
+        monkeypatch.setattr("evidenceforge.evaluation.thresholds.load_rules_file", lambda _: {})
+        with pytest.raises(ConfigurationError, match="thresholds.yaml"):
+            load_thresholds()
+        load_thresholds.cache_clear()

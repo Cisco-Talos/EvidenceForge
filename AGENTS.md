@@ -108,7 +108,7 @@ handoff details in `docs/worklog/` until they are no longer useful.
   and 95%+ for the core generation engine.
 
 **Format Support:**
-- json-logic-qubit for format definition validation rules
+- Pydantic-validated bounded record predicates for format validation
 - Standard library json/csv for text formats
 - XML output via string templates (no python-evtx dependency)
 
@@ -701,7 +701,7 @@ All emitters inherit from `LogEmitter` ABC (`src/evidenceforge/generation/emitte
 
 ### Format Definitions
 
-Format definitions are YAML files in `src/evidenceforge/config/formats/`, not code. Each defines fields, variants, JSON Logic validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
+Format definitions are YAML files in `src/evidenceforge/config/formats/`, not code. Each defines fields, variants, typed record validators, and Jinja2 output templates. Loaded via `formats/loader.py`. Adding a new format requires only a new YAML file.
 
 ### YAML Data Directory Convention
 

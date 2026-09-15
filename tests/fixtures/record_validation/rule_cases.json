@@ -1,0 +1,569 @@
+[
+  {
+    "rule": "ecar.legacy-1",
+    "pass": {
+      "object": "PROCESS",
+      "pid": 123
+    },
+    "fail": {
+      "object": "PROCESS"
+    }
+  },
+  {
+    "rule": "ecar.legacy-2",
+    "pass": {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "tid": 123
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "CREATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-3",
+    "pass": {
+      "object": "PROCESS",
+      "action": "TERMINATE",
+      "tid": 123
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "TERMINATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-4",
+    "pass": {
+      "objectID": "abc"
+    },
+    "fail": {}
+  },
+  {
+    "rule": "ecar.legacy-5",
+    "pass": {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "image_path": "/usr/bin/bash"
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "CREATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-6",
+    "pass": {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "ppid": 1
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "CREATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-7",
+    "pass": {
+      "object": "PROCESS",
+      "action": "CREATE",
+      "command_line": "bash"
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "CREATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-8",
+    "pass": {
+      "object": "THREAD",
+      "action": "REMOTE_CREATE",
+      "target_pid": 2,
+      "image_path": "app.exe"
+    },
+    "fail": {
+      "object": "THREAD",
+      "action": "REMOTE_CREATE",
+      "image_path": "app.exe"
+    }
+  },
+  {
+    "rule": "ecar.legacy-9",
+    "pass": {
+      "object": "PROCESS",
+      "action": "OPEN",
+      "image_path": "app.exe"
+    },
+    "fail": {
+      "object": "PROCESS",
+      "action": "OPEN"
+    }
+  },
+  {
+    "rule": "ecar.legacy-10",
+    "pass": {
+      "object": "FLOW",
+      "src_ip": "10.0.0.1",
+      "dst_ip": "10.0.0.2"
+    },
+    "fail": {
+      "object": "FLOW",
+      "dst_ip": "10.0.0.2"
+    }
+  },
+  {
+    "rule": "ecar.legacy-11",
+    "pass": {
+      "object": "SERVICE",
+      "action": "CREATE",
+      "service_name": "sshd"
+    },
+    "fail": {
+      "object": "SERVICE",
+      "action": "CREATE"
+    }
+  },
+  {
+    "rule": "ecar.legacy-12",
+    "pass": {
+      "object": "USER_SESSION",
+      "action": "LOGIN",
+      "principal": "alice"
+    },
+    "fail": {
+      "object": "USER_SESSION",
+      "action": "LOGIN"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-1",
+    "pass": {
+      "EventID": 4624,
+      "LogonType": 3,
+      "TargetUserName": "alice",
+      "IpAddress": "10.0.0.1"
+    },
+    "fail": {
+      "EventID": 4624,
+      "LogonType": 3,
+      "TargetUserName": "alice"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-2",
+    "pass": {
+      "EventID": 4624,
+      "LogonType": 2,
+      "WorkstationName": "WS01"
+    },
+    "fail": {
+      "EventID": 4624,
+      "LogonType": 2
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-3",
+    "pass": {
+      "EventID": 4688,
+      "NewProcessName": "C:\\Windows\\app.exe"
+    },
+    "fail": {
+      "EventID": 4688
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-4",
+    "pass": {
+      "EventID": 4634,
+      "LogonType": 3
+    },
+    "fail": {
+      "EventID": 4634
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-5",
+    "pass": {
+      "EventID": 4624,
+      "TargetUserSid": "S-1-5-18"
+    },
+    "fail": {
+      "EventID": 4624
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-6",
+    "pass": {
+      "EventID": 4625,
+      "Status": "0xc000006d",
+      "TargetUserName": "alice"
+    },
+    "fail": {
+      "EventID": 4625,
+      "TargetUserName": "alice"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-7",
+    "pass": {
+      "EventID": 4672,
+      "PrivilegeList": "SeDebugPrivilege"
+    },
+    "fail": {
+      "EventID": 4672
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-8",
+    "pass": {
+      "EventID": 4689,
+      "ProcessName": "C:\\Windows\\app.exe",
+      "ProcessId": "0x120"
+    },
+    "fail": {
+      "EventID": 4689,
+      "ProcessId": "0x120"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-9",
+    "pass": {
+      "EventID": 4768,
+      "ServiceName": "krbtgt",
+      "IpAddress": "10.0.0.1"
+    },
+    "fail": {
+      "EventID": 4768,
+      "IpAddress": "10.0.0.1"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-10",
+    "pass": {
+      "EventID": 4769,
+      "ServiceName": "HOST/ws01",
+      "IpAddress": "10.0.0.1"
+    },
+    "fail": {
+      "EventID": 4769,
+      "IpAddress": "10.0.0.1"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-11",
+    "pass": {
+      "EventID": 4776,
+      "Workstation": "WS01",
+      "TargetUserName": "alice"
+    },
+    "fail": {
+      "EventID": 4776,
+      "TargetUserName": "alice"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-12",
+    "pass": {
+      "EventID": 4771,
+      "Status": "0x18",
+      "TargetUserName": "alice"
+    },
+    "fail": {
+      "EventID": 4771,
+      "TargetUserName": "alice"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-13",
+    "pass": {
+      "EventID": 5156,
+      "Direction": "%%14592",
+      "SourceAddress": "10.0.0.1",
+      "DestAddress": "10.0.0.2"
+    },
+    "fail": {
+      "EventID": 5156,
+      "SourceAddress": "10.0.0.1",
+      "DestAddress": "10.0.0.2"
+    }
+  },
+  {
+    "rule": "windows_event_security.legacy-14",
+    "pass": {
+      "EventID": 4648,
+      "TargetServerName": "WS01",
+      "TargetUserName": "alice"
+    },
+    "fail": {
+      "EventID": 4648,
+      "TargetUserName": "alice"
+    }
+  },
+  {
+    "rule": "zeek_conn.legacy-1",
+    "pass": {
+      "conn_state": "SF",
+      "duration": 1.25
+    },
+    "fail": {
+      "conn_state": "SF"
+    }
+  },
+  {
+    "rule": "zeek_conn.legacy-2",
+    "pass": {
+      "conn_state": "SF",
+      "orig_bytes": 0,
+      "resp_bytes": 0
+    },
+    "fail": {
+      "conn_state": "SF",
+      "resp_bytes": 0
+    }
+  },
+  {
+    "rule": "zeek_conn.legacy-3",
+    "pass": {
+      "proto": "icmp"
+    },
+    "fail": {
+      "proto": "smtp"
+    }
+  },
+  {
+    "rule": "zeek_conn.legacy-4",
+    "pass": {
+      "conn_state": "SF",
+      "proto": "tcp",
+      "duration": 0.001
+    },
+    "fail": {
+      "conn_state": "SF",
+      "proto": "tcp",
+      "duration": 0.0
+    }
+  },
+  {
+    "rule": "zeek_http.legacy-1",
+    "pass": {
+      "method": "CONNECT",
+      "status_code": 200,
+      "response_body_len": 0
+    },
+    "fail": {
+      "method": "CONNECT",
+      "status_code": 200,
+      "response_body_len": 10
+    }
+  },
+  {
+    "rule": "zeek_http.legacy-2",
+    "pass": {
+      "method": "TRACE"
+    },
+    "fail": {
+      "method": "INVALID"
+    }
+  },
+  {
+    "rule": "web_access.legacy-2",
+    "pass": {
+      "method": "TRACE"
+    },
+    "fail": {
+      "method": "INVALID"
+    }
+  },
+  {
+    "rule": "syslog.legacy-1",
+    "pass": {
+      "message": "sshd: accepted"
+    },
+    "fail": {
+      "message": ""
+    }
+  },
+  {
+    "rule": "syslog.legacy-2",
+    "pass": {
+      "hostname": "ws01"
+    },
+    "fail": {
+      "hostname": ""
+    }
+  },
+  {
+    "rule": "snort_alert.legacy-1",
+    "pass": {
+      "priority": 1
+    },
+    "fail": {
+      "priority": 100
+    }
+  },
+  {
+    "rule": "snort_alert.legacy-2",
+    "pass": {
+      "src_ip": "10.0.0.1",
+      "dst_ip": "10.0.0.2"
+    },
+    "fail": {
+      "dst_ip": "10.0.0.2"
+    }
+  },
+  {
+    "rule": "bash_history.legacy-1",
+    "pass": {
+      "command": "ls -la"
+    },
+    "fail": {
+      "command": ""
+    }
+  },
+  {
+    "rule": "bash_history.legacy-2",
+    "pass": {
+      "username": "alice"
+    },
+    "fail": {
+      "username": ""
+    }
+  },
+  {
+    "rule": "zeek_dns.legacy-1",
+    "pass": {
+      "query": "example.com"
+    },
+    "fail": {
+      "query": ""
+    }
+  },
+  {
+    "rule": "zeek_dns.legacy-2",
+    "pass": {
+      "rcode_name": "NOERROR"
+    },
+    "fail": {}
+  },
+  {
+    "rule": "web_access.legacy-1",
+    "pass": {
+      "status_code": 200
+    },
+    "fail": {
+      "status_code": 99
+    }
+  },
+  {
+    "rule": "ecar.object-action",
+    "pass": {
+      "object": "FILE",
+      "action": "RENAME"
+    },
+    "fail": {
+      "object": "FILE",
+      "action": "LOGIN"
+    }
+  },
+  {
+    "rule": "smb.rename-source",
+    "pass": {
+      "action": "SMB::FILE_RENAME",
+      "prev_name": "old.txt"
+    },
+    "fail": {
+      "action": "SMB::FILE_RENAME",
+      "prev_name": ""
+    }
+  },
+  {
+    "rule": "zeek_ocsp.interval",
+    "pass": {
+      "thisUpdate": 1,
+      "nextUpdate": 2
+    },
+    "fail": {
+      "thisUpdate": 3,
+      "nextUpdate": 2
+    }
+  },
+  {
+    "rule": "zeek_x509.interval",
+    "pass": {
+      "certificate.not_valid_before": 1,
+      "certificate.not_valid_after": 2
+    },
+    "fail": {
+      "certificate.not_valid_before": 3,
+      "certificate.not_valid_after": 2
+    }
+  },
+  {
+    "rule": "sysmon.source-family",
+    "pass": {
+      "EventID": 3,
+      "SourceIp": "2001:db8::1",
+      "SourceIsIpv6": "true"
+    },
+    "fail": {
+      "EventID": 3,
+      "SourceIp": "2001:db8::1",
+      "SourceIsIpv6": "false"
+    }
+  },
+  {
+    "rule": "sysmon.destination-family",
+    "pass": {
+      "EventID": 3,
+      "DestinationIp": "2001:db8::1",
+      "DestinationIsIpv6": "true"
+    },
+    "fail": {
+      "EventID": 3,
+      "DestinationIp": "2001:db8::1",
+      "DestinationIsIpv6": "false"
+    }
+  },
+  {
+    "rule": "dns.qtype-name",
+    "pass": {
+      "qtype": 1,
+      "qtype_name": "A"
+    },
+    "fail": {
+      "qtype": 1,
+      "qtype_name": "AAAA"
+    }
+  },
+  {
+    "rule": "dns.rcode-name",
+    "pass": {
+      "rcode": 0,
+      "rcode_name": "NOERROR"
+    },
+    "fail": {
+      "rcode": 0,
+      "rcode_name": "NXDOMAIN"
+    }
+  },
+  {
+    "rule": "dns.answer-ttls",
+    "pass": {
+      "answers": [
+        "10.0.0.1"
+      ],
+      "TTLs": [
+        60.0
+      ]
+    },
+    "fail": {
+      "answers": [
+        "10.0.0.1"
+      ],
+      "TTLs": []
+    }
+  }
+]

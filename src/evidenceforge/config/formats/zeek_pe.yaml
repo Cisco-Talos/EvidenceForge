@@ -95,8 +95,8 @@ fields:
   - name: section_names
     type: list
     required: false
-    description: "PE section names (JSON array of strings)"
-
+    description: PE section names (JSON array of strings)
+    item_type: string
 output:
   format: json
   file_extension: ".json"

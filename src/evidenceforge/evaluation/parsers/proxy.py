@@ -114,6 +114,11 @@ class ProxyAccessParser(LogParser):
         return parent.name
 
     def _parse_line(self, line: str, line_number: int, hostname: str | None = None) -> ParsedRecord:
+        if line.lstrip().startswith(("{", "[")):
+            from .apache_json import parse_apache_json
+
+            return parse_apache_json(line, line_number, self.format_name, hostname)
+
         fields: dict = {}
         errors: list[str] = []
         timestamp = None

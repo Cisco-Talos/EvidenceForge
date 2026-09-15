@@ -79,6 +79,8 @@ class ParsedRecord(BaseModel):
     line_number: int | None = None
     source_host: str | None = None
     source_instance: str | None = None
+    representation: str | None = None
+    source_fields: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class LogParser(ABC):
@@ -107,6 +109,8 @@ _PARSER_CLASSES: dict[str, type[LogParser]] = {}
 
 def register_parser(cls: type[LogParser]) -> type[LogParser]:
     """Decorator to register a parser class."""
+    if cls.format_name in _PARSER_CLASSES:
+        raise ValueError(f"Duplicate parser registration: {cls.format_name}")
     _PARSER_CLASSES[cls.format_name] = cls
     return cls
 

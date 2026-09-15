@@ -815,7 +815,7 @@ storyline:
   - id: evt-011
     time: "+2h59m"
     actor: root
-    system: LT-MRIVERA-02
+    system: WS-AJOHNSON-01
     activity: "Wrong-password fumble before broader credential spray"
     events:
       - type: failed_logon
