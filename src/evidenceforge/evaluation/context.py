@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.ground_truth import GroundTruthDocument
@@ -35,3 +35,6 @@ class EvaluationContext:
     # ARTIFACTS_MANIFEST.json.
     email_ground_truth: dict[str, dict] | None = None
     effective_config: EffectiveConfig | None = None
+    # Parseability owns this run-local exclusion set. Records remain in report
+    # counts and exact acceptance gates, but cannot enter typed cross-source indexes.
+    malformed_record_ids: set[int] = field(default_factory=set, compare=False)

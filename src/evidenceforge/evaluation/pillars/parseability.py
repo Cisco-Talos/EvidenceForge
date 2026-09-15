@@ -39,7 +39,11 @@ from evidenceforge.evaluation.dimensions import (
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
-from evidenceforge.evaluation.validation_routes import ARTIFACT_VALIDATORS, get_validation_route
+from evidenceforge.evaluation.validation_routes import (
+    ARTIFACT_VALIDATORS,
+    get_validation_route,
+    require_evaluated,
+)
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.rules import Finding
@@ -75,7 +79,9 @@ class ParseabilityScorer(DimensionScorer):
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         progress("sub_score_start", {"name": "Spec Conformance", "step": 1, "total": 2})
-        spec, constraints = self._score_both(records)
+        spec, constraints = self._score_both(
+            records, malformed_record_ids=context.malformed_record_ids if context else None
+        )
         progress("sub_score_done", {"name": "Spec Conformance", "score": spec.score})
 
         progress("sub_score_start", {"name": "Format Constraints", "step": 2, "total": 2})
@@ -98,7 +104,12 @@ class ParseabilityScorer(DimensionScorer):
     def _score_format_constraints(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
         return self._score_both(records)[1]
 
-    def _score_both(self, records: dict[str, list[ParsedRecord]]) -> tuple[SubScore, SubScore]:
+    def _score_both(
+        self,
+        records: dict[str, list[ParsedRecord]],
+        *,
+        malformed_record_ids: set[int] | None = None,
+    ) -> tuple[SubScore, SubScore]:
         """Validate each record once and aggregate bounded diagnostics by category."""
         totals = {"schema": 0, "constraint": 0}
         passing = {"schema": 0, "constraint": 0}
@@ -130,6 +141,7 @@ class ParseabilityScorer(DimensionScorer):
                         definition, normalized, variant, include_diagnostics=False
                     )
                     for finding in result.findings:
+                        require_evaluated(finding)
                         if finding.severity != "error" or finding.outcome not in {
                             "fail",
                             "evaluation_error",
@@ -150,6 +162,11 @@ class ParseabilityScorer(DimensionScorer):
                             )
                             for message in validate_strict(name, record.raw, record.fields).errors
                         )
+                for group in selected.values():
+                    for finding in group:
+                        require_evaluated(finding)
+                if selected["schema"] and malformed_record_ids is not None:
+                    malformed_record_ids.add(id(record))
                 for category in totals:
                     if record.parse_errors and category == "constraint":
                         continue

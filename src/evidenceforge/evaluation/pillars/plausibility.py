@@ -227,10 +227,13 @@ class PlausibilityScorer(DimensionScorer):
             _get_variant,
             _normalize_for_validation,
         )
-        from evidenceforge.evaluation.validation_routes import get_validation_route
+        from evidenceforge.evaluation.validation_routes import (
+            get_validation_route,
+            require_evaluated,
+        )
         from evidenceforge.formats.loader import load_format
-        from evidenceforge.formats.rules import evaluate_rule
-        from evidenceforge.models.exceptions import ConfigurationError
+        from evidenceforge.formats.rules import evaluate_rule, rule_fields
+        from evidenceforge.formats.validator import validate_field
 
         total_applicable = 0
         passing = 0
@@ -240,20 +243,30 @@ class PlausibilityScorer(DimensionScorer):
             if route.kind == "artifact":
                 continue  # Structural checks run in parseability; email joins run below.
             definition = load_format(route.validator)
+            diagnostic_rules = [r for r in definition.validators or [] if r.severity == "warning"]
+            if not diagnostic_rules:
+                continue
+            diagnostic_fields = {name for rule in diagnostic_rules for name in rule_fields(rule)}
             for record in record_list:
                 if record.parse_errors:
                     continue
                 normalized = _normalize_for_validation(format_name, record.fields, record.timestamp)
-                for rule in definition.validators or []:
-                    if rule.severity != "warning":
-                        continue
-                    finding = evaluate_rule(
-                        rule, normalized, format_name, _get_variant(format_name, record)
-                    )
-                    if finding.outcome == "evaluation_error":
-                        raise ConfigurationError(
-                            f"Record rule {rule.id} could not be evaluated for {format_name}"
+                variant = _get_variant(format_name, record)
+                fields = definition.validation_fields(variant) or {}
+                invalid_fields = {
+                    name
+                    for name, field in fields.items()
+                    if name in diagnostic_fields
+                    and (
+                        (field.required and name not in normalized)
+                        or (
+                            name in normalized and not validate_field(field, normalized[name]).valid
                         )
+                    )
+                }
+                for rule in diagnostic_rules:
+                    finding = evaluate_rule(rule, normalized, format_name, variant, invalid_fields)
+                    require_evaluated(finding)
                     if finding.severity != "warning" or finding.outcome == "not_applicable":
                         continue
                     total_applicable += 1

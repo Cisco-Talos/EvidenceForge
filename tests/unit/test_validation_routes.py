@@ -265,3 +265,70 @@ def test_malformed_artifact_completes_failed_evaluation(tmp_path: Path, message:
     assert all(p["score"] is not None for p in report["pillars"])
     spec = next(s for s in report["pillars"][0]["sub_scores"] if s["key"] == "spec_conformance")
     assert spec["score"] < 100
+
+
+@pytest.mark.parametrize("owner", ["correctness", "diagnostic", "artifact"])
+def test_returned_execution_error_aborts_cli(monkeypatch, tmp_path: Path, owner: str) -> None:
+    import shutil
+    from types import SimpleNamespace
+
+    from evidenceforge.formats.rules import Finding
+
+    source = "email_artifacts" if owner == "artifact" else "zeek_conn"
+    finding = Finding(
+        rule_id="injected.rule",
+        format=source,
+        variant="test-variant",
+        fields=("field_a",),
+        category="evaluation",
+        outcome="evaluation_error",
+        message="injected execution error",
+    )
+    output = FIXTURES / "eval/good"
+    if owner == "correctness":
+        monkeypatch.setattr(
+            "evidenceforge.evaluation.pillars.parseability.validate_event",
+            lambda *a, **kw: SimpleNamespace(findings=[finding]),
+        )
+    elif owner == "diagnostic":
+        monkeypatch.setattr("evidenceforge.formats.rules.evaluate_rule", lambda *a, **kw: finding)
+    else:
+        for path in (FIXTURES / "record_validation/email").iterdir():
+            shutil.copyfile(path, tmp_path / path.name)
+        output = tmp_path
+        monkeypatch.setitem(routes.ARTIFACT_VALIDATORS, "email_manifest", lambda record: [finding])
+    result = CliRunner().invoke(
+        app,
+        [
+            "eval",
+            str(output),
+            "--scenario",
+            str(FIXTURES / "scenarios/retail-store-ftp-attack.yaml"),
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 22, result.stderr
+    assert result.stdout == ""
+    for detail in ("injected.rule", source, "test-variant", "field_a"):
+        assert detail in result.stderr
+
+
+def test_validate_event_retains_returned_error_compatibility(monkeypatch) -> None:
+    from evidenceforge.formats.rules import Finding
+    from evidenceforge.formats.validator import validate_event
+
+    failure = Finding(
+        rule_id="test.returned",
+        outcome="evaluation_error",
+        category="evaluation",
+        message="cannot execute",
+        fields=("orig_bytes",),
+    )
+    monkeypatch.setattr("evidenceforge.formats.validator.evaluate_rule", lambda *a, **kw: failure)
+    result = validate_event(load_all_formats()["zeek_conn"], {})
+    assert result.valid is False
+    assert any("test.returned" in message for message in result.errors)
+    assert failure.rule_id in {
+        f.rule_id for f in result.findings if f.outcome == "evaluation_error"
+    }

@@ -434,6 +434,7 @@ class EvaluationEngine:
         total_pillars = len(DIMENSION_SCORERS)
         self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_pillars})
         pillars: list[PillarScore] = []
+        scoring_records = records
         for i, scorer in enumerate(DIMENSION_SCORERS, 1):
             self._progress(
                 "dimension_start",
@@ -448,11 +449,16 @@ class EvaluationEngine:
             pillar_score: PillarScore
             try:
                 pillar_score = scorer.score(
-                    records,
+                    scoring_records,
                     self.scenario,
                     context=context,
                     progress=self._progress,
                 )
+                if isinstance(scorer, ParseabilityScorer) and context.malformed_record_ids:
+                    scoring_records = {
+                        source: [r for r in items if id(r) not in context.malformed_record_ids]
+                        for source, items in records.items()
+                    }
                 pillars.append(pillar_score)
             except (
                 OSError,

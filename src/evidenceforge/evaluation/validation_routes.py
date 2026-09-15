@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.rules import Finding
-from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.models.exceptions import ConfigurationError, EvaluationError
 
 
 class ValidationRoute(BaseModel):
@@ -114,3 +114,13 @@ def validate_route_inventory() -> None:
             load_format(route.validator)
         elif route.validator not in ARTIFACT_VALIDATORS:
             raise ConfigurationError(f"Unknown artifact validator: {route.validator}")
+
+
+def require_evaluated(finding: Finding) -> None:
+    """Separate broken validation execution from invalid observed evidence."""
+    if finding.outcome == "evaluation_error":
+        raise EvaluationError(
+            f"Rule {finding.rule_id} failed for source={finding.format} "
+            f"variant={finding.variant or 'base'} fields={','.join(finding.fields)}: "
+            f"{finding.message}"
+        )
