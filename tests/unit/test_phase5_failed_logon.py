@@ -286,6 +286,33 @@ class TestFailedLogonFormatValidation:
         result = validate_event(fmt_def, event, variant_name="failed_logon")
         assert result.valid, f"Validation errors: {result.errors}"
 
+    def test_4771_rejects_missing_ip_sentinel(self):
+        """A 4771 client address must be a source-native IP, including for localhost."""
+        fmt_def = load_format("windows_event_security")
+        event = {
+            "EventID": 4771,
+            "TimeCreated": "2024-03-15T10:00:00Z",
+            "Computer": "DC-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "EventRecordID": 1001,
+            "ExecutionProcessID": 624,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "alice.smith",
+            "TargetSid": "S-1-5-21-123-456-789-1001",
+            "ServiceName": "krbtgt/CORP.LOCAL",
+            "TicketOptions": "0x40810010",
+            "Status": "0x18",
+            "PreAuthType": 2,
+            "IpAddress": "-",
+            "IpPort": 0,
+        }
+
+        result = validate_event(fmt_def, event, variant_name="kerberos_preauth_failed")
+
+        assert not result.valid
+        assert any(error.startswith("IpAddress:") for error in result.errors)
+
 
 class TestFailedLogonRate:
     """Test that baseline activity includes ~10% failed logons."""
@@ -390,13 +417,20 @@ class TestFailedLogonDC:
             hostname="DC-01", ip="10.0.10.100", os="Windows Server 2019", type="domain_controller"
         )
         user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+        source = System(
+            hostname="LT-SOURCE",
+            ip="10.0.10.2",
+            os="Linux Ubuntu 22.04",
+            type="workstation",
+        )
+        ag._ip_to_system[source.ip] = source
 
         ag.generate_failed_logon(
             user=user,
             system=wks,
             time=timestamp,
             logon_type=3,
-            source_ip="10.0.10.1",
+            source_ip=source.ip,
             dc_system=dc,
         )
 
@@ -411,6 +445,7 @@ class TestFailedLogonDC:
         assert "ntlm_validation" in event_types, "Missing 4776 on DC"
         ntlm_event = next(e for e in dc_events if e.event_type == "ntlm_validation")
         assert ntlm_event.auth.failure_status != "0x0"
+        assert ntlm_event.auth.source_ip == "LT-SOURCE"
 
     def test_failed_logon_can_emit_kerberos_without_ntlm(
         self, state_manager, mock_emitters, timestamp, monkeypatch
@@ -461,6 +496,13 @@ class TestFailedLogonDC:
         }
         assert "kerberos_preauth_failed" in event_types
         assert "ntlm_validation" not in event_types
+        kerberos_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "kerberos_preauth_failed"
+        )
+        assert kerberos_event.kerberos.source_ip == "::ffff:45.83.221.45"
+        assert kerberos_event.kerberos.source_port > 0
 
     def test_failed_logon_network_evidence_is_not_syn_only(
         self, state_manager, mock_emitters, timestamp, monkeypatch

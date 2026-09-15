@@ -861,7 +861,7 @@ variants:
         type: integer
         required: false
       - name: IpAddress
-        type: string
+        type: ip_address
         required: true
       - name: IpPort
         type: integer

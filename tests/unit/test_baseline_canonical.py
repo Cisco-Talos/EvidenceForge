@@ -1723,6 +1723,7 @@ class TestSyslogContext:
             user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
             system=linux,
             time=timestamp,
+            logon_type=3,
             source_ip="10.0.10.99",
         )
 
@@ -1845,10 +1846,10 @@ class TestSyslogContext:
             for event in zeek_events
         )
 
-    def test_self_sourced_linux_failed_logon_renders_local_auth(
+    def test_self_sourced_linux_network_failed_logon_stays_network_auth(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
-        """A Linux host should not render sshd as connecting from its own host IP."""
+        """An explicit type-3 attempt must not be rewritten as console authentication."""
         linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(
@@ -1863,11 +1864,10 @@ class TestSyslogContext:
         assert syslog.emit.called
         event = syslog.emit.call_args[0][0]
         assert event.syslog is not None
-        assert event.syslog.app_name == "login"
-        assert "logname=LOGIN" in event.syslog.message
-        assert "tty=/dev/tty1" in event.syslog.message
-        assert "rhost=  user=alice" in event.syslog.message
-        assert "from 10.0.10.2" not in event.syslog.message
+        assert event.syslog.app_name == "sshd"
+        assert "Failed password for alice from 10.0.10.2" in event.syslog.message
+        assert "tty=/dev/tty1" not in event.syslog.message
+        assert event.auth.source_ip == "10.0.10.2"
 
     def test_generate_syslog_event_helper(
         self, activity_gen, state_manager, mock_emitters, timestamp

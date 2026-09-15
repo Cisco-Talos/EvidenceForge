@@ -748,3 +748,49 @@ contract is required by both; expanded external verification and documentation a
 Local implementation commits: `1e91cf1b` (projection/validation), `2526cda3` (checkpoint scratch path),
 `7b2ea369` (external and generation gates). Final native/installer/documentation checks: **205 passed,
 3.97s**. Installed skills were regenerated after the final canonical-reference update.
+
+## Failed-logon requester, target, and DC correction
+
+Corrected `evt-011` to target `WS-AJOHNSON-01` while retaining `root` as the actor and
+`10.10.1.99` as the authored requester. Failed-logon generation now classifies locality from logon
+type instead of source/target address equality, preserves requester identity independently from the
+authentication target, renders 4776 `Workstation` from the requester system, and canonicalizes a
+genuinely DC-local 4771 to `::1` with port `0`. Weighted Kerberos/NTLM selection is unchanged.
+Generation behavior revision **94** declares the localized authentication/source-native change.
+
+The deterministic evaluator now matches failed-logon evidence by authored `target_username`, treats
+missing or `-` source values as mismatches when a source was authored, validates supporting 4771/4776
+records on modeled DCs, and compares their client IP/workstation to the requester. DC traces remain
+optional. The 4771 format contract now requires a valid IP address; positive native fixtures were
+updated accordingly.
+
+Verification:
+
+- Scenario validation: valid, 0 errors, 0 warnings, 24 pre-existing informational pivot suggestions.
+- Focused auth/evaluator coverage: 135 passed; the five affected cross-contract regressions also pass.
+- Routine suite: **11,635 passed, 48 skipped, 2,026 deselected**, 371.22s, `--no-cov`.
+- Ruff check and format pass; generation behavior revision/digest and diff whitespace checks pass.
+- Fresh bundles are retained under `/private/tmp/eforge-record-validation-fixed-20260915/{sof-elk,splunk}`.
+  Both authoritative evaluations count 119,982 records, pass acceptance, and score 100% for schema
+  and format constraints. Both report 98.3021% indicator accuracy and 89.7959% temporal integrity.
+- The corrected trace renders target-side 4625 and eCAR failure evidence on `WS-AJOHNSON-01` with
+  `aisha.johnson`, requester `LT-MRIVERA-02` / `10.10.1.99`, and destination `10.10.1.35`.
+  This seed selected NTLM, so DC-01 emits 4776 with `Workstation: LT-MRIVERA-02`; no 4771 is required.
+
+External ingest reruns:
+
+- **Splunk PASS:** all 119,532 supported records were indexed with exact expected/observed counts.
+  CIM-required validation used `Splunk_SA_CIM` 8.5.0 plus Microsoft Windows 10.0.1, Sysmon 5.0.0,
+  Cisco ASA 6.0.1, Zeek 1.0.11, and Apache 3.0.0 TAs from `~/TEMP/SplunkTA`. Authentication,
+  Change, Endpoint, Intrusion Detection, Network Traffic, and Web models were visible. Artifacts are
+  under `/private/tmp/eforge-record-validation-fixed-20260915/splunk-ingest/splunk/`.
+- **SOF-ELK FAIL, upstream parser only:** all expected/observed counts match, and Windows Snare,
+  Zeek, ASA, web, and proxy validators pass. Thirteen valid OpenSSH close records receive
+  `_grokparsefailure_6015-01`, including `Connection closed by authenticating user svc_mgmt
+  10.10.2.27 port 59644 [preauth]` and `Connection closed by invalid user unknown 10.10.2.25 port
+  37379 [preauth]`. The failure report is
+  `/private/tmp/eforge-record-validation-fixed-20260915/sof-elk-ingest/sof-elk/parsed/sof_elk_parser_failures.json`.
+  No SOF-ELK parser or generated-log workaround was added.
+
+Remaining evaluator findings (for example the missing cleanup trace and pre-existing timing/pivot
+findings) are unrelated to this correction and were not repaired here. `TODO.md` is unchanged.

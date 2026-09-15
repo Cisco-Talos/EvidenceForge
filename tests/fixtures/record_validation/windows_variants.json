@@ -339,7 +339,7 @@
       "ServiceName": "example",
       "TicketOptions": "0x1",
       "Status": "0x1",
-      "IpAddress": "example"
+      "IpAddress": "::1"
     }
   },
   {

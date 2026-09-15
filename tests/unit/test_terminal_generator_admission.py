@@ -148,7 +148,7 @@ def _failed_logon_headroom(
         source_ip=source_ip,
         dc_system=dc_system,
     )
-    local_logon = logon_type in (2, 5, 7, 11) or source_ip == system.ip
+    local_logon = logon_type in (2, 4, 5, 7, 11)
     normalized_source = "-" if local_logon else source_ip or system.ip
     return generator._failed_logon_completion_headroom(
         request=request,

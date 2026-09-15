@@ -390,7 +390,7 @@
       "ServiceName": "example",
       "TicketOptions": "0x1",
       "Status": "0x1",
-      "IpAddress": "example",
+      "IpAddress": "::ffff:10.10.1.99",
       "PreAuthType": 42,
       "IpPort": 42,
       "CertIssuerName": "witness",

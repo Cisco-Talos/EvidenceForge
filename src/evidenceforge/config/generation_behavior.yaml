@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 93
+current_revision: 94
 history_start_revision: 1
-behavior_surface_sha256: 53336d3f30f517d276b5039b3cde3d9289e428093ccbd16f016013e2671b452d
+behavior_surface_sha256: d83ed59aab34880fa16d3b32f9ebc169a8e66a0cc8bc94d55915a5f867451ed9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -828,3 +828,14 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Preserve canonical Windows fields and repair SOF-ELK Snare aliases; XML and non-Snare evidence are unchanged.
+  - revision: 94
+    id: failed-logon-requester-identity
+    impact: localized
+    domains:
+      - authentication
+      - requester-identity
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+    summary: Preserve failed-logon requester identity independently from the authentication target and domain controller.

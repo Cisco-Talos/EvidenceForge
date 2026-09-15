@@ -2284,8 +2284,8 @@ class WindowsEventEmitter(LogEmitter):
         rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
-        source_ip = krb.source_ip or "-"
-        source_port = krb.source_port if source_ip not in {"", "-"} else 0
+        source_ip = krb.source_ip if krb.source_ip not in {"", "-"} else "::1"
+        source_port = krb.source_port if source_ip != "::1" else 0
 
         event_data = {
             "EventID": 4771,

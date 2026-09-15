@@ -504,11 +504,12 @@ def test_splunk_cim_dataset_failures_report_count_and_field_gaps() -> None:
 def test_splunk_search_result_rows_ignore_export_info_messages() -> None:
     rows = [
         {"messages": [{"type": "INFO", "text": "No matching fields exist."}], "lastrow": True},
-        {"result": {"component": "TailReader", "message": "real warning"}},
+        {"preview": True, "result": {"component": "TailReader", "message": "partial warning"}},
+        {"preview": False, "result": {"component": "TailReader", "message": "real warning"}},
     ]
 
     assert _search_result_rows(rows) == [
-        {"result": {"component": "TailReader", "message": "real warning"}}
+        {"preview": False, "result": {"component": "TailReader", "message": "real warning"}}
     ]
 
 
