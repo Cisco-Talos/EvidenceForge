@@ -45,6 +45,7 @@ from evidenceforge.config import (
 )
 from evidenceforge.config.schemas import IdsSignaturePredicateSpec
 from evidenceforge.models.ids import IdsAlertPolicySpec
+from evidenceforge.utils.host_paths import logical_path
 
 type SchemaCheck = tuple[object, type[BaseModel], str]
 
@@ -705,7 +706,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
 
     for path in overlay_yaml_files:
         data, err = _safe_load_yaml(path)
-        rel_path = str(path.relative_to(overlay_dir))
+        rel_path = logical_path(path.relative_to(overlay_dir))
         if err:
             result.issues.append(Issue("ERROR", f"overlay/{rel_path}", f"YAML parse error: {err}"))
             overlay_errors = True
@@ -1010,7 +1011,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
         overlay_personas_dir = overlay_dir / "personas"
         if overlay_personas_dir.is_dir():
             for persona_file in sorted(overlay_personas_dir.glob("*.yaml")):
-                rel_path = str(persona_file.relative_to(overlay_dir))
+                rel_path = logical_path(persona_file.relative_to(overlay_dir))
                 pdata, perr = _safe_load_yaml(persona_file)
                 if perr:
                     continue  # Already caught in YAML health check above

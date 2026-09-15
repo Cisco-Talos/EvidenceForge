@@ -9,6 +9,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from evidenceforge.utils.files import fsync_directory
+
 from .models import CheckpointCursor
 
 _SYNC_DIRECTORY_ENV = "EFORGE_TEST_CHECKPOINT_SYNC_DIR"
@@ -24,7 +26,9 @@ def _publish_ready_marker(directory: Path, marker: Path, payload: bytes) -> None
     """Atomically publish a durable test marker with complete contents."""
 
     pending = marker.with_name(f".{marker.name}.pending")
-    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    descriptor = os.open(
+        pending, (os.O_WRONLY | getattr(os, "O_BINARY", 0)) | os.O_CREAT | os.O_EXCL, 0o600
+    )
     try:
         remaining = memoryview(payload)
         while remaining:
@@ -40,14 +44,7 @@ def _publish_ready_marker(directory: Path, marker: Path, payload: bytes) -> None
     except OSError:
         pending.unlink(missing_ok=True)
         raise
-    directory_descriptor = os.open(
-        directory,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-    )
-    try:
-        os.fsync(directory_descriptor)
-    finally:
-        os.close(directory_descriptor)
+    fsync_directory(directory)
 
 
 def checkpoint_test_synchronizer_from_environment(

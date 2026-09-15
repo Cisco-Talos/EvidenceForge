@@ -55,7 +55,7 @@ EXPECTED_SKILL_FILES = {
     "validate.md",
 }
 EXPECTED_REFERENCE_FILES = {
-    str(path.relative_to(CANONICAL_COMMAND_ROOT))
+    path.relative_to(CANONICAL_COMMAND_ROOT).as_posix()
     for path in (CANONICAL_COMMAND_ROOT / "references").glob("*.md")
 }
 EVIDENCE_REFERENCES = {
@@ -157,7 +157,7 @@ class TestInstallSkills:
         for ref_path in EXPECTED_REFERENCE_FILES:
             ref = tmp_path / "eforge" / ref_path
             assert ref.is_file(), f"Missing reference: {ref_path}"
-            content = ref.read_text()
+            content = ref.read_text(encoding="utf-8")
             assert len(content) > 100, f"Reference doc appears empty or truncated: {ref_path}"
 
         # Auto-discovery should find all .md files in references/
@@ -246,13 +246,25 @@ class TestInstallSkills:
 
         install_skills(tmp_path)
         root = tmp_path / "eforge"
-        scenario_reference = (root / "references" / "scenario-smb.md").read_text()
-        bundle_reference = (root / "references" / "generation-bundle-targets.md").read_text()
-        endpoint_reference = (root / "references" / "evidence-endpoint-linux.md").read_text()
-        network_reference = (root / "references" / "evidence-network-ids.md").read_text()
-        windows_reference = (root / "references" / "evidence-windows.md").read_text()
-        host_config_reference = (root / "references" / "config-host-activity.md").read_text()
-        validation_reference = (root / "references" / "config-validation.md").read_text()
+        scenario_reference = (root / "references" / "scenario-smb.md").read_text(encoding="utf-8")
+        bundle_reference = (root / "references" / "generation-bundle-targets.md").read_text(
+            encoding="utf-8"
+        )
+        endpoint_reference = (root / "references" / "evidence-endpoint-linux.md").read_text(
+            encoding="utf-8"
+        )
+        network_reference = (root / "references" / "evidence-network-ids.md").read_text(
+            encoding="utf-8"
+        )
+        windows_reference = (root / "references" / "evidence-windows.md").read_text(
+            encoding="utf-8"
+        )
+        host_config_reference = (root / "references" / "config-host-activity.md").read_text(
+            encoding="utf-8"
+        )
+        validation_reference = (root / "references" / "config-validation.md").read_text(
+            encoding="utf-8"
+        )
 
         assert "client_access" in scenario_reference
         assert "smb_principal" in scenario_reference
@@ -432,7 +444,7 @@ class TestInstallChatGPTSkills:
 
         for skill_file in EXPECTED_SKILL_FILES:
             command_name = skill_file.removesuffix(".md")
-            skill = (tmp_path / f"eforge-{command_name}" / "SKILL.md").read_text()
+            skill = (tmp_path / f"eforge-{command_name}" / "SKILL.md").read_text(encoding="utf-8")
             assert skill.startswith("---\n")
             frontmatter = skill.split("---\n", 2)[1]
             parsed = yaml.safe_load(frontmatter)
@@ -447,7 +459,7 @@ class TestInstallChatGPTSkills:
         for ref_path in EXPECTED_CHATGPT_REFERENCES["scenario"]:
             ref = tmp_path / "eforge-scenario" / ref_path
             assert ref.is_file(), f"Missing reference: {ref_path}"
-            assert len(ref.read_text()) > 100
+            assert len(ref.read_text(encoding="utf-8")) > 100
 
     def test_chatgpt_reference_bundle_matches_each_skill_contract(self, tmp_path):
         """Each ChatGPT skill receives exactly the references required by its workflow."""
@@ -456,7 +468,7 @@ class TestInstallChatGPTSkills:
         for skill_name, expected in EXPECTED_CHATGPT_REFERENCES.items():
             references_dir = tmp_path / f"eforge-{skill_name}" / "references"
             actual = {
-                str(path.relative_to(references_dir.parent))
+                path.relative_to(references_dir.parent).as_posix()
                 for path in references_dir.rglob("*.md")
             }
             assert actual == expected, skill_name
@@ -497,7 +509,7 @@ class TestInstallChatGPTSkills:
         install_chatgpt_skills(tmp_path)
 
         for skill_name in ("config", "evaluate", "generate", "scenario", "validate"):
-            skill = (tmp_path / f"eforge-{skill_name}" / "SKILL.md").read_text()
+            skill = (tmp_path / f"eforge-{skill_name}" / "SKILL.md").read_text(encoding="utf-8")
             assert len(skill.split()) <= 1_500, skill_name
 
     def test_core_skills_prefer_the_checkout_cli_during_development(self):
@@ -526,7 +538,7 @@ class TestInstallChatGPTSkills:
         install_chatgpt_skills(tmp_path)
 
         for skill_name, references in EXPECTED_CHATGPT_REFERENCES.items():
-            skill = (tmp_path / f"eforge-{skill_name}" / "SKILL.md").read_text()
+            skill = (tmp_path / f"eforge-{skill_name}" / "SKILL.md").read_text(encoding="utf-8")
             for reference in references:
                 invocation = f"/eforge:references:{Path(reference).stem}"
                 assert invocation not in skill
@@ -584,7 +596,7 @@ class TestInstallChatGPTSkills:
         _, removed = install_chatgpt_skills(tmp_path)
 
         assert "eforge-assess" not in removed
-        assert sentinel.read_text() == "keep me"
+        assert sentinel.read_text(encoding="utf-8") == "keep me"
         assert (assess_dir / "SKILL.md").is_file()
 
     def test_chatgpt_rejects_symlinked_skill_directory(self, tmp_path):
@@ -607,7 +619,7 @@ class TestInstallChatGPTSkills:
         with pytest.raises(PermissionError, match="symlinked path"):
             install_chatgpt_skills(tmp_path)
 
-        assert victim_file.read_text() == "do not overwrite"
+        assert victim_file.read_text(encoding="utf-8") == "do not overwrite"
 
     def test_chatgpt_rejects_symlinked_reference_directory(self, tmp_path):
         """install_chatgpt_skills rejects nested symlinked reference directories."""
@@ -796,6 +808,6 @@ class TestInstallSkillsCli:
         assert "Legacy EvidenceForge skills" in result.stdout
         # Rich may wrap the long temporary home path at the slash depending on
         # the pytest worker suffix; normalize line wrapping before matching.
-        assert ".codex/skills" in result.stdout.replace("\n", "")
+        assert ".codex/skills" in result.stdout.replace("\n", "").replace("\\", "/")
         assert "These legacy files were not modified" in result.stdout
-        assert sentinel.read_text() == "preserve me"
+        assert sentinel.read_text(encoding="utf-8") == "preserve me"

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+from evidenceforge.utils.files import open_host_file
 
 from .errors import CheckpointCorruptionError, CheckpointFilesystemError
 from .packed import dumps, loads
@@ -114,7 +115,9 @@ def _read_file(path: Path, *, offset: int = 0) -> tuple[bytes, os.stat_result]:
         raise CheckpointFilesystemError(f"emitter spool has an unsafe owner: {path}")
     if before.st_size < offset:
         raise CheckpointFilesystemError(f"emitter spool was truncated: {path}")
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    descriptor = open_host_file(
+        path, (os.O_RDONLY | getattr(os, "O_BINARY", 0)) | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         opened = os.fstat(descriptor)
         if (opened.st_dev, opened.st_ino, opened.st_size) != (
@@ -125,8 +128,9 @@ def _read_file(path: Path, *, offset: int = 0) -> tuple[bytes, os.stat_result]:
             raise CheckpointFilesystemError(f"emitter spool changed while opening: {path}")
         chunks: list[bytes] = []
         cursor = offset
+        os.lseek(descriptor, offset, os.SEEK_SET)
         while cursor < opened.st_size:
-            payload = os.pread(descriptor, min(4 * 1024 * 1024, opened.st_size - cursor), cursor)
+            payload = os.read(descriptor, min(4 * 1024 * 1024, opened.st_size - cursor))
             if not payload:
                 raise CheckpointFilesystemError(f"emitter spool read made no progress: {path}")
             chunks.append(payload)

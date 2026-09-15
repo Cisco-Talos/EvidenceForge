@@ -47,6 +47,7 @@ from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.verification_resources import VerificationResources
 from evidenceforge.output_targets import OutputTarget, normalize_output_target
+from evidenceforge.utils.files import fsync_directory
 
 logger = logging.getLogger(__name__)
 ExactPublicationKey = tuple[str, int, int]
@@ -903,21 +904,6 @@ _EXACT_PREFIX_BARRIER_EMITTER: ContextVar[int | None] = ContextVar(
     default=None,
 )
 _QUEUE_PUT = Queue.put
-
-
-def fsync_directory(path: Path) -> None:
-    """Durably publish a newly created or atomically replaced directory entry."""
-
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-    except OSError:
-        if os.name == "nt":
-            return
-        raise
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def stage_exact_publication_row(

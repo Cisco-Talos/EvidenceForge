@@ -2802,6 +2802,10 @@ class SysmonEventEmitter(LogEmitter):
 
     def _validate_spool_directory_unlocked(self) -> None:
         """Revalidate the owner-only private directory and pinned identity."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.validate_spool_directory(self)
 
         spool_dir = self._spool_dir
         descriptor = self._spool_directory_descriptor
@@ -2838,6 +2842,10 @@ class SysmonEventEmitter(LogEmitter):
 
     def _validate_spool_file_unlocked(self) -> None:
         """Revalidate the SQLite main file without following its directory entry."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.validate_spool_file(self)
 
         self._validate_spool_directory_unlocked()
         descriptor = self._spool_directory_descriptor
@@ -2858,6 +2866,10 @@ class SysmonEventEmitter(LogEmitter):
 
     def _get_spool_dir_unlocked(self) -> Path:
         """Return the owner-only local runtime directory for exact journal state."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.get_spool_directory(self, provider="Sysmon")
 
         if self._spool_dir is not None:
             if self._spool_initialization_pending:
@@ -2936,6 +2948,10 @@ class SysmonEventEmitter(LogEmitter):
 
     def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
         """Open the exact Sysmon journal while holding `_file_lock`."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.get_spool_connection(self, provider="Sysmon")
 
         if self._spool_conn is not None:
             if self._spool_file_initialization_pending:
@@ -3199,6 +3215,10 @@ class SysmonEventEmitter(LogEmitter):
 
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the owner-private journal after terminal close or abort."""
+        if os.name == "nt":
+            from evidenceforge.utils import windows_journals
+
+            return windows_journals.cleanup_spool(self)
 
         if (
             self._exact_candidate_abort_close_rendering

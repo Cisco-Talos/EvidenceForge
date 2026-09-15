@@ -60,6 +60,9 @@ from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILEN
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.profiling import GenerationProfiler
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
+from tests.support.output_equivalence import (
+    deterministic_bundle_files as _deterministic_bundle_files,
+)
 
 runner = CliRunner()
 
@@ -92,20 +95,11 @@ def _configure_mock_generation(
         for relative_path, contents in generated_files.items():
             destination = ground_truth_dir / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(contents, encoding="utf-8")
+            destination.write_text(contents, encoding="utf-8", newline="\n")
 
     engine.generate.side_effect = fake_generate
     mock_engine_class.return_value = engine
     return engine
-
-
-def _deterministic_bundle_files(root: Path) -> dict[str, bytes]:
-    ignored = {"GENERATION_MANIFEST.json", "generation.log"}
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file() and path.name not in ignored
-    }
 
 
 def test_generation_progress_uses_fifteen_minute_speed_window():
@@ -137,6 +131,7 @@ def test_generation_progress_keeps_zero_percent_bar_visible_in_narrow_terminal()
         force_terminal=True,
         color_system="standard",
         no_color=False,
+        legacy_windows=False,
     )
     progress = _generation_progress(console)
     progress.add_task(
@@ -563,9 +558,9 @@ environment:
         )
 
         assert result.exit_code == EXIT_SUCCESS, result.stdout
-        assert "╭" in result.stdout
+        assert ("┌" if os.name == "nt" else "╭") in result.stdout
         assert "┬" in result.stdout
-        assert "╯" in result.stdout
+        assert ("┘" if os.name == "nt" else "╯") in result.stdout
         for expected in (
             "Compiled storage topology",
             "Volumes",
@@ -1157,9 +1152,9 @@ class TestGenerateCheckpointResume:
     @pytest.mark.parametrize(
         ("interrupt_signal", "checkpoint_hour", "duration"),
         [
-            (signal.SIGKILL, 1, "1h"),
+            (getattr(signal, "SIGKILL", None), 1, "1h"),
             (signal.SIGINT, 9, "2h"),
-            (signal.SIGKILL, 10, "2h"),
+            (getattr(signal, "SIGKILL", None), 10, "2h"),
         ],
         ids=("sigkill-warmup", "sigint-collection", "sigkill-tail"),
     )
@@ -1172,6 +1167,9 @@ class TestGenerateCheckpointResume:
         tmp_path: Path,
     ) -> None:
         """A post-commit signal should resume portably to exact deterministic bundle bytes."""
+
+        if os.name != "posix":
+            pytest.skip("Exercises POSIX signal interruption semantics")
 
         scenario = tmp_path / "scenario.yaml"
         scenario.write_text(
@@ -2236,7 +2234,10 @@ output:
 
         def boom_rename(self, target):
             nonlocal fault_reached
-            if self.name == OUTPUT_TARGET_FILENAME and ".eforge-generation/staged" in str(self):
+            if (
+                self.name == OUTPUT_TARGET_FILENAME
+                and ".eforge-generation/staged" in self.as_posix()
+            ):
                 fault_reached = True
                 raise RuntimeError("injected swap failure")
             return real_rename(self, target)
@@ -2365,7 +2366,7 @@ output:
                 self_path.name == "data"
                 and target.name == "data"
                 and "rollback" not in str(self_path)
-                and ".eforge-generation/staged" in str(self_path)
+                and ".eforge-generation/staged" in self_path.as_posix()
             ):
                 # Fail when installing staged data/ → live data/
                 fault_reached = True
@@ -2416,13 +2417,14 @@ output:
 
         def _fail_on_gt_install(self_path, target):
             nonlocal fault_reached
-            if self_path.name == "GROUND_TRUTH.md" and ".eforge-generation/staged" in str(
-                self_path
+            if (
+                self_path.name == "GROUND_TRUTH.md"
+                and ".eforge-generation/staged" in self_path.as_posix()
             ):
                 fault_reached = True
                 raise OSError("Simulated disk error during GT install")
             result = original_rename(self_path, target)
-            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in self_path.as_posix():
                 data_installed.append(True)
             return result
 
@@ -2492,7 +2494,7 @@ output:
 
         def _interrupt_on_data_install(self_path, target):
             nonlocal fault_reached
-            if self_path.name == "data" and ".eforge-generation/staged" in str(self_path):
+            if self_path.name == "data" and ".eforge-generation/staged" in self_path.as_posix():
                 fault_reached = True
                 raise KeyboardInterrupt()
             return original_rename(self_path, target)

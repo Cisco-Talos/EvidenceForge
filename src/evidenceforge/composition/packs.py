@@ -28,6 +28,7 @@ from evidenceforge.utils import (
     ScenarioIncludeBudgetState,
     load_scenario_source_graph,
 )
+from evidenceforge.utils.host_paths import logical_path
 from evidenceforge.utils.yaml_loader import load_yaml_text
 
 from .models import (
@@ -267,15 +268,20 @@ def _bounded_pack_tree(root: Path) -> tuple[_PackTreeEntry, ...]:
         directory = directories.pop()
         descriptor: int | None = None
         try:
-            descriptor = os.open(directory, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISDIR(metadata.st_mode):
-                raise PackError(f"pack path is not a directory: {directory}")
-            with os.scandir(descriptor) as iterator:
-                entries = [
-                    (entry.name, entry.stat(follow_symlinks=False))
-                    for entry in sorted(iterator, key=lambda item: item.name)
-                ]
+            if os.name == "nt":
+                from evidenceforge.utils.windows_filesystem import directory_entries
+
+                entries = directory_entries(directory)
+            else:
+                descriptor = os.open(directory, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISDIR(metadata.st_mode):
+                    raise PackError(f"pack path is not a directory: {directory}")
+                with os.scandir(descriptor) as iterator:
+                    entries = [
+                        (entry.name, entry.stat(follow_symlinks=False))
+                        for entry in sorted(iterator, key=lambda item: item.name)
+                    ]
         except PackError:
             raise
         except OSError as exc:
@@ -339,7 +345,12 @@ def _read_regular_file_no_follow(path: Path, *, max_bytes: int | None = None) ->
 
     descriptor: int | None = None
     try:
-        descriptor = os.open(path, os.O_RDONLY | _NOFOLLOW)
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import open_file
+
+            descriptor = open_file(path, os.O_RDONLY)
+        else:
+            descriptor = os.open(path, os.O_RDONLY | _NOFOLLOW)
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise PackError(f"pack path is not a regular file: {path}")
@@ -405,13 +416,21 @@ def _write_new_file_no_follow(path: Path, content: bytes) -> None:
     created = False
     completed = False
     try:
-        parent_descriptor = os.open(path.parent, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
-        descriptor = os.open(
-            path.name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
-            0o600,
-            dir_fd=parent_descriptor,
-        )
+        if os.name == "nt":
+            from evidenceforge.utils import windows_filesystem as filesystem
+
+            parent_descriptor = filesystem.open_directory(path.parent)
+            descriptor = filesystem.open_child(
+                parent_descriptor, path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            )
+        else:
+            parent_descriptor = os.open(path.parent, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+            descriptor = os.open(
+                path.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                0o600,
+                dir_fd=parent_descriptor,
+            )
         created = True
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             descriptor = None
@@ -428,7 +447,10 @@ def _write_new_file_no_follow(path: Path, content: bytes) -> None:
             os.close(descriptor)
         if created and not completed:
             try:
-                os.unlink(path.name, dir_fd=parent_descriptor)
+                if os.name == "nt":
+                    filesystem.remove_child(parent_descriptor, path.name)
+                else:
+                    os.unlink(path.name, dir_fd=parent_descriptor)
             except FileNotFoundError:
                 pass
         if parent_descriptor is not None:
@@ -897,6 +919,16 @@ class PackRepository:
         self._assert_project_path_safe(destination)
         if staging.parent != destination.parent:
             raise PackError("staged pack must be a sibling of its destination")
+        if os.name == "nt":
+            from evidenceforge.utils.windows_filesystem import publish_new_directory
+
+            try:
+                publish_new_directory(staging, destination)
+            except FileExistsError as exc:
+                raise PackError(f"pack destination already exists: {destination}") from exc
+            except OSError as exc:
+                raise PackError(f"unable to publish staged pack at {destination}: {exc}") from exc
+            return
         try:
             destination.mkdir(mode=0o700)
         except FileExistsError as exc:
@@ -1348,7 +1380,7 @@ class PackRepository:
         }
         orphan_yaml = sorted(all_yaml - semantic_files, key=str)
         if orphan_yaml:
-            names = ", ".join(str(path.relative_to(root)) for path in orphan_yaml)
+            names = ", ".join(logical_path(path.relative_to(root)) for path in orphan_yaml)
             raise PackError(f"pack contains unreferenced semantic YAML file(s): {names}")
         companion_file_bytes: dict[str, bytes] = {}
         for entry in tree_entries:
@@ -1362,7 +1394,7 @@ class PackRepository:
             )
 
         file_bytes = {
-            str(path.relative_to(root)): semantic_bytes_by_path[path]
+            logical_path(path.relative_to(root)): semantic_bytes_by_path[path]
             for path in sorted(semantic_bytes_by_path, key=str)
         }
         source_directories = frozenset(
@@ -1394,7 +1426,7 @@ class PackRepository:
             companion_file_bytes=tuple(sorted(companion_file_bytes.items())),
             source_directories=source_directories,
             payload_files=frozenset(
-                str(path.relative_to(root)) for path in sorted(payload_files, key=str)
+                logical_path(path.relative_to(root)) for path in sorted(payload_files, key=str)
             ),
             catalog_field_origins=catalog_field_origins,
             organization_model_origins=organization_model_origins,

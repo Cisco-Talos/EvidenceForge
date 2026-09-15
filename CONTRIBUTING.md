@@ -226,3 +226,20 @@ you can do:
 - Improve documentation or add tutorials.
 
 Thanks again for your interest in contributing to EvidenceForge!
+
+### Native Windows CI
+
+Routine CI runs Python 3.12 on Ubuntu and native Windows, with `uv run pytest --no-cov`.
+The routine suite includes a short real generation, checkpoint, cooperative suspension,
+verification, and fresh-process resume comparison against uninterrupted output. The same test
+runs during normal local macOS testing. Broad checkpoint fault/interruption tests remain in the
+Linux slow release gate for PRs into main.
+
+Native Windows uses an isolated local NTFS backend for protected output journals and checkpoints;
+macOS and Linux retain their POSIX implementations. The routine timeout is 45 minutes on Windows
+and 25 minutes on Linux. Small native API contracts run in the routine suite. A separate required
+Windows checkpoint durability job runs focused slow simulated power-loss recovery tests with a
+20-minute timeout. These tests validate the documented storage assumptions, not physical power-loss
+certification. See the
+[native Windows design](docs/design/native-windows-filesystem.md) for platform limits. Do not
+blanket-skip portable failures or disable publication protections to make the job green.

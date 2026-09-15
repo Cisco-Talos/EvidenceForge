@@ -6,6 +6,50 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.1.0 (2026-09-14)
+
+This release adds native Windows generation and checkpoint recovery on local NTFS, including
+write-through checkpoint publication validated by native API tests and simulated power-loss
+recovery. macOS and Linux remain the primary platforms; their implementations, generated evidence
+semantics, public CLI, and checkpoint schemas remain unchanged.
+
+**Native Windows filesystem and generation support**
+
+- Add isolated, handle-relative NTFS operations with restrictive ACLs, native file identity,
+  reparse-point rejection, safe ancestor pinning, atomic rename, exclusive creation, and explicit
+  handle cleanup. Validate Unicode paths, owner rights, and delete-pending files (`2c333149`,
+  `ed204011`, `aff4578c`, `185ab44b`, `b0ab4363`, `4fd15884`).
+- Route Windows temporary streams, Windows/Sysmon source journals, Syslog, Bash history, Snort,
+  and checkpoint storage through native filesystem paths. Preserve existing POSIX operations
+  behind OS branches and wrappers (`ad7e0ca8`, `cfaf6134`, `709b4766`, `24ec42ab`).
+- Correct Windows binary flushing, writable reconciliation handles, logical manifest/skill
+  references, and native token ownership (`4b0971a3`, `7a5836bd`, `7160bfc6`).
+
+**Checkpoint write-through publication**
+
+- Flush complete checkpoint file contents and publish files and newly created directories through
+  write-through native handles before acknowledging a recovery point. Authenticate and
+  incrementally republish reused dependencies; durably publish and consume suspension control
+  records (`ebdb1611`, `7ed890d6`).
+- Stop further publication and reclamation after an uncertain recovery-index update, and defer
+  reclamation in fresh processes until index durability is confirmed (`730ef96d`).
+- Exercise actual native barriers, injected I/O failures, deliberately broken protocols, and
+  real CLI recovery from simulated crash images. The fault model covers 906 interruption/profile
+  combinations, including torn writes, reused objects, retention, and spool restoration
+  (`70fc28ea`, `8bf08865`, `a2787369`). This validates the documented storage assumptions; it
+  does not certify physical power-loss safety or final bundle publication.
+
+**CI and validation**
+
+- Run the routine Python 3.12 suite on Linux and native Windows, including one short unmarked
+  generation/checkpoint/suspend/verify/resume comparison that also runs locally on macOS. Preserve
+  the Linux slow-release and cross-Python portability gates (`ca146454`, `e012a93c`).
+- Add a required Windows checkpoint durability job and raise the Windows routine timeout to
+  45 minutes for hosted-runner variation; Linux routine and Windows durability timeouts remain
+  25 and 20 minutes (`70fc28ea`, `59678514`).
+- Document platform boundaries, native NTFS security and durability assumptions, CI failure
+  inventories, and passing Windows/Linux/macOS validation (`65212a99`, `4fd15884`, `a2787369`).
+
 ## v2.0.1 (2026-09-14)
 
 This patch corrects foreground process ownership, Linux resolver-health evidence, and short

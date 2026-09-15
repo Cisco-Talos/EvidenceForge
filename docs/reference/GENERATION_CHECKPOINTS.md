@@ -164,10 +164,27 @@ two recovery manifests and bounded live heads, shared content-addressed segments
 and a single-run lock. The resource forecast reports this separately as `Projected checkpoint
 workspace` and includes it once in projected peak working disk.
 
-Checkpoint publication requires protected ownership, no symlinks or path traversal, atomic rename,
-and durable file and directory synchronization. Preflight fails when the filesystem cannot provide
-those guarantees; use another filesystem or explicitly pass `--checkpoint-hours 0`. A demonstrably
-stale lock may be reclaimed, but concurrent generation against the same output root is rejected.
+On macOS and Linux, checkpoint publication requires protected ownership, no symlinks or path
+traversal, atomic rename, and durable file and directory synchronization. Preflight fails when
+the filesystem cannot provide those guarantees; use another filesystem or explicitly pass
+`--checkpoint-hours 0`. A demonstrably stale lock may be reclaimed, but concurrent generation
+against the same output root is rejected.
+
+Native Windows generation runs Python directly without WSL. Protected output journals, temporary
+storage, and checkpoint workspaces require fixed local NTFS storage, restrictive ACLs, and paths
+without reparse points such as junctions. Checkpoint publication uses buffered binary I/O,
+explicit file flushing, and native write-through creation and rename handles. Newly created
+checkpoint directories are staged and published through write-through renames; this supplies
+the Windows namespace barrier instead of POSIX directory synchronization. Disabling checkpoints
+does not bypass the native output-journal storage requirements.
+
+Checkpoint dependencies become durable before the recovery index is published and acknowledged.
+While the checkpoint remains retained, simulated power loss after acknowledgment must recover
+that checkpoint or a newer complete point. This is conditional on stable pre-existing ancestry
+and storage honoring flush/write-through requests. Native API and simulated power-loss CI tests
+validate the publication protocol, not physical hardware power-loss safety or final bundle
+publication. See the [native Windows design](../design/native-windows-filesystem.md) for tested
+platforms and the full storage contract.
 
 The newest corrupt recovery point produces a warning and falls back to the previous valid point.
 Tampering, incompatible run inputs, unsupported schemas, failed hydration, and unsafe ownership are
