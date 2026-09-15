@@ -22,7 +22,8 @@ def _verified_snapshot(root: Path) -> dict[str, bytes]:
 
 
 @pytest.mark.slow
-def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["default", "sof-elk"])
+def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path, target: str) -> None:
     root = Path(__file__).parents[2]
     scenario = root / "scenarios/iteration-test/scenario.yaml"
     outputs = [tmp_path / "first", tmp_path / "second"]
@@ -39,7 +40,7 @@ def test_iteration_fresh_process_bytes_and_complete_evaluation(tmp_path: Path) -
                 "--seed",
                 "42",
                 "--target",
-                "default",
+                target,
             ],
             cwd=root,
             capture_output=True,
