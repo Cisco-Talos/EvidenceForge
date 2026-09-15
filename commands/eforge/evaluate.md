@@ -148,3 +148,8 @@ emitter layer.
 
 Finish with the verdict, available score, failed gates, strongest evidence, and smallest useful next
 action. Keep recommendations read-only unless the user asks to act.
+
+## Validation policy
+
+Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,
+structured findings, or compatibility with existing projects.

@@ -62,6 +62,18 @@ from evidenceforge.formats.format_def import (
     FormatDefinition,
     OutputTemplate,
 )
+from evidenceforge.formats.rules import (
+    AddressFamily,
+    Bounds,
+    Combination,
+    Compare,
+    Length,
+    Membership,
+    Pattern,
+    Presence,
+    RecordRule,
+    SameLength,
+)
 from evidenceforge.generation.activity.timing_profiles import windows_collision_spacing_config
 from evidenceforge.generation.activity.windows_auth_realism import min_unlock_gap_seconds
 from evidenceforge.generation.emitters import source_journal
@@ -153,6 +165,16 @@ _EXACT_FORMAT_MODEL_TAGS: tuple[tuple[type[object], str], ...] = (
     (EventVariant, "event_variant"),
     (OutputTemplate, "output_template"),
     (FormatDefinition, "format_definition"),
+    (RecordRule, "record_rule"),
+    (Presence, "presence"),
+    (Compare, "compare"),
+    (Membership, "membership"),
+    (Bounds, "bounds"),
+    (Length, "length"),
+    (Pattern, "pattern"),
+    (SameLength, "same_length"),
+    (Combination, "combination"),
+    (AddressFamily, "address_family"),
 )
 _EXACT_FORMAT_SNAPSHOT_MAX_DEPTH = 64
 _EXACT_FORMAT_SNAPSHOT_MAX_NODES = 100_000

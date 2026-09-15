@@ -5,8 +5,8 @@ engine-owned. `.eforge/config/evaluation`, pack catalogs, scenario YAML, and env
 cannot replace them.
 
 Packaged rule files live under `src/evidenceforge/config/evaluation/` and include thresholds,
-co-occurrence, distributions, causal/timing checks, and cross-source rules. They must remain aligned
-with evaluator code, parsers, ground-truth contracts, observation semantics, and format definitions.
+distributions, causal/timing checks, and cross-source rules. They must remain aligned
+with typed record rules in `config/formats/`, evaluator code, parsers, ground-truth contracts, observation semantics, and format definitions.
 
 Use the evaluate skill to run or interpret `eforge eval`. A request to change scoring policy is a
 source-code development task, not an `eforge-config` overlay task. For an authorized developer

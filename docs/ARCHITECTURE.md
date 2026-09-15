@@ -954,7 +954,7 @@ checkpoint publication.
 
 ### Format Definition System
 
-Log formats are defined declaratively in YAML files (`src/evidenceforge/formats/definitions/`), not in code:
+Log formats are defined declaratively in YAML files (`src/evidenceforge/config/formats/`), not in code:
 
 ```yaml
 # Example: zeek_conn.yaml
@@ -974,9 +974,15 @@ fields:
 ```
 
 Each format YAML defines fields (name, type, constraints), event variants (for multi-event formats like Windows Security), and Jinja2 output templates. Adding a new log format requires:
-1. A new YAML definition in `formats/definitions/`
+1. A new YAML definition in `config/formats/`
 2. An emitter class in `generation/emitters/`
 3. A parser class in `evaluation/parsers/` (for eval support)
+
+Record contracts use Pydantic schemas and a bounded evaluator, with cached field plans per
+format/variant. Dotted source field names are literal keys. Findings carry structured categories;
+schema/correctness failures gate every record at 100%, while context-dependent realism rules stay
+diagnostic. JSON Logic and the separate co-occurrence interpreter have been removed. See
+[record validation](reference/RECORD_VALIDATION.md) for the developer contract.
 
 ### Evaluation Engine
 

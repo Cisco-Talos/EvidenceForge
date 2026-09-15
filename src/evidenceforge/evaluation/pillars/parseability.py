@@ -41,66 +41,24 @@ from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.rules import Finding
 from evidenceforge.formats.validator import STRICT_FORMATS, validate_event, validate_strict
 from evidenceforge.models.scenario import Scenario
 
 logger = logging.getLogger(__name__)
 
-# EventID → variant name mapping for Windows Event Security
-WINDOWS_VARIANT_MAP = {
-    1102: "log_cleared",
-    4624: "logon",
-    4625: "failed_logon",
-    4634: "logoff",
-    4648: "explicit_credentials",
-    4656: "object_handle_requested",
-    4658: "object_handle_closed",
-    4663: "object_access",
-    4672: "special_privileges",
-    4688: "process_creation",
-    4689: "process_termination",
-    4697: "service_installed",
-    4698: "scheduled_task",
-    4800: "workstation_locked",
-    4801: "workstation_unlocked",
-    4720: "account_created",
-    4723: "password_change",
-    4724: "password_reset",
-    4726: "account_deleted",
-    4728: "group_membership_change",
-    4729: "group_membership_change",
-    4732: "group_membership_change",
-    4733: "group_membership_change",
-    4738: "account_changed",
-    4756: "group_membership_change",
-    4757: "group_membership_change",
-    4768: "kerberos_tgt",
-    4769: "kerberos_service_ticket",
-    4770: "kerberos_service_ticket",
-    4771: "kerberos_preauth_failed",
-    4776: "ntlm_validation",
-    5140: "network_share_access",
-    5145: "network_share_access_check",
-    5156: "wfp_connection",
-}
 
-# EventID -> variant name mapping for Windows Event Sysmon
-SYSMON_VARIANT_MAP = {
-    1: "sysmon_process_create",
-    3: "sysmon_network_connect",
-    5: "sysmon_process_terminate",
-    7: "sysmon_image_loaded",
-    8: "sysmon_create_remote_thread",
-    10: "sysmon_process_access",
-    11: "sysmon_file_create",
-    12: "sysmon_registry_create_delete",
-    13: "sysmon_registry_set_value",
-    22: "sysmon_dns_query",
-}
+def _variant_map(format_name: str) -> dict[int, str]:
+    """Derive source event selectors from the packaged schema."""
+    return {
+        event_id: variant.name
+        for variant in load_format(format_name).variants or []
+        for event_id in variant.event_ids or ([int(variant.event_id)] if variant.event_id else [])
+    }
 
-# Error category constants
-_SPEC_CATEGORIES = {"parse_error", "missing_field", "strict_validation"}
-_CONSTRAINT_CATEGORIES = {"constraint_violation", "validation_error"}
+
+WINDOWS_VARIANT_MAP = _variant_map("windows_event_security")
+SYSMON_VARIANT_MAP = _variant_map("windows_event_sysmon")
 
 
 class ParseabilityScorer(DimensionScorer):
@@ -116,11 +74,10 @@ class ParseabilityScorer(DimensionScorer):
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         progress("sub_score_start", {"name": "Spec Conformance", "step": 1, "total": 2})
-        spec = self._score_spec_conformance(records)
+        spec, constraints = self._score_both(records)
         progress("sub_score_done", {"name": "Spec Conformance", "score": spec.score})
 
         progress("sub_score_start", {"name": "Format Constraints", "step": 2, "total": 2})
-        constraints = self._score_format_constraints(records)
         progress("sub_score_done", {"name": "Format Constraints", "score": constraints.score})
 
         sub_scores = [spec, constraints]
@@ -135,191 +92,99 @@ class ParseabilityScorer(DimensionScorer):
         )
 
     def _score_spec_conformance(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        """Spec conformance: parse errors + strict-mode validation failures.
-
-        Counts records where the parser returned errors OR the strict validator
-        (RFC3164 syslog with legacy fallback, Zeek typed columns, eCAR schema, Windows XML)
-        rejected
-        the record. These failures indicate a downstream parser would reject the
-        record entirely.
-        """
-        total = 0
-        passing = 0
-        failures: list[str] = []
-        failure_counts: dict[str, dict[str, int]] = {}
-
-        def _track(fmt: str, category: str, detail: str) -> None:
-            failure_counts.setdefault(fmt, {})
-            failure_counts[fmt][category] = failure_counts[fmt].get(category, 0) + 1
-            if len(failures) < 20:
-                failures.append(detail)
-
-        for format_name, record_list in records.items():
-            fmt_def = _load_format_def(format_name)
-            for record in record_list:
-                total += 1
-
-                if record.parse_errors:
-                    ctx = _build_event_context(format_name, record, None)
-                    ctx_label = f" ({ctx})" if ctx else ""
-                    line_info = f" (line {record.line_number})" if record.line_number else ""
-                    for err in record.parse_errors:
-                        _track(
-                            format_name,
-                            "parse_error",
-                            f"[{format_name}{ctx_label}]{line_info} Parse error: {err}",
-                        )
-                    continue
-
-                if fmt_def is not None:
-                    variant = _get_variant(format_name, record)
-                    ctx = _build_event_context(format_name, record, variant)
-                    ctx_label = f" ({ctx})" if ctx else ""
-                    normalized = _normalize_for_validation(
-                        format_name, record.fields, record.timestamp
-                    )
-                    result = validate_event(fmt_def, normalized, variant, event_context=ctx)
-
-                    # Strict-mode: required field & type checks count as spec failures
-                    spec_errors = (
-                        [
-                            e
-                            for e in result.errors
-                            if "required field missing" in e.lower()
-                            or "invalid" in e.lower()
-                            or "expected" in e.lower()
-                        ]
-                        if not result.valid
-                        else []
-                    )
-
-                    # Strict parser check (format-level byte validation)
-                    strict_failed = False
-                    if format_name in STRICT_FORMATS and record.raw:
-                        strict_result = validate_strict(format_name, record.raw, record.fields)
-                        if not strict_result.valid:
-                            for err in strict_result.errors:
-                                _track(
-                                    format_name,
-                                    "strict_validation",
-                                    f"[{format_name}{ctx_label}] Strict: {err}",
-                                )
-                            strict_failed = True
-
-                    if spec_errors or strict_failed:
-                        line_info = f" (line {record.line_number})" if record.line_number else ""
-                        for err in spec_errors:
-                            _track(
-                                format_name,
-                                _categorize_error(err),
-                                f"[{format_name}{ctx_label}]{line_info} {err}",
-                            )
-                    else:
-                        passing += 1
-                else:
-                    passing += 1
-
-        score = 100.0 * passing / total if total > 0 else 0.0
-        return SubScore(
-            name="Spec Conformance",
-            key="spec_conformance",
-            weight=0.55,
-            score=score,
-            details=f"{passing}/{total} records pass strict spec validation",
-            sample_failures=failures,
-            failure_summary=failure_counts,
-        )
+        return self._score_both(records)[0]
 
     def _score_format_constraints(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        """Format constraints: per-field enum/range/regex violations.
+        return self._score_both(records)[1]
 
-        Counts records with constraint violations (enum out-of-range, regex mismatch,
-        invalid type coercion). These don't fail the strict parser but do violate
-        the format's declared field contracts.
-        """
-        total = 0
-        passing = 0
-        failures: list[str] = []
-        failure_counts: dict[str, dict[str, int]] = {}
-
-        def _track(fmt: str, category: str, detail: str) -> None:
-            failure_counts.setdefault(fmt, {})
-            failure_counts[fmt][category] = failure_counts[fmt].get(category, 0) + 1
-            if len(failures) < 20:
-                failures.append(detail)
-
-        for format_name, record_list in records.items():
-            fmt_def = _load_format_def(format_name)
-            for record in record_list:
+    def _score_both(self, records: dict[str, list[ParsedRecord]]) -> tuple[SubScore, SubScore]:
+        """Validate each record once and aggregate bounded diagnostics by category."""
+        totals = {"schema": 0, "constraint": 0}
+        passing = {"schema": 0, "constraint": 0}
+        failures: dict[str, list[str]] = {"schema": [], "constraint": []}
+        counts: dict[str, dict[str, dict[str, int]]] = {"schema": {}, "constraint": {}}
+        findings: dict[str, list[Finding]] = {"schema": [], "constraint": []}
+        for name, items in records.items():
+            definition = _load_format_def(name)
+            for record in items:
+                selected: dict[str, list[Finding]] = {"schema": [], "constraint": []}
                 if record.parse_errors:
-                    continue  # Excluded from constraint scoring (already in spec_conformance)
-
-                if fmt_def is not None:
-                    variant = _get_variant(format_name, record)
-                    ctx = _build_event_context(format_name, record, variant)
-                    ctx_label = f" ({ctx})" if ctx else ""
-                    normalized = _normalize_for_validation(
-                        format_name, record.fields, record.timestamp
-                    )
-                    result = validate_event(fmt_def, normalized, variant, event_context=ctx)
-
-                    # Only count constraint errors (not missing-field / strict errors)
-                    constraint_errors = (
-                        [
-                            e
-                            for e in result.errors
-                            if "required field missing" not in e.lower()
-                            and "invalid" not in e.lower()
-                            and "expected" not in e.lower()
-                        ]
-                        if not result.valid
-                        else []
-                    )
-
-                    # Also check strict parser for constraint-style issues
-                    if format_name in STRICT_FORMATS and record.raw:
-                        strict_result = validate_strict(format_name, record.raw, record.fields)
-                        # Only strict non-spec errors (e.g. malformed value)
-                        constraint_strict = [
-                            e for e in strict_result.errors if "required" not in e.lower()
-                        ]
-                        constraint_errors.extend(constraint_strict)
-
-                    total += 1
-                    if not constraint_errors:
-                        passing += 1
-                    else:
-                        line_info = f" (line {record.line_number})" if record.line_number else ""
-                        for err in constraint_errors:
-                            _track(
-                                format_name,
-                                "constraint_violation",
-                                f"[{format_name}{ctx_label}]{line_info} {err}",
-                            )
+                    selected["schema"] = [
+                        Finding(
+                            rule_id="parser.record",
+                            format=name,
+                            category="parse",
+                            message=message,
+                        )
+                        for message in record.parse_errors
+                    ]
                 else:
-                    total += 1
-                    passing += 1
+                    variant = _get_variant(name, record)
+                    normalized = _normalize_for_validation(name, record.fields, record.timestamp)
+                    result = validate_event(
+                        definition, normalized, variant, include_diagnostics=False
+                    )
+                    for finding in result.findings:
+                        if finding.severity != "error" or finding.outcome not in {
+                            "fail",
+                            "evaluation_error",
+                        }:
+                            continue
+                        category = (
+                            "schema" if finding.category in {"schema", "parse"} else "constraint"
+                        )
+                        selected[category].append(finding)
+                    if name in STRICT_FORMATS and record.raw:
+                        selected["schema"].extend(
+                            Finding(
+                                rule_id="parser.structure",
+                                format=name,
+                                variant=variant,
+                                category="parse",
+                                message=message,
+                            )
+                            for message in validate_strict(name, record.raw, record.fields).errors
+                        )
+                for category in totals:
+                    if record.parse_errors and category == "constraint":
+                        continue
+                    totals[category] += 1
+                    errors = selected[category]
+                    if not errors:
+                        passing[category] += 1
+                        continue
+                    counts[category].setdefault(name, {}).setdefault(category, 0)
+                    counts[category][name][category] += 1
+                    for finding in errors:
+                        if len(failures[category]) < 20:
+                            failures[category].append(
+                                f"[{name}] line {record.line_number}: {finding.message}"
+                            )
+                            findings[category].append(finding)
 
-        score = 100.0 * passing / total if total > 0 else 0.0
-        return SubScore(
-            name="Format Constraints",
-            key="format_constraints",
-            weight=0.45,
-            score=score,
-            details=f"{passing}/{total} records pass format constraint checks",
-            sample_failures=failures,
-            failure_summary=failure_counts,
-        )
+        def subscore(category: str) -> SubScore:
+            schema = category == "schema"
+            total = totals[category]
+            return SubScore(
+                name="Spec Conformance" if schema else "Format Constraints",
+                key="spec_conformance" if schema else "format_constraints",
+                weight=0.55 if schema else 0.45,
+                score=100.0 * passing[category] / total if total else 0.0,
+                details=f"{passing[category]}/{total} records pass {category} validation",
+                sample_failures=failures[category],
+                failure_summary=counts[category],
+                sample_findings=findings[category],
+            )
+
+        return subscore("schema"), subscore("constraint")
 
 
 # --- Module-level helpers ---
 
 
-def _load_format_def(format_name: str) -> FormatDefinition | None:
-    try:
-        return load_format(format_name)
-    except Exception:
-        return None
+def _load_format_def(format_name: str) -> FormatDefinition:
+    """A missing or broken schema is an evaluation error, never a passing record."""
+    return load_format(format_name)
 
 
 def _get_variant(format_name: str, record: ParsedRecord) -> str | None:
@@ -380,12 +245,3 @@ def _normalize_for_validation(
         if isinstance(restricted_sid_count, str) and restricted_sid_count.isdigit():
             normalized["RestrictedSidCount"] = int(restricted_sid_count)
     return normalized
-
-
-def _categorize_error(error_msg: str) -> str:
-    lower = error_msg.lower()
-    if "required field missing" in lower:
-        return "missing_field"
-    if "invalid" in lower or "expected" in lower:
-        return "constraint_violation"
-    return "validation_error"

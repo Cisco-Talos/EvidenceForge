@@ -85,3 +85,19 @@ output:
       "revoketime": {{ revoketime | tojson }}{% endif %}{% if revokereason is not none %},
       "revokereason": {{ revokereason | tojson }}{% endif %}
     }
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: zeek_ocsp.interval
+  message: Validity interval is reversed
+  severity: warning
+  when:
+  - op: presence
+    field: thisUpdate
+  - op: presence
+    field: nextUpdate
+  checks:
+  - op: compare
+    field: thisUpdate
+    relation: le
+    other_field: nextUpdate

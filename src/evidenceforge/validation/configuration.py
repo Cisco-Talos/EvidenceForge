@@ -647,6 +647,14 @@ def validate_config(
     """Validate raw overlays before activating an optional effective provider."""
     directories = _configuration_directories()
     result = ValidationResult()
+    from evidenceforge.formats.loader import validate_packaged_contracts
+    from evidenceforge.models.exceptions import ConfigurationError
+
+    try:
+        validate_packaged_contracts()
+    except ConfigurationError as exc:
+        result.issues.append(Issue("ERROR", "packaged record contracts", str(exc)))
+        return result
     overlay_yaml_files, blocked = _validate_raw_overlays(result)
     if blocked:
         return result

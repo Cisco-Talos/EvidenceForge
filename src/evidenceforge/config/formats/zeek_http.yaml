@@ -77,13 +77,15 @@ fields:
   - name: request_body_len
     type: integer
     required: true
-    description: "Request body length"
-
+    description: Request body length
+    constraints:
+      min_value: 0
   - name: response_body_len
     type: integer
     required: true
-    description: "Response body length"
-
+    description: Response body length
+    constraints:
+      min_value: 0
   - name: status_code
     type: integer
     required: true
@@ -97,8 +99,8 @@ fields:
   - name: tags
     type: list
     required: false
-    description: "Zeek http.log tags (JSON array of strings)"
-
+    description: Zeek http.log tags (JSON array of strings)
+    item_type: string
   - name: referrer
     type: string
     required: false
@@ -107,33 +109,33 @@ fields:
   - name: resp_fuids
     type: list
     required: false
-    description: "Response file UIDs (JSON array)"
-
+    description: Response file UIDs (JSON array)
+    item_type: string
   - name: orig_fuids
     type: list
     required: false
-    description: "Request file UIDs (JSON array)"
-
+    description: Request file UIDs (JSON array)
+    item_type: string
   - name: orig_filenames
     type: list
     required: false
-    description: "Request filenames exposed on the wire (JSON array)"
-
+    description: Request filenames exposed on the wire (JSON array)
+    item_type: string
   - name: orig_mime_types
     type: list
     required: false
-    description: "Request MIME types (JSON array)"
-
+    description: Request MIME types (JSON array)
+    item_type: string
   - name: resp_filenames
     type: list
     required: false
-    description: "Response filenames exposed on the wire (JSON array)"
-
+    description: Response filenames exposed on the wire (JSON array)
+    item_type: string
   - name: resp_mime_types
     type: list
     required: false
-    description: "Response MIME types (JSON array)"
-
+    description: Response MIME types (JSON array)
+    item_type: string
 output:
   format: json
   file_extension: ".json"
@@ -185,3 +187,47 @@ output:
       "resp_mime_types": {{ resp_mime_types | tojson }}
       {%- endif %}
     }
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: zeek_http.legacy-1
+  message: HTTP CONNECT must not have response body
+  severity: error
+  when:
+  - op: compare
+    field: method
+    relation: eq
+    value: CONNECT
+  - op: compare
+    field: status_code
+    relation: eq
+    value: 200
+  checks:
+  - op: compare
+    field: response_body_len
+    relation: eq
+    value: 0
+- id: zeek_http.legacy-2
+  message: HTTP response has method
+  severity: error
+  when: []
+  checks:
+  - op: membership
+    field: method
+    values:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - HEAD
+    - OPTIONS
+    - PATCH
+    - TRACE
+    - CONNECT
+    - PROPFIND
+    - PROPPATCH
+    - MKCOL
+    - COPY
+    - MOVE
+    - LOCK
+    - UNLOCK

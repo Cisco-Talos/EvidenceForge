@@ -20,8 +20,8 @@ fields:
   - name: uids
     type: list
     required: true
-    description: "Connection UIDs (JSON array of strings)"
-
+    description: Connection UIDs (JSON array of strings)
+    item_type: string
   - name: client_addr
     type: ip_address
     required: true
@@ -55,18 +55,20 @@ fields:
   - name: msg_types
     type: list
     required: true
-    description: "DHCP message types (JSON array of strings)"
-
+    description: DHCP message types (JSON array of strings)
+    item_type: string
   - name: lease_time
     type: float
     required: false
-    description: "Lease lifetime in seconds"
-
+    description: Lease lifetime in seconds
+    constraints:
+      min_value: 0
   - name: duration
     type: float
     required: false
-    description: "Transaction duration in seconds"
-
+    description: Transaction duration in seconds
+    constraints:
+      min_value: 0
 output:
   format: json
   file_extension: ".json"

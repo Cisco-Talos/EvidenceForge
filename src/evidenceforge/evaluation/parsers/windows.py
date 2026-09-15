@@ -66,6 +66,7 @@ class _WindowsXmlParser(LogParser):
         {
             "LogonType",
             "IpPort",
+            "ClientPort",
             "KeyLength",
             "PreAuthType",
             "NetworkPort",
@@ -101,6 +102,19 @@ class _WindowsXmlParser(LogParser):
                     event_bytes = 0
                 continue
 
+            if not in_event:
+                text = line.strip()
+                if text and not re.fullmatch(
+                    r"(?:<\?xml[^>]*\?>|<Events(?:\s[^>]*)?>|</Events>)", text
+                ):
+                    event_index += 1
+                    yield ParsedRecord(
+                        source_format=self.format_name,
+                        raw=line,
+                        parse_errors=["Unexpected content outside Windows Event"],
+                        line_number=event_index,
+                    )
+
             if in_event:
                 event_bytes += len(line.encode("utf-8"))
                 if event_bytes > MAX_EVALUATION_RECORD_BYTES:
@@ -114,6 +128,14 @@ class _WindowsXmlParser(LogParser):
                     in_event = False
                     event_lines = []
                     event_bytes = 0
+
+        if in_event:
+            yield ParsedRecord(
+                source_format=self.format_name,
+                raw="".join(event_lines),
+                parse_errors=["Incomplete Windows Event at end of input"],
+                line_number=event_index + 1,
+            )
 
     def _parse_event(self, raw: str, index: int) -> ParsedRecord:
         fields: dict = {}
@@ -174,6 +196,8 @@ class _WindowsXmlParser(LogParser):
                     name = data_el.get("Name", "")
                     value = data_el.text or ""
                     if name:
+                        if name in fields:
+                            raise ValueError(f"Duplicate Windows field: {name}")
                         fields[name] = self._coerce_event_data_field(name, value)
 
             # UserData fields (1102 LogFileCleared and similar)
@@ -186,9 +210,11 @@ class _WindowsXmlParser(LogParser):
                         # Strip namespace from tag name
                         tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
                         if child.text:
+                            if tag in fields:
+                                raise ValueError(f"Duplicate Windows field: {tag}")
                             fields[tag] = child.text
 
-        except ET.ParseError as e:
+        except (ET.ParseError, ValueError, OverflowError) as e:
             errors.append(f"XML parse error: {e}")
 
         return ParsedRecord(
@@ -205,8 +231,10 @@ class _WindowsXmlParser(LogParser):
         if name in self._INTEGER_EVENT_DATA_FIELDS:
             try:
                 return int(value)
-            except ValueError:
-                return value
+            except ValueError as exc:
+                if name in {"IpPort", "NetworkPort"} and value == "-":
+                    return value
+                raise ValueError(f"Invalid numeric Windows field {name}: {value!r}") from exc
         return value
 
 
@@ -318,12 +346,14 @@ class _WindowsSnareParser(_WindowsXmlParser):
                 except ValueError:
                     fields[key] = value
                     errors.append(f"Invalid integer field {key}: {value}")
-            fields.update(
-                {
-                    name: self._coerce_event_data_field(name, value)
-                    for name, value in _parse_expanded_snare_fields(full_data).items()
-                }
-            )
+            for name, value in _parse_expanded_snare_fields(full_data).items():
+                try:
+                    converted = self._coerce_event_data_field(name, value)
+                    if name in fields and fields[name] != converted:
+                        raise ValueError(f"Conflicting Snare field: {name}")
+                    fields[name] = converted
+                except ValueError as exc:
+                    errors.append(str(exc))
 
         return ParsedRecord(
             source_format=self.format_name,
@@ -387,7 +417,9 @@ class SysmonEventParser(_WindowsSnareParser):
     format_name = "windows_event_sysmon"
     xml_filename = "windows_event_sysmon.xml"
     snare_filename = WINDOWS_SYSMON_SNARE_FILENAME
-    _INTEGER_EVENT_DATA_FIELDS = _WindowsXmlParser._INTEGER_EVENT_DATA_FIELDS | frozenset(
+    _INTEGER_EVENT_DATA_FIELDS = (
+        _WindowsXmlParser._INTEGER_EVENT_DATA_FIELDS - {"Protocol"}
+    ) | frozenset(
         {
             "DestinationPort",
             "NewThreadId",

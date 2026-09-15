@@ -629,3 +629,8 @@ companions appear according to normal visibility rules.
 - Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
 - Cache hit/miss status is probabilistic, with stable web-route status generated upstream
 - Limited to HTTP and HTTPS traffic
+
+## Record validation
+
+See [the shared record contract](RECORD_VALIDATION.md) for typed predicates, Windows aliases,
+parser failure accounting, and exact schema/correctness acceptance gates.

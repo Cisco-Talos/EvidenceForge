@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from evidenceforge.formats.rules import Finding
+
 
 class SubScore(BaseModel):
     """A sub-score within a quality pillar."""
@@ -24,6 +26,7 @@ class SubScore(BaseModel):
     adjusted: bool = False
     """True when the score excludes expected observation-profile gaps."""
     details: str = ""
+    sample_findings: list[Finding] = Field(default_factory=list)
     sample_failures: list[str] = Field(default_factory=list)
     failure_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
     """Aggregated failure counts by format and category.

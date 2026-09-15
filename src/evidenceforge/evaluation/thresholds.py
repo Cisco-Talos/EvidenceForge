@@ -11,35 +11,37 @@ any numeric values.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from functools import lru_cache
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from evidenceforge.config.provider import _register_trusted_derived_cache
 from evidenceforge.evaluation.rules import load_rules_file
+from evidenceforge.models.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
 _FILE = "thresholds.yaml"
 
 
-@dataclass
-class SubScoreThreshold:
-    minimum: float
-    aspirational: float
-    hard_gate: bool = False
+class SubScoreThreshold(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    minimum: float = Field(ge=0, le=100)
+    aspirational: float = Field(ge=0, le=100)
+    hard_gate: bool = Field(default=False, strict=True)
 
 
-@dataclass
-class PillarThresholds:
-    weight: float
-    sub_scores: dict[str, SubScoreThreshold] = field(default_factory=dict)
+class PillarThresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    weight: float = Field(ge=0, le=1)
+    sub_scores: dict[str, SubScoreThreshold] = Field(default_factory=dict)
 
 
-@dataclass
-class EvalThresholds:
+class EvalThresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     overall_minimum: float
     overall_aspirational: float
-    pillars: dict[str, PillarThresholds] = field(default_factory=dict)
+    pillars: dict[str, PillarThresholds] = Field(default_factory=dict)
 
     def sub_score(self, pillar: str, key: str) -> SubScoreThreshold | None:
         """Return threshold for a sub-score, or None if not configured."""
@@ -58,35 +60,43 @@ class EvalThresholds:
         return result
 
 
+class OverallThresholds(BaseModel):
+    """Package-owned overall scoring thresholds."""
+
+    model_config = ConfigDict(extra="forbid")
+    minimum: float = Field(ge=0, le=100)
+    aspirational: float = Field(ge=0, le=100)
+
+
+class ThresholdDocument(BaseModel):
+    """Strict on-disk scoring policy with mandatory exact source gates."""
+
+    model_config = ConfigDict(extra="forbid")
+    overall: OverallThresholds
+    pillars: dict[str, PillarThresholds]
+
+    @model_validator(mode="after")
+    def validate_gates(self) -> ThresholdDocument:
+        """Prevent missing correctness gates from weakening acceptance."""
+        for key in ("spec_conformance", "format_constraints"):
+            pillar = self.pillars.get("parseability")
+            threshold = pillar.sub_scores.get(key) if pillar else None
+            if threshold is None or not threshold.hard_gate or threshold.minimum != 100:
+                raise ValueError(f"parseability.{key} requires a 100% hard gate")
+        return self
+
+
 @lru_cache(maxsize=1)
 def load_thresholds() -> EvalThresholds:
-    """Load and cache thresholds from thresholds.yaml."""
-    raw = load_rules_file(_FILE)
-    if not raw:
-        logger.warning("thresholds.yaml not found or empty; using built-in defaults")
-        return _defaults()
-
-    overall = raw.get("overall", {})
-    pillars_raw = raw.get("pillars", {})
-
-    pillars: dict[str, PillarThresholds] = {}
-    for pillar_name, pillar_data in pillars_raw.items():
-        sub_scores: dict[str, SubScoreThreshold] = {}
-        for key, ss in (pillar_data.get("sub_scores") or {}).items():
-            sub_scores[key] = SubScoreThreshold(
-                minimum=float(ss.get("minimum", 0.0)),
-                aspirational=float(ss.get("aspirational", 100.0)),
-                hard_gate=bool(ss.get("hard_gate", False)),
-            )
-        pillars[pillar_name] = PillarThresholds(
-            weight=float(pillar_data.get("weight", 0.0)),
-            sub_scores=sub_scores,
-        )
-
+    """Load validated package policy; missing policy is an explicit configuration error."""
+    try:
+        document = ThresholdDocument.model_validate(load_rules_file(_FILE))
+    except (ValidationError, OSError, ValueError) as exc:
+        raise ConfigurationError(f"Invalid packaged thresholds.yaml: {exc}") from exc
     return EvalThresholds(
-        overall_minimum=float(overall.get("minimum", 70.0)),
-        overall_aspirational=float(overall.get("aspirational", 85.0)),
-        pillars=pillars,
+        overall_minimum=document.overall.minimum,
+        overall_aspirational=document.overall.aspirational,
+        pillars=document.pillars,
     )
 
 
@@ -96,11 +106,3 @@ _register_trusted_derived_cache(
     globals(),
     load_thresholds,
 )
-
-
-def _defaults() -> EvalThresholds:
-    """Minimal safe defaults when the YAML is absent."""
-    return EvalThresholds(
-        overall_minimum=70.0,
-        overall_aspirational=85.0,
-    )

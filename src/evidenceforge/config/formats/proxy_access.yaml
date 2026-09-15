@@ -53,13 +53,15 @@ fields:
   - name: sc_bytes
     type: integer
     required: false
-    description: "Server to client transaction bytes; CONNECT rows contain only setup response bytes"
-
+    description: Server to client transaction bytes; CONNECT rows contain only setup response bytes
+    constraints:
+      min_value: 0
   - name: cs_bytes
     type: integer
     required: false
-    description: "Client to server transaction bytes; CONNECT rows contain only setup request bytes"
-
+    description: Client to server transaction bytes; CONNECT rows contain only setup request bytes
+    constraints:
+      min_value: 0
   - name: byte_scope
     type: string
     required: false
@@ -68,18 +70,21 @@ fields:
   - name: tunnel_cs_bytes
     type: integer
     required: false
-    description: "Canonical client-to-proxy tunnel bytes when transport accounting is available"
-
+    description: Canonical client-to-proxy tunnel bytes when transport accounting is available
+    constraints:
+      min_value: 0
   - name: tunnel_sc_bytes
     type: integer
     required: false
-    description: "Canonical proxy-to-client tunnel bytes when transport accounting is available"
-
+    description: Canonical proxy-to-client tunnel bytes when transport accounting is available
+    constraints:
+      min_value: 0
   - name: tunnel_duration_ms
     type: integer
     required: false
-    description: "Canonical client-to-proxy tunnel duration in milliseconds when available"
-
+    description: Canonical client-to-proxy tunnel duration in milliseconds when available
+    constraints:
+      min_value: 0
   - name: tunnel_id
     type: string
     required: false
@@ -88,13 +93,16 @@ fields:
   - name: client_src_port
     type: integer
     required: false
-    description: "Client source port for exact proxy-tunnel transport correlation"
-
+    description: Client source port for exact proxy-tunnel transport correlation
+    constraints:
+      min_value: 0
+      max_value: 65535
   - name: time_taken
     type: integer
     required: false
-    description: "Request duration in milliseconds"
-
+    description: Request duration in milliseconds
+    constraints:
+      min_value: 0
   - name: user_agent
     type: string
     required: false

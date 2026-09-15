@@ -1157,6 +1157,9 @@ def _validate_compiled_scenario(
     if not isinstance(compiled, CompiledScenario):
         raise TypeError("compiled must be a CompiledScenario")
     with effective_config_scope(compiled.effective_config):
+        from evidenceforge.formats.loader import validate_packaged_contracts
+
+        validate_packaged_contracts()
         validator = ScenarioValidator(
             compiled.scenario,
             oob_hosts=oob_hosts,
@@ -2551,12 +2554,25 @@ def validate(
             console.print(f"  Network: {segments} segments, {sensors} sensors")
         console.print("\n[bold]Validating cross-references...[/bold]")
 
-    validator, issues = _validate_compiled_scenario(
-        compiled,
-        oob_hosts,
-        scenario_file.parent,
-        allow_large_workload=allow_large_workload,
-    )
+    try:
+        validator, issues = _validate_compiled_scenario(
+            compiled,
+            oob_hosts,
+            scenario_file.parent,
+            allow_large_workload=allow_large_workload,
+        )
+    except EvidenceForgeError as exc:
+        if json_output:
+            payload = _validation_json_payload(
+                scenario_file=scenario_file,
+                input_kind=compiled.authored_kind,
+                project_root=resolved_project_root,
+                issues=_exception_issue_payloads(exc, scenario_file),
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            console.print(Text(f"Configuration validation failed: {exc}", style="red"))
+        raise typer.Exit(EXIT_SCHEMA_VALIDATION) from exc
     issues.extend(_legacy_public_identity_deprecation_issues(compiled))
 
     from evidenceforge.config.provider import effective_config_scope
@@ -2702,7 +2718,7 @@ def eval_cmd(
         help="Evaluate the authoritative bundle despite an authored-scenario digest mismatch.",
     ),
 ) -> None:
-    """Evaluate a generated dataset for quality across four pillars.
+    """Evaluate a generated dataset; schema and record correctness require 100%.
 
     Reads generated log files and the original scenario, runs deterministic
     and statistical quality checks, and produces a quality report.

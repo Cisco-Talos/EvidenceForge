@@ -23,20 +23,20 @@
 """Format validation for EvidenceForge.
 
 This module provides validation functions for log fields based on format definitions.
-Uses json-logic-py for complex validation rules.
+Uses typed record predicates for cross-field validation.
 """
 
 import ipaddress
 import json
 import logging
+import math
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 
-from json_logic import jsonLogic
-
 from .format_def import FieldConstraint, FieldDefinition, FieldType, FormatDefinition
+from .rules import Finding, evaluate_rule
 
 # Deduplicate unknown field warnings: only warn once per (format, field) pair
 _warned_unknown_fields: set[tuple[str, str]] = set()
@@ -52,17 +52,22 @@ class ValidationResult:
         errors: List of error messages (field path + message)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.valid = True
         self.errors: list[str] = []
+        self.findings: list[Finding] = []
 
-    def add_error(self, field_path: str, message: str) -> None:
+    def add_error(self, field_path: str, message: str, category: str = "schema") -> None:
         """Add a validation error."""
         self.valid = False
         self.errors.append(f"{field_path}: {message}")
+        self.findings.append(
+            Finding(rule_id=field_path, fields=(field_path,), category=category, message=message)
+        )
 
     def merge(self, other: "ValidationResult") -> None:
         """Merge another validation result into this one."""
+        self.findings.extend(other.findings)
         if not other.valid:
             self.valid = False
             self.errors.extend(other.errors)
@@ -91,6 +96,12 @@ def validate_field_type(
         if not isinstance(field_value, int) or isinstance(field_value, bool):
             result.add_error(field_name, f"Expected integer, got {type(field_value).__name__}")
 
+    elif field_type == FieldType.FLOAT:
+        if isinstance(field_value, bool) or not isinstance(field_value, (int, float)):
+            result.add_error(field_name, "Expected finite number")
+        elif not math.isfinite(field_value):
+            result.add_error(field_name, "Expected finite number")
+
     elif field_type == FieldType.BOOLEAN:
         if not isinstance(field_value, bool):
             result.add_error(field_name, f"Expected boolean, got {type(field_value).__name__}")
@@ -98,7 +109,8 @@ def validate_field_type(
     elif field_type == FieldType.TIMESTAMP:
         # Accept datetime objects, ISO 8601 strings, or epoch floats/ints (Zeek)
         if isinstance(field_value, (int, float)) and not isinstance(field_value, bool):
-            pass  # Epoch timestamp — valid
+            if not math.isfinite(field_value):
+                result.add_error(field_name, "Expected finite timestamp")
         elif isinstance(field_value, str):
             try:
                 datetime.fromisoformat(field_value.replace("Z", "+00:00"))
@@ -170,7 +182,7 @@ def validate_field_constraints(
             )
 
     # Min/max value (for integers)
-    if isinstance(field_value, int) and not isinstance(field_value, bool):
+    if isinstance(field_value, (int, float)) and not isinstance(field_value, bool):
         if constraints.min_value is not None and field_value < constraints.min_value:
             result.add_error(
                 field_name,
@@ -203,18 +215,7 @@ def validate_field_constraints(
                 f"Value must be one of {constraints.allowed_values}, got {field_value}",
             )
 
-    # JSON Logic validation
-    if constraints.json_logic:
-        try:
-            # JSON Logic rule has access to the field value as {"value": ...}
-            data = {"value": field_value}
-            logic_result = jsonLogic(constraints.json_logic, data)
-            if not logic_result:
-                result.add_error(
-                    field_name, f"Failed JSON Logic validation: {constraints.json_logic}"
-                )
-        except Exception as e:
-            result.add_error(field_name, f"JSON Logic error: {e}")
+    result.findings = [f.model_copy(update={"category": "constraint"}) for f in result.findings]
 
     return result
 
@@ -231,9 +232,20 @@ def validate_field(field_def: FieldDefinition, field_value: Any) -> ValidationRe
     """
     result = ValidationResult()
 
+    if field_value is None and field_def.nullable:
+        return result
+
     # Type validation
     type_result = validate_field_type(field_def.name, field_value, field_def.type)
     result.merge(type_result)
+
+    if not type_result.valid:
+        return result
+    if field_def.item_type and isinstance(field_value, list):
+        for index, item in enumerate(field_value):
+            result.merge(
+                validate_field_type(f"{field_def.name}[{index}]", item, field_def.item_type)
+            )
 
     # Constraint validation
     if field_def.constraints:
@@ -272,33 +284,6 @@ _RFC5424_RE = re.compile(
 _RFC5424_PRIORITY_MAX = 191  # 23 facilities × 8 severities - 1
 _LEGACY_BSD_SYSLOG_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+")
 _LEGACY_ISO_SYSLOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*\s+\S+\s+\S+")
-
-# eCAR valid object/action combos
-_ECAR_VALID_OBJECTS = frozenset(
-    {"PROCESS", "FILE", "FLOW", "REGISTRY", "MODULE", "THREAD", "USER_SESSION", "SERVICE"}
-)
-_ECAR_VALID_ACTIONS = frozenset(
-    {
-        "CREATE",
-        "DELETE",
-        "MODIFY",
-        "READ",
-        "WRITE",
-        "OPEN",
-        "CLOSE",
-        "EXECUTE",
-        "TERMINATE",
-        "LOGIN",
-        "LOGOUT",
-        "START",
-        "STOP",
-        "LOAD",
-        "UNLOAD",
-        "CONNECT",
-        "DISCONNECT",
-        "REMOTE_CREATE",
-    }
-)
 
 # Formats that support strict-mode validation
 STRICT_FORMATS: frozenset[str] = frozenset(
@@ -457,12 +442,7 @@ def _validate_strict_ecar(raw: str, fields: dict[str, Any], result: ValidationRe
     if not isinstance(obj, dict):
         result.add_error("ecar_json", f"Expected JSON object, got {type(obj).__name__}")
         return
-    obj_type = obj.get("object")
-    action = obj.get("action")
-    if obj_type is not None and obj_type not in _ECAR_VALID_OBJECTS:
-        result.add_error("ecar_object", f"Unknown object type: {obj_type!r}")
-    if action is not None and action not in _ECAR_VALID_ACTIONS:
-        result.add_error("ecar_action", f"Unknown action: {action!r}")
+    # Field enums and object/action combinations have one owner: the format contract.
 
 
 def validate_event(
@@ -470,6 +450,8 @@ def validate_event(
     event_data: dict[str, Any],
     variant_name: str | None = None,
     event_context: str | None = None,
+    *,
+    include_diagnostics: bool = True,
 ) -> ValidationResult:
     """Validate an event against a format definition.
 
@@ -486,25 +468,20 @@ def validate_event(
     result = ValidationResult()
     ctx_suffix = f" ({event_context})" if event_context else ""
 
-    # Build combined field list (base + variant)
-    fields = list(format_def.fields)
-    if variant_name and format_def.variants:
-        variant = next((v for v in format_def.variants if v.name == variant_name), None)
-        if variant:
-            fields.extend(variant.fields)
-        else:
-            result.add_error("_variant", f"Unknown variant: {variant_name}")
-            return result
+    fields = format_def.validation_fields(variant_name)
+    if fields is None:
+        result.add_error("_variant", f"Unknown variant: {variant_name}")
+        return result
 
     # Check required fields
-    for field_def in fields:
+    for field_def in fields.values():
         if field_def.required and field_def.name not in event_data:
             result.add_error(field_def.name, f"Required field missing{ctx_suffix}")
 
     # Validate present fields
     for field_name, field_value in event_data.items():
         # Find field definition
-        field_def = next((f for f in fields if f.name == field_name), None)
+        field_def = fields.get(field_name)
         if not field_def:
             # Unknown field (warning, not error) — deduplicate per context
             key = (format_def.name, field_name, event_context or "")
@@ -517,16 +494,19 @@ def validate_event(
         field_result = validate_field(field_def, field_value)
         result.merge(field_result)
 
-    # Cross-field validators (JSON Logic)
-    if format_def.validators:
-        for i, validator in enumerate(format_def.validators):
-            try:
-                logic_result = jsonLogic(validator, event_data)
-                if not logic_result:
-                    result.add_error(
-                        "_cross_field", f"Failed cross-field validation #{i}: {validator}"
-                    )
-            except Exception as e:
-                result.add_error("_cross_field", f"Cross-field validator error: {e}")
-
+    invalid_fields = {f.fields[0].split("[", 1)[0] for f in result.findings if f.fields}
+    for rule in format_def.validators or []:
+        if not include_diagnostics and rule.severity == "warning":
+            continue
+        finding = evaluate_rule(rule, event_data, format_def.name, variant_name, invalid_fields)
+        result.findings.append(finding)
+        if finding.outcome == "evaluation_error" or (
+            finding.outcome == "fail" and finding.severity == "error"
+        ):
+            result.valid = False
+            result.errors.append(f"_cross_field: {finding.rule_id}: {finding.message}")
+    result.findings = [
+        finding.model_copy(update={"format": format_def.name, "variant": variant_name})
+        for finding in result.findings
+    ]
     return result

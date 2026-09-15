@@ -215,3 +215,8 @@ only when the user requests an example or regression fixture.
 Return the exact organization reference, exact industry dependencies, version rationale, standalone
 or partial status, files and exports authored, final digest, validation result, consumer-harness
 result, and representative runtime evidence observed. State what remains scenario-owned.
+
+## Validation policy
+
+Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,
+structured findings, or compatibility with existing projects.

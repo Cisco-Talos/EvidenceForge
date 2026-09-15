@@ -187,3 +187,8 @@ Return:
 5. Final digest and exports.
 6. Versioning or dependency decisions.
 7. The specialized skill to use next when substantive authoring remains.
+
+## Validation policy
+
+Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,
+structured findings, or compatibility with existing projects.

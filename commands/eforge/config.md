@@ -147,4 +147,4 @@ selected. Use composition explanation when pack and overlay precedence matters.
 
 State the project root, whether the operation remained read-only, files changed, directly implied
 repairs, validation result, and unresolved pre-existing or semantic decisions. Mention the effective
-merge behavior when it could surprise the user.
+merge behavior when it could surprise the user. Read `/eforge:references:record-validation` for validation policy and compatibility.

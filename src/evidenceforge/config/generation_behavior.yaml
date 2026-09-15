@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 89
+current_revision: 90
 history_start_revision: 1
-behavior_surface_sha256: 120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c
+behavior_surface_sha256: ddfb34dd83a38ab24ffcfc7386bee9669d5ba3dd06eda5b227c660d4a6db20b4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -798,3 +798,10 @@ changes:
       - host-filesystem
     formats: []
     summary: Publish Windows checkpoint dependencies and recovery indexes through native write-through handles without changing POSIX operations or evidence semantics
+  - revision: 90
+    id: typed-record-validation
+    impact: none
+    domains:
+      - record-validation
+    formats: []
+    summary: Replace record validation contracts without changing rendered evidence.

@@ -166,3 +166,11 @@ def clear_cache() -> None:
     global _format_cache
     _format_cache.clear()
     logger.debug("Cleared format definition cache")
+
+
+def validate_packaged_contracts() -> None:
+    """Validate package-owned record and scoring contracts for command preflight."""
+    load_all_formats()
+    from evidenceforge.evaluation.thresholds import load_thresholds
+
+    load_thresholds()

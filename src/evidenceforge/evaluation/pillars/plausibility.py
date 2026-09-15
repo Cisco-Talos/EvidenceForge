@@ -40,7 +40,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from evidenceforge.evaluation._shared import (
-    _condition_matches,
     _extract_hostname,
     _extract_username,
     _jensen_shannon_divergence,
@@ -224,29 +223,40 @@ class PlausibilityScorer(DimensionScorer):
     # --- Sub-score 2: Co-occurrence Rules ---
 
     def _score_co_occurrence(self, records: dict[str, list[ParsedRecord]]) -> SubScore:
-        co_rules = load_rules_file("co_occurrence.yaml")
+        from evidenceforge.evaluation.pillars.parseability import (
+            _get_variant,
+            _normalize_for_validation,
+        )
+        from evidenceforge.formats.loader import load_format
+        from evidenceforge.formats.rules import evaluate_rule
+        from evidenceforge.models.exceptions import ConfigurationError
+
         total_applicable = 0
         passing = 0
         failures: list[str] = []
-        max_sample = 2000
-
         for format_name, record_list in records.items():
-            rules = co_rules.get(format_name, [])
-            if not rules:
-                continue
-            valid = [r for r in record_list if not r.parse_errors]
-            if len(valid) > max_sample:
-                valid = _stable_records(valid, max_sample)
-
-            for record in valid:
-                for rule in rules:
-                    if _condition_matches(rule.get("condition", {}), record.fields):
-                        total_applicable += 1
-                        checks = rule.get("checks", [])
-                        if all(_check_passes(chk, record.fields) for chk in checks):
-                            passing += 1
-                        elif len(failures) < 10:
-                            failures.append(f"[{format_name}] Rule '{rule['name']}' failed")
+            definition = load_format(format_name)
+            for record in record_list:
+                if record.parse_errors:
+                    continue
+                normalized = _normalize_for_validation(format_name, record.fields, record.timestamp)
+                for rule in definition.validators or []:
+                    if rule.severity != "warning":
+                        continue
+                    finding = evaluate_rule(
+                        rule, normalized, format_name, _get_variant(format_name, record)
+                    )
+                    if finding.outcome == "evaluation_error":
+                        raise ConfigurationError(
+                            f"Record rule {rule.id} could not be evaluated for {format_name}"
+                        )
+                    if finding.severity != "warning" or finding.outcome == "not_applicable":
+                        continue
+                    total_applicable += 1
+                    if finding.outcome == "pass":
+                        passing += 1
+                    elif len(failures) < 10:
+                        failures.append(f"[{format_name}] {finding.rule_id}: {finding.message}")
 
         if total_applicable == 0:
             return SubScore(
@@ -669,36 +679,6 @@ def _check_os_plausibility(record: ParsedRecord, fmt: str) -> bool | None:
             return False
         return True
     return None
-
-
-def _check_passes(check: dict[str, Any], fields: dict[str, Any]) -> bool:
-    field_name = check.get("field", "")
-    value = fields.get(field_name)
-    if "present" in check:
-        return value is not None
-    if "not_equal" in check:
-        return value is not None and value != check["not_equal"]
-    if "equals" in check:
-        return value == check["equals"]
-    if "min_length" in check:
-        return isinstance(value, str) and len(value) >= check["min_length"]
-    if "min_value" in check or "max_value" in check:
-        try:
-            v = int(value) if not isinstance(value, (int, float)) else value
-            if "min_value" in check and v < check["min_value"]:
-                return False
-            if "max_value" in check and v > check["max_value"]:
-                return False
-            return True
-        except (ValueError, TypeError):
-            return False
-    if "in" in check:
-        return value in check["in"]
-    if "matches" in check:
-        import re
-
-        return bool(re.search(check["matches"], str(value or "")))
-    return True
 
 
 def _coerce_key(value: Any, reference: dict) -> Any:

@@ -13,7 +13,7 @@ fields:
   - {name: action, type: string, required: true}
   - {name: path, type: string, required: true}
   - {name: name, type: string, required: true}
-  - {name: size, type: integer, required: false}
+  - {name: size, type: integer, required: false, constraints: {min_value: 0}}
   - {name: prev_name, type: string, required: false}
   - {name: fuid, type: string, required: false}
 output:
@@ -41,3 +41,18 @@ output:
       "fuid": {{ fuid | tojson }}
       {%- endif %}
     }
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: smb.rename-source
+  message: Rename requires previous name
+  severity: error
+  when:
+  - op: compare
+    field: action
+    relation: eq
+    value: SMB::FILE_RENAME
+  checks:
+  - op: length
+    field: prev_name
+    minimum: 1

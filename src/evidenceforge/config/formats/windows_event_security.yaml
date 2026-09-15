@@ -728,6 +728,7 @@ variants:
   # EventID 4769: A Kerberos service ticket was requested
   - name: kerberos_service_ticket
     event_id: "4769"
+    event_ids: [4769, 4770]
     description: "Kerberos service ticket request"
     fields:
       - name: TargetUserName
@@ -804,12 +805,18 @@ variants:
       - name: SourcePort
         type: integer
         required: true
+        constraints:
+          min_value: 0
+          max_value: 65535
       - name: DestAddress
         type: string
         required: true
       - name: DestPort
         type: integer
         required: true
+        constraints:
+          min_value: 0
+          max_value: 65535
       - name: Protocol
         type: integer
         required: true
@@ -947,6 +954,7 @@ variants:
   # EventID 4728/4729/4732/4733/4756/4757: Group membership changes
   - name: group_membership_change
     event_id: "4728"
+    event_ids: [4728, 4729, 4732, 4733, 4756, 4757]
     description: "Member added/removed from security group"
     fields:
       - name: MemberName
@@ -1321,6 +1329,73 @@ variants:
       - {name: AccessReason, type: string, required: true}
 
 # Output template in Windows Event Log XML format
+  - name: scheduled_task_deleted
+    event_id: '4699'
+    description: scheduled task deleted
+    fields:
+    - name: SubjectUserSid
+      type: sid
+      required: true
+    - name: SubjectUserName
+      type: string
+      required: true
+    - name: SubjectDomainName
+      type: string
+      required: true
+    - name: SubjectLogonId
+      type: hex_string
+      required: true
+    - name: TaskName
+      type: string
+      required: true
+    - name: TaskContent
+      type: string
+      required: false
+  - name: scheduled_task_enabled
+    event_id: '4700'
+    description: scheduled task enabled
+    fields:
+    - name: SubjectUserSid
+      type: sid
+      required: true
+    - name: SubjectUserName
+      type: string
+      required: true
+    - name: SubjectDomainName
+      type: string
+      required: true
+    - name: SubjectLogonId
+      type: hex_string
+      required: true
+    - name: TaskName
+      type: string
+      required: true
+    - name: TaskContent
+      type: string
+      required: false
+  - name: scheduled_task_disabled
+    event_id: '4701'
+    description: scheduled task disabled
+    fields:
+    - name: SubjectUserSid
+      type: sid
+      required: true
+    - name: SubjectUserName
+      type: string
+      required: true
+    - name: SubjectDomainName
+      type: string
+      required: true
+    - name: SubjectLogonId
+      type: hex_string
+      required: true
+    - name: TaskName
+      type: string
+      required: true
+    - name: TaskContent
+      type: string
+      required: false
+
 output:
   format: xml
   file_extension: ".xml"
@@ -1689,12 +1764,227 @@ output:
       {% endif %}
     </Event>
 
-# Cross-field validators using JSON Logic
+# Typed cross-field record validators
+
+# Typed record contracts; evaluated after scalar validation.
 validators:
-  # Network logons (type 3) should have valid IP address (not "-")
-  - if:
-      - and:
-          - "==": [{"var": "EventID"}, 4624]
-          - "==": [{"var": "LogonType"}, 3]
-    then:
-      "!=": [{"var": "IpAddress"}, "-"]
+- id: windows_event_security.legacy-1
+  message: Network logon (type 3) requires valid IP
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4624
+  - op: compare
+    field: LogonType
+    relation: eq
+    value: 3
+  checks:
+  - op: compare
+    field: IpAddress
+    relation: ne
+    value: '-'
+  - op: compare
+    field: IpAddress
+    relation: ne
+    value: ''
+  exclude:
+  - op: compare
+    field: TargetUserName
+    relation: eq
+    value: ANONYMOUS LOGON
+- id: windows_event_security.legacy-2
+  message: Interactive logon (type 2) uses local workstation
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4624
+  - op: compare
+    field: LogonType
+    relation: eq
+    value: 2
+  checks:
+  - op: compare
+    field: WorkstationName
+    relation: ne
+    value: ''
+- id: windows_event_security.legacy-3
+  message: Process creation has process name
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4688
+  checks:
+  - op: length
+    field: NewProcessName
+    minimum: 1
+- id: windows_event_security.legacy-4
+  message: Logoff must have a logon type
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4634
+  checks:
+  - op: presence
+    field: LogonType
+    present: true
+- id: windows_event_security.legacy-5
+  message: Logon has valid SID
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4624
+  checks:
+  - op: compare
+    field: TargetUserSid
+    relation: ne
+    value: ''
+- id: windows_event_security.legacy-6
+  message: Failed logon has status code
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4625
+  checks:
+  - op: presence
+    field: Status
+    present: true
+  - op: length
+    field: TargetUserName
+    minimum: 1
+- id: windows_event_security.legacy-7
+  message: Special privileges has privilege list
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4672
+  checks:
+  - op: length
+    field: PrivilegeList
+    minimum: 1
+- id: windows_event_security.legacy-8
+  message: Process termination has process name
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4689
+  checks:
+  - op: length
+    field: ProcessName
+    minimum: 1
+  - op: presence
+    field: ProcessId
+    present: true
+- id: windows_event_security.legacy-9
+  message: Kerberos TGT has krbtgt service
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4768
+  checks:
+  - op: compare
+    field: ServiceName
+    relation: eq
+    value: krbtgt
+  - op: compare
+    field: IpAddress
+    relation: ne
+    value: '-'
+- id: windows_event_security.legacy-10
+  message: Kerberos service ticket has service name
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4769
+  checks:
+  - op: length
+    field: ServiceName
+    minimum: 1
+  - op: compare
+    field: IpAddress
+    relation: ne
+    value: '-'
+- id: windows_event_security.legacy-11
+  message: NTLM validation has workstation
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4776
+  checks:
+  - op: length
+    field: Workstation
+    minimum: 1
+  - op: length
+    field: TargetUserName
+    minimum: 1
+- id: windows_event_security.legacy-12
+  message: Kerberos preauth failure has status
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4771
+  checks:
+  - op: presence
+    field: Status
+    present: true
+  - op: length
+    field: TargetUserName
+    minimum: 1
+- id: windows_event_security.legacy-13
+  message: WFP connection has direction
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 5156
+  checks:
+  - op: membership
+    field: Direction
+    values:
+    - '%%14592'
+    - '%%14593'
+  - op: presence
+    field: SourceAddress
+    present: true
+  - op: presence
+    field: DestAddress
+    present: true
+- id: windows_event_security.legacy-14
+  message: Explicit creds has target server
+  severity: warning
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 4648
+  checks:
+  - op: length
+    field: TargetServerName
+    minimum: 1
+  - op: length
+    field: TargetUserName
+    minimum: 1
