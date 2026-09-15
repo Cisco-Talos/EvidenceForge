@@ -75,3 +75,21 @@ Developer coverage checks reconcile all parser routes, native schemas, emitter r
 rendering paths. Routine tests render, parse, and validate every native format and supported Windows
 variant. The slow iteration-scenario gate checks fresh-process byte equality, bundle integrity,
 complete evaluation, and exact record validation, including email artifacts and observation gaps.
+
+### Malformed evidence versus evaluator faults
+
+A returned `evaluation_error` finding stops scoring before aggregation, including diagnostic and
+artifact rules. The CLI returns 22, identifies the rule/source/variant/fields on stderr, and emits no
+report. The library compatibility view still returns `valid=False`, errors, and structured findings.
+
+Malformed records remain counted in source totals and exact schema acceptance. Once recorded as
+schema/parse failures, they do not enter later pillars' typed distribution or cross-source indexes.
+Those scores describe usable evidence and cannot override failed schema acceptance. Well-typed
+records with cross-field contradictions still reach specialized evaluators. This prevents malformed
+identities, timestamps, and collections from turning ordinary invalid evidence into engine faults.
+
+Splunk web/proxy JSON is parsed through its supported field aliases before shared validation.
+Malformed native fields and conflicting aliases remain counted failures. SOF-ELK Snare projection
+coverage is still a known gap on this branch: its omitted XML metadata and flattened identity labels
+need an explicit native contract; current schema failures are not waived. See the validation worklog
+for the retained target fixtures and merge-readiness evidence.

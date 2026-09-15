@@ -58,6 +58,14 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Reconcile SOF-ELK Snare validation with its native projection before merging record
+  validation: XML-only system metadata is omitted and repeated Security labels lose subject/target
+  scope. Define the projection contract and repair any information loss at its owning layer, with
+  separately justified generator changes. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
+- [ ] **P2** Investigate Splunk iteration indicator matching after native web/proxy JSON parsing
+  (71.92% indicator accuracy), separately from the unchanged 83.33% temporal-integrity failure and
+  the Zeek packet-filter/reporter/weird generation-coverage investigation. See the same worklog.
+
 - Prepare the 2.1.0 release from `dev` to `main`, including the version/changelog bump and routine,
   coverage, slow, and checkpoint portability gates. See the
   [release worklog](docs/worklog/2026-09-14-2.1.0-release.md).

@@ -39,3 +39,15 @@ Developer coverage checks reconcile all parser routes, native schemas, emitter r
 rendering paths. Routine tests render, parse, and validate every native format and supported Windows
 variant. The slow iteration-scenario gate checks fresh-process byte equality, bundle integrity,
 complete evaluation, and exact record validation, including email artifacts and observation gaps.
+
+Returned `evaluation_error` findings abort evaluation just like raised exceptions, including
+realism diagnostics and artifact validators. The diagnostic identifies the rule, source, variant,
+and fields. The library `validate_event` API still returns `valid=False`, errors, and findings;
+the scoring boundary raises the execution error.
+
+Malformed records remain in source counts and exact schema acceptance. After those failures are
+recorded, malformed records are omitted from the typed distribution and cross-source indexes used
+by later pillars. Those pillar scores describe the usable evidence; they cannot override failed
+schema acceptance. Cross-field contradictions in otherwise well-typed records remain available to
+specialized evaluators. Missing optional observations and source-native conversions retain their
+existing semantics.

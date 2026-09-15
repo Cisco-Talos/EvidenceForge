@@ -348,3 +348,176 @@ no branch publication is authorized by this repair request.
   `/private/tmp/eforge-routing-slow.log`, `/private/tmp/eforge-routing-checkpoint.log`.
 - Immutable baseline checkout remains clean. No generator correction, scenario/pack/overlay edit,
   package-version bump, push, or PR publication occurred. Linux/Windows CI remains outstanding.
+
+## Pre-PR gap closure (2026-09-15)
+
+### Requirement matrix
+
+| Requirement | Status | Evidence / boundary |
+|---|---|---|
+| 1. Returned correctness/diagnostic/artifact execution errors | Passed | Scoring calls `require_evaluated` before aggregation; CLI fault injection checks exit 22, empty stdout, rule/source/variant/fields. Library compatibility remains `valid=False` plus errors/findings. |
+| 2. Native malformed-record matrix | Passed | All 66 format/Windows variant witnesses; 2,044 required JSON/XML mutations; six malformed text timestamps; 51 rules through native parsing (101 pass/fail cases, one explicitly inapplicable native case); 310 JSON fields with null/empty/dash/object/bounds/nonfinite/list cases. |
+| 2. Malformed values through all pillars | Passed | One combined CLI batch covers all 25 native formats, every required-field mutation and every JSON field with an invalid object. Exact source counts remain; completed FAIL exits 0. |
+| 3. Historical checkpoint | Passed | Baseline suspension, untouched copy, exact refusal/no mutation, read-only status/verify, compatible hydration/resume, one migration, dependency diagnostics and 24 byte-identical evidence files against both uninterrupted controls. |
+| 4. Scenario/config/pack compatibility | Passed | 55 comparison entries across two projects and Scenario 1.0/2.0; all command exits match. Supported effective values, entities, provenance, pack locks/build/import/hydration match. Detailed differences retained. |
+| 4. Target generation bytes | Passed | Full iteration SOF-ELK serial and Splunk threaded captures: 141 evidence files each match baseline, with manifest hashes independently verified. |
+| 4. Target evaluation | **Failed / merge blocker** | SOF-ELK Snare lacks the full XML contract and has ambiguous flattened field labels. No schema waiver or generation change made. Splunk JSON parser repaired; exact record gates now pass, but indicator accuracy is 71.9215%. |
+| 4. Five-run full-evaluation performance | Passed | Isolated full parsing/all-pillar runs on the same 123,105-record baseline evidence; final median candidate 12.1033s versus 12.3028s baseline, with slightly lower peak RSS. |
+| 4. Routine/slow/Ruff/behavior gates | Results below | First routine run found missing navigation in the expanded checkpoint reference; fixed and installer rerun. |
+| 4. Linux/Windows CI | Externally pending | No publication authorized. Local macOS tests do not substitute for CI. |
+| 5. Independent review / merge readiness | Externally pending | No independent review or PR publication. The target findings above remain explicit blockers. |
+
+### Repairs and demonstrated defects
+
+- Shared scoring now converts **returned** `evaluation_error` findings into `EvaluationError`
+  before aggregate totals, including diagnostics and artifact validators. Ordinary malformed evidence
+  is not an execution fault. The diagnostic boundary includes the rule, source, variant and fields.
+- Bash epochs outside platform time range, or beyond Python's integer-string conversion limit,
+  previously raised before producing a record. Both now remain counted parse failures.
+- The combined native mutation batch exposed an OCSP diagnostic comparing malformed operands, then
+  a distribution index using a dictionary-valued field as a key. Diagnostics now check operand
+  schema validity; parseability records schema failures in a run-local set. Later pillars consume
+  the usable-record view, while source totals and exact acceptance retain every malformed record.
+  Well-typed cross-field contradictions still reach specialized evaluators. No catch-and-continue
+  or acceptance relaxation was added.
+- Baseline checkpoint hydration initially rejected frozen JSON Logic format documents. A narrowly
+  recognized immutable-snapshot decoder now promotes the two known legacy format documents and
+  threshold policy in memory. Full-document hashes must match, and native rendering templates must
+  remain identical. Stored snapshots are untouched; arbitrary old disk/internal syntax is still
+  rejected. Promoting only rule lists was insufficient: Windows renderer identity also depends on
+  canonical field metadata, which the final decoder preserves coherently.
+- Full Splunk target evaluation exposed text-only web/proxy parsers. The new Apache JSON adapter
+  maps the existing target fields, preserves source-native values, rejects conflicting aliases and
+  malformed shapes/types/timestamps, and retains CONNECT authority versus ordinary request-path
+  semantics without inventing URL schemes. Compact native fixtures cover positive and corrupted
+  records through parsing, scoring and CLI acceptance. No emitter was changed.
+
+### Historical checkpoint evidence
+
+`tests/integration/test_validation_checkpoint_upgrade.py` is the reproducible slow gate. Set
+`EFORGE_VALIDATION_BASELINE_PYTHON=/private/tmp/eforge-rv-baseline-env/bin/python` and run it with
+`-m slow --no-cov`. Routine decoder tests use committed immutable baseline YAML fixtures, so they
+need no external checkout. The mixed Windows/Linux fixture has one hour warmup, three hours of
+collection, seed 42, hourly checkpoints, and the existing synchronization harness.
+
+The verified run preserved the suspended checkpoint byte-for-byte. Exact policy exited 1 and
+left every checkpoint/bundle file hash unchanged; status and full scratch verification also left
+it unchanged. Compatible resume exited 0, recorded `accepted_policy=compatible`, migration count 1,
+and removal of `json-logic-qubit`. It retained `output_equivalence=not-guaranteed` for runtime drift.
+All 24 evidence/ground-truth/observation files matched both controls. Resolved scenario and generation
+manifest differences are validation snapshots, derived fingerprints, generation/resume timestamps,
+and migration lineage. Byte equality is evidence for this run, not a compatibility guarantee.
+
+The first scratch verifier attempt hit macOS's `/var` symlink ancestry guard. The harness now uses
+its resolved private temporary directory for scratch storage; the safety guard was not bypassed.
+An existing classifier initializes any nonempty behavior history as `localized`, including a history
+containing only `impact: none` entries. That conservative diagnostic remains unchanged; it does not
+prevent compatible hydration or strengthen the output-equivalence guarantee.
+
+### CLI/configuration comparison
+
+Scratch harness `/private/tmp/eforge-gap-compat.py` runs baseline and candidate in isolated processes,
+with multiple project scopes sequentially inside each process. Both have 55 result entries and no
+nonzero command exits. Coverage includes input/resolved validation, resolve JSON, configuration JSON,
+CWD/explicit/no-ancestor resolution, two DNS overlays, Scenario 1.0/2.0, organization/industry closure,
+pack validation/build/inspect/import/hydration, exact locks, and legacy text/JSON eval. A repeated
+project-A check after project B matches A's initial configuration.
+
+Compiled-document differences are limited to the already enumerated 20 format documents, packaged
+co-occurrence/threshold documents, and effective/compiled digests. Scenario, supported overlays,
+field provenance and locks do not differ. Resolve JSON differs only in `compiled_sha256`.
+Validation text additionally reports changing available memory/disk. Eval retains existing keys;
+expected differences are exact thresholds, structured findings, current validation counts/details,
+execution timing and evaluated timestamp. Pack JSON and immutable release locks match exactly.
+Full outputs: `/private/tmp/eforge-gap-compat-{baseline,candidate}/results.json`; comparison:
+`/private/tmp/eforge-gap-compat-comparison.json`.
+
+### Newly exposed target boundaries
+
+Both targets contain 123,105 records from 22 sources; baseline/candidate bytes match in all 141
+non-metadata files per target. SOF-ELK serial and Splunk threaded captures are retained under
+`/private/tmp/eforge-gap-{sof-elk,splunk}-{baseline,candidate}`. Hash comparison:
+`/private/tmp/eforge-gap-target-comparisons.json`.
+
+SOF-ELK evaluation completes but schema compliance is 75.4397%: all 18,718 Windows Security and
+11,517 Sysmon records lack XML-only `Level`, `ExecutionProcessID`, and `ExecutionThreadID` metadata.
+Security labels also map `SourceAddress`/`DestAddress` to `SourceIp`/`DestinationIp` and flatten
+subject/target identities into repeated labels that the current parser cannot scope reliably.
+This is a projection-contract and information-preservation issue, not a missing Jinja template.
+The full inventory is retained in `/private/tmp/eforge-gap-snare-audit.log`. A compact Snare fixture
+keeps the failure visible. Defining a native projection contract and repairing lost identity scope
+requires separate work; silently making XML fields optional would conceal it.
+
+Splunk initially rejected all 2,236 proxy and 822 web records. After its parser repair, schema and
+correctness are 100%; overall score is 95.3330. Its indicator accuracy of 71.9215% is now exposed by
+complete parsing (1,063/1,478 checks), including proxy and Windows username mismatches. It needs a
+separate trace-matching/identity investigation; the evaluator must not invent missing identities or
+weaken the gate. Temporal integrity remains 83.3333% versus 85, as before. These findings, and the
+packet-filter/reporter/weird generation investigation, remain separate from validation-rule fixes.
+
+### Final evidence and repository gates
+
+- Fix commits: `9c89e83d` (returned execution errors and malformed evidence), `cd6463f7`
+  (historical snapshot recovery), `68cd5dd8` (Splunk web/proxy parsing). Generator code and package
+  version are unchanged. Behavior revision 92 declares validation snapshot decoding with no
+  generation impact; behavior manifest checks pass.
+- **Routine:** 11,439 passed, 68 skipped, 2,025 deselected, `--no-cov`, 368.81s.
+  The additional deliberate native skip is the unrepresentable empty Bash filename-derived username.
+- **Slow:** 5 passed, 7 deselected, `--no-cov`, 482.28s: complete iteration fresh-process pair,
+  authoritative observation-overlay evaluation, public seed determinism, hash-seed storage identity,
+  and historical baseline checkpoint upgrade. The final default capture matches all **141** baseline
+  evidence files; both fresh candidate captures match all **142** manifest-owned files including
+  resolved input. Manifest-owned hashes are independently verified.
+- **Final focused:** 152 passed, 2,456 deselected, 8.11s: error routing, snapshot decoder, target JSON,
+  behavior provenance, combined 25-format malformed-record evaluation, and oversized Bash epochs.
+- Existing routine cutoff/partial-observation guards remain active, including
+  `test_firewall_teardown_after_export_window_is_marked_unobserved` and
+  `test_pre_window_or_observation_gap_is_not_scored`. The dedicated slow observation-profile test
+  verifies authoritative bundle configuration and intentional missingness through causality scoring.
+- **Performance:** five isolated full evaluations per revision, alternating interpreters, identical
+  123,105-record heterogeneous baseline bundle, all four pillars complete, all exits 0. Median wall
+  time baseline **12.3028s**, candidate **12.1033s** (1.62% faster). Median peak process RSS baseline
+  **777,846,784 bytes**, candidate **774,471,680 bytes** (0.43% lower). Includes imports, parsing and
+  all pillars. No >20% regression to investigate; these measurements are not CI timing assertions.
+- **Ruff:** check and format check pass (892 Python files). `git diff --check` is clean. Canonical
+  references were regenerated through `install-skills`; installer/reference contracts pass.
+- Immutable baseline checkout remains clean. No push, PR, version bump, generator modification,
+  `attempt` policy, or relaxed threshold was used. Linux/Windows CI and independent review remain
+  pending; **merge readiness is not established**, including the target-specific findings above.
+
+Machine-readable results and comparison hashes are committed in
+[validation-gap evidence](2026-09-15-validation-gap-evidence.json). Full logs are retained at
+`/private/tmp/eforge-gap-routine-final.log`, `/private/tmp/eforge-gap-slow.log`,
+`/private/tmp/eforge-gap-final-focused.log`, and `/private/tmp/eforge-gap-performance-final/`.
+Historical preserved checkpoint and controls are in
+`/private/tmp/eforge-gap-slow-final/test_baseline_checkpoint_upgra0/`.
+
+Reproducible verification tools (run from the repository, with new output directories):
+
+```bash
+# Repeat for the candidate interpreter into a separate directory.
+/private/tmp/eforge-rv-baseline-env/bin/python scripts/capture_validation_compatibility.py \
+  --output /private/tmp/validation-compat-baseline-new
+
+/private/tmp/eforge-rv-candidate-env/bin/python scripts/benchmark_validation.py \
+  --baseline-python /private/tmp/eforge-rv-baseline-env/bin/python \
+  --candidate-python /private/tmp/eforge-rv-candidate-env/bin/python \
+  --bundle /private/tmp/eforge-rv-iteration-baseline \
+  --output /private/tmp/validation-performance-new
+
+EFORGE_VALIDATION_BASELINE_PYTHON=/private/tmp/eforge-rv-baseline-env/bin/python \
+  uv run --no-sync pytest tests/integration/test_validation_checkpoint_upgrade.py -m slow --no-cov
+```
+
+The committed CLI capture tool was exercised against both isolated environments after its extraction
+from the scratch harness: 55 results per revision, all exits 0, equal supported configuration and
+pack operations. CWD/explicit effective configuration matches; no-ancestor mode excludes the parent
+overlay; project A retains its values after project B. The `.efpack` archives are byte-identical:
+`43433bfe3c0769748320318ab41261fd626e1471fa464c5420b0dfe3acf0757d`.
+
+Baseline target evaluations independently confirm these parser/projection gaps predate this branch:
+SOF-ELK baseline schema/correctness are both 75.4389%; Splunk baseline schema is 97.5151%.
+Both baseline runs complete with failed acceptance. Candidate native Splunk parsing repairs its
+3,058 rejected HTTP records; the small remaining baseline/candidate schema difference is the
+previously documented eCAR rename validation defect. Original baseline target reports are retained
+as `/private/tmp/eforge-gap-{sof-elk,splunk}-baseline-report.json` and included in the evidence summary.
