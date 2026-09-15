@@ -112,6 +112,8 @@ class ParseabilityScorer(DimensionScorer):
     ) -> tuple[SubScore, SubScore]:
         """Validate each record once and aggregate bounded diagnostics by category."""
         totals = {"schema": 0, "constraint": 0}
+        unavailable_count = 0
+        unavailable_findings: list[Finding] = []
         passing = {"schema": 0, "constraint": 0}
         failures: dict[str, list[str]] = {"schema": [], "constraint": []}
         counts: dict[str, dict[str, dict[str, int]]] = {"schema": {}, "constraint": {}}
@@ -137,11 +139,33 @@ class ParseabilityScorer(DimensionScorer):
                     assert definition is not None
                     variant = _get_variant(name, record)
                     normalized = _normalize_for_validation(name, record.fields, record.timestamp)
+                    unavailable = frozenset()
+                    if record.representation == "windows_snare":
+                        from evidenceforge.formats.snare import LEGACY_UNAVAILABLE_FIELDS
+
+                        if record.fields.get("ProjectionVersion") != "1":
+                            unavailable = LEGACY_UNAVAILABLE_FIELDS
+                        normalized = {
+                            key: value
+                            for key, value in normalized.items()
+                            if key in definition.validation_fields(variant)
+                        }
                     result = validate_event(
-                        definition, normalized, variant, include_diagnostics=False
+                        definition,
+                        normalized,
+                        variant,
+                        include_diagnostics=False,
+                        unavailable_fields=unavailable,
                     )
                     for finding in result.findings:
                         require_evaluated(finding)
+                        if (
+                            finding.outcome == "not_applicable"
+                            and set(finding.fields) & unavailable
+                        ):
+                            unavailable_count += 1
+                            if len(unavailable_findings) < 20:
+                                unavailable_findings.append(finding)
                         if finding.severity != "error" or finding.outcome not in {
                             "fail",
                             "evaluation_error",
@@ -151,7 +175,11 @@ class ParseabilityScorer(DimensionScorer):
                             "schema" if finding.category in {"schema", "parse"} else "constraint"
                         )
                         selected[category].append(finding)
-                    if name in STRICT_FORMATS and record.raw:
+                    if (
+                        name in STRICT_FORMATS
+                        and record.raw
+                        and record.representation != "windows_snare"
+                    ):
                         selected["schema"].extend(
                             Finding(
                                 rule_id="parser.structure",
@@ -196,6 +224,8 @@ class ParseabilityScorer(DimensionScorer):
                 sample_failures=failures[category],
                 failure_summary=counts[category],
                 sample_findings=findings[category],
+                unavailable_check_count=unavailable_count if schema else 0,
+                sample_unavailable_findings=unavailable_findings if schema else [],
             )
 
         return subscore("schema"), subscore("constraint")

@@ -28,6 +28,10 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.snare import SnareEnvelope, load_snare_projections
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     WINDOWS_SYSMON_SNARE_FILENAME,
@@ -120,6 +124,7 @@ class _WindowsXmlParser(LogParser):
                     event_index += 1
                     yield ParsedRecord(
                         source_format=self.format_name,
+                        representation="windows_xml",
                         raw=line,
                         parse_errors=["Unexpected content outside Windows Event"],
                         line_number=event_index,
@@ -142,6 +147,7 @@ class _WindowsXmlParser(LogParser):
         if in_event:
             yield ParsedRecord(
                 source_format=self.format_name,
+                representation="windows_xml",
                 raw="".join(event_lines),
                 parse_errors=["Incomplete Windows Event at end of input"],
                 line_number=event_index + 1,
@@ -149,6 +155,7 @@ class _WindowsXmlParser(LogParser):
         elif wrapper_open:
             yield ParsedRecord(
                 source_format=self.format_name,
+                representation="windows_xml",
                 raw="<Events>",
                 parse_errors=["Incomplete Windows Events wrapper at end of input"],
                 line_number=event_index + 1,
@@ -236,6 +243,7 @@ class _WindowsXmlParser(LogParser):
 
         return ParsedRecord(
             source_format=self.format_name,
+            representation="windows_xml",
             raw=raw,
             fields=fields,
             timestamp=timestamp,
@@ -293,6 +301,7 @@ class _WindowsSnareParser(_WindowsXmlParser):
         errors: list[str] = []
         timestamp = None
         source_host = None
+        source_fields: list[tuple[str, str]] = []
 
         match = SNARE_SYSLOG_PATTERN.match(raw)
         if match is None:
@@ -354,7 +363,7 @@ class _WindowsSnareParser(_WindowsXmlParser):
                 }
             )
             for key, value, converter in (
-                ("EventRecordID", event_record_id, int),
+                ("SnareCounter", event_record_id, int),
                 ("EventID", event_id, int),
                 ("Criticality", criticality, int),
             ):
@@ -363,10 +372,105 @@ class _WindowsSnareParser(_WindowsXmlParser):
                 except ValueError:
                     fields[key] = value
                     errors.append(f"Invalid integer field {key}: {value}")
-            for name, value in _parse_expanded_snare_fields(full_data).items():
+            if computer != _computer_repeat or computer != source_host:
+                errors.append("Conflicting Snare computer names")
+            try:
+                native_time = datetime.strptime(snare_time, "%a %b %d %H:%M:%S %Y").replace(
+                    tzinfo=UTC
+                )
+                if native_time.strftime("%b %d %H:%M:%S").split() != groups["timestamp"].split():
+                    errors.append("Conflicting Snare timestamps")
+                timestamp = native_time
+                fields["TimeCreated"] = timestamp.isoformat()
+            except ValueError:
+                errors.append("Invalid Snare system timestamp")
+            if fields.get("Criticality") not in range(5):
+                errors.append("Snare criticality must be 0-4")
+            try:
+                SnareEnvelope(
+                    event_id=fields.get("EventID"),
+                    counter=fields.get("SnareCounter"),
+                    criticality=fields.get("Criticality"),
+                    computer=computer,
+                    provider=provider,
+                    channel=channel,
+                    timestamp=timestamp,
+                    logtype=logtype,
+                )
+            except ValidationError as exc:
+                errors.extend(
+                    f"Snare envelope {error['loc']}: {error['msg']}" for error in exc.errors()
+                )
+            source_fields = _snare_field_occurrences(full_data)
+            modern = ("ProjectionVersion", "1") in source_fields
+            if any(name == "ProjectionVersion" and value != "1" for name, value in source_fields):
+                errors.append("Unsupported Snare ProjectionVersion")
+            projection = None
+            if isinstance(fields.get("EventID"), int):
+                projection = next(
+                    (
+                        p
+                        for p in load_snare_projections().events
+                        if p.source == self.format_name and p.event_id == fields["EventID"]
+                    ),
+                    None,
+                )
+                if projection is None:
+                    errors.append(f"Unsupported Snare EventID: {fields['EventID']}")
+            aliases = {
+                _snare_field_name(label): name
+                for label, name in (projection.aliases.items() if projection and modern else [])
+            }
+            if modern and projection:
+                present = {name for name, _ in source_fields}
+                for label, fallback in projection.fallback_aliases.items():
+                    normalized_label = _snare_field_name(label)
+                    primary = aliases.get(normalized_label)
+                    if primary is None or primary not in present:
+                        aliases[normalized_label] = fallback
+            if not modern and self.format_name == "windows_event_security":
+                aliases.update(
+                    SourceIp="SourceAddress",
+                    DestinationIp="DestAddress",
+                    DestinationPort="DestPort",
+                )
+            definitions = load_format(self.format_name).validation_fields(
+                projection.variant if projection else None
+            )
+            for name, value in source_fields:
+                if name == "ProjectionVersion":
+                    fields[name] = value
+                    continue
+                name = aliases.get(name, name)
+                if name not in definitions:
+                    continue  # Unscoped historical labels remain in source_fields.
                 try:
+                    field_type = definitions[name].type.value
+                    if (
+                        modern
+                        and projection
+                        and name in projection.decimal_aliases.values()
+                        and not value.lower().startswith("0x")
+                    ):
+                        value = hex(int(value))
+
                     converted = self._coerce_event_data_field(name, value)
-                    if name in fields and fields[name] != converted:
+                    if field_type == "integer" and name not in self._INTEGER_EVENT_DATA_FIELDS:
+                        converted = int(value)
+
+                    if name == "TimeCreated":
+                        precise = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        if precise.replace(microsecond=0) != timestamp:
+                            raise ValueError("Conflicting Snare field: TimeCreated")
+                        timestamp = precise
+                        fields[name] = precise.isoformat()
+                        continue
+                    equivalent_hex = (
+                        field_type == "hex_string"
+                        and name in fields
+                        and int(fields[name], 16) == int(converted, 16)
+                    )
+                    if name in fields and fields[name] != converted and not equivalent_hex:
                         raise ValueError(f"Conflicting Snare field: {name}")
                     fields[name] = converted
                 except ValueError as exc:
@@ -380,24 +484,29 @@ class _WindowsSnareParser(_WindowsXmlParser):
             parse_errors=errors,
             line_number=line_num,
             source_host=source_host,
+            representation="windows_snare",
+            source_fields=source_fields,
         )
 
 
-def _parse_expanded_snare_fields(full_data: str) -> dict[str, str]:
+def _snare_field_occurrences(full_data: str) -> list[tuple[str, str]]:
     """Extract flattened ``Name: value`` fields in one bounded linear pass."""
 
     tail = full_data.split(":  ", 1)[1] if ":  " in full_data else full_data
-    parsed: dict[str, str] = {}
+    parsed: list[tuple[str, str]] = []
     current_name = ""
     current_value: list[str] = []
 
     def commit() -> None:
         value = "  ".join(current_value).strip()
-        if current_name and value:
-            parsed[current_name] = value
+        if current_name:
+            parsed.append((current_name, value))
 
     for segment in tail.split("  "):
-        raw_name, separator, raw_value = segment.partition(": ")
+        raw_name, separator, raw_value = segment.partition(":")
+        if raw_value and not raw_value.startswith(" "):
+            separator = ""
+        raw_value = raw_value.removeprefix(" ")
         candidate_name = _snare_field_name(raw_name.strip()) if separator else ""
         if separator and candidate_name:
             commit()
@@ -409,10 +518,20 @@ def _parse_expanded_snare_fields(full_data: str) -> dict[str, str]:
     return parsed
 
 
+def _parse_expanded_snare_fields(full_data: str) -> dict[str, str]:
+    """Compatibility view; repeated labels are intentionally not collapsed."""
+    occurrences = _snare_field_occurrences(full_data)
+    names = [name for name, _ in occurrences]
+    return {name: value for name, value in occurrences if names.count(name) == 1}
+
+
 def _snare_field_name(name: str) -> str:
     """Return a stable eval-friendly field name for a Snare expanded label."""
     if not name:
         return ""
+    canonical = re.fullmatch(r"Canonical\[([A-Za-z][A-Za-z0-9_]*)\]", name)
+    if canonical:
+        return canonical[1]
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         return name
     return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")

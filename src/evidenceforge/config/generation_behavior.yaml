@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 92
+current_revision: 93
 history_start_revision: 1
-behavior_surface_sha256: 7f12bd02b78cac7e8ccae605df62083bfccca7a2dc0e7b7356dcc484e063e7ff
+behavior_surface_sha256: 53336d3f30f517d276b5039b3cde3d9289e428093ccbd16f016013e2671b452d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -819,3 +819,12 @@ changes:
       - validation-preflight
     formats: []
     summary: Decodes recognized legacy validation metadata for compatible checkpoint hydration without changing rendering definitions.
+  - revision: 93
+    id: snare-canonical-field-preservation
+    impact: localized
+    domains:
+      - source-native-projection
+    formats:
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserve canonical Windows fields and repair SOF-ELK Snare aliases; XML and non-Snare evidence are unchanged.

@@ -46,7 +46,7 @@ def test_windows_security_snare_renderer_uses_payload_marker_without_syslog_app_
     )
     assert "\t4624\tMicrosoft-Windows-Security-Auditing\talice\t" in rendered
     assert "An account was successfully logged on.:  " in rendered
-    assert "Security ID: S-1-5-18" in rendered
+    assert "SubjectUserSid: S-1-5-18" in rendered
     assert "Account Name: alice" in rendered
 
 

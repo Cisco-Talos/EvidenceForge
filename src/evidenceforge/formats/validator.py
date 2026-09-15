@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any
 
 from .format_def import FieldConstraint, FieldDefinition, FieldType, FormatDefinition
-from .rules import Finding, evaluate_rule
+from .rules import Finding, evaluate_rule, rule_fields
 
 # Deduplicate unknown field warnings: only warn once per (format, field) pair
 _warned_unknown_fields: set[tuple[str, str]] = set()
@@ -452,6 +452,7 @@ def validate_event(
     event_context: str | None = None,
     *,
     include_diagnostics: bool = True,
+    unavailable_fields: frozenset[str] = frozenset(),
 ) -> ValidationResult:
     """Validate an event against a format definition.
 
@@ -476,7 +477,19 @@ def validate_event(
     # Check required fields
     for field_def in fields.values():
         if field_def.required and field_def.name not in event_data:
-            result.add_error(field_def.name, f"Required field missing{ctx_suffix}")
+            if field_def.name in unavailable_fields:
+                result.findings.append(
+                    Finding(
+                        rule_id=field_def.name,
+                        fields=(field_def.name,),
+                        category="schema",
+                        severity="warning",
+                        outcome="not_applicable",
+                        message="Field unavailable in historical Snare representation",
+                    )
+                )
+            else:
+                result.add_error(field_def.name, f"Required field missing{ctx_suffix}")
 
     # Validate present fields
     for field_name, field_value in event_data.items():
@@ -497,6 +510,18 @@ def validate_event(
     invalid_fields = {f.fields[0].split("[", 1)[0] for f in result.findings if f.fields}
     for rule in format_def.validators or []:
         if not include_diagnostics and rule.severity == "warning":
+            continue
+        unavailable = set(rule_fields(rule)) & unavailable_fields - event_data.keys()
+        if unavailable:
+            result.findings.append(
+                Finding(
+                    rule_id=rule.id,
+                    fields=tuple(sorted(unavailable)),
+                    severity="warning",
+                    outcome="not_applicable",
+                    message="Rule requires unavailable historical Snare fields",
+                )
+            )
             continue
         finding = evaluate_rule(rule, event_data, format_def.name, variant_name, invalid_fields)
         result.findings.append(finding)

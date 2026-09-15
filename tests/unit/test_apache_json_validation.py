@@ -114,12 +114,13 @@ def test_apache_json_records_stay_counted(
         assert report["acceptance_passed"] is False
 
 
-def test_snare_projection_gap_remains_visible() -> None:
+def test_historical_snare_unavailable_fields_remain_visible() -> None:
     """Do not silently waive missing XML metadata or invent ambiguous account fields."""
     records = list(
         get_parser("windows_event_security").parse_file(ROOT / "windows_event_security_snare.log")
     )
     assert len(records) == 1
     schema, _ = ParseabilityScorer()._score_both({"windows_event_security": records})
-    assert schema.score == 0
-    assert "Level" in {f.rule_id for f in schema.sample_findings}
+    assert schema.score == 100
+    assert "Level" in {f.rule_id for f in schema.sample_unavailable_findings}
+    assert schema.unavailable_check_count > 0

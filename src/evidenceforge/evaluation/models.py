@@ -27,6 +27,8 @@ class SubScore(BaseModel):
     """True when the score excludes expected observation-profile gaps."""
     details: str = ""
     sample_findings: list[Finding] = Field(default_factory=list)
+    unavailable_check_count: int = 0
+    sample_unavailable_findings: list[Finding] = Field(default_factory=list)
     sample_failures: list[str] = Field(default_factory=list)
     failure_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
     """Aggregated failure counts by format and category.

@@ -180,3 +180,6 @@ def validate_packaged_contracts() -> None:
     from evidenceforge.evaluation.validation_routes import validate_route_inventory
 
     validate_route_inventory()
+    from evidenceforge.formats.snare import load_snare_projections
+
+    load_snare_projections()

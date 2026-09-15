@@ -79,6 +79,8 @@ class ParsedRecord(BaseModel):
     line_number: int | None = None
     source_host: str | None = None
     source_instance: str | None = None
+    representation: str | None = None
+    source_fields: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class LogParser(ABC):
