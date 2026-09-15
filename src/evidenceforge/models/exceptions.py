@@ -191,3 +191,7 @@ class InsufficientDiskSpaceError(GenerationError):
     Raised when the output directory lacks the required disk space
     for the estimated log dataset size.
     """
+
+
+class EvaluationError(EvidenceForgeError):
+    """An evaluation component failed; no completed quality report is available."""

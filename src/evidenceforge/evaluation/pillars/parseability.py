@@ -39,6 +39,7 @@ from evidenceforge.evaluation.dimensions import (
 )
 from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.validation_routes import ARTIFACT_VALIDATORS, get_validation_route
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.rules import Finding
@@ -105,7 +106,8 @@ class ParseabilityScorer(DimensionScorer):
         counts: dict[str, dict[str, dict[str, int]]] = {"schema": {}, "constraint": {}}
         findings: dict[str, list[Finding]] = {"schema": [], "constraint": []}
         for name, items in records.items():
-            definition = _load_format_def(name)
+            route = get_validation_route(name)
+            definition = _load_format_def(route.validator) if route.kind == "native" else None
             for record in items:
                 selected: dict[str, list[Finding]] = {"schema": [], "constraint": []}
                 if record.parse_errors:
@@ -118,7 +120,10 @@ class ParseabilityScorer(DimensionScorer):
                         )
                         for message in record.parse_errors
                     ]
+                elif route.kind == "artifact":
+                    selected["schema"] = ARTIFACT_VALIDATORS[route.validator](record)
                 else:
+                    assert definition is not None
                     variant = _get_variant(name, record)
                     normalized = _normalize_for_validation(name, record.fields, record.timestamp)
                     result = validate_event(

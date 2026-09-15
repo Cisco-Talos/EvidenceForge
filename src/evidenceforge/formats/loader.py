@@ -174,3 +174,6 @@ def validate_packaged_contracts() -> None:
     from evidenceforge.evaluation.thresholds import load_thresholds
 
     load_thresholds()
+    from evidenceforge.evaluation.validation_routes import validate_route_inventory
+
+    validate_route_inventory()

@@ -11,8 +11,9 @@
 
 ## Execution
 
-Local implementation and validation are complete. External CI awaits explicit publication approval.
-No generator correction was made; source-native contract defects were repaired in validation.
+Implementation and the iteration-test follow-up repairs are complete locally. The defects discovered
+by the full iteration run are documented below together with their repairs and passing final gates.
+External CI awaits explicit publication approval. No generator correction or version bump was made.
 
 ## Audit inventory
 
@@ -217,3 +218,133 @@ prepared locally; user approval to push/open the draft is required to run Linux/
   candidate generation after the final rule adjustment matches all 29 baseline artifacts again.
 - Local work is complete. Remote Linux/Windows CI remains blocked solely on explicit approval to
   publish the local feature branch and open a draft PR.
+
+## Full iteration-test follow-up (supersedes the completion statement above)
+
+At the user's request, ran the current `scenarios/iteration-test/scenario.yaml` unchanged against
+baseline `787fd733` and candidate `3c4323fb`, using their isolated locked environments. Both CLI
+commands ran from the same project root, with `--seed 42 --target default`, normal threaded
+rendering, and the default checkpoint cadence. The Scenario 2.0 input uses six hours of collection,
+two hours of warmup, the Meridian Healthcare Solutions organization pack 1.1.0, technology industry
+pack 1.0.0, and the `enterprise_standard` observation profile. Input SHA-256:
+`f397d25ebb47d21ae2232bd3d1022bcedc96eb8d75a58b65fa7db5462c24e9a4`.
+Validation passed; no scenario, configuration, pack, or generator changes were made for this test.
+
+### Generation comparison: PASS
+
+- Both generate commands exited 0. Outputs are retained in
+  `/private/tmp/eforge-rv-iteration-baseline` and `/private/tmp/eforge-rv-iteration-candidate`.
+- Both contain 143 files excluding `generation.log`; no files are missing or extra. All 141 files
+  other than the resolved scenario and generation manifest are raw-byte identical, including native
+  evidence, ground truth, observation/collection/storage sidecars, and payload/email artifacts.
+- Independently verified all 142 file hashes in each generation manifest and each resolved-file
+  hash. Both seeds, targets, selected pack identities/digests, and runtime metadata match.
+- `RESOLVED_SCENARIO.yaml` differs only in package-owned format definitions, migrated co-occurrence
+  rules, exact schema/correctness thresholds, and the three resulting configuration/document digests.
+  Authored scenario, resolved entities, assets, provenance, and other effective configuration match.
+- `GENERATION_MANIFEST.json` differs only in `created_at`, `compiled_sha256`,
+  `resolved_file_sha256`, and `files.RESOLVED_SCENARIO.yaml`.
+- Native data occupies 76,175,193 bytes. Both evaluators account for 123,105 records in 22 source
+  categories, including 25 `email_artifacts` records. This is 21 native log formats plus the artifact
+  category; this run does not contain Zeek NTP, packet_filter, reporter, or weird records.
+- Comparison script and full enumerated metadata differences are retained at
+  `/private/tmp/eforge-rv-iteration-compare.py` and
+  `/private/tmp/eforge-rv-iteration-comparison.json`.
+
+### Evaluation: candidate integration defects found
+
+- Baseline evaluation completes its pillars, overall 96.3267, acceptance FAIL because temporal
+  integrity is 83.3333 against its unchanged 85 minimum. Its legacy record validator additionally
+  reports one eCAR FILE/RENAME false rejection (123,104/123,105 passing).
+- Candidate parseability and plausibility pillars fail with `ConfigurationError: Format definition
+  not found: email_artifacts`. Their new generic format loading mistakenly includes this specialized
+  artifact source. These pillars are unmeasured; no 100% schema/correctness claim is warranted.
+- The existing engine catches those pillar exceptions, continues producing a partial report, and
+  exits 0. Acceptance correctly fails for the unmeasured required gates, but the execution failure
+  is not surfaced as exit 22. This remains a gap in the requested explicit engine-error contract.
+- Both baseline and candidate write validator warnings before the JSON document on stdout; the
+  candidate also writes pillar tracebacks there. Raw stdout is therefore not valid JSON. The prior
+  narrow JSON checks did not cover this richer input. Original stdout/stderr are retained separately;
+  `*-report.json` files extract the report object for diagnosis without rerunning evaluation.
+- Candidate causality and timing match baseline exactly, including the same eight temporal-integrity
+  findings (40/48 expected-visible events correctly timed). Both load the observation manifest and
+  apply identical filtered/dropped/delayed/out-of-window accounting.
+- Do not interpret the candidate's partial overall score (93.5685) as a realism regression: two
+  scoring pillars did not execute. The evidence bytes are identical.
+
+Reports: `/private/tmp/eforge-rv-iteration-{baseline,candidate}-report.json`; original captured output:
+`/private/tmp/eforge-rv-iteration-{baseline,candidate}-eval.json` and corresponding `.err` files.
+Next implementation work must restore specialized email-artifact handling without silently accepting
+missing native schemas, surface pillar execution failures explicitly, and keep JSON stdout clean.
+The full iteration scenario should become a regression gate for these interactions.
+
+
+## Evaluator routing repair
+
+Implemented explicit Pydantic-validated source routes for all 26 parser sources: 25 native schemas
+and the named email-manifest artifact validator. Shared command preflight and evaluation verify
+registry completeness; duplicate parser registration, duplicate/missing/stale routes, unavailable
+schemas, and unknown artifact validators fail explicitly. Inventory tests also reconcile all 25
+native emitter registrations and parse all 29 embedded Jinja template strings.
+
+Email artifacts retain their existing open extension metadata and optional fields. Known scalar and
+recipient-list types are checked; malformed top-level shapes, sections, message entries, and dates
+remain counted failures. Invalid values retain raw evidence but do not reach specialized indexes
+(for example, a list-valued Message-ID cannot crash a dictionary lookup). Complete empty sections
+remain empty inputs. Existing email/SMTP/file consistency checks remain active.
+
+Pillar execution failures now abort evaluation through the existing CLI exit-22 boundary, without
+an incomplete quality report. Completed evaluations with failed acceptance retain exit 0. Logging
+is configured on stderr for each CLI invocation, preserving clean JSON stdout across repeated
+in-process invocations. Normal execution failures have concise diagnostics; verbose mode retains
+explicit traceback access. CLI help, canonical evaluate skill, and shared validation references are
+updated; installed skills were regenerated through `install-skills` (sandbox-authorized write).
+
+Coverage now includes 66 native render/parse/validate cases spanning all native formats and every
+supported Windows/Sysmon variant, with explicit Bash and Snort source-native rendering paths. A
+committed compact email/SMTP/connection fixture verifies normal scoring and cross-source subject
+agreement; corrupt manifest cases verify completed failed acceptance rather than pillar crashes.
+The slow iteration test generates twice in fresh processes, verifies manifest hashes, compares all
+manifest-owned bytes including the resolved scenario, and requires all four pillars to complete
+with exact schema/correctness scores.
+
+Generation behavior revision 91 declares `impact: none` for the expanded preflight/error surface;
+package version remains 2.1.0. Two repaired fresh-process captures match all 141 baseline evidence
+files and the pre-repair candidate, with manifest hashes independently verified. The first final
+revision-91 slow-test capture also matches those 141 frozen-baseline files; metadata changes are
+restricted to the packaged validation/behavior contracts and derived provenance hashes.
+
+The repaired full iteration evaluation parses all 123,105 records and completes every pillar:
+schema and record correctness 100%; plausibility 96.88451591546246; causality 93.9846681096681;
+timing 93.04839206783377. Overall is 96.32697441984939, acceptance FAIL solely for the unchanged
+83.3333 temporal-integrity score against 85. No new evidence violation was found after repairing
+routing. Original output remains unchanged; reports are in `/private/tmp/eforge-routing-final-report.json`
+and corresponding `.err`, with comparison evidence in `/private/tmp/eforge-routing-byte-comparison.json`.
+
+Initial full routine run: 8,940 passed, one skill-word-limit failure, 67 skipped, 2,024 deselected.
+The skill text was shortened and its focused gate passed. Final focused routing/parser cases:
+143 passed; skill/routing gate: 96 passed. Checkpoint resume and behavior gates: 24 passed.
+Final full routine and slow results follow below when complete. Linux/Windows CI remains unrun;
+no branch publication is authorized by this repair request.
+
+
+### Final repair gates
+
+- Full routine suite: **8,946 passed, 67 skipped, 2,024 deselected**, `--no-cov`, 352.20 seconds.
+- Final routing/parser/engine/skill focused gate: **159 passed**, 4.25 seconds.
+- Slow iteration plus determinism gate: **4 passed, 7 deselected**, `--no-cov`, 474.27 seconds.
+  This includes two complete fresh-process iteration generations and a full successful evaluation
+  execution; schema/correctness gates are 100%, while the known temporal gate still fails acceptance.
+- Checkpoint suspension/resume and behavior manifest gate: **24 passed**, 24.80 seconds.
+- Ruff check and format check pass (883 files); `git diff --check` is clean. Behavior revision 91
+  digest: `01d8e495c09bb88c163a1142a30bf272eaf4fba201c29ccb26b3173c61eccbed`.
+- Final revision-91 captures have identical file sets and all 142 manifest-owned files are identical
+  between fresh processes, including `RESOLVED_SCENARIO.yaml`. Against frozen baseline, all 141
+  non-metadata evidence/sidecar/artifact files match. The only changed files are the resolved scenario
+  and generation manifest; resolved changes are exclusively the enumerated package-owned validation
+  documents and derived digests. Comparison details and hashes are retained in
+  `/private/tmp/eforge-routing-final-comparison.json`.
+- Logs: `/private/tmp/eforge-routing-routine-final.log`, `/private/tmp/eforge-routing-final-focused.log`,
+  `/private/tmp/eforge-routing-slow.log`, `/private/tmp/eforge-routing-checkpoint.log`.
+- Immutable baseline checkout remains clean. No generator correction, scenario/pack/overlay edit,
+  package-version bump, push, or PR publication occurred. Linux/Windows CI remains outstanding.

@@ -50,7 +50,11 @@ from evidenceforge.evaluation.pillars import (
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
-from evidenceforge.models.exceptions import EvaluationLimitError
+from evidenceforge.models.exceptions import (
+    EvaluationError,
+    EvaluationLimitError,
+    EvidenceForgeError,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import read_output_target_marker
 
@@ -422,6 +426,10 @@ class EvaluationEngine:
             effective_config=self.effective_config,
         )
 
+        from evidenceforge.evaluation.validation_routes import validate_route_inventory
+
+        validate_route_inventory()
+
         # 2. Run each available pillar scorer
         total_pillars = len(DIMENSION_SCORERS)
         self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_pillars})
@@ -446,15 +454,17 @@ class EvaluationEngine:
                     progress=self._progress,
                 )
                 pillars.append(pillar_score)
-            except Exception:
-                logger.exception(f"Pillar {scorer.number} scoring failed")
-                pillar_score = PillarScore(
-                    number=scorer.number,
-                    name=scorer.name,
-                    weight=scorer.weight,
-                    score=None,
-                )
-                pillars.append(pillar_score)
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                RuntimeError,
+                EvidenceForgeError,
+            ) as exc:
+                raise EvaluationError(
+                    f"Pillar {scorer.number} ({scorer.name}) failed: {exc}"
+                ) from exc
             self._progress(
                 "dimension_done",
                 {

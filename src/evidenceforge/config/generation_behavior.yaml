@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 90
+current_revision: 91
 history_start_revision: 1
-behavior_surface_sha256: 1afd4d21cdb97c9243c6d1db7409f8d669c118bd39831ae1244181138b44633f
+behavior_surface_sha256: 01d8e495c09bb88c163a1142a30bf272eaf4fba201c29ccb26b3173c61eccbed
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -805,3 +805,10 @@ changes:
       - record-validation
     formats: []
     summary: Replace record validation contracts without changing rendered evidence.
+  - revision: 91
+    id: evaluator-source-routing
+    impact: none
+    domains:
+      - validation-preflight
+    formats: []
+    summary: Declares parser validation ownership and explicit evaluation failures without changing rendered evidence.

@@ -227,6 +227,7 @@ class PlausibilityScorer(DimensionScorer):
             _get_variant,
             _normalize_for_validation,
         )
+        from evidenceforge.evaluation.validation_routes import get_validation_route
         from evidenceforge.formats.loader import load_format
         from evidenceforge.formats.rules import evaluate_rule
         from evidenceforge.models.exceptions import ConfigurationError
@@ -235,7 +236,10 @@ class PlausibilityScorer(DimensionScorer):
         passing = 0
         failures: list[str] = []
         for format_name, record_list in records.items():
-            definition = load_format(format_name)
+            route = get_validation_route(format_name)
+            if route.kind == "artifact":
+                continue  # Structural checks run in parseability; email joins run below.
+            definition = load_format(route.validator)
             for record in record_list:
                 if record.parse_errors:
                     continue

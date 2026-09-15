@@ -61,7 +61,8 @@ Treat these exits as distinct outcomes:
 - `0`: parse the JSON report; its acceptance verdict may still be `FAIL` or `INDETERMINATE`.
 - `1`: input/path error or a legacy dataset missing `--scenario`; correct the invocation.
 - `2`: scenario/include, bundle-integrity, or comparison-mismatch error; report it and stop.
-- `22`: evaluation engine or capacity failure; report the diagnostic without inventing scores.
+- `22`: evaluation engine, scoring-pillar, or capacity failure; no completed report is emitted.
+  Diagnostics use stderr; successful JSON stdout contains exactly one report object.
 - `130`: interrupted; report that no completed evaluation is available.
 
 ### Override gates

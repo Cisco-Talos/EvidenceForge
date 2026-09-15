@@ -21,3 +21,21 @@ Rules and thresholds are package-owned developer interfaces. They cannot be over
 YAML, `.eforge/config`, pack catalogs, or environment variables. Supported Scenario 1.0/2.0, overlay
 syntax and merge precedence, pack/release schemas, and project-root resolution are unchanged.
 Do not add a threshold override or weaken a rule to make a dataset pass.
+
+
+## Validation coverage and execution failures
+
+Every parser source has an explicit package-owned validation route. Native log sources require a
+format schema; email artifact manifest entries use structural artifact validation and retain their
+specialized email consistency checks. An unknown source or unavailable native schema is an engine
+error, never an implicitly passing record. Empty email sections and optional metadata remain valid.
+
+A failed scoring pillar stops evaluation with exit 22 and no quality report. Successful JSON mode
+writes one report object to stdout; warnings and progress go to stderr. A completed report may still
+fail acceptance and exit 0. Use `--verbose` for an execution-failure traceback. Do not interpret a
+partial collection of pillar scores as an overall quality result.
+
+Developer coverage checks reconcile all parser routes, native schemas, emitter registrations, and
+rendering paths. Routine tests render, parse, and validate every native format and supported Windows
+variant. The slow iteration-scenario gate checks fresh-process byte equality, bundle integrity,
+complete evaluation, and exact record validation, including email artifacts and observation gaps.

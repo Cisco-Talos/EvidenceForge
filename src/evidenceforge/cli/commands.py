@@ -698,7 +698,8 @@ def setup_logging(verbose: bool = False, debug: bool = False) -> None:
     logging.basicConfig(
         level=level,
         format="%(message)s",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)],
+        handlers=[RichHandler(console=Console(stderr=True), rich_tracebacks=debug)],
+        force=True,
     )
 
 
@@ -2727,7 +2728,9 @@ def eval_cmd(
     - 0: Evaluation completed (check report for pass/fail)
     - 1: Input error (file not found, invalid path)
     - 2: Schema validation error in scenario
-    - 22: Evaluation engine error
+    - 22: Evaluation engine or scoring-pillar error (no report)
+
+    JSON reports use stdout; logging and progress use stderr.
     """
     if output_format not in {"text", "json"}:
         console.print(

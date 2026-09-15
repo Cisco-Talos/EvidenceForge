@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "email": {
+    "messages": [
+      {
+        "message_id": "<validation@example.test>",
+        "subject": "Validation fixture",
+        "to": [
+          "reader@example.test"
+        ],
+        "date": "Mon, 18 Mar 2024 12:00:00 +0000",
+        "artifact_export_status": "metadata_only"
+      }
+    ]
+  }
+}
