@@ -88,6 +88,7 @@ class _WindowsXmlParser(LogParser):
         in_event = False
         event_lines: list[str] = []
         event_bytes = 0
+        wrapper_open = False
 
         for _line_number, line in iter_bounded_text_lines(path):
             if not in_event and EVENT_START_PATTERN.search(line):
@@ -104,9 +105,18 @@ class _WindowsXmlParser(LogParser):
 
             if not in_event:
                 text = line.strip()
-                if text and not re.fullmatch(
-                    r"(?:<\?xml[^>]*\?>|<Events(?:\s[^>]*)?>|</Events>)", text
-                ):
+                if re.fullmatch(r"<Events(?:\s[^>]*)?>", text) and not wrapper_open:
+                    try:
+                        ET.fromstring(text + "</Events>")
+                    except ET.ParseError:
+                        pass  # Report the malformed wrapper below.
+                    else:
+                        wrapper_open = True
+                        continue
+                if text == "</Events>" and wrapper_open:
+                    wrapper_open = False
+                    continue
+                if text and not re.fullmatch(r"(?:<\?xml[^>]*\?>|<Events\s*/>)", text):
                     event_index += 1
                     yield ParsedRecord(
                         source_format=self.format_name,
@@ -134,6 +144,13 @@ class _WindowsXmlParser(LogParser):
                 source_format=self.format_name,
                 raw="".join(event_lines),
                 parse_errors=["Incomplete Windows Event at end of input"],
+                line_number=event_index + 1,
+            )
+        elif wrapper_open:
+            yield ParsedRecord(
+                source_format=self.format_name,
+                raw="<Events>",
+                parse_errors=["Incomplete Windows Events wrapper at end of input"],
                 line_number=event_index + 1,
             )
 

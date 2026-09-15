@@ -431,3 +431,18 @@ def test_windows_protocol_conversion_is_source_specific() -> None:
     assert security._coerce_event_data_field("Protocol", "6") == 6
     with pytest.raises(ValueError, match="Protocol"):
         security._coerce_event_data_field("Protocol", "tcp")
+
+
+@pytest.mark.parametrize("raw", ["<Events>\n", "</Events>\n", "<Events broken>\n</Events>\n"])
+def test_malformed_windows_wrapper_does_not_disappear(tmp_path: Path, raw: str) -> None:
+    path = tmp_path / "windows_event_security.xml"
+    path.write_text(raw)
+    records = list(get_parser("windows_event_security").parse_file(path))
+    assert records
+    assert all(record.parse_errors for record in records)
+
+
+def test_empty_complete_windows_wrapper_has_no_records(tmp_path: Path) -> None:
+    path = tmp_path / "windows_event_security.xml"
+    path.write_text("<Events>\n</Events>\n")
+    assert list(get_parser("windows_event_security").parse_file(path)) == []
