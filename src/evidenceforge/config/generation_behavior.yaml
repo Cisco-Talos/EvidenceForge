@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 91
+current_revision: 92
 history_start_revision: 1
-behavior_surface_sha256: 01d8e495c09bb88c163a1142a30bf272eaf4fba201c29ccb26b3173c61eccbed
+behavior_surface_sha256: 7f12bd02b78cac7e8ccae605df62083bfccca7a2dc0e7b7356dcc484e063e7ff
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -812,3 +812,10 @@ changes:
       - validation-preflight
     formats: []
     summary: Declares parser validation ownership and explicit evaluation failures without changing rendered evidence.
+  - revision: 92
+    id: legacy-validation-snapshot-decoding
+    impact: none
+    domains:
+      - validation-preflight
+    formats: []
+    summary: Decodes recognized legacy validation metadata for compatible checkpoint hydration without changing rendering definitions.

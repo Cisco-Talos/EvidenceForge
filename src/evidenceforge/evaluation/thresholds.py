@@ -90,7 +90,13 @@ class ThresholdDocument(BaseModel):
 def load_thresholds() -> EvalThresholds:
     """Load validated package policy; missing policy is an explicit configuration error."""
     try:
-        document = ThresholdDocument.model_validate(load_rules_file(_FILE))
+        from evidenceforge.config import get_config_directory
+        from evidenceforge.formats.snapshot_compatibility import decode_validation_snapshot
+
+        raw = decode_validation_snapshot(
+            get_config_directory() / "evaluation" / _FILE, load_rules_file(_FILE)
+        )
+        document = ThresholdDocument.model_validate(raw)
     except (ValidationError, OSError, ValueError) as exc:
         raise ConfigurationError(f"Invalid packaged thresholds.yaml: {exc}") from exc
     return EvalThresholds(

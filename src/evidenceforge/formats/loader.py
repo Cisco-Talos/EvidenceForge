@@ -101,6 +101,9 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
     try:
         # Load YAML
         data = load_yaml(format_file)
+        from evidenceforge.formats.snapshot_compatibility import decode_validation_snapshot
+
+        data = decode_validation_snapshot(format_file, data)
 
         # Validate against Pydantic model
         format_def = FormatDefinition(**data)
