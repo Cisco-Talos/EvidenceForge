@@ -11,8 +11,8 @@
 
 ## Execution
 
-Implementation and validation in progress. No generator corrections authorized merely by a new
-validation failure: independently establish the source-native contract first.
+Local implementation and validation are complete. External CI awaits explicit publication approval.
+No generator correction was made; source-native contract defects were repaired in validation.
 
 ## Audit inventory
 
@@ -104,10 +104,9 @@ will be recorded below.
 
 ## Verification status
 
-Focused and full-suite validation is being finalized. Earlier full runs exposed stale behavior
-fingerprints while source files were still being edited, plus skill-size/packaging expectations;
-these are being corrected before the final frozen-tree gate. Do not treat those earlier runs as a
-passing final gate.
+Earlier full runs exposed stale behavior fingerprints while source files were still being edited,
+plus skill-size/packaging expectations. These were corrected. Final passing results are recorded
+below; the earlier failed runs are retained here as execution history.
 
 ## Complete rule inventory
 
@@ -205,3 +204,16 @@ complete empty wrapper remains an empty input. Four regression cases cover this 
 External CI has not run: automatic approval review rejected `git push` because external publication
 was not explicitly authorized. No push occurred. The committed branch and draft-PR description are
 prepared locally; user approval to push/open the draft is required to run Linux/Windows CI.
+
+## Local completion results
+
+- Full macOS routine run: **8,844 passed, 67 skipped, 2,023 deselected**, without coverage
+  (338.69 seconds). The wrapper repair additionally passes its 271-test focused gate.
+- A final HTTP boundary check extends the migrated CONNECT guard from only 200 to every 2xx
+  response. This is required by RFC 9110 section 9.3.6, not a new scenario restriction:
+  https://www.rfc-editor.org/rfc/rfc9110.html#section-9.3.6 . Seven explicit status-boundary tests
+  distinguish successful tunnels from failed CONNECT error responses. This affects evaluation only.
+- Final focused rule/parser/checkpoint/behavior gate: **261 passed** in 23.93 seconds. A fresh
+  candidate generation after the final rule adjustment matches all 29 baseline artifacts again.
+- Local work is complete. Remote Linux/Windows CI remains blocked solely on explicit approval to
+  publish the local feature branch and open a draft PR.

@@ -446,3 +446,14 @@ def test_empty_complete_windows_wrapper_has_no_records(tmp_path: Path) -> None:
     path = tmp_path / "windows_event_security.xml"
     path.write_text("<Events>\n</Events>\n")
     assert list(get_parser("windows_event_security").parse_file(path)) == []
+
+
+@pytest.mark.parametrize("status", [199, 200, 201, 299, 300, 407, 500])
+def test_connect_body_rule_uses_the_entire_successful_status_class(status: int) -> None:
+    rule = load_format("zeek_http").validators[0]
+    fields = {"method": "CONNECT", "status_code": status, "response_body_len": 1}
+    expected = "fail" if 200 <= status <= 299 else "not_applicable"
+    assert evaluate_rule(rule, fields, "zeek_http", None).outcome == expected
+    fields["response_body_len"] = 0
+    expected = "pass" if 200 <= status <= 299 else "not_applicable"
+    assert evaluate_rule(rule, fields, "zeek_http", None).outcome == expected

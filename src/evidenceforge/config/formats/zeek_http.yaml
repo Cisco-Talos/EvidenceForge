@@ -198,10 +198,10 @@ validators:
     field: method
     relation: eq
     value: CONNECT
-  - op: compare
+  - op: bounds
     field: status_code
-    relation: eq
-    value: 200
+    minimum: 200
+    maximum: 299
   checks:
   - op: compare
     field: response_body_len
