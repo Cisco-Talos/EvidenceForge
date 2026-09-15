@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 94
+current_revision: 95
 history_start_revision: 1
-behavior_surface_sha256: d83ed59aab34880fa16d3b32f9ebc169a8e66a0cc8bc94d55915a5f867451ed9
+behavior_surface_sha256: 8257de43a05cc766305c694351e1159864335f1cd577028a556cc6f344b5ed5c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -839,3 +839,13 @@ changes:
       - syslog
       - windows_event_security
     summary: Preserve failed-logon requester identity independently from the authentication target and domain controller.
+  - revision: 95
+    id: canonical-host-text-newlines
+    impact: localized
+    domains:
+      - checkpoint-resume
+      - source-native-projection
+    formats:
+      - proxy_access
+      - web_access
+    summary: Use canonical LF framing for ordinary host text output so Windows checkpoint resume matches uninterrupted generation.

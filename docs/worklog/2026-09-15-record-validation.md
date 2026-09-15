@@ -794,3 +794,16 @@ External ingest reruns:
 
 Remaining evaluator findings (for example the missing cleanup trace and pre-existing timing/pivot
 findings) are unrelated to this correction and were not repaired here. `TODO.md` is unchanged.
+
+## Windows CI checkpoint newline correction
+
+PR #421's first CI run passed lint, Linux routine tests, and Windows checkpoint durability, but the
+Windows routine suite exposed one byte-equivalence failure in the SOF-ELK checkpoint smoke test.
+Uninterrupted `web_access.log` and `proxy_access.log` files used platform-translated CRLF framing,
+while checkpoint external sorting used canonical LF framing. The ordinary per-host text writer now
+opens append output with `newline="\n"`, matching the existing external-sort contract on every
+platform. A unit regression verifies both the explicit newline argument and final sorted bytes.
+Generation behavior revision **95** declares the Windows-only output normalization. Local
+verification passes the focused regression and the SOF-ELK checkpoint suspend/resume smoke test;
+Ruff, behavior-manifest, and whitespace checks also pass. Windows CI remains the authoritative
+cross-platform confirmation before merge.

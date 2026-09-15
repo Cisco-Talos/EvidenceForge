@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import builtins
 import gc
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, sleep
+from typing import Any
 from weakref import ref
 
 import pytest
@@ -23,7 +25,7 @@ from evidenceforge.generation.emitters.base import (
     LogEmitter,
     stage_exact_publication_row,
 )
-from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter, _SingleHostWriter
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -64,6 +66,37 @@ class _TestBaseEmitter(LogEmitter):
 
 def _new_batch() -> ExactPublicationBatch:
     return ExactPublicationAuthority(capacity=1).issue_batch()
+
+
+def test_sorted_host_writer_uses_lf_for_checkpoint_equivalence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary sorted output must match checkpoint external-sort newline bytes."""
+
+    output = tmp_path / "host.log"
+    original_open = builtins.open
+    newline_arguments: list[str | None] = []
+
+    def recording_open(*args: Any, **kwargs: Any) -> Any:
+        if args and Path(args[0]) == output:
+            newline = kwargs.get("newline")
+            assert newline is None or isinstance(newline, str)
+            newline_arguments.append(newline)
+        return original_open(*args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", recording_open)
+    writer = _SingleHostWriter(
+        output,
+        sort_on_flush=True,
+        defer_sorted_flush_until_close=True,
+    )
+    writer.write("second")
+    writer.write("first")
+    writer.close()
+
+    assert newline_arguments == ["\n"]
+    assert output.read_bytes() == b"first\nsecond\n"
 
 
 def _wait_for_pending_exact_registration(emitter: LogEmitter) -> None:
