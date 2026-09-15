@@ -58,13 +58,19 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Reconcile SOF-ELK Snare validation with its native projection before merging record
-  validation: XML-only system metadata is omitted and repeated Security labels lose subject/target
-  scope. Define the projection contract and repair any information loss at its owning layer, with
-  separately justified generator changes. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
-- [ ] **P2** Investigate Splunk iteration indicator matching after native web/proxy JSON parsing
-  (71.92% indicator accuracy), separately from the unchanged 83.33% temporal-integrity failure and
-  the Zeek packet-filter/reporter/weird generation-coverage investigation. See the same worklog.
+- [ ] **P1** Add representation-aware SOF-ELK Snare evaluation: validate the native envelope
+  without requiring XML-only metadata, normalize unambiguous aliases, and preserve repeated
+  Security labels without inventing subject/target scope. Strengthen external-parser assertions
+  beyond ingestion tags to check extracted fields against pinned SOF-ELK behavior. Current upstream
+  has additional extraction limitations; do not assume these require generator changes. See the
+  [validation worklog](docs/worklog/2026-09-15-record-validation.md).
+- [ ] **P1 — deferred** Investigate the existing iteration-scenario temporal-integrity failure
+  (40/48 visible events, 83.33%, below the unchanged 85% gate). Separate expected-time matching,
+  ordering, missing traces, and source-observation timing before assigning fixes to their owning
+  layer. Baseline/candidate evidence bytes match; this predates the validation refactor and is
+  deferred from this branch by user decision. See the same worklog for the eight findings.
+- [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
+  sources separately from their dedicated renderer/parser/validator fixture coverage.
 
 - Prepare the 2.1.0 release from `dev` to `main`, including the version/changelog bump and routine,
   coverage, slow, and checkpoint portability gates. See the

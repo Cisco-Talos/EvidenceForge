@@ -43,6 +43,10 @@ def parse_apache_json(
             if canonical in fields and fields[canonical] != value:
                 errors.append(f"Conflicting JSON field: {canonical}")
             fields[canonical] = value
+        # Apache's dash means no authenticated user, as in the text projections.
+        # Normalize after merging so conflicting aliases still remain parse failures.
+        if fields.get("username") == "-":
+            fields.pop("username")
         ts = document.get("timestamp")
         if not isinstance(ts, str):
             errors.append("Apache JSON timestamp must be an ISO timestamp string")

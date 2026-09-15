@@ -521,3 +521,75 @@ Both baseline runs complete with failed acceptance. Candidate native Splunk pars
 3,058 rejected HTTP records; the small remaining baseline/candidate schema difference is the
 previously documented eCAR rename validation defect. Original baseline target reports are retained
 as `/private/tmp/eforge-gap-{sof-elk,splunk}-baseline-report.json` and included in the evidence summary.
+
+## SOF-ELK parser investigation and Splunk anonymous-user repair
+
+This section supersedes the earlier Splunk indicator investigation and narrows the SOF-ELK
+assessment: missing XML system metadata does **not** establish incorrect Snare rendering.
+
+### Upstream SOF-ELK findings
+
+Inspected the actual preprocessing and extraction configuration at our harness pin
+`517af9445574cc084cd5f4b80539fc244dab82b0` and current upstream main
+`a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b`:
+
+- [1010 preprocessing](https://github.com/philhagen/sof-elk/blob/517af9445574cc084cd5f4b80539fc244dab82b0/configfiles/1010-preprocess-snare.conf)
+  removes MSWinEventLog and converts tabs into CSV separators. Our envelope uses this contract.
+- [6010 extraction at the pin](https://github.com/philhagen/sof-elk/blob/517af9445574cc084cd5f4b80539fc244dab82b0/configfiles/6010-snare.conf)
+  reads Snare criticality, counter, channel, provider, computer, log type and expanded message.
+  It does not require XML Level/ExecutionProcessID/ExecutionThreadID. Criticality and Snare counter
+  are their own fields, not interchangeable XML metadata. Our XML-schema requirement is wrong for
+  this representation; adding invented XML values would also be wrong.
+- SourceIp/DestinationIp map to ECS source.ip/destination.ip. These labels are intentional.
+  SourcePort/DestinationPort have explicit patterns, but the retained 5156 fixture's DestPort does
+  not match DestinationPort. Successful ingestion is therefore weaker than complete extraction.
+- Repeated Security ID, Account Name, Account Domain and Logon ID labels feed generic fields.
+  There is no event-specific subject/target reconstruction in these patterns. Our parser additionally
+  overwrites repeated labels. Preserve the raw ordered occurrences; do not assign scope by guessing.
+- Sysmon UtcTime overrides the syslog timestamp; the local-system timestamp is retained separately.
+  Hex process/logon IDs are converted, hashes are split, and backslashes are normalized to slashes.
+  These are explicit projection semantics to account for in comparison tests.
+- [Current main](https://github.com/philhagen/sof-elk/blob/a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b/configfiles/6010-snare.conf)
+  now distinguishes New Process ID/Creator Process ID and New Process Name/Creator Process Name.
+  Our renderer's generic Process ID/Process Name matches the older pin, so parser-version coverage
+  matters. Both inspected versions retain notes about unhandled Security messages.
+- Our external Snare harness currently checks event ID/provider/channel/computer and ingestion tags;
+  it does not assert full account/process/network extraction. This explains why that gate could pass
+  while internal XML-based evaluation fails. This investigation was source inspection, not a fresh
+  Logstash execution; the sandbox could not access the Docker socket.
+
+Recommended implementation: explicit Snare representation metadata and a typed native-envelope
+contract, event-specific unambiguous alias normalization, ordered repeated-label retention, and
+field-level external-parser assertions against a declared upstream revision. Apply shared rules to
+facts the representation actually carries; report unavailable scope explicitly. Retain full XML
+requirements for XML. Separately demonstrate any rendering incompatibility before authorizing a
+renderer change. No Snare parser/schema/renderer changes were made in this follow-up.
+
+### Splunk fix and evidence
+
+Apache JSON `user: "-"` now means absent authenticated identity, matching the text parsers.
+Normalization happens after alias conflict detection, preserving errors for contradictory
+`user`/`username` values in either order. Real usernames, domain-qualified users, and machine accounts
+are retained; actual wrong usernames still fail indicator checks. Regression coverage includes
+parsing, schema scoring, indicator checks, and CLI accounting/acceptance for conflicting aliases.
+
+Full retained Splunk iteration evaluation completed with exit 0 and one JSON report:
+`/private/tmp/eforge-gap-splunk-normalized-report.json` (stderr in the adjacent `.err` file).
+All 123,105 records remain counted. Schema/correctness remain 100%; indicator accuracy improves
+from 1,063/1,478 (71.9215%) to 1,063/1,080 (98.4259%), matching the default target. The 398 removed
+checks were comparisons against the no-user sentinel. The sole failing acceptance gate is unchanged
+83.3333% temporal integrity versus 85%. No evidence regeneration or generator modification occurred.
+
+### Deferred temporal work
+
+At the user's direction, TODO now tracks temporal integrity as a separate **P1, deferred** item.
+The eight findings are event indices 0 (-152s), 11 (-172s), 24 (-188s), 28 (+198s), 29 (+313s default,
++314s Splunk), 33 (ordering), 42 and 44 (missing traces). Timing tolerance is 120s. These require
+separating matcher expectations from canonical/source-observation timing before prescribing fixes.
+Thresholds and generated evidence remain unchanged. The obsolete Splunk investigation was removed;
+the diagnostic Zeek generation-coverage follow-up remains separately tracked.
+
+Verification for this follow-up: **89 passed** (Apache JSON and native evaluator parsers), 4.46s,
+`--no-cov`; Ruff check/format (892 files), behavior-manifest check, and diff whitespace check pass.
+The earlier full routine/slow results above precede this narrow normalization fix; those suites were
+not rerun. No branch publication or PR was performed.
