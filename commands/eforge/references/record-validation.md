@@ -51,3 +51,17 @@ by later pillars. Those pillar scores describe the usable evidence; they cannot 
 schema acceptance. Cross-field contradictions in otherwise well-typed records remain available to
 specialized evaluators. Missing optional observations and source-native conversions retain their
 existing semantics.
+
+## SOF-ELK® Windows Snare
+
+Snare has an explicit representation contract. Current output preserves available canonical Windows
+fields and compatible SOF-ELK display aliases; XML requirements remain unchanged for XML. A field
+present in raw Snare is not necessarily indexed by SOF-ELK. Historical repeated account labels are
+retained without inventing subject/target scope. Inspect `unavailable_check_count` and
+`sample_unavailable_findings` for historical coverage limits; do not describe those checks as passed.
+Malformed fields and contradictory aliases still fail exact acceptance. Projection definitions,
+like rules and thresholds, are package-owned and are not configuration overlays. Temporal-integrity
+findings remain independent of representation/schema results.
+The frozen upstream parsers do not index zero ports or the preserved ParentImage/CurrentDirectory
+paths; do not infer absence of those facts from missing indexed fields. Supplied Sysmon UtcTime
+remains distinct from TimeCreated and controls the upstream event timestamp.

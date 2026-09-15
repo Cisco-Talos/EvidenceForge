@@ -89,7 +89,40 @@ records with cross-field contradictions still reach specialized evaluators. This
 identities, timestamps, and collections from turning ordinary invalid evidence into engine faults.
 
 Splunk web/proxy JSON is parsed through its supported field aliases before shared validation.
-Malformed native fields and conflicting aliases remain counted failures. SOF-ELK Snare projection
-coverage is still a known gap on this branch: its omitted XML metadata and flattened identity labels
-need an explicit native contract; current schema failures are not waived. See the validation worklog
-for the retained target fixtures and merge-readiness evidence.
+Malformed native fields and conflicting aliases remain counted failures.
+
+## Windows Snare representation
+
+SOF-ELK® Windows output uses a Snare envelope, not XML. The parser explicitly records the
+representation and validates the envelope independently; XML retains its full structure requirements.
+Package-owned event-specific projections preserve canonical fields and select coherent display
+aliases for downstream extraction. Scoped logon IDs use `Canonical[SubjectLogonId]` and
+`Canonical[TargetLogonId]` labels (also `Canonical[TargetLinkedLogonId]`) to avoid SOF-ELK's
+unanchored generic LogonId pattern. Hex process
+IDs retain their original canonical values alongside decimal views where downstream parsing needs
+one. Execution PID fallback is explicitly sourced from ExecutionProcessID and never fabricated.
+
+Current projections carry `ProjectionVersion: 1`, precise TimeCreated, Level, execution IDs and the
+Windows EventRecordID. Snare criticality and counter remain distinct source-native concepts.
+Private generation bookkeeping is excluded. String values retain native whitespace/delimiter
+sanitization. Raw preservation does not imply SOF-ELK indexes every field.
+Supplied Sysmon UtcTime is retained independently of TimeCreated; only an absent UtcTime uses the
+existing system-time fallback. SOF-ELK uses UtcTime for its event timestamp. Zero-valued ports remain
+in the raw record, although upstream positive-integer patterns do not extract them.
+Both frozen revisions also normalize backslashes before applying backslash-dependent ParentImage
+and CurrentDirectory patterns. These fields remain raw-only; field-preservation tests explicitly
+check this limitation. RuleName becomes an upstream array, and domain/user patterns require a
+qualified identity. Do not assume raw-only fields are searchable as structured fields.
+
+Historical generated Snare remains supported. Ordered repeated labels are retained without
+last-value-wins identity reconstruction. Missing unrepresentable XML/scoped fields produce explicit
+not-applicable findings; malformed values and contradictions still fail. Parseability reports
+`unavailable_check_count` and bounded `sample_unavailable_findings`. These indicate coverage limits,
+not proof that unavailable facts were correct. Current projections must provide required metadata.
+
+External compatibility is tested against revisions `517af9445574cc084cd5f4b80539fc244dab82b0` and
+`a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b`, checking extracted values as well as ingestion. The harness
+uses uncompressed staged files and path identity for small fixtures; it removes upstream gzip auto
+detection from this transport adapter. Upstream Logstash filters remain unchanged. The existing
+optional-enrichment tag policy remains in force, with no new exemptions. See the branch worklog and
+field inventory for source/version-specific extraction limitations and executed gate results.

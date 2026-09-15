@@ -58,12 +58,13 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Add representation-aware SOF-ELK Snare evaluation: validate the native envelope
-  without requiring XML-only metadata, normalize unambiguous aliases, and preserve repeated
-  Security labels without inventing subject/target scope. Strengthen external-parser assertions
-  beyond ingestion tags to check extracted fields against pinned SOF-ELK behavior. Current upstream
-  has additional extraction limitations; do not assume these require generator changes. See the
-  [validation worklog](docs/worklog/2026-09-15-record-validation.md).
+- [x] **P1** Preserve Windows facts in Snare and validate its native representation. All 43 variants
+  have typed projections and field-level gates against both frozen SOF-ELK revisions; historical
+  ambiguity remains explicit. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
+- [ ] **P2** Follow up upstream Snare extraction limitations: ParentImage/CurrentDirectory patterns
+  require backslashes after the pipeline replaces them, and POSINT patterns omit zero ports.
+  EvidenceForge preserves these raw values; structured indexing needs upstream parser work and
+  renewed compatibility gates. No upstream changes are part of this branch.
 - [ ] **P1 — deferred** Investigate the existing iteration-scenario temporal-integrity failure
   (40/48 visible events, 83.33%, below the unchanged 85% gate). Separate expected-time matching,
   ordering, missing traces, and source-observation timing before assigning fixes to their owning

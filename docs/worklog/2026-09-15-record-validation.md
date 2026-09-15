@@ -593,3 +593,158 @@ Verification for this follow-up: **89 passed** (Apache JSON and native evaluator
 `--no-cov`; Ruff check/format (892 files), behavior-manifest check, and diff whitespace check pass.
 The earlier full routine/slow results above precede this narrow normalization fix; those suites were
 not rerun. No branch publication or PR was performed.
+
+## Snare data preservation and representation-aware validation
+
+This implementation supersedes the Snare investigation and pending recommendation above. Work
+continues locally on `codex/record-validation`; the pre-Snare comparison commit is `2c899b06`.
+Original baseline `787fd733` and its isolated environment remain untouched. Package version remains
+2.1.0. No branch publication or PR is authorized or performed.
+
+### Contracts and field dispositions
+
+The companion `2026-09-15-snare-field-inventory.json` inventories all **43 variants / 826 declared
+field slots**, including optional fields. Each slot names its canonical field, previous disposition,
+current labels, upstream extraction destinations and committed fixture witness. Optional fixture
+values are synthetic contract witnesses, not facts added to generated events. The 43 minimal native
+fixtures remain covered alongside the expanded optional-field fixtures.
+
+- Typed, exhaustive, package-owned YAML projections replace the global Security label mapping.
+  Generic account labels consistently select one event-appropriate identity; scoped subject and
+  target values remain independently available. New/creator process aliases use their actual owners.
+- `DestPort` now supplies the supported `DestinationPort` alias. Hex ProcessId values retain their
+  canonical spelling and provide a decimal view where required by upstream patterns.
+- Level, execution IDs, precise TimeCreated, Windows EventRecordID, zero and empty string values are
+  retained when supplied. Private bookkeeping and absent values are not emitted. Envelope position,
+  timestamp convention, and existing whitespace/tab/newline/double-pipe sanitization remain stable.
+- Subject/target/linked logon IDs use protected `Canonical[...]` labels: the upstream `LogonId:`
+  pattern is unanchored and otherwise captures scoped names. The selected `Logon ID` display alias
+  remains available for generic Security extraction. These are distinct downstream field names.
+- Current upstream requires an execution-PID fallback for events without an actor/new-process PID.
+  It comes only from supplied ExecutionProcessID, and internal normalization preserves that owner.
+  A trailing projection marker prevents whitespace trimming from hiding the final real field from
+  upstream patterns requiring two spaces after a value.
+- Supplied Sysmon UtcTime is no longer overwritten with TimeCreated. XML truth comparison exposed
+  **9,011 affected Sysmon rows** in the iteration scenario. Missing UtcTime retains the existing
+  fallback; no canonical event time is generated or moved by this renderer repair.
+
+The parser distinguishes XML and Snare explicitly. Snare validates its own typed envelope and
+projection; criticality/counter do not masquerade as Windows Level/EventRecordID. Ordered repeated
+labels survive parsing. Historical unscoped identities are not guessed; missing unavailable facts
+produce structured not-applicable findings with counts and bounded examples. Current projections
+must supply their required facts. Conflicting aliases, malformed numeric fields, invalid timestamps,
+and missing required fields remain counted failures through CLI acceptance. Engine-error versus
+ordinary FAIL exit semantics are unchanged.
+
+### External compatibility
+
+Actual Docker/Filebeat/Logstash pipelines are exercised at both frozen revisions:
+
+- `517af9445574cc084cd5f4b80539fc244dab82b0` (existing harness pin).
+- `a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b` (frozen current upstream).
+
+The harness's existing small-file path-identity adapter removes upstream compression auto-detection
+for uncompressed staged fixtures; Filebeat otherwise refuses that combination. Upstream Logstash
+filters are unmodified. The existing optional-enrichment `_grokparsefail_6010-01` policy remains;
+no new tag exemption was added. Current upstream `_grokparsefail_6010-02` was repaired by the truthful
+execution-PID fallback, not waived.
+
+Fixtures include distinct subject/target users, child/creator processes, hexadecimal IDs, all optional
+fields, IPv6, zero ports, Unicode paths, and command-line punctuation. Assertions cover record counts,
+existing tag policy, values and types, identity/process/network ownership, Sysmon event time and
+optional metadata. Raw preservation does not imply indexed fields: both revisions omit zero ports
+under POSINT patterns and do not extract many canonical system/scoped fields. Those values remain
+in the raw record. Native whitespace sanitization is not byte-for-byte preservation of pre-render
+strings. No upstream parser modification is required for these dispositions.
+
+### Verification and reproducibility
+
+Final execution results and generation evidence are recorded below for the frozen-source runs.
+The external suite is opt-in; a skipped run is not a passing external gate:
+
+```sh
+uv run --no-sync pytest tests/external_parser/test_snare_projection_matrix.py \
+  -m external_parser --include-external-parsers --no-cov
+uv run --no-sync pytest tests/unit/test_snare_projection.py --no-cov
+uv run --no-sync pytest tests/integration/test_iteration_validation.py -m slow -k sof-elk --no-cov
+uv run --no-sync pytest tests/integration/test_checkpoint_smoke.py --no-cov
+uv run --no-sync pytest --no-cov
+uv run --no-sync python scripts/check_generation_behavior.py --base-ref 2c899b06
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+```
+
+The Snare projection loader is registered with the existing trusted derived-cache contract; otherwise
+checkpoint generation correctly rejected the unknown cached loader. The macOS mixed-format
+checkpoint test also exposed a tool-owned `/var` versus `/private/var` temporary-path alias: checkpoint
+verification now resolves that scratch root before Snort hydration, preserving ancestry enforcement.
+Generation behavior revision **93** declares localized Windows source-native projection changes.
+
+Canonical evaluation references and documentation describe historical ambiguity, unavailable checks,
+raw versus indexed fields, and source-specific metadata. Installed Codex skills are regenerated only
+through `eforge install-skills --agent codex`. Temporal-integrity repair remains separately deferred
+P1; diagnostic Zeek generation coverage remains a separate P2 investigation. Linux/Windows CI and
+independent review remain publication-dependent merge gates.
+
+### Final local evidence
+
+- **Routine:** 11,608 passed, 70 skipped, 2,026 deselected, 437.95s, `--no-cov`.
+  Log: `/private/tmp/eforge-snare-routine-delivery.log`. The later fixture-only refinements are also
+  covered by 226 focused native/installer/behavior checks (4.40s).
+- **Iteration slow:** 1 passed (SOF-ELK target), 386.44s; generates twice in fresh processes, verifies
+  every manifest hash, compares all covered bytes, and completes all four evaluation pillars.
+  Log: `/private/tmp/eforge-snare-complete.log`; outputs are under
+  `/private/tmp/eforge-snare-complete/test_iteration_fresh_process_b0/{first,second}`.
+- **Checkpoint:** default and mixed Windows/Linux SOF-ELK suspend/verify/resume match uninterrupted
+  controls; 25 checkpoint/behavior tests passed in 60.18s. The original-baseline compatibility slow
+  test also passed (1 test, 51.37s). Snare's localized behavior change is declared, not misrepresented
+  as guaranteed equivalence with old rendering.
+- **Candidate evaluation:** `/private/tmp/eforge-snare-delivery-report.json` is one complete JSON
+  object, exit 0; stderr is separate. All 123,105 records are counted. Spec Conformance and Format
+  Constraints are 100%. Temporal integrity remains 83.3333% versus 85%, the sole failed gate.
+- **Byte comparison:** `2026-09-15-snare-generation-evidence.json` records hashes and per-variant label
+  differences. Both runs contain 142 covered files. Twenty Snare files and RESOLVED_SCENARIO.yaml
+  differ from the retained pre-change target bundle; the other 121 are byte-identical. Resolved
+  differences are the added packaged projection YAML and associated configuration digests.
+- **XML truth comparison:** `2026-09-15-snare-xml-truth-evidence.json` matches all 18,718 Security and
+  11,517 Sysmon records by host/EventID/EventRecordID. UtcTime now agrees for every Sysmon row.
+  Remaining differences are timestamp spelling, XML template defaults absent from canonical event
+  input, preserved native whitespace sanitation, and RestrictedSidCount string-to-integer typing.
+  No generated facts were invented to imitate XML template placeholders.
+- **External optional-field results:** both frozen revisions pass 45-record pipelines, including all
+  optional field witnesses (97.23s). The stronger assertions exposed upstream RuleName array typing,
+  qualified-name requirements, and raw-only ParentImage/CurrentDirectory. Both revisions replace
+  backslashes before the latter fields' backslash-dependent patterns; actual rows confirm absent
+  destinations with intact raw fields and unchanged unrelated extraction. These are documented
+  unsupported extraction paths, not claimed successful indexing. No unsafe alternative labels or
+  upstream filter edits are introduced.
+- Ruff check, Ruff format (895 files), behavior revision/digest against `2c899b06`, and diff whitespace
+  checks pass. Canonical references were regenerated with the installer; the reference/link tests
+  pass. External skipped runs are excluded from pass evidence.
+
+| Requirement | Status | Evidence |
+|---|---|---|
+| Every variant/field disposition | Passed | 43 variants, 826 slots, full/minimal committed fixtures and inventory |
+| Typed projections and native/legacy normalization | Passed | Native tests, CLI corruption accounting, unavailable findings |
+| Both actual external parsers | Passed | Opt-in 45-record pipelines at both frozen revisions |
+| Optional-field interference / extraction | Passed with explicit raw-only limitations | Assertions and upstream pattern dispositions above |
+| Full iteration byte equality and hashes | Passed | Generation evidence JSON; 121 unaffected files identical |
+| Fresh-process and checkpoint determinism | Passed | Slow iteration and mixed-target checkpoint controls |
+| Full evaluation | Completed FAIL | Schema/correctness 100%; unchanged temporal P1 failure |
+| Routine / Ruff / behavior / skills | Passed | Logs and commands above |
+| Linux/Windows CI and independent review | Externally pending | No publication authorized |
+| Temporal repair and diagnostic Zeek generation coverage | Deferred | Existing separate P1/P2 roadmap items |
+
+The final external gate adds actual tab/newline/double-pipe command-line input to the Unicode
+witness: **2 passed, 96.64s**, 45 records per frozen revision. Log:
+`/private/tmp/eforge-snare-external-accepted.log`; extracted JSON and staged inputs are retained under
+`/private/tmp/eforge-snare-external-accepted/test_all_snare_variants_extrac{0,1}/runtime/`.
+This supersedes the earlier external runs. The only remaining upstream extraction limitations are
+explicit raw-only dispositions, not missing event facts or waived ingestion failures. TODO records
+the upstream pattern follow-up separately; the Snare preservation/evaluation task is locally complete.
+Rendering/projection and evaluator integration share one implementation commit because the shared
+contract is required by both; expanded external verification and documentation are committed separately.
+
+Local implementation commits: `1e91cf1b` (projection/validation), `2526cda3` (checkpoint scratch path),
+`7b2ea369` (external and generation gates). Final native/installer/documentation checks: **205 passed,
+3.97s**. Installed skills were regenerated after the final canonical-reference update.

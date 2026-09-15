@@ -32,5 +32,10 @@ No essential decoder test requires a local historical checkout or sample directo
 
 `targets/` holds compact Splunk web/proxy JSON examples and a SOF-ELK Snare projection witness from
 the iteration scenario. The Splunk fixtures exercise aliases, malformed types/shapes, and conflicts
-through the complete CLI. The Snare witness deliberately retains its known projection-contract
-failure; the test must not make missing XML metadata or ambiguous identity labels silently valid.
+through the complete CLI. The historical Snare witness retains ambiguous identity labels and omitted
+XML metadata; tests require explicit unavailable-check findings rather than invented values.
+
+`snare_full_variants.json` adds synthetic optional-field witnesses for all 43 variants and all 826
+declared field slots. These are test values, not new generator defaults. Internal tests compare
+canonical fields after rendering/parsing; external tests verify downstream extraction against both
+frozen parser revisions. `targets/snare_v1/` contains compact generated projection-version-1 rows.

@@ -1,0 +1,952 @@
+{
+  "pre_snare_commit": "2c899b06",
+  "baseline_root": "/private/tmp/eforge-gap-sof-elk-candidate",
+  "candidate_roots": [
+    "/private/tmp/eforge-snare-complete/test_iteration_fresh_process_b0/first",
+    "/private/tmp/eforge-snare-complete/test_iteration_fresh_process_b0/second"
+  ],
+  "baseline_files": 142,
+  "candidate_files": 142,
+  "fresh_process_bytes_equal": true,
+  "manifest_hashes_verified": true,
+  "changed_files": [
+    "RESOLVED_SCENARIO.yaml",
+    "data/DC-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/DC-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/DC-02.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/DC-02.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_sysmon_snare.log",
+    "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_security_snare.log",
+    "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log"
+  ],
+  "unchanged_files": 121,
+  "hashes": {
+    "RESOLVED_SCENARIO.yaml": {
+      "before": "811147ecedf978c2334c110fd3e98e9dcea21c9a866106b8fb52ed892c56aeb0",
+      "after": "c48421d0155199b6e608dda65e127d1244ae7c98f6e86215ea39e8aeeba94f2e"
+    },
+    "data/DC-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "f05c7e12d513617a4011a47dac5793ec16c888e7ec692238039d361eef2e8594",
+      "after": "cbe781f5cf8a402de3a68019173654f15151d94981438f3d0dc624e34ab3db92"
+    },
+    "data/DC-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "f18d6452f80b44b9371985451ec765806ae02fc7afb72e612663b78e9646a689",
+      "after": "d4dcc5d7da345f10c70eb816831fe93479c87298499e5d35fe9afbe2ce7acad7"
+    },
+    "data/DC-02.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "44ecc608434196a25268d55dc519f9584350542bf9ce37e6b72d731794675194",
+      "after": "082c5fe4786ac0084e548675ecb109179ff5f88ac8326d9a0e6c710fc515e8aa"
+    },
+    "data/DC-02.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "6c08e6fc862710901fad5adf5bd822b830d096404ff14cba617e277654c5bbcb",
+      "after": "36d2b7b2c60e313e523a0b6014bea8432c9e01e60dd8b67b9564d6a7cdc530db"
+    },
+    "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "53faaa37cb38dc8ed953737e076e652ce185dcaee9ff5c08b35e2f38f64d502b",
+      "after": "6f4894d0d8320d1ada88f7824d31eb649ee63b6341c5a407ba5a0c6b7306dfb2"
+    },
+    "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "c936c74efc84ccf62fb0d27b51c85f99ef984452176192e5828a81437942b9e8",
+      "after": "0bc4f1fbd2add2a6c13b1f14be3d64c7542a78816650436a8bfac4e6a2526ed0"
+    },
+    "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "524488bfcf21e85e465a4a2bce701ecd3767ddb8758088c7d8f0143458204e4b",
+      "after": "71a6f81d377c0e910b9508c5d16dae24b6dccbc226028299f71accb21dc39971"
+    },
+    "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "5c6b80fab7747111b84ccb14c32b8c807787dd7dd2515822ba3457d30dca5c47",
+      "after": "4435367ec7c58e2c5a3f96fa637a8b4e4c42c928b504fa73f9c1045c90115ce9"
+    },
+    "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "fee56aa5e8da65648beb8c7d1f088b10dae5663011b850365a6d5ff6cb560d39",
+      "after": "73d0fab1237f908d418062e380be626cacd800c014fe22b3dc3584eb73e0e658"
+    },
+    "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "45f1fded6b9e53a68e994362aadb6b368e861738b4ac47037103c69347ac624b",
+      "after": "8d8d568a4123147531055a0ae6f4c3a301100487cd741a150df4e7539d0a9e43"
+    },
+    "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "aa3b47d90ab3aec8d5f0ac7b064c97255aa97e75a977daae9340fec0dd9dcdd8",
+      "after": "fce645310e30290747be6ad8207eebe0900d584289a33da932d2830863da5c52"
+    },
+    "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "1d8d768328b6c3ee8cc5d6493c3a3f6f68f04b037ab41ce540465bf332532ea4",
+      "after": "628c9414d81057677f4d414686cdddd62bcd86fa17a7f3148c9db764e2743056"
+    },
+    "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "b18a609a6787f51d22494bdd20d1424addbfefc27a4b6c35663bd6125f2cb66a",
+      "after": "a6fbe1bf2b99d1a7b1edca628bc4dee54a7ab631f6a23b6e2f6ef0eabc998946"
+    },
+    "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "b5c15fc4063e353b80303219dd2b75123f19b9e1d8f339c89db88e4d0d1397f0",
+      "after": "a55c4fa22ce6e80c0ba873f572f822a8f1e7bf1b9985a362c611a2ba2399ef6e"
+    },
+    "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "9cb9736b07e7f4ad4558c07220a7140def5883199937f1d93c4f4f36eb5d3a1d",
+      "after": "e432d59dcf54649811393311c579617c543861ec115f1edd3d8d113aa2605c80"
+    },
+    "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "c399e8d0b05254c45eb778af538d950c68dae22b8d903685da63ffff33f89df2",
+      "after": "21ea645d761c1538075d6a87f8d5c18e066eddc527c02679aac135404ba442a5"
+    },
+    "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "e3bf896fa53297c6c2c0e0b3f7b56fc923349a70a2fead28ea95e81d1d1f8fdd",
+      "after": "1746660c283dcd7282354ddb200c9fd1a7289a616b332b8c3d7e9754ee4b7d56"
+    },
+    "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "3fe36cedad8d86eb1cb104b7c363246b05eb3368ed63503a9588402cd8f98fe2",
+      "after": "bda07dcf6f421291137ea155f531ab9a3b26826a5d19313bb092d20fedc9e5a4"
+    },
+    "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_security_snare.log": {
+      "before": "8e3d57599fba2215226a5dc6778d6f714645dde1b336de6c2d1d0bd4856c1385",
+      "after": "f1dc504b6f5a4354f20db576c85d009d8ccb1d646f5e2510326bdf6bd0fdb6b0"
+    },
+    "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": {
+      "before": "d6fbff5c3b73079028caad07e6bccfd636c633475875c6ab96301a2b3b55481f",
+      "after": "6f8e0802b5fba3b9a5ae1bdc373b1cc45ae1d22f9c50d762c7f72f19d8bebb11"
+    }
+  },
+  "variant_differences": {
+    "windows_event_security:5156": {
+      "records": 12026,
+      "changed_records": 12026,
+      "added_labels": [
+        "DestAddress",
+        "DestinationPort",
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceAddress",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4769": {
+      "records": 2103,
+      "changed_records": 2103,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "Status",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Exit_Status",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4689": {
+      "records": 826,
+      "changed_records": 826,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "Status",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4624": {
+      "records": 810,
+      "changed_records": 810,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetLogonId",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_Name",
+        "_auth_occurrence_id",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4672": {
+      "records": 415,
+      "changed_records": 415,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_auth_occurrence_id",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4688": {
+      "records": 957,
+      "changed_records": 957,
+      "added_labels": [
+        "Creator_Process_ID",
+        "Creator_Process_Name",
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "NewProcessId",
+        "NewProcessName",
+        "New_Process_ID",
+        "New_Process_Name",
+        "ProcessId",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetLogonId",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_ID",
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:5140": {
+      "records": 92,
+      "changed_records": 92,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4634": {
+      "records": 392,
+      "changed_records": 392,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TargetDomainName",
+        "TargetLogonId",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4768": {
+      "records": 798,
+      "changed_records": 798,
+      "added_labels": [
+        "CertIssuerName",
+        "CertSerialNumber",
+        "CertThumbprint",
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "Status",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Exit_Status",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4776": {
+      "records": 59,
+      "changed_records": 59,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "Status",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Exit_Status",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4648": {
+      "records": 16,
+      "changed_records": 16,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Process_Name",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4779": {
+      "records": 21,
+      "changed_records": 21,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4771": {
+      "records": 4,
+      "changed_records": 4,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "Status",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Exit_Status",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4697": {
+      "records": 3,
+      "changed_records": 3,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4720": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4724": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4738": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4728": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4698": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:1102": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4726": {
+      "records": 1,
+      "changed_records": 1,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Logon_ID",
+        "Security_ID",
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:3": {
+      "records": 7567,
+      "changed_records": 7567,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:5": {
+      "records": 834,
+      "changed_records": 834,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:10": {
+      "records": 725,
+      "changed_records": 725,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:1": {
+      "records": 952,
+      "changed_records": 952,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:22": {
+      "records": 1134,
+      "changed_records": 1134,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:7": {
+      "records": 122,
+      "changed_records": 122,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:8": {
+      "records": 12,
+      "changed_records": 12,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:11": {
+      "records": 29,
+      "changed_records": 29,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_sysmon:13": {
+      "records": 142,
+      "changed_records": 142,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:5145": {
+      "records": 55,
+      "changed_records": 55,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4656": {
+      "records": 36,
+      "changed_records": 36,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4663": {
+      "records": 31,
+      "changed_records": 31,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4658": {
+      "records": 36,
+      "changed_records": 36,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4625": {
+      "records": 23,
+      "changed_records": 23,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Image",
+        "Level",
+        "ProcessId",
+        "ProcessName",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "SourceIp",
+        "SourcePort",
+        "Status",
+        "SubjectDomainName",
+        "SubjectLogonId",
+        "SubjectUserName",
+        "SubjectUserSid",
+        "TargetDomainName",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "Exit_Status",
+        "Logon_ID",
+        "Process_Name",
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4801": {
+      "records": 4,
+      "changed_records": 4,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TargetDomainName",
+        "TargetLogonId",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    },
+    "windows_event_security:4800": {
+      "records": 4,
+      "changed_records": 4,
+      "added_labels": [
+        "EventRecordID",
+        "ExecutionProcessID",
+        "ExecutionThreadID",
+        "Level",
+        "Process_ID",
+        "ProjectionEnd",
+        "ProjectionVersion",
+        "TargetDomainName",
+        "TargetLogonId",
+        "TargetUserName",
+        "TargetUserSid",
+        "TimeCreated"
+      ],
+      "removed_labels": [
+        "_host_type"
+      ]
+    }
+  },
+  "resolved_difference": "Added package-owned Snare projection YAML and corresponding compiled/effective configuration digests; scenario intent unchanged."
+}

@@ -1,0 +1,55 @@
+{
+  "baseline_root": "/private/tmp/eforge-rv-iteration-baseline",
+  "candidate_root": "/private/tmp/eforge-snare-complete/test_iteration_fresh_process_b0/first",
+  "comparison": {
+    "windows_event_security": {
+      "original_records": 18718,
+      "matched": 18718,
+      "missing": 0,
+      "field_differences": {
+        "TimeCreated": 18718,
+        "TransmittedServices": 2713,
+        "ImpersonationLevel": 587,
+        "RestrictedAdminMode": 587,
+        "TargetLinkedLogonId": 587,
+        "PrivilegeList": 417,
+        "LogonGuid": 2103,
+        "CertIssuerName": 4,
+        "CertSerialNumber": 4,
+        "CertThumbprint": 4,
+        "DisplayName": 2,
+        "UserPrincipalName": 2,
+        "HomeDirectory": 2,
+        "HomePath": 2,
+        "ScriptPath": 2,
+        "ProfilePath": 2,
+        "UserWorkstations": 2,
+        "AccountExpires": 2,
+        "AllowedToDelegateTo": 2,
+        "UserAccountControl": 2,
+        "UserParameters": 2,
+        "SidHistory": 2,
+        "LogonHours": 2,
+        "TaskContent": 1,
+        "AccessList": 91,
+        "RestrictedSidCount": 36
+      }
+    },
+    "windows_event_sysmon": {
+      "original_records": 11517,
+      "matched": 11517,
+      "missing": 0,
+      "field_differences": {
+        "TimeCreated": 11517,
+        "RuleName": 11517
+      }
+    }
+  },
+  "dispositions": {
+    "TimeCreated": "Same instant; XML has seven fractional digits with Z versus parsed ISO precision/offset spelling",
+    "missing_optional_fields": "XML templates supply defaults/empty placeholders not present in canonical event data; do not invent those facts in Snare",
+    "PrivilegeList_UserAccountControl_AccessList_TaskContent": "Existing Snare whitespace sanitation",
+    "RestrictedSidCount": "XML string versus typed Snare integer",
+    "UtcTime": "9011 old Snare overwrites repaired; no remaining XML/Snare UtcTime differences"
+  }
+}
