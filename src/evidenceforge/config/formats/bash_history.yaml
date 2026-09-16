@@ -39,3 +39,23 @@ output:
   template: |
     #{{ timestamp.timestamp() | int }}
     {{ command }}
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: bash_history.legacy-1
+  message: Command is non-empty
+  severity: error
+  when: []
+  checks:
+  - op: length
+    field: command
+    minimum: 1
+- id: bash_history.legacy-2
+  message: Has username
+  severity: error
+  when: []
+  checks:
+  - op: compare
+    field: username
+    relation: ne
+    value: ''

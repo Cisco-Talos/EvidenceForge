@@ -1,0 +1,1339 @@
+{
+  "baseline": "787fd733",
+  "fix_commits": [
+    "9c89e83d",
+    "cd6463f7",
+    "68cd5dd8"
+  ],
+  "platform": "macOS arm64 Python 3.12.9",
+  "package_version": "2.1.0",
+  "generator_changes": false,
+  "scenario_sha256": "f397d25ebb47d21ae2232bd3d1022bcedc96eb8d75a58b65fa7db5462c24e9a4",
+  "cli": {
+    "entries": {
+      "a-v1-cwd-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v1-cwd-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v1-cwd-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v1-explicit-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v1-explicit-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v1-explicit-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v1-no_ancestor-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v1-no_ancestor-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v1-no_ancestor-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v1-resolved-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v2-cwd-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v2-cwd-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v2-cwd-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v2-explicit-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v2-explicit-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v2-explicit-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v2-no_ancestor-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-v2-no_ancestor-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "a-v2-no_ancestor-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "a-v2-resolved-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "a-config": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "a-config-explicit": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "a-config-no-ancestor": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "b-v1-cwd-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-v1-cwd-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v1-cwd-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v1-explicit-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-v1-explicit-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v1-explicit-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v1-no_ancestor-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": [
+          ""
+        ]
+      },
+      "b-v1-no_ancestor-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v1-no_ancestor-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v1-resolved-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-v2-cwd-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-v2-cwd-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v2-cwd-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v2-explicit-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": [
+          ""
+        ]
+      },
+      "b-v2-explicit-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v2-explicit-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v2-no_ancestor-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-v2-no_ancestor-resolve": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/compiled_sha256"
+        ]
+      },
+      "b-v2-no_ancestor-compiled": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": "same enumerated package contract differences"
+      },
+      "b-v2-resolved-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": []
+      },
+      "b-config": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "b-config-explicit": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "b-config-no-ancestor": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "a-config-repeat": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "pack-validate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "pack-build": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "pack-inspect": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "pack-import": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "pack-hydrate": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      },
+      "legacy-eval-text": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "stdout",
+        "differences": [
+          ""
+        ]
+      },
+      "legacy-eval-json": {
+        "exit": 0,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": [
+          "/acceptance_criteria/0/aspirational",
+          "/acceptance_criteria/0/threshold",
+          "/acceptance_criteria/1/aspirational",
+          "/acceptance_criteria/1/threshold",
+          "/evaluated_at",
+          "/pillars/0/sub_scores/0/details",
+          "/pillars/0/sub_scores/0/sample_findings",
+          "/pillars/0/sub_scores/1/details",
+          "/pillars/0/sub_scores/1/sample_findings",
+          "/pillars/1/sub_scores/0/sample_findings",
+          "/pillars/1/sub_scores/1/details",
+          "/pillars/1/sub_scores/1/sample_findings",
+          "/pillars/1/sub_scores/2/sample_findings",
+          "/pillars/1/sub_scores/3/sample_findings",
+          "/pillars/1/sub_scores/4/sample_findings",
+          "/pillars/1/sub_scores/5/sample_findings",
+          "/pillars/1/sub_scores/6/sample_findings",
+          "/pillars/2/sub_scores/0/sample_findings",
+          "/pillars/2/sub_scores/1/sample_findings",
+          "/pillars/2/sub_scores/2/sample_findings",
+          "/pillars/2/sub_scores/3/sample_findings",
+          "/pillars/2/sub_scores/4/sample_findings",
+          "/pillars/2/sub_scores/5/sample_findings",
+          "/pillars/2/sub_scores/6/sample_findings",
+          "/pillars/2/sub_scores/7/sample_findings",
+          "/pillars/3/sub_scores/0/sample_findings",
+          "/pillars/3/sub_scores/1/sample_findings",
+          "/pillars/3/sub_scores/2/sample_findings",
+          "/pillars/3/sub_scores/3/sample_findings",
+          "/pillars/3/sub_scores/4/sample_findings",
+          "/pillars/3/sub_scores/5/sample_findings"
+        ]
+      },
+      "installed-locks": {
+        "exit": null,
+        "exit_equal": true,
+        "comparison": "payload",
+        "differences": []
+      }
+    },
+    "compiled_difference_paths": [
+      "/digests/compiled_sha256",
+      "/digests/effective_config_sha256",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/bash_history",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/ecar",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/snort_alert",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/syslog",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/web_access",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/windows_event_security",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/zeek_conn",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/zeek_dns",
+      "/effective_config/packaged_defaults/evaluation/co_occurrence.yaml/zeek_http",
+      "/effective_config/packaged_defaults/evaluation/thresholds.yaml/pillars/parseability/sub_scores/format_constraints/aspirational",
+      "/effective_config/packaged_defaults/evaluation/thresholds.yaml/pillars/parseability/sub_scores/format_constraints/minimum",
+      "/effective_config/packaged_defaults/evaluation/thresholds.yaml/pillars/parseability/sub_scores/spec_conformance/aspirational",
+      "/effective_config/packaged_defaults/evaluation/thresholds.yaml/pillars/parseability/sub_scores/spec_conformance/minimum",
+      "/effective_config/packaged_defaults/formats/bash_history.yaml/validators",
+      "/effective_config/packaged_defaults/formats/ecar.yaml/fields/17/constraints",
+      "/effective_config/packaged_defaults/formats/ecar.yaml/validators",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/10/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/11/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/12/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/14/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/15/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/7/constraints",
+      "/effective_config/packaged_defaults/formats/proxy_access.yaml/fields/8/constraints",
+      "/effective_config/packaged_defaults/formats/snort_alert.yaml/validators",
+      "/effective_config/packaged_defaults/formats/syslog.yaml/validators",
+      "/effective_config/packaged_defaults/formats/web_access.yaml/fields/3/constraints/allowed_values",
+      "/effective_config/packaged_defaults/formats/web_access.yaml/fields/7/constraints",
+      "/effective_config/packaged_defaults/formats/web_access.yaml/validators",
+      "/effective_config/packaged_defaults/formats/windows_event_security.yaml/validators",
+      "/effective_config/packaged_defaults/formats/windows_event_security.yaml/variants",
+      "/effective_config/packaged_defaults/formats/windows_event_sysmon.yaml/validators",
+      "/effective_config/packaged_defaults/formats/windows_event_sysmon.yaml/variants/4/fields/11/constraints",
+      "/effective_config/packaged_defaults/formats/windows_event_sysmon.yaml/variants/4/fields/14/type",
+      "/effective_config/packaged_defaults/formats/windows_event_sysmon.yaml/variants/4/fields/16/constraints",
+      "/effective_config/packaged_defaults/formats/windows_event_sysmon.yaml/variants/4/fields/9/type",
+      "/effective_config/packaged_defaults/formats/zeek_conn.yaml/fields/8/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_conn.yaml/validators",
+      "/effective_config/packaged_defaults/formats/zeek_dhcp.yaml/fields/1/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_dhcp.yaml/fields/10/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_dhcp.yaml/fields/8/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_dhcp.yaml/fields/9/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/13/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/13/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/15/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/15/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/16/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/17/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/18/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/19/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/20/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/21/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/22/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/23/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/7/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/8/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/fields/9/required",
+      "/effective_config/packaged_defaults/formats/zeek_dns.yaml/validators",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/10/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/13/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/14/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/15/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/16/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/2/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/3/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/4/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_files.yaml/fields/8/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/12/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/13/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/16/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/18/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/19/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/20/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/21/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/22/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/fields/23/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_http.yaml/validators",
+      "/effective_config/packaged_defaults/formats/zeek_ntp.yaml/fields/18/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_ocsp.yaml/validators",
+      "/effective_config/packaged_defaults/formats/zeek_pe.yaml/fields/16/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_smb_files.yaml/fields/9/constraints",
+      "/effective_config/packaged_defaults/formats/zeek_smb_files.yaml/validators",
+      "/effective_config/packaged_defaults/formats/zeek_smtp.yaml/fields/11/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_smtp.yaml/fields/15/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_smtp.yaml/fields/16/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_smtp.yaml/fields/20/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_smtp.yaml/fields/9/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_ssl.yaml/fields/12/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_x509.yaml/fields/14/item_type",
+      "/effective_config/packaged_defaults/formats/zeek_x509.yaml/validators"
+    ],
+    "sequential_project_isolation": true,
+    "explicit_cwd_equivalence": true,
+    "no_ancestor_overlay_exclusion": true,
+    "pack_archive_sha256": "43433bfe3c0769748320318ab41261fd626e1471fa464c5420b0dfe3acf0757d"
+  },
+  "generation": {
+    "default": {
+      "files": 141,
+      "differences": [],
+      "manifest_hashes_verified": true
+    },
+    "targets": [
+      {
+        "target": "sof-elk",
+        "serial": true,
+        "files": 141,
+        "equal": true,
+        "hashes": {
+          "COLLECTION_PROFILE.json": "3988d91fbc2e8ed94f5ea5edfa8ec3e020d9525e2185a5a8f3cdbad3568ab221",
+          "ARTIFACTS_MANIFEST.json": "7291ceaac01333cf8ff7b283594d4f8d58f2787c513fe09f8ae1d91480a3e8ba",
+          "STORAGE_MANIFEST.json": "9ed5b8fab6895ac4ed9e9f95f4a6e00684a631b6b8e5518f80baf1237e13f49a",
+          "GROUND_TRUTH.md": "23a9a6d2a3e03b0422c85715e894a628ec868a913ec1e2cf32fa6d377f060990",
+          "OUTPUT_TARGET.txt": "7a970cb04428c1aeaa10cc8a99617b652bd625b2c1f1b14d95d9bfbd580d03ea",
+          "OBSERVATION_MANIFEST.json": "3ca29efb16318975acb35c79aec58a46fb177924de0a4a16d101a9f35f2581d0",
+          "GROUND_TRUTH.json": "e23649f3e62d136271af0dbb63639c33a59d12e3579846cc00e2a75cb6450b6b",
+          "artifacts/email/email-000067da1b70.eml": "c5015f17a347ba2fd6673ef9733f10cdbdd57bd40a663bb636d646059e3ae495",
+          "artifacts/email/vendor-interface-package-msg.eml": "d5e106545bc7f3293b8f33d6e2ba3a41b3476199a0cd3870396ad349b58a1a24",
+          "artifacts/email/email-0000353a8db2.eml": "8e0c7fa3299b85e7fd7ba1926ebdcf6a411455770246962ecb66127124121eec",
+          "artifacts/email/email-0000a19a7c67.eml": "45afb9aa8ffea371b6b54a8e1206a7424ce8bcf4a7828e78a029642a2216d57c",
+          "artifacts/email/email-0000ac7de856.eml": "50dc20f4e0ff5eb5b8d1371e605e041b5bcbee6311d333a3a072f5487257211d",
+          "artifacts/email/email-0000d86f3a5a.eml": "84ec46d89faa29cb0160f36f3f8dde769b99af22afa7d1cdde7f4c991e368980",
+          "artifacts/email/email-000062c1e8bc.eml": "25e794da3b85d8a7a74288fcc0fec3e24ec5b334a82ee6f15ccfdf20b9b4ac2a",
+          "artifacts/email/email-0000c26b996c.eml": "29163f366250394374c394e7d9f2bb265588b30d44c73a149b9a10d3a00f33b5",
+          "artifacts/email/email-00000d636362.eml": "5907d9ff374dfd7ab93522b4207504eab629a5033d98bfed1411ae649b2467da",
+          "artifacts/email/email-000017856473.eml": "413fe90452348ed236ef1878354e3fc987a4afe8e81ce45ffcc62b4cd6d4e668",
+          "artifacts/email/email-0000038a366c.eml": "4904ea5246bbbb0e63a702e45e6e73aa29d7734110daa2d2c0567df73a1ca4f3",
+          "artifacts/email/email-0000c6e10117.eml": "b8509166998e77d212bd7c0d9b1d340a62c6656405b00a030569453831f98d02",
+          "artifacts/email/email-00002cc7948e.eml": "f8c3053c2ead1247e66ee6a5443e68de8b3aed865de9bf9cf1721ac3f3386399",
+          "artifacts/email/email-00006cf8c4e9.eml": "1fa60a446fc111b4cb66257dd1d8e962da02adfa42906f4835eb477d4659a1a1",
+          "artifacts/email/ehr-release-note-msg.eml": "d70f3ede4146534f746a6611e2f4eab69de19e3c748592e554ee58e42b25b88f",
+          "artifacts/email/email-0000bd32b806.eml": "3461a56c25611c9e7f03fc9aae7913181d354f7f69cf2d593e4a629be463153f",
+          "artifacts/email/benefits-confirmation-msg.eml": "5fa3d66ede215ab36dbeecb22d60cd40f2c32b2fb549ad8a45567f5602afc0bd",
+          "artifacts/email/internal-reset-lure-msg.eml": "80c25648c41069faafd66b9c0778d4df4f01c0ae7b2699effee87c383b1e42e3",
+          "artifacts/email/finance-forward-to-it-msg.eml": "9f00abdc22dd7344e66073bc4108966bf5ce2165ebc724ba605f0fc776bdfb58",
+          "artifacts/email/executive-operating-note-msg.eml": "533f85f249fd41fd24c519f9706294d271cbdd99b319554a1efe1e645f45e22d",
+          "artifacts/email/email-0000ddba5b5b.eml": "2d3e1476df948add47258b0413c3a05a537ac3c859e777bc23fa776e7b56543b",
+          "artifacts/email/email-000020db74d5.eml": "a94fa73332a03af61fa8fa59bc6c74f3dbd52682e4e0cd232ee4625ca1a4014e",
+          "artifacts/email/docflow-ai-summary-msg.eml": "cfd9f88f5c78ae881a66551bbc3f4cc09e45cbc91a2c65b1e35465071b2dd68e",
+          "artifacts/email/email-0000ca36ebc9.eml": "8f15cfecd1127bb3e007fd64c91eb0f460fb48c510dbb0e6314b690c015d0cc6",
+          "data/MAIL-EDGE-01.meridianhcs.local/ecar.json": "0e5736f8503c0c9d73c981eefa667e27b608203ffcfb4a1f44ab31a208f4d3ae",
+          "data/DC-02.meridianhcs.local/ecar.json": "606cb6ba6324cc2d85b881bea2e17783fd1be94b471c291ce34b330e33293e14",
+          "data/WS-PPATEL-01.meridianhcs.local/ecar.json": "a8987267959232fc9b34df149f4a92c737d732c4edb39a5d6447a5ad4f1ea2a3",
+          "data/DB-PROD-01.meridianhcs.local/ecar.json": "0f1765c77fd9646fad05cf862476a576ee92c74f0a262973a89e880662444ad2",
+          "data/LT-MRIVERA-02.meridianhcs.local/ecar.json": "986bf770537066962933d3527ef2703557d5a489857d2d2fa7f7f392ec854e29",
+          "data/WEB-EXT-01.meridianhcs.local/ecar.json": "f574a835779c774952c2e623fc60a44ee956deeecb0e71c30292f21e5561c9b2",
+          "data/WEB-EXT-01.meridianhcs.local/web_access.log": "34f05fee500a03fe67c087399d4690bf286f10f396fd8ccb583dbd60c745dac7",
+          "data/DC-01.meridianhcs.local/ecar.json": "c27067fe8ae5444d6631af08d68fbb967cfb0b52e3f098827c5bafb321f9d0ea",
+          "data/LOG-MON-01.meridianhcs.local/ecar.json": "fd602e7b2fa5fe1a04bf603316c50ad51c21f0cdbe32f1a06ef2d41152419109",
+          "data/PROXY-01.meridianhcs.local/ecar.json": "2c264286c1cf75626491cfbc47561fe3b15764f503230b7d42943b504d655fb7",
+          "data/PROXY-01.meridianhcs.local/proxy_access.log": "fec117b161822b4411361ab84e4e856dc2c212c9378a68ae2e70bb944d796361",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/ecar.json": "a440e983e57f8aaa720a042ff88a545b6b84026202baa954f73a4a25933b922e",
+          "data/MAIL-FIN-01.meridianhcs.local/ecar.json": "9443412965e8fde309c47cabeab6a427096e83f96e6d7b8292502d4891fd21ce",
+          "data/WS-AJOHNSON-01.meridianhcs.local/ecar.json": "a14ea1127c81197d41c62b5bfe142540b93476897f610605dff4809095279053",
+          "data/snort-perimeter/snort_alert.log": "eb490077da9d741f51813f46c758249f9506d83cd6e7a33d113fdd13071b3a1d",
+          "data/zeek-db/x509.json": "5dc519f13897bdd658306b67bc1901bd60c5224c943edbb6061a8bfb7e971269",
+          "data/zeek-db/ocsp.json": "829bc08ff8d4281c84d3487bd5a0523a779d14a42e04c856ceddc215cb6adc65",
+          "data/zeek-db/dns.json": "e18572f99b6734c8235edb2a4b678a5165516cba41a26c9f75c3ac0c0684a68c",
+          "data/zeek-db/http.json": "e7ebcd1c98571b612b57115f6ad7b9bf09d4f5fa56a12aa7dca40ce21e277408",
+          "data/zeek-db/ssl.json": "d5cc4fa131f1ac92ff74a86d9da91987738df07c292a4c2c596de5a0eb910e4b",
+          "data/zeek-db/files.json": "030987bb41d2e5a6c7d859144195e6f28de9004133bc51f2ac5dc86bac36b076",
+          "data/zeek-db/conn.json": "2e02f8117db2ea194cd11002949b065702c277714cc32b64a880ca4ecf6b3b29",
+          "data/MAIL-CLIN-01.meridianhcs.local/ecar.json": "ae96cd53a8a3354adb636256f8183456570c5a882441a04fa8afc70db3433498",
+          "data/zeek-core/dhcp.json": "6e60c5e81b2723df56e646b42de489b2d6cb82cd9df1cbeca4a08d056b29ec2d",
+          "data/zeek-core/x509.json": "d14bb37fcffe9b8ddf778636d71f5565ce6e5c0bcf4af6ba48c48860c79d104d",
+          "data/zeek-core/ocsp.json": "6608417c0a9d4e401262bf74c50b07591996a9c627eae123dcad9c242c145760",
+          "data/zeek-core/dns.json": "a2d0edb92a6e346dd891df73f50d69679c58f422e631ce8a5ed59c58e0f625f0",
+          "data/zeek-core/http.json": "dbfbb7a7845c8947dd66e756e5804a665e387dc29dc09190b09c93edf5babbd3",
+          "data/zeek-core/smtp.json": "c0a900bf8b0a2794332c2420453dcf08955fd90e49e3d1988634a680f02dc414",
+          "data/zeek-core/ssl.json": "92b21544a8945fd0504b221807814c061e437df8cd8defa75ca7caf843cf3c49",
+          "data/zeek-core/files.json": "edf2fb09a6cf021a50405c6d81c68b8a18a4f5becd3aca3378308dff47320041",
+          "data/zeek-core/smb_mapping.json": "78d254a7401b078d90708b78b9e76639320bd9172206b0ce3300316c70e4e65f",
+          "data/zeek-core/conn.json": "1bb4fd5f89256b502f6e5acdbad422b8a7efe37a64dc14aa267f9d247bedfb7d",
+          "data/zeek-core/smb_files.json": "2a24b0d7495167d8f4c058762ce202276eb799b151daf3faef95879741e6906b",
+          "data/zeek-core/pe.json": "90a9790ca9c4b82c99a648fc2860138f45979be37b785aa024fa2b74a3cc481e",
+          "data/snort-core/snort_alert.log": "408c93679d346d9d1191e764b714fe178917398d903bc4626231989c924541b6",
+          "data/FILE-SRV-01.meridianhcs.local/ecar.json": "3bdfacf2e477f7ede5833cbde43c41bb1a1fafcca6bb0c1a0bd9439acb45b391",
+          "data/WS-LNGUYEN-01.meridianhcs.local/ecar.json": "007fb4e6cf81c9aca557ff69f04dc25f8cd3316ef7bd7e7f8a68f49906f20f61",
+          "data/WS-MCHEN-01.meridianhcs.local/ecar.json": "8e5b44c530bec399aad7913a36059dfe2b9857f64e479e76bb9e3847161b6c64",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/ecar.json": "33546882b858a25014b609340acf0ac978560faed74760a20c2afb7dd98e52a4",
+          "data/WS-OHADDAD-01.meridianhcs.local/ecar.json": "256bd37a133d9337686bef3bb56646578c39b72ea8e64610e0064f2962f665ca",
+          "data/zeek-dmz/x509.json": "d832abe01aa4de5b321d1735e748bf523f77fe13347b3d467de9675cc59b478a",
+          "data/zeek-dmz/ocsp.json": "1e905c0d6be9f6dbf5ba01267cb08cd77e102c457c767826329554c61aeec669",
+          "data/zeek-dmz/dns.json": "efe88efe70a77e589f0fda071606a4b34f82f242b8ff13ee6f3eb6b097ad4e56",
+          "data/zeek-dmz/http.json": "0004ee98c65d431722330db7cac4582a1ed110af81f8cacedbd22f79d3d316bd",
+          "data/zeek-dmz/ssl.json": "926611dc031f81afda0d1720e248b340e7aaf9a5342c03412432365fe2a53f13",
+          "data/zeek-dmz/files.json": "85eb48715b98cc1747a05f40efab973b2fffb3c67a5824a3dc5aa7b2e0a56e5a",
+          "data/zeek-dmz/conn.json": "085c68f3b9a51026a78b0959d11fd1adedb6855155b3a1b0bdd4b480012715da",
+          "data/zeek-dmz/pe.json": "540a9d977ddcfdc6f2c228f5fd7796614195ba0b3cbbe4ecba8c9339c23ff1c2",
+          "data/FILE-LNX-01.meridianhcs.local/ecar.json": "656cab5f841bfaf06960a4fc249285450d3d8e1c56368efa1d83e3b20940aa83",
+          "data/WS-EBROOKS-01.meridianhcs.local/ecar.json": "b2f2d915dfd81ac28730994364d62d88734f2b055df5875eef318c0209ee710b",
+          "data/APP-INT-01.meridianhcs.local/ecar.json": "9c90a6428cbf7a6b82f94362573a1741203f9fb46cde9019812bff2a21ca731d",
+          "data/MAIL-EDGE-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "5f13e45b2dc1d9f052c7bd280b11b48c972c847bf5048dd59e9e77b04b323612",
+          "data/MAIL-EDGE-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "d6214a876e325b65b7ee8b83f52b353fcf248917377e207e568a31532d17c3cf",
+          "data/MAIL-EDGE-01.meridianhcs.local/2024/syslog.log": "01bdfbbfaab7d67330663b6615a87f3ba8d84907c3c2f3749c5f9c004e945994",
+          "data/DC-02.meridianhcs.local/2024/windows_event_security_snare.log": "44ecc608434196a25268d55dc519f9584350542bf9ce37e6b72d731794675194",
+          "data/DC-02.meridianhcs.local/2024/windows_event_sysmon_snare.log": "6c08e6fc862710901fad5adf5bd822b830d096404ff14cba617e277654c5bbcb",
+          "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_security_snare.log": "e3bf896fa53297c6c2c0e0b3f7b56fc923349a70a2fead28ea95e81d1d1f8fdd",
+          "data/WS-PPATEL-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "3fe36cedad8d86eb1cb104b7c363246b05eb3368ed63503a9588402cd8f98fe2",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "2e5586e5b3ddddaf2c8af52675bb2098738c7b115df97653acdd5284e66cc7cd",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/root.bash_history": "ae189b0c0a5626ae1613541acf992d1a9d427dda0963ae1073a06f3edc1da7d4",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "ee081c06165ea9e5c4ecf4fbf595a0dfea184d116692c349f035ac8b09eb5689",
+          "data/DB-PROD-01.meridianhcs.local/2024/syslog.log": "f2eb8b3e78c4ce58ea7de1173d535d2d29d5732ef6397b546e02e7d3d8595806",
+          "data/LT-MRIVERA-02.meridianhcs.local/2024/syslog.log": "27dd64d55c2c0270cee883ab7edbd75709e47973a97669421a0074e0ddbfb616",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "8aa827dd762bca192f91e9d95630ed827ac72cf80188a242b3dc7de4489e8469",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "0699604125c3d35db981d101933b366b25a5bd93ab1aad270905045db8252de5",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/root.bash_history": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "debe5f709305172b6b55ec5ea8cf10aba8edc31938b37ef666e510892614b8ab",
+          "data/WEB-EXT-01.meridianhcs.local/2024/syslog.log": "3a8fe58da57b13ec20c3885a8d6a47728fdb12f04eb0d4ff708530b4fb4376f0",
+          "data/DC-01.meridianhcs.local/2024/windows_event_security_snare.log": "f05c7e12d513617a4011a47dac5793ec16c888e7ec692238039d361eef2e8594",
+          "data/DC-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "f18d6452f80b44b9371985451ec765806ae02fc7afb72e612663b78e9646a689",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "b44c58e2e9644460ea238eb96ff44842e4a0fe6896c00edddc66b7b7a0657979",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/priya.patel.bash_history": "cf210da7baf84812e7a4f16770bce63e4195aee5537f8d945025e672a371af65",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "e20adf4468cc09dac81afa1213faf58ab88620a905e6aa57643a4ab86e9c6b81",
+          "data/LOG-MON-01.meridianhcs.local/2024/syslog.log": "89b2b514eacea40ed44292c7e9b967774d87deb54313ab6f62e7853f12a5476f",
+          "data/PROXY-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "d944c36afc66146ca1b3bb49fe725c813024bc7ba4ff8f0523d7ff31d9fd0142",
+          "data/PROXY-01.meridianhcs.local/bash_history/priya.patel.bash_history": "911a54a0c477a23da65373be14fdd9396fa43664b75c54804df0a9d8269e82da",
+          "data/PROXY-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "805e7d2ce92fc270ec8a1d20a5a4c7fb662d22bfd9146e843b81f381510f8af3",
+          "data/PROXY-01.meridianhcs.local/2024/syslog.log": "fd608da928402932289009d968c4bb17b04a8a1cbf3cb954fd486f72e276987b",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_security_snare.log": "aa3b47d90ab3aec8d5f0ac7b064c97255aa97e75a977daae9340fec0dd9dcdd8",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "1d8d768328b6c3ee8cc5d6493c3a3f6f68f04b037ab41ce540465bf332532ea4",
+          "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_security_snare.log": "524488bfcf21e85e465a4a2bce701ecd3767ddb8758088c7d8f0143458204e4b",
+          "data/MAIL-FIN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "5c6b80fab7747111b84ccb14c32b8c807787dd7dd2515822ba3457d30dca5c47",
+          "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_security_snare.log": "fee56aa5e8da65648beb8c7d1f088b10dae5663011b850365a6d5ff6cb560d39",
+          "data/WS-AJOHNSON-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "45f1fded6b9e53a68e994362aadb6b368e861738b4ac47037103c69347ac624b",
+          "data/MAIL-CLIN-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "6d2353e02422416de0c3d8a5c399955f2ecfb0c6d885ae1e0fdd6d1dfb642c60",
+          "data/MAIL-CLIN-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "03573d93db26675bb1ee064a21197d42542ad1e326a6b814135491992ac08906",
+          "data/MAIL-CLIN-01.meridianhcs.local/2024/syslog.log": "29cf4cafc4421a18d68bb631ed6a291201c6efceaeed7b06e20cb7aebdd10e4a",
+          "data/fw-perimeter/2024/cisco_asa.log": "b3af353fb4d44b150f3c82054f511a2b1a7741c61d0819b317c843821fc017b4",
+          "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_security_snare.log": "53faaa37cb38dc8ed953737e076e652ce185dcaee9ff5c08b35e2f38f64d502b",
+          "data/FILE-SRV-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "c936c74efc84ccf62fb0d27b51c85f99ef984452176192e5828a81437942b9e8",
+          "data/WS-LNGUYEN-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "ccce55e03e2546c34be4c7b252be449c360a93b775b4984d081555dec7a758a8",
+          "data/WS-LNGUYEN-01.meridianhcs.local/2024/syslog.log": "8aaf0245f779214a2c1c7b88f096746e83c2be6c6eb5ffd407a52115cc27b2e0",
+          "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_security_snare.log": "9cb9736b07e7f4ad4558c07220a7140def5883199937f1d93c4f4f36eb5d3a1d",
+          "data/WS-MCHEN-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "c399e8d0b05254c45eb778af538d950c68dae22b8d903685da63ffff33f89df2",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_security_snare.log": "8e3d57599fba2215226a5dc6778d6f714645dde1b336de6c2d1d0bd4856c1385",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "d6fbff5c3b73079028caad07e6bccfd636c633475875c6ab96301a2b3b55481f",
+          "data/WS-OHADDAD-01.meridianhcs.local/bash_history/omar.haddad.bash_history": "4b3502b37538e2b25e0b8329303dce02f65707480786f152845e4961ecc3c313",
+          "data/WS-OHADDAD-01.meridianhcs.local/2024/syslog.log": "5c8b3c02d067e167fc8c1d0cada0a452765a7ac5b14ac0345a28a14468732a65",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "f17b48498d601ac5bc950bd066cd017d1b092d3937b57dca3bb1c647657f9a98",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/priya.patel.bash_history": "7598d9a8d5cb7256007be7e433144f5c657f6f63cf88718f9daab59069b76b12",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "9d7518a98448e6fa4adb628b49a011bb9e1627ab3ce50bd1fc39307524e59a1c",
+          "data/FILE-LNX-01.meridianhcs.local/2024/syslog.log": "e91d85c199f0bc9299d26a87fc1a25de4c62135ef156e8356a27aec122a6200e",
+          "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_security_snare.log": "b18a609a6787f51d22494bdd20d1424addbfefc27a4b6c35663bd6125f2cb66a",
+          "data/WS-EBROOKS-01.meridianhcs.local/2024/windows_event_sysmon_snare.log": "b5c15fc4063e353b80303219dd2b75123f19b9e1d8f339c89db88e4d0d1397f0",
+          "data/APP-INT-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "dfe26330c9245b119a35c320f2d7669746297e3395757ac024b9056ebdce0da1",
+          "data/APP-INT-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "a78af3b127b26410d787923dab8353e047c2f428ab3de82169f856592889688e",
+          "data/APP-INT-01.meridianhcs.local/bash_history/root.bash_history": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "data/APP-INT-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "b04c155840f7583699401a93770c5a0aa388fb8d819bbe0217739da900d19544",
+          "data/APP-INT-01.meridianhcs.local/2024/syslog.log": "aaf589023120a3c216872565d6e82f284ccb023d119acb698d9f42baecc844f1"
+        }
+      },
+      {
+        "target": "splunk",
+        "serial": false,
+        "files": 141,
+        "equal": true,
+        "hashes": {
+          "COLLECTION_PROFILE.json": "0bca0af6d9341fc164e34bd81a5445d18621c2b4b6c244b0b39f2542f34a1f0f",
+          "ARTIFACTS_MANIFEST.json": "7291ceaac01333cf8ff7b283594d4f8d58f2787c513fe09f8ae1d91480a3e8ba",
+          "STORAGE_MANIFEST.json": "9ed5b8fab6895ac4ed9e9f95f4a6e00684a631b6b8e5518f80baf1237e13f49a",
+          "GROUND_TRUTH.md": "23a9a6d2a3e03b0422c85715e894a628ec868a913ec1e2cf32fa6d377f060990",
+          "OUTPUT_TARGET.txt": "d31a0d2ea7becadb883d33f8189e1cef71c07a907bef52c2437de1348005d004",
+          "OBSERVATION_MANIFEST.json": "3ca29efb16318975acb35c79aec58a46fb177924de0a4a16d101a9f35f2581d0",
+          "GROUND_TRUTH.json": "e23649f3e62d136271af0dbb63639c33a59d12e3579846cc00e2a75cb6450b6b",
+          "artifacts/email/email-000067da1b70.eml": "c5015f17a347ba2fd6673ef9733f10cdbdd57bd40a663bb636d646059e3ae495",
+          "artifacts/email/vendor-interface-package-msg.eml": "d5e106545bc7f3293b8f33d6e2ba3a41b3476199a0cd3870396ad349b58a1a24",
+          "artifacts/email/email-0000353a8db2.eml": "8e0c7fa3299b85e7fd7ba1926ebdcf6a411455770246962ecb66127124121eec",
+          "artifacts/email/email-0000a19a7c67.eml": "45afb9aa8ffea371b6b54a8e1206a7424ce8bcf4a7828e78a029642a2216d57c",
+          "artifacts/email/email-0000ac7de856.eml": "50dc20f4e0ff5eb5b8d1371e605e041b5bcbee6311d333a3a072f5487257211d",
+          "artifacts/email/email-0000d86f3a5a.eml": "84ec46d89faa29cb0160f36f3f8dde769b99af22afa7d1cdde7f4c991e368980",
+          "artifacts/email/email-000062c1e8bc.eml": "25e794da3b85d8a7a74288fcc0fec3e24ec5b334a82ee6f15ccfdf20b9b4ac2a",
+          "artifacts/email/email-0000c26b996c.eml": "29163f366250394374c394e7d9f2bb265588b30d44c73a149b9a10d3a00f33b5",
+          "artifacts/email/email-00000d636362.eml": "5907d9ff374dfd7ab93522b4207504eab629a5033d98bfed1411ae649b2467da",
+          "artifacts/email/email-000017856473.eml": "413fe90452348ed236ef1878354e3fc987a4afe8e81ce45ffcc62b4cd6d4e668",
+          "artifacts/email/email-0000038a366c.eml": "4904ea5246bbbb0e63a702e45e6e73aa29d7734110daa2d2c0567df73a1ca4f3",
+          "artifacts/email/email-0000c6e10117.eml": "b8509166998e77d212bd7c0d9b1d340a62c6656405b00a030569453831f98d02",
+          "artifacts/email/email-00002cc7948e.eml": "f8c3053c2ead1247e66ee6a5443e68de8b3aed865de9bf9cf1721ac3f3386399",
+          "artifacts/email/email-00006cf8c4e9.eml": "1fa60a446fc111b4cb66257dd1d8e962da02adfa42906f4835eb477d4659a1a1",
+          "artifacts/email/ehr-release-note-msg.eml": "d70f3ede4146534f746a6611e2f4eab69de19e3c748592e554ee58e42b25b88f",
+          "artifacts/email/email-0000bd32b806.eml": "3461a56c25611c9e7f03fc9aae7913181d354f7f69cf2d593e4a629be463153f",
+          "artifacts/email/benefits-confirmation-msg.eml": "5fa3d66ede215ab36dbeecb22d60cd40f2c32b2fb549ad8a45567f5602afc0bd",
+          "artifacts/email/internal-reset-lure-msg.eml": "80c25648c41069faafd66b9c0778d4df4f01c0ae7b2699effee87c383b1e42e3",
+          "artifacts/email/finance-forward-to-it-msg.eml": "9f00abdc22dd7344e66073bc4108966bf5ce2165ebc724ba605f0fc776bdfb58",
+          "artifacts/email/executive-operating-note-msg.eml": "533f85f249fd41fd24c519f9706294d271cbdd99b319554a1efe1e645f45e22d",
+          "artifacts/email/email-0000ddba5b5b.eml": "2d3e1476df948add47258b0413c3a05a537ac3c859e777bc23fa776e7b56543b",
+          "artifacts/email/email-000020db74d5.eml": "a94fa73332a03af61fa8fa59bc6c74f3dbd52682e4e0cd232ee4625ca1a4014e",
+          "artifacts/email/docflow-ai-summary-msg.eml": "cfd9f88f5c78ae881a66551bbc3f4cc09e45cbc91a2c65b1e35465071b2dd68e",
+          "artifacts/email/email-0000ca36ebc9.eml": "8f15cfecd1127bb3e007fd64c91eb0f460fb48c510dbb0e6314b690c015d0cc6",
+          "data/MAIL-EDGE-01.meridianhcs.local/ecar.json": "0e5736f8503c0c9d73c981eefa667e27b608203ffcfb4a1f44ab31a208f4d3ae",
+          "data/MAIL-EDGE-01.meridianhcs.local/syslog.log": "48817ffa142f9bb6728f9dfbd8adfe0081e4caca129d8548b1ec5d070944f98b",
+          "data/DC-02.meridianhcs.local/ecar.json": "606cb6ba6324cc2d85b881bea2e17783fd1be94b471c291ce34b330e33293e14",
+          "data/DC-02.meridianhcs.local/windows_event_sysmon.xml": "ca726cdfda0a7bf7ab3fc6ae684f592a070b66734cecb90956195c3351b08073",
+          "data/DC-02.meridianhcs.local/windows_event_security.xml": "8b687772211ec2a274234ce253e2957ebea980b21da2efddcc61f8f8481a994a",
+          "data/WS-PPATEL-01.meridianhcs.local/ecar.json": "a8987267959232fc9b34df149f4a92c737d732c4edb39a5d6447a5ad4f1ea2a3",
+          "data/WS-PPATEL-01.meridianhcs.local/windows_event_sysmon.xml": "62dce1d3bda5a2945b865a3c7b9e8986f993d9366b415800e21dde600e1f9c68",
+          "data/WS-PPATEL-01.meridianhcs.local/windows_event_security.xml": "aa95c4309c801050634818496aede563d8b5fedf9b61000363fdc0c75e5410bb",
+          "data/DB-PROD-01.meridianhcs.local/ecar.json": "0f1765c77fd9646fad05cf862476a576ee92c74f0a262973a89e880662444ad2",
+          "data/DB-PROD-01.meridianhcs.local/syslog.log": "2b7e8baf1771214ccb266ade82ca3df8b77d0a01fc17767f8c0480b60ca13c12",
+          "data/LT-MRIVERA-02.meridianhcs.local/ecar.json": "986bf770537066962933d3527ef2703557d5a489857d2d2fa7f7f392ec854e29",
+          "data/LT-MRIVERA-02.meridianhcs.local/syslog.log": "1fb48210cfe5e35a786734fdd0be58194e4fb780c5c871b294b2b15b2a1d567b",
+          "data/WEB-EXT-01.meridianhcs.local/ecar.json": "f574a835779c774952c2e623fc60a44ee956deeecb0e71c30292f21e5561c9b2",
+          "data/WEB-EXT-01.meridianhcs.local/syslog.log": "f355dc44ae32c74186a8f585a0615e827c11c990187d501c8d3404744c311847",
+          "data/WEB-EXT-01.meridianhcs.local/web_access.log": "f388622481771fac6bebe47d01a90072a728ebe384b9039c4d5c2969b45b4aee",
+          "data/DC-01.meridianhcs.local/ecar.json": "c27067fe8ae5444d6631af08d68fbb967cfb0b52e3f098827c5bafb321f9d0ea",
+          "data/DC-01.meridianhcs.local/windows_event_sysmon.xml": "29b2c1ee609b2e2247c7d93139bcc37b762da6d6d0c9dfdabfef445428460a4a",
+          "data/DC-01.meridianhcs.local/windows_event_security.xml": "ad3b7c45ce41555617d6cebe3d296d6c8c8112cfe0fbc66bcb10568d05e458c9",
+          "data/LOG-MON-01.meridianhcs.local/ecar.json": "fd602e7b2fa5fe1a04bf603316c50ad51c21f0cdbe32f1a06ef2d41152419109",
+          "data/LOG-MON-01.meridianhcs.local/syslog.log": "a9c138798c3c1b9ea5457b1a7751fe06535b14a8a02537d1bf654ce7b2c813a1",
+          "data/PROXY-01.meridianhcs.local/ecar.json": "2c264286c1cf75626491cfbc47561fe3b15764f503230b7d42943b504d655fb7",
+          "data/PROXY-01.meridianhcs.local/syslog.log": "49b481695c673b7d233ea28677233bd0048000791ca1df9f8f7830eb456973ca",
+          "data/PROXY-01.meridianhcs.local/proxy_access.log": "1560e1a5944aee5f29d2fa3916b4417af36d3645edc3567c38d9d4c034dbd7cd",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/ecar.json": "a440e983e57f8aaa720a042ff88a545b6b84026202baa954f73a4a25933b922e",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/windows_event_sysmon.xml": "b530cca3fb43f9c42817f91492c0c53fee372ba1f1137647066f7fa3b6e44b5a",
+          "data/WS-DRAMIREZ-01.meridianhcs.local/windows_event_security.xml": "410d9da90d08e098a7e307c8d51c69fb2584d837f569e904be3d3ee431765556",
+          "data/MAIL-FIN-01.meridianhcs.local/ecar.json": "9443412965e8fde309c47cabeab6a427096e83f96e6d7b8292502d4891fd21ce",
+          "data/MAIL-FIN-01.meridianhcs.local/windows_event_sysmon.xml": "3b2ad674ee45ed76899043fb8fc6915964e50a2492ebe2d0bdfb62f33a769025",
+          "data/MAIL-FIN-01.meridianhcs.local/windows_event_security.xml": "0765fead4350a05b094444b92f0f21bfd3687aec38b5fa55ba3672dc9f268ca8",
+          "data/WS-AJOHNSON-01.meridianhcs.local/ecar.json": "a14ea1127c81197d41c62b5bfe142540b93476897f610605dff4809095279053",
+          "data/WS-AJOHNSON-01.meridianhcs.local/windows_event_sysmon.xml": "71c1851abc48b2ac8b63f93e7b445f9c161c6bbf37e1045f215fa3e44f341aae",
+          "data/WS-AJOHNSON-01.meridianhcs.local/windows_event_security.xml": "eaf1359aaad41a97e29a0a78082a9e00d6b689a8b7b6f64c69568365073a0e7a",
+          "data/snort-perimeter/snort_alert.log": "eb490077da9d741f51813f46c758249f9506d83cd6e7a33d113fdd13071b3a1d",
+          "data/zeek-db/x509.json": "5dc519f13897bdd658306b67bc1901bd60c5224c943edbb6061a8bfb7e971269",
+          "data/zeek-db/ocsp.json": "829bc08ff8d4281c84d3487bd5a0523a779d14a42e04c856ceddc215cb6adc65",
+          "data/zeek-db/dns.json": "e18572f99b6734c8235edb2a4b678a5165516cba41a26c9f75c3ac0c0684a68c",
+          "data/zeek-db/http.json": "e7ebcd1c98571b612b57115f6ad7b9bf09d4f5fa56a12aa7dca40ce21e277408",
+          "data/zeek-db/ssl.json": "d5cc4fa131f1ac92ff74a86d9da91987738df07c292a4c2c596de5a0eb910e4b",
+          "data/zeek-db/files.json": "030987bb41d2e5a6c7d859144195e6f28de9004133bc51f2ac5dc86bac36b076",
+          "data/zeek-db/conn.json": "2e02f8117db2ea194cd11002949b065702c277714cc32b64a880ca4ecf6b3b29",
+          "data/MAIL-CLIN-01.meridianhcs.local/ecar.json": "ae96cd53a8a3354adb636256f8183456570c5a882441a04fa8afc70db3433498",
+          "data/MAIL-CLIN-01.meridianhcs.local/syslog.log": "0bb6ba257e499dc29215d1e03c45d8892ea581670c72a0afad211e50c72b56de",
+          "data/fw-perimeter/cisco_asa.log": "b3af353fb4d44b150f3c82054f511a2b1a7741c61d0819b317c843821fc017b4",
+          "data/zeek-core/dhcp.json": "6e60c5e81b2723df56e646b42de489b2d6cb82cd9df1cbeca4a08d056b29ec2d",
+          "data/zeek-core/x509.json": "d14bb37fcffe9b8ddf778636d71f5565ce6e5c0bcf4af6ba48c48860c79d104d",
+          "data/zeek-core/ocsp.json": "6608417c0a9d4e401262bf74c50b07591996a9c627eae123dcad9c242c145760",
+          "data/zeek-core/dns.json": "a2d0edb92a6e346dd891df73f50d69679c58f422e631ce8a5ed59c58e0f625f0",
+          "data/zeek-core/http.json": "dbfbb7a7845c8947dd66e756e5804a665e387dc29dc09190b09c93edf5babbd3",
+          "data/zeek-core/smtp.json": "c0a900bf8b0a2794332c2420453dcf08955fd90e49e3d1988634a680f02dc414",
+          "data/zeek-core/ssl.json": "92b21544a8945fd0504b221807814c061e437df8cd8defa75ca7caf843cf3c49",
+          "data/zeek-core/files.json": "edf2fb09a6cf021a50405c6d81c68b8a18a4f5becd3aca3378308dff47320041",
+          "data/zeek-core/smb_mapping.json": "78d254a7401b078d90708b78b9e76639320bd9172206b0ce3300316c70e4e65f",
+          "data/zeek-core/conn.json": "1bb4fd5f89256b502f6e5acdbad422b8a7efe37a64dc14aa267f9d247bedfb7d",
+          "data/zeek-core/smb_files.json": "2a24b0d7495167d8f4c058762ce202276eb799b151daf3faef95879741e6906b",
+          "data/zeek-core/pe.json": "90a9790ca9c4b82c99a648fc2860138f45979be37b785aa024fa2b74a3cc481e",
+          "data/snort-core/snort_alert.log": "408c93679d346d9d1191e764b714fe178917398d903bc4626231989c924541b6",
+          "data/FILE-SRV-01.meridianhcs.local/ecar.json": "3bdfacf2e477f7ede5833cbde43c41bb1a1fafcca6bb0c1a0bd9439acb45b391",
+          "data/FILE-SRV-01.meridianhcs.local/windows_event_sysmon.xml": "e46fbf6d00c770d70a99359c526f12d3ca505dd4b211104284d7288fd9a4d3fa",
+          "data/FILE-SRV-01.meridianhcs.local/windows_event_security.xml": "8674f1af3499bde8e4ee06960c1440c3fb389f4e75f616aaf7a7f46f8e481578",
+          "data/WS-LNGUYEN-01.meridianhcs.local/ecar.json": "007fb4e6cf81c9aca557ff69f04dc25f8cd3316ef7bd7e7f8a68f49906f20f61",
+          "data/WS-LNGUYEN-01.meridianhcs.local/syslog.log": "cc73ff5812b041473cfff1262d31a07f7d2650ca9f08baadb11ae212c7e229c5",
+          "data/WS-MCHEN-01.meridianhcs.local/ecar.json": "8e5b44c530bec399aad7913a36059dfe2b9857f64e479e76bb9e3847161b6c64",
+          "data/WS-MCHEN-01.meridianhcs.local/windows_event_sysmon.xml": "baa52a4c4815dbc5dd84c9c32840d8aca1e5fd45302b302708b8287350ae9ce5",
+          "data/WS-MCHEN-01.meridianhcs.local/windows_event_security.xml": "d2157dae680219a31ec77618ddd1ad90fe83c30f5eb8d39ed49a1ed8cd4f766f",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/ecar.json": "33546882b858a25014b609340acf0ac978560faed74760a20c2afb7dd98e52a4",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/windows_event_sysmon.xml": "43d90dd2da1c3a3f31a94ceb4fbf95f555bd29199e1a88d10916f3098e6eb99d",
+          "data/WS-SMARTINEZ-01.meridianhcs.local/windows_event_security.xml": "fc3c4e1af2638020249c631a43b5937e74299804f9de5396d4001e326672a59d",
+          "data/WS-OHADDAD-01.meridianhcs.local/ecar.json": "256bd37a133d9337686bef3bb56646578c39b72ea8e64610e0064f2962f665ca",
+          "data/WS-OHADDAD-01.meridianhcs.local/syslog.log": "4a7b8ac069b3ce13d5653d9da6e3512b505ab94fafd5311caf055ac6f78e54b2",
+          "data/zeek-dmz/x509.json": "d832abe01aa4de5b321d1735e748bf523f77fe13347b3d467de9675cc59b478a",
+          "data/zeek-dmz/ocsp.json": "1e905c0d6be9f6dbf5ba01267cb08cd77e102c457c767826329554c61aeec669",
+          "data/zeek-dmz/dns.json": "efe88efe70a77e589f0fda071606a4b34f82f242b8ff13ee6f3eb6b097ad4e56",
+          "data/zeek-dmz/http.json": "0004ee98c65d431722330db7cac4582a1ed110af81f8cacedbd22f79d3d316bd",
+          "data/zeek-dmz/ssl.json": "926611dc031f81afda0d1720e248b340e7aaf9a5342c03412432365fe2a53f13",
+          "data/zeek-dmz/files.json": "85eb48715b98cc1747a05f40efab973b2fffb3c67a5824a3dc5aa7b2e0a56e5a",
+          "data/zeek-dmz/conn.json": "085c68f3b9a51026a78b0959d11fd1adedb6855155b3a1b0bdd4b480012715da",
+          "data/zeek-dmz/pe.json": "540a9d977ddcfdc6f2c228f5fd7796614195ba0b3cbbe4ecba8c9339c23ff1c2",
+          "data/FILE-LNX-01.meridianhcs.local/ecar.json": "656cab5f841bfaf06960a4fc249285450d3d8e1c56368efa1d83e3b20940aa83",
+          "data/FILE-LNX-01.meridianhcs.local/syslog.log": "0a6ba83048d12b696338d37524d5a886b0c47924c251ae9d4c0be58b94ab0532",
+          "data/WS-EBROOKS-01.meridianhcs.local/ecar.json": "b2f2d915dfd81ac28730994364d62d88734f2b055df5875eef318c0209ee710b",
+          "data/WS-EBROOKS-01.meridianhcs.local/windows_event_sysmon.xml": "0d8efee1b5381b64e6e3db04ddbc300660dd267860fa8c610e042a02a385c5b8",
+          "data/WS-EBROOKS-01.meridianhcs.local/windows_event_security.xml": "0916d6d85255898762cd5b751a653c4b903df1d20b37f62ce0ed07e3f1fcf00b",
+          "data/APP-INT-01.meridianhcs.local/ecar.json": "9c90a6428cbf7a6b82f94362573a1741203f9fb46cde9019812bff2a21ca731d",
+          "data/APP-INT-01.meridianhcs.local/syslog.log": "45b8ac973c5c2ade7ddb0e7b941ebe5edf9ea664215dc855c017f292a08997d7",
+          "data/MAIL-EDGE-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "5f13e45b2dc1d9f052c7bd280b11b48c972c847bf5048dd59e9e77b04b323612",
+          "data/MAIL-EDGE-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "d6214a876e325b65b7ee8b83f52b353fcf248917377e207e568a31532d17c3cf",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "2e5586e5b3ddddaf2c8af52675bb2098738c7b115df97653acdd5284e66cc7cd",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/root.bash_history": "ae189b0c0a5626ae1613541acf992d1a9d427dda0963ae1073a06f3edc1da7d4",
+          "data/DB-PROD-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "ee081c06165ea9e5c4ecf4fbf595a0dfea184d116692c349f035ac8b09eb5689",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "8aa827dd762bca192f91e9d95630ed827ac72cf80188a242b3dc7de4489e8469",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "0699604125c3d35db981d101933b366b25a5bd93ab1aad270905045db8252de5",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/root.bash_history": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "data/WEB-EXT-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "debe5f709305172b6b55ec5ea8cf10aba8edc31938b37ef666e510892614b8ab",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "b44c58e2e9644460ea238eb96ff44842e4a0fe6896c00edddc66b7b7a0657979",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/priya.patel.bash_history": "cf210da7baf84812e7a4f16770bce63e4195aee5537f8d945025e672a371af65",
+          "data/LOG-MON-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "e20adf4468cc09dac81afa1213faf58ab88620a905e6aa57643a4ab86e9c6b81",
+          "data/PROXY-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "d944c36afc66146ca1b3bb49fe725c813024bc7ba4ff8f0523d7ff31d9fd0142",
+          "data/PROXY-01.meridianhcs.local/bash_history/priya.patel.bash_history": "911a54a0c477a23da65373be14fdd9396fa43664b75c54804df0a9d8269e82da",
+          "data/PROXY-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "805e7d2ce92fc270ec8a1d20a5a4c7fb662d22bfd9146e843b81f381510f8af3",
+          "data/MAIL-CLIN-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "6d2353e02422416de0c3d8a5c399955f2ecfb0c6d885ae1e0fdd6d1dfb642c60",
+          "data/MAIL-CLIN-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "03573d93db26675bb1ee064a21197d42542ad1e326a6b814135491992ac08906",
+          "data/WS-LNGUYEN-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "ccce55e03e2546c34be4c7b252be449c360a93b775b4984d081555dec7a758a8",
+          "data/WS-OHADDAD-01.meridianhcs.local/bash_history/omar.haddad.bash_history": "4b3502b37538e2b25e0b8329303dce02f65707480786f152845e4961ecc3c313",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "f17b48498d601ac5bc950bd066cd017d1b092d3937b57dca3bb1c647657f9a98",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/priya.patel.bash_history": "7598d9a8d5cb7256007be7e433144f5c657f6f63cf88718f9daab59069b76b12",
+          "data/FILE-LNX-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "9d7518a98448e6fa4adb628b49a011bb9e1627ab3ce50bd1fc39307524e59a1c",
+          "data/APP-INT-01.meridianhcs.local/bash_history/marcus.chen.bash_history": "dfe26330c9245b119a35c320f2d7669746297e3395757ac024b9056ebdce0da1",
+          "data/APP-INT-01.meridianhcs.local/bash_history/lina.nguyen.bash_history": "a78af3b127b26410d787923dab8353e047c2f428ab3de82169f856592889688e",
+          "data/APP-INT-01.meridianhcs.local/bash_history/root.bash_history": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "data/APP-INT-01.meridianhcs.local/bash_history/aisha.johnson.bash_history": "b04c155840f7583699401a93770c5a0aa388fb8d819bbe0217739da900d19544"
+        }
+      }
+    ]
+  },
+  "checkpoint": {
+    "exact_exit": 1,
+    "checkpoint_unchanged": true,
+    "status": {
+      "behavior_change": "localized",
+      "behavior_differences": {
+        "behavior_history_sha256": {
+          "current": "f01ca7faeebe06b09572744926b89d442d27baa2cac5036bd7402927d71ad6ce",
+          "stored": "7b54114a8c15f587f5fa31f80892ecdac037a99e864fb5862bdf1ffd0b082482"
+        },
+        "behavior_revision": {
+          "current": 92,
+          "stored": 89
+        },
+        "behavior_surface_sha256": {
+          "current": "7f12bd02b78cac7e8ccae605df62083bfccca7a2dc0e7b7356dcc484e063e7ff",
+          "stored": "120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c"
+        },
+        "evidenceforge_build_sha256": {
+          "current": "968ddd39803290d8f115e33cf55fea6b6f494c7656a6fa8033806a298331d86f",
+          "stored": "c90af0b333c28990fcef11bc84fb3830339e050db24cebe25b466800a57aa2c3"
+        }
+      },
+      "checkpoint_hours": 1,
+      "compatibility": "passed",
+      "compatibility_level": "load-compatible",
+      "confirmation_required": false,
+      "diagnostics": {
+        "behavior_change_ids": [
+          "typed-record-validation",
+          "evaluator-source-routing",
+          "legacy-validation-snapshot-decoding"
+        ],
+        "behavior_domains": [
+          "record-validation",
+          "validation-preflight"
+        ],
+        "behavior_formats": [],
+        "behavior_summaries": [
+          "Replace record validation contracts without changing rendered evidence.",
+          "Declares parser validation ownership and explicit evaluation failures without changing rendered evidence.",
+          "Decodes recognized legacy validation metadata for compatible checkpoint hydration without changing rendering definitions."
+        ],
+        "checkpoint_schema": "2.0",
+        "checkpoint_workspace_forecast": {
+          "expected_bytes": 7283181,
+          "lower_bytes": 1553538,
+          "upper_bytes": 11977116
+        },
+        "checkpoint_workspace_forecast_vs_actual": {
+          "actual_bytes": 5450278,
+          "actual_to_expected_ratio": 0.7483375739254592,
+          "expected_bytes": 7283181
+        },
+        "component_mismatches": {
+          "behavior_history_sha256": {
+            "current": "f01ca7faeebe06b09572744926b89d442d27baa2cac5036bd7402927d71ad6ce",
+            "stored": "7b54114a8c15f587f5fa31f80892ecdac037a99e864fb5862bdf1ffd0b082482"
+          },
+          "behavior_revision": {
+            "current": 92,
+            "stored": 89
+          },
+          "behavior_surface_sha256": {
+            "current": "7f12bd02b78cac7e8ccae605df62083bfccca7a2dc0e7b7356dcc484e063e7ff",
+            "stored": "120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c"
+          },
+          "dependencies": {
+            "current": {
+              "jinja2": "3.1.6",
+              "pydantic": "2.13.5",
+              "pytz": "2026.3.post1",
+              "pyyaml": "6.0.3",
+              "typer": "0.27.2"
+            },
+            "stored": {
+              "jinja2": "3.1.6",
+              "json-logic-qubit": "0.9.1",
+              "pydantic": "2.13.5",
+              "pytz": "2026.3.post1",
+              "pyyaml": "6.0.3",
+              "typer": "0.27.2"
+            }
+          },
+          "evidenceforge_build_sha256": {
+            "current": "968ddd39803290d8f115e33cf55fea6b6f494c7656a6fa8033806a298331d86f",
+            "stored": "c90af0b333c28990fcef11bc84fb3830339e050db24cebe25b466800a57aa2c3"
+          }
+        },
+        "current_components": {
+          "behavior_history_sha256": "f01ca7faeebe06b09572744926b89d442d27baa2cac5036bd7402927d71ad6ce",
+          "behavior_history_start_revision": 1,
+          "behavior_manifest_schema": "1.0",
+          "behavior_revision": 92,
+          "behavior_surface_sha256": "7f12bd02b78cac7e8ccae605df62083bfccca7a2dc0e7b7356dcc484e063e7ff",
+          "checkpoint_schema": "2.0",
+          "dependencies": {
+            "jinja2": "3.1.6",
+            "pydantic": "2.13.5",
+            "pytz": "2026.3.post1",
+            "pyyaml": "6.0.3",
+            "typer": "0.27.2"
+          },
+          "evidenceforge_build_sha256": "968ddd39803290d8f115e33cf55fea6b6f494c7656a6fa8033806a298331d86f",
+          "evidenceforge_version": "2.1.0",
+          "formats": [
+            "bash_history",
+            "cisco_asa",
+            "ecar",
+            "proxy_access",
+            "snort_alert",
+            "syslog",
+            "web_access",
+            "windows",
+            "zeek"
+          ],
+          "interpreter_cache_tag": "cpython-312",
+          "machine": "arm64",
+          "oob_hosts": [],
+          "output_target": "default",
+          "platform": "darwin",
+          "python": "3.12.9",
+          "python_compiler": "Clang 16.0.0 (clang-1600.0.26.6)",
+          "python_implementation": "CPython",
+          "resolved_sha256": "2d44f65d765f35d8f508fae6f00d7abd9e7c2a00ba071b2a621983e01e21df2e",
+          "sys_byteorder": "little"
+        },
+        "current_fingerprint": "2d280877ca174a5fa86fdd6dc54d1ad786bc87123a9a3a94290c2f69db906a45",
+        "filesystem": {
+          "durability_probe": "not repeated by read-only status; required when generation starts",
+          "ownership_and_no_symlink_validation": "performed"
+        },
+        "hard_component_mismatches": [],
+        "lock": {
+          "detail": null,
+          "heartbeat": "not used; local liveness is process-probed",
+          "owner": null,
+          "state": "absent"
+        },
+        "participant_heads": 26,
+        "phase_completed_hours": 2,
+        "phase_total_hours": 3,
+        "run_id": "bb1b50d183004c67b29688c4f67ba2eb",
+        "segment_bytes": 1537705,
+        "segment_count": 60,
+        "selected_sequence": 2,
+        "stored_components": {
+          "behavior_history_sha256": "7b54114a8c15f587f5fa31f80892ecdac037a99e864fb5862bdf1ffd0b082482",
+          "behavior_history_start_revision": 1,
+          "behavior_manifest_schema": "1.0",
+          "behavior_revision": 89,
+          "behavior_surface_sha256": "120dd81053c2116d467a2637f2ccc52e0f155ce4b546a114acde26eee4e9705c",
+          "checkpoint_schema": "2.0",
+          "dependencies": {
+            "jinja2": "3.1.6",
+            "json-logic-qubit": "0.9.1",
+            "pydantic": "2.13.5",
+            "pytz": "2026.3.post1",
+            "pyyaml": "6.0.3",
+            "typer": "0.27.2"
+          },
+          "evidenceforge_build_sha256": "c90af0b333c28990fcef11bc84fb3830339e050db24cebe25b466800a57aa2c3",
+          "evidenceforge_version": "2.1.0",
+          "formats": [
+            "bash_history",
+            "cisco_asa",
+            "ecar",
+            "proxy_access",
+            "snort_alert",
+            "syslog",
+            "web_access",
+            "windows",
+            "zeek"
+          ],
+          "interpreter_cache_tag": "cpython-312",
+          "machine": "arm64",
+          "oob_hosts": [],
+          "output_target": "default",
+          "platform": "darwin",
+          "python": "3.12.9",
+          "python_compiler": "Clang 16.0.0 (clang-1600.0.26.6)",
+          "python_implementation": "CPython",
+          "resolved_sha256": "2d44f65d765f35d8f508fae6f00d7abd9e7c2a00ba071b2a621983e01e21df2e",
+          "sys_byteorder": "little"
+        },
+        "stored_fingerprint": "0a3805af6279d69710ad27129f583ebca4105f50c7e1a9fe6656984573661f7d",
+        "validation_bytes_hashed": 8730962,
+        "validation_seconds": 0.9442476669792086,
+        "workspace_bytes": 5450278
+      },
+      "errors": [],
+      "integrity": "passed",
+      "loadability": "not-verified",
+      "output_equivalence": "not-guaranteed",
+      "output_root": "/private/tmp/eforge-gap-slow-final/test_baseline_checkpoint_upgra0/suspended",
+      "phase": "collection",
+      "phase_completed_hours": 2,
+      "phase_total_hours": 3,
+      "recovery_points": [
+        {
+          "error": null,
+          "phase": "collection",
+          "role": "latest",
+          "sequence": 2,
+          "simulated_hour": 3,
+          "valid": true
+        },
+        {
+          "error": null,
+          "phase": "collection",
+          "role": "previous",
+          "sequence": 1,
+          "simulated_hour": 2,
+          "valid": true
+        }
+      ],
+      "restore_verified": false,
+      "resume_command": "eforge generate --output /private/tmp/eforge-gap-slow-final/test_baseline_checkpoint_upgra0/suspended --resume",
+      "run_differences": {},
+      "run_identity": "matched",
+      "runtime_differences": {
+        "dependencies": {
+          "current": {
+            "jinja2": "3.1.6",
+            "pydantic": "2.13.5",
+            "pytz": "2026.3.post1",
+            "pyyaml": "6.0.3",
+            "typer": "0.27.2"
+          },
+          "stored": {
+            "jinja2": "3.1.6",
+            "json-logic-qubit": "0.9.1",
+            "pydantic": "2.13.5",
+            "pytz": "2026.3.post1",
+            "pyyaml": "6.0.3",
+            "typer": "0.27.2"
+          }
+        }
+      },
+      "schema_version": "1.1",
+      "simulated_hour": 3,
+      "state": "resumable",
+      "state_contract_differences": {},
+      "storage": {
+        "available_bytes": 337081720832,
+        "checkpoint_bytes": 5450278,
+        "generated_bytes": 745908,
+        "managed_file_count": 165,
+        "prior_bundle_bytes": 0,
+        "recovery_overhead_bytes": 5450278,
+        "total_managed_bytes": 6196186,
+        "unrelated_entry_count": 0
+      },
+      "suspended": true,
+      "suspension_requested": false,
+      "used_fallback": false,
+      "warnings": [
+        "checkpoint has attemptable build or runtime drift; serialized state must be fully verified, and remaining output equivalence is not guaranteed"
+      ]
+    },
+    "resume_exit": 0,
+    "evidence_files": 24
+  },
+  "evaluation": {
+    "sof-elk": {
+      "records": 123105,
+      "sources": {
+        "bash_history": 283,
+        "cisco_asa": 18930,
+        "ecar": 33307,
+        "email_artifacts": 25,
+        "proxy_access": 2236,
+        "snort_alert": 146,
+        "syslog": 3948,
+        "web_access": 822,
+        "windows_event_security": 18718,
+        "windows_event_sysmon": 11517,
+        "zeek_conn": 19850,
+        "zeek_dhcp": 47,
+        "zeek_dns": 3728,
+        "zeek_files": 2113,
+        "zeek_http": 3376,
+        "zeek_ocsp": 89,
+        "zeek_pe": 3,
+        "zeek_smb_files": 215,
+        "zeek_smb_mapping": 125,
+        "zeek_smtp": 46,
+        "zeek_ssl": 2496,
+        "zeek_x509": 1085
+      },
+      "overall": 92.00543296527613,
+      "acceptance_passed": false,
+      "failed_gates": [
+        {
+          "name": "parseability.spec_conformance",
+          "pillar": "parseability",
+          "sub_score_key": "spec_conformance",
+          "threshold": 100.0,
+          "aspirational": 100.0,
+          "actual": 75.43966532634742,
+          "passed": false,
+          "applicable": true,
+          "meets_aspirational": false,
+          "level": "hard"
+        },
+        {
+          "name": "causality.pivot_linkability",
+          "pillar": "causality",
+          "sub_score_key": "pivot_linkability",
+          "threshold": 80.0,
+          "aspirational": 95.0,
+          "actual": 79.16666666666667,
+          "passed": false,
+          "applicable": true,
+          "meets_aspirational": false,
+          "level": "hard"
+        },
+        {
+          "name": "causality.temporal_integrity",
+          "pillar": "causality",
+          "sub_score_key": "temporal_integrity",
+          "threshold": 85.0,
+          "aspirational": 95.0,
+          "actual": 79.16666666666667,
+          "passed": false,
+          "applicable": true,
+          "meets_aspirational": false,
+          "level": "hard"
+        }
+      ],
+      "schema": 75.43966532634742,
+      "correctness": 100.0
+    },
+    "splunk": {
+      "records": 123105,
+      "sources": {
+        "bash_history": 283,
+        "cisco_asa": 18930,
+        "ecar": 33307,
+        "email_artifacts": 25,
+        "proxy_access": 2236,
+        "snort_alert": 146,
+        "syslog": 3948,
+        "web_access": 822,
+        "windows_event_security": 18718,
+        "windows_event_sysmon": 11517,
+        "zeek_conn": 19850,
+        "zeek_dhcp": 47,
+        "zeek_dns": 3728,
+        "zeek_files": 2113,
+        "zeek_http": 3376,
+        "zeek_ocsp": 89,
+        "zeek_pe": 3,
+        "zeek_smb_files": 215,
+        "zeek_smb_mapping": 125,
+        "zeek_smtp": 46,
+        "zeek_ssl": 2496,
+        "zeek_x509": 1085
+      },
+      "overall": 95.33304610265087,
+      "acceptance_passed": false,
+      "failed_gates": [
+        {
+          "name": "causality.indicator_accuracy",
+          "pillar": "causality",
+          "sub_score_key": "indicator_accuracy",
+          "threshold": 85.0,
+          "aspirational": 95.0,
+          "actual": 71.92151556156969,
+          "passed": false,
+          "applicable": true,
+          "meets_aspirational": false,
+          "level": "hard"
+        },
+        {
+          "name": "causality.temporal_integrity",
+          "pillar": "causality",
+          "sub_score_key": "temporal_integrity",
+          "threshold": 85.0,
+          "aspirational": 95.0,
+          "actual": 83.33333333333333,
+          "passed": false,
+          "applicable": true,
+          "meets_aspirational": false,
+          "level": "hard"
+        }
+      ],
+      "schema": 100.0,
+      "correctness": 100.0
+    }
+  },
+  "tests": {
+    "routine": {
+      "passed": 11439,
+      "skipped": 68,
+      "deselected": 2025,
+      "seconds": 368.81
+    },
+    "slow": {
+      "passed": 5,
+      "deselected": 7,
+      "seconds": 482.28
+    },
+    "focused": {
+      "passed": 152,
+      "deselected": 2456,
+      "seconds": 8.11
+    }
+  },
+  "pending": [
+    "SOF-ELK Snare projection contract and identity label information preservation",
+    "Splunk indicator matching investigation",
+    "Existing temporal integrity failure",
+    "Zeek diagnostic-source generation coverage investigation",
+    "Linux/Windows CI",
+    "Independent review"
+  ],
+  "performance": {
+    "summary": {
+      "baseline": {
+        "seconds": 12.302766000037082,
+        "peak_rss_bytes": 777846784
+      },
+      "candidate": {
+        "seconds": 12.103271708008833,
+        "peak_rss_bytes": 774471680
+      }
+    },
+    "runs": [
+      {
+        "revision": "baseline",
+        "run": 0,
+        "seconds": 12.288577334024012,
+        "peak_rss_bytes": 777846784,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "candidate",
+        "run": 0,
+        "seconds": 12.110443916986696,
+        "peak_rss_bytes": 776798208,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "baseline",
+        "run": 1,
+        "seconds": 12.293113749939948,
+        "peak_rss_bytes": 778043392,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "candidate",
+        "run": 1,
+        "seconds": 12.103271708008833,
+        "peak_rss_bytes": 772997120,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "baseline",
+        "run": 2,
+        "seconds": 12.312071250053123,
+        "peak_rss_bytes": 774012928,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "candidate",
+        "run": 2,
+        "seconds": 12.09251404099632,
+        "peak_rss_bytes": 778059776,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "baseline",
+        "run": 3,
+        "seconds": 12.345635375007987,
+        "peak_rss_bytes": 778321920,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "candidate",
+        "run": 3,
+        "seconds": 12.117104000062682,
+        "peak_rss_bytes": 773128192,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "baseline",
+        "run": 4,
+        "seconds": 12.302766000037082,
+        "peak_rss_bytes": 773832704,
+        "records": 123105,
+        "exit": 0
+      },
+      {
+        "revision": "candidate",
+        "run": 4,
+        "seconds": 12.059598000021651,
+        "peak_rss_bytes": 774471680,
+        "records": 123105,
+        "exit": 0
+      }
+    ]
+  },
+  "baseline_target_evaluation": {
+    "sof-elk": {
+      "records": 123105,
+      "overall": 88.5760678165854,
+      "schema": 75.43885301165672,
+      "correctness": 75.43885301165672,
+      "acceptance_passed": false
+    },
+    "splunk": {
+      "records": 123105,
+      "overall": 94.6609994150794,
+      "schema": 97.51512936111449,
+      "correctness": 99.99916699292777,
+      "acceptance_passed": false
+    }
+  }
+}

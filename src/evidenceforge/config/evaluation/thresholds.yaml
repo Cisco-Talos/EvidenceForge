@@ -18,15 +18,15 @@ pillars:
     weight: 0.30
     sub_scores:
       spec_conformance:
-        minimum: 95
-        aspirational: 99
+        minimum: 100
+        aspirational: 100
         hard_gate: true
-        # Real SIEMs tolerate ~5% parse failures; 98 was aspirational, not achievable.
+        # Every observed record must satisfy the source schema.
       format_constraints:
-        minimum: 90
-        aspirational: 98
+        minimum: 100
+        aspirational: 100
         hard_gate: true
-        # Constraint violations are authoring errors; more forgiving floor.
+        # Correctness violations cannot be averaged away.
 
   # Pillar 2 — Plausibility
   # Goal: no impossible or highly-improbable field values, combinations, or
@@ -43,7 +43,7 @@ pillars:
         minimum: 85
         aspirational: 95
         hard_gate: false
-        # Rules are incomplete; tighten as co_occurrence.yaml coverage grows.
+        # Context-dependent record realism is diagnostic, not a correctness gate.
       distribution_fit:
         minimum: 70
         aspirational: 85

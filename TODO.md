@@ -58,6 +58,21 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1** Preserve Windows facts in Snare and validate its native representation. All 43 variants
+  have typed projections and field-level gates against both frozen SOF-ELK revisions; historical
+  ambiguity remains explicit. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
+- [ ] **P2** Follow up upstream Snare extraction limitations: ParentImage/CurrentDirectory patterns
+  require backslashes after the pipeline replaces them, and POSINT patterns omit zero ports.
+  EvidenceForge preserves these raw values; structured indexing needs upstream parser work and
+  renewed compatibility gates. No upstream changes are part of this branch.
+- [ ] **P1 — deferred** Investigate the existing iteration-scenario temporal-integrity failure
+  (40/48 visible events, 83.33%, below the unchanged 85% gate). Separate expected-time matching,
+  ordering, missing traces, and source-observation timing before assigning fixes to their owning
+  layer. Baseline/candidate evidence bytes match; this predates the validation refactor and is
+  deferred from this branch by user decision. See the same worklog for the eight findings.
+- [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
+  sources separately from their dedicated renderer/parser/validator fixture coverage.
+
 - Prepare the 2.1.0 release from `dev` to `main`, including the version/changelog bump and routine,
   coverage, slow, and checkpoint portability gates. See the
   [release worklog](docs/worklog/2026-09-14-2.1.0-release.md).

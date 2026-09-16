@@ -219,14 +219,24 @@ class TestStrictEcar:
     def test_invalid_unknown_object(self):
         """Object type not in the allowed set — fails."""
         raw = '{"object": "KERNEL_MODULE", "action": "CREATE"}'
-        result = validate_strict("ecar", raw, {})
+        import json
+
+        from evidenceforge.formats.loader import load_format
+        from evidenceforge.formats.validator import validate_event
+
+        result = validate_event(load_format("ecar"), json.loads(raw))
         assert not result.valid
         assert any("kernel_module" in e.lower() or "object" in e.lower() for e in result.errors)
 
     def test_invalid_unknown_action(self):
         """Action not in the allowed set — fails."""
         raw = '{"object": "PROCESS", "action": "EXPLODE"}'
-        result = validate_strict("ecar", raw, {})
+        import json
+
+        from evidenceforge.formats.loader import load_format
+        from evidenceforge.formats.validator import validate_event
+
+        result = validate_event(load_format("ecar"), json.loads(raw))
         assert not result.valid
         assert any("explode" in e.lower() or "action" in e.lower() for e in result.errors)
 

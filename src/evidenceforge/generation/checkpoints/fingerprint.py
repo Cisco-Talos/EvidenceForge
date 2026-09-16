@@ -25,7 +25,6 @@ from .models import CHECKPOINT_SCHEMA_VERSION
 
 _RUNTIME_DISTRIBUTIONS = (
     "jinja2",
-    "json-logic-qubit",
     "pydantic",
     "pytz",
     "pyyaml",

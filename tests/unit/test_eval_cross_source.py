@@ -1328,6 +1328,134 @@ class TestBeaconProxyMatcher:
 
         assert CrossSourceScorer._username_indicator_matches("aisha.johnson", event)
         assert not CrossSourceScorer._username_indicator_matches("root", event)
+        scorer = CrossSourceScorer()
+        assert scorer._record_matches(
+            _record(
+                "windows_event_security",
+                {
+                    "EventID": 4625,
+                    "Computer": "WS-AJOHNSON-01.meridianhcs.local",
+                    "TargetUserName": "aisha.johnson",
+                },
+                ts=T0,
+            ),
+            "windows_event_security",
+            ResolvedEvent(
+                index=0,
+                time=T0,
+                actor="root",
+                system="WS-AJOHNSON-01",
+                system_ip="10.10.1.35",
+                activity="wrong password fumble",
+                details={"target_username": "aisha.johnson"},
+                event_types=["failed_logon"],
+            ),
+            "failed_logon",
+        )
+
+    def test_failed_logon_source_sentinel_is_an_indicator_mismatch(self):
+        """An explicit source must not receive credit when a source-bearing trace loses it."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="WS-AJOHNSON-01",
+            system_ip="10.10.1.35",
+            activity="wrong password fumble",
+            details={"source_ip": "10.10.1.99", "target_username": "aisha.johnson"},
+            event_types=["failed_logon"],
+        )
+        trace = _record(
+            "ecar",
+            {
+                "hostname": "WS-AJOHNSON-01",
+                "object": "USER_SESSION",
+                "action": "LOGIN",
+                "principal": "aisha.johnson",
+                "src_ip": "-",
+            },
+            ts=T0,
+        )
+
+        assert ("source_ip", False) in CrossSourceScorer()._check_indicators(event, trace)
+
+        del trace.fields["src_ip"]
+        assert ("source_ip", False) in CrossSourceScorer()._check_indicators(event, trace)
+
+    def test_failed_logon_dc_supporting_traces_use_requester_identity(self):
+        """4771/4776 support a failed logon without borrowing the target as requester."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+        from evidenceforge.models.scenario import System
+
+        source = System(
+            hostname="LT-MRIVERA-02",
+            ip="10.10.1.99",
+            os="Linux Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 10",
+            type="workstation",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        scenario = _make_scenario(systems=[source, target, dc])
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system=target.hostname,
+            system_ip=target.ip,
+            activity="wrong password fumble",
+            details={"source_ip": source.ip, "target_username": "aisha.johnson"},
+            event_types=["failed_logon"],
+        )
+        scorer = CrossSourceScorer()
+        scorer._initialize_pivot_identity(scenario)
+        kerberos = _record(
+            "windows_event_security",
+            {
+                "EventID": 4771,
+                "Computer": "DC-01.meridianhcs.local",
+                "TargetUserName": "aisha.johnson",
+                "IpAddress": "::ffff:10.10.1.99",
+            },
+            ts=T0,
+        )
+        ntlm = _record(
+            "windows_event_security",
+            {
+                "EventID": 4776,
+                "Computer": "DC-01.meridianhcs.local",
+                "TargetUserName": "aisha.johnson",
+                "Workstation": "LT-MRIVERA-02",
+            },
+            ts=T0,
+        )
+
+        assert scorer._record_matches(kerberos, "windows_event_security", event, "failed_logon")
+        assert scorer._record_matches(ntlm, "windows_event_security", event, "failed_logon")
+        assert all(result for _name, result in scorer._check_indicators(event, kerberos))
+        assert all(result for _name, result in scorer._check_indicators(event, ntlm))
+
+        kerberos.fields["IpAddress"] = "10.10.1.88"
+        ntlm.fields["Workstation"] = target.hostname
+        assert ("source_ip", False) in scorer._check_indicators(event, kerberos)
+        assert ("source_workstation", False) in scorer._check_indicators(event, ntlm)
+
+        index = scorer._build_host_time_index({"windows_event_security": [kerberos, ntlm]})
+        assert scorer._search_for_event_indexed(event, "failed_logon", index) == [
+            kerberos,
+            ntlm,
+        ]
 
     def test_ipv4_mapped_source_indicator_matches_plain_ipv4(self):
         """Windows IPv4-mapped addresses should not create source mismatch noise."""

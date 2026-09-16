@@ -284,7 +284,7 @@ variants:
         type: string
         required: true
       - name: SourceIp
-        type: string
+        type: ip_address
         required: true
       - name: SourceHostname
         type: string
@@ -292,6 +292,9 @@ variants:
       - name: SourcePort
         type: integer
         required: true
+        constraints:
+          min_value: 0
+          max_value: 65535
       - name: SourcePortName
         type: string
         required: false
@@ -299,7 +302,7 @@ variants:
         type: string
         required: true
       - name: DestinationIp
-        type: string
+        type: ip_address
         required: true
       - name: DestinationHostname
         type: string
@@ -307,6 +310,9 @@ variants:
       - name: DestinationPort
         type: integer
         required: true
+        constraints:
+          min_value: 0
+          max_value: 65535
       - name: DestinationPortName
         type: string
         required: false
@@ -656,3 +662,38 @@ output:
         {% endif %}
       </EventData>
     </Event>
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: sysmon.source-family
+  message: IP address must agree with IPv6 flag
+  severity: error
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 3
+  - op: presence
+    field: SourceIp
+  - op: presence
+    field: SourceIsIpv6
+  checks:
+  - op: address_family
+    field: SourceIp
+    other_field: SourceIsIpv6
+- id: sysmon.destination-family
+  message: IP address must agree with IPv6 flag
+  severity: error
+  when:
+  - op: compare
+    field: EventID
+    relation: eq
+    value: 3
+  - op: presence
+    field: DestinationIp
+  - op: presence
+    field: DestinationIsIpv6
+  checks:
+  - op: address_family
+    field: DestinationIp
+    other_field: DestinationIsIpv6

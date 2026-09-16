@@ -22,13 +22,13 @@
 
 """Base parser for all Zeek NDJSON log files."""
 
-import json
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import LogParser, ParsedRecord, iter_bounded_text_lines
+from .json_record import decode_record
 
 
 class ZeekNdjsonParser(LogParser):
@@ -56,7 +56,7 @@ class ZeekNdjsonParser(LogParser):
         timestamp = None
 
         try:
-            data = json.loads(raw)
+            data = decode_record(raw)
             fields = data
 
             ts = data.get("ts")
@@ -64,10 +64,10 @@ class ZeekNdjsonParser(LogParser):
                 try:
                     epoch = float(ts)
                     timestamp = datetime.fromtimestamp(epoch, tz=UTC)
-                except (ValueError, TypeError, OSError):
+                except (ValueError, TypeError, OSError, OverflowError):
                     errors.append(f"Invalid timestamp: {ts}")
 
-        except json.JSONDecodeError as e:
+        except (ValueError, TypeError) as e:
             errors.append(f"JSON parse error: {e}")
 
         return ParsedRecord(

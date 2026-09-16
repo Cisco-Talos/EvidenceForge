@@ -15,3 +15,6 @@ documentation, and round-trip tests together.
 
 Do not place format YAML under `.eforge/config`, expose it through a pack, or treat a copied package
 file as a supported project override.
+
+Field schemas and bounded record predicates are validated with Pydantic at load time. Legacy JSON
+Logic is no longer supported. See `/eforge:references:record-validation` for acceptance policy.

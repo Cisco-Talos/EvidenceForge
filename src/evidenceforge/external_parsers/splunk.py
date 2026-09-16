@@ -1169,7 +1169,11 @@ def _cim_required_field_names(expectation: SplunkCimExpectation) -> tuple[str, .
 
 
 def _search_result_rows(rows: list[JsonObject]) -> list[JsonObject]:
-    return [row for row in rows if isinstance(row.get("result"), dict)]
+    return [
+        row
+        for row in rows
+        if row.get("preview") is not True and isinstance(row.get("result"), dict)
+    ]
 
 
 def _validation_sourcetype(

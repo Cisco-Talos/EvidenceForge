@@ -96,3 +96,23 @@ output:
   encoding: utf-8
   template: |
     <{{ pri }}>1 {{ timestamp.isoformat().replace('+00:00', 'Z') }} {{ hostname }} {{ app_name }} {{ pid | default('-', true) }} {{ msgid | default('-', true) }} {{ structured_data | default('-', true) }} {{ message }}
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: syslog.legacy-1
+  message: Syslog has non-empty message
+  severity: error
+  when: []
+  checks:
+  - op: length
+    field: message
+    minimum: 1
+- id: syslog.legacy-2
+  message: Syslog has hostname
+  severity: error
+  when: []
+  checks:
+  - op: compare
+    field: hostname
+    relation: ne
+    value: ''

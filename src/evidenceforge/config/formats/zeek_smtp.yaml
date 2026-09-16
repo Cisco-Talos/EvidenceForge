@@ -47,7 +47,8 @@ fields:
   - name: rcptto
     type: list
     required: true
-    description: "Envelope RCPT TO values"
+    description: Envelope RCPT TO values
+    item_type: string
   - name: last_reply
     type: string
     required: true
@@ -55,7 +56,8 @@ fields:
   - name: path
     type: list
     required: true
-    description: "Zeek SMTP path vector"
+    description: Zeek SMTP path vector
+    item_type: string
   - name: tls
     type: boolean
     required: true
@@ -71,11 +73,13 @@ fields:
   - name: to
     type: list
     required: false
-    description: "Visible To header recipients when visible"
+    description: Visible To header recipients when visible
+    item_type: string
   - name: cc
     type: list
     required: false
-    description: "Visible Cc header recipients when visible"
+    description: Visible Cc header recipients when visible
+    item_type: string
   - name: msg_id
     type: string
     required: false
@@ -91,8 +95,8 @@ fields:
   - name: fuids
     type: list
     required: false
-    description: "File UIDs for visible message parts/attachments"
-
+    description: File UIDs for visible message parts/attachments
+    item_type: string
 output:
   format: json
   file_extension: ".json"

@@ -77,8 +77,8 @@ fields:
   - name: cert_chain_fuids
     type: list
     required: false
-    description: "Zeek file UIDs for certificates observed in the server certificate chain"
-
+    description: Zeek file UIDs for certificates observed in the server certificate chain
+    item_type: string
 output:
   format: json
   file_extension: ".json"

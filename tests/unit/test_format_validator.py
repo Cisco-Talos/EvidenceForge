@@ -336,26 +336,11 @@ class TestValidateFieldConstraints:
         assert result.valid is False
         assert "must be one of" in result.errors[0]
 
-    def test_json_logic_simple_valid(self):
-        """Test simple JSON Logic rule passes."""
-        constraints = FieldConstraint(json_logic={"==": [{"var": "value"}, 42]})
-        result = validate_field_constraints("field", 42, constraints)
-        assert result.valid is True
+    def test_legacy_json_logic_rejected(self):
+        from pydantic import ValidationError
 
-    def test_json_logic_simple_invalid(self):
-        """Test simple JSON Logic rule fails."""
-        constraints = FieldConstraint(json_logic={"==": [{"var": "value"}, 42]})
-        result = validate_field_constraints("field", 99, constraints)
-        assert result.valid is False
-        assert "Failed JSON Logic" in result.errors[0]
-
-    @pytest.mark.parametrize("falsey_result", [0, "", []])
-    def test_json_logic_falsey_non_boolean_invalid(self, falsey_result):
-        """Test JSON Logic falsey non-boolean outputs fail validation."""
-        constraints = FieldConstraint(json_logic={"var": "value"})
-        result = validate_field_constraints("field", falsey_result, constraints)
-        assert result.valid is False
-        assert "Failed JSON Logic" in result.errors[0]
+        with pytest.raises(ValidationError, match="json_logic"):
+            FieldConstraint(json_logic={"==": [{"var": "value"}, 42]})
 
     def test_multiple_constraints(self):
         """Test multiple constraints together."""
@@ -555,7 +540,20 @@ class TestValidateEvent:
                 FieldDefinition(name="field2", type=FieldType.INTEGER),
             ],
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
-            validators=[{"<": [{"var": "field1"}, {"var": "field2"}]}],
+            validators=[
+                {
+                    "id": "test.order",
+                    "message": "ordered",
+                    "checks": [
+                        {
+                            "op": "compare",
+                            "field": "field1",
+                            "relation": "lt",
+                            "other_field": "field2",
+                        }
+                    ],
+                }
+            ],
         )
         event_data = {"field1": 10, "field2": 20}
         result = validate_event(format_def, event_data)
@@ -572,7 +570,20 @@ class TestValidateEvent:
                 FieldDefinition(name="field2", type=FieldType.INTEGER),
             ],
             output=OutputTemplate(format="text", template="t", file_extension=".txt"),
-            validators=[{"<": [{"var": "field1"}, {"var": "field2"}]}],
+            validators=[
+                {
+                    "id": "test.order",
+                    "message": "ordered",
+                    "checks": [
+                        {
+                            "op": "compare",
+                            "field": "field1",
+                            "relation": "lt",
+                            "other_field": "field2",
+                        }
+                    ],
+                }
+            ],
         )
         event_data = {"field1": 30, "field2": 20}
         result = validate_event(format_def, event_data)

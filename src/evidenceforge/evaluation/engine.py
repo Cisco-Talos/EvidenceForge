@@ -50,7 +50,11 @@ from evidenceforge.evaluation.pillars import (
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.ground_truth import load_ground_truth_document
 from evidenceforge.events.observation_manifest import load_observation_manifest
-from evidenceforge.models.exceptions import EvaluationLimitError
+from evidenceforge.models.exceptions import (
+    EvaluationError,
+    EvaluationLimitError,
+    EvidenceForgeError,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.output_targets import read_output_target_marker
 
@@ -422,10 +426,15 @@ class EvaluationEngine:
             effective_config=self.effective_config,
         )
 
+        from evidenceforge.evaluation.validation_routes import validate_route_inventory
+
+        validate_route_inventory()
+
         # 2. Run each available pillar scorer
         total_pillars = len(DIMENSION_SCORERS)
         self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_pillars})
         pillars: list[PillarScore] = []
+        scoring_records = records
         for i, scorer in enumerate(DIMENSION_SCORERS, 1):
             self._progress(
                 "dimension_start",
@@ -440,21 +449,28 @@ class EvaluationEngine:
             pillar_score: PillarScore
             try:
                 pillar_score = scorer.score(
-                    records,
+                    scoring_records,
                     self.scenario,
                     context=context,
                     progress=self._progress,
                 )
+                if isinstance(scorer, ParseabilityScorer) and context.malformed_record_ids:
+                    scoring_records = {
+                        source: [r for r in items if id(r) not in context.malformed_record_ids]
+                        for source, items in records.items()
+                    }
                 pillars.append(pillar_score)
-            except Exception:
-                logger.exception(f"Pillar {scorer.number} scoring failed")
-                pillar_score = PillarScore(
-                    number=scorer.number,
-                    name=scorer.name,
-                    weight=scorer.weight,
-                    score=None,
-                )
-                pillars.append(pillar_score)
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                RuntimeError,
+                EvidenceForgeError,
+            ) as exc:
+                raise EvaluationError(
+                    f"Pillar {scorer.number} ({scorer.name}) failed: {exc}"
+                ) from exc
             self._progress(
                 "dimension_done",
                 {

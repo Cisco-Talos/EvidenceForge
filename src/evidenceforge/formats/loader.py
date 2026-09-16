@@ -101,6 +101,9 @@ def load_format(name: str, force_reload: bool = False) -> FormatDefinition:
     try:
         # Load YAML
         data = load_yaml(format_file)
+        from evidenceforge.formats.snapshot_compatibility import decode_validation_snapshot
+
+        data = decode_validation_snapshot(format_file, data)
 
         # Validate against Pydantic model
         format_def = FormatDefinition(**data)
@@ -166,3 +169,17 @@ def clear_cache() -> None:
     global _format_cache
     _format_cache.clear()
     logger.debug("Cleared format definition cache")
+
+
+def validate_packaged_contracts() -> None:
+    """Validate package-owned record and scoring contracts for command preflight."""
+    load_all_formats()
+    from evidenceforge.evaluation.thresholds import load_thresholds
+
+    load_thresholds()
+    from evidenceforge.evaluation.validation_routes import validate_route_inventory
+
+    validate_route_inventory()
+    from evidenceforge.formats.snare import load_snare_projections
+
+    load_snare_projections()

@@ -66,7 +66,7 @@ class BashHistoryParser(LogParser):
             line = raw_line.rstrip("\n")
             ts_match = TIMESTAMP_PATTERN.match(line)
             if ts_match:
-                epoch = int(ts_match.group(1))
+                epoch: str | int = ts_match.group(1)
                 command = ""
                 try:
                     _command_line_number, raw_command = next(lines)
@@ -78,8 +78,9 @@ class BashHistoryParser(LogParser):
                 timestamp = None
                 errors: list[str] = []
                 try:
+                    epoch = int(epoch)
                     timestamp = datetime.fromtimestamp(epoch, tz=UTC)
-                except (ValueError, OSError):
+                except (ValueError, OSError, OverflowError):
                     errors.append(f"Invalid epoch: {epoch}")
 
                 raw = f"#{epoch}\n{command}" if command else f"#{epoch}"

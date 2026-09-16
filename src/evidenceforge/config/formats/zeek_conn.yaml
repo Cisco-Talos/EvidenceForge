@@ -60,8 +60,9 @@ fields:
   - name: duration
     type: float
     required: false
-    description: "Connection duration in seconds (unset if not ended)"
-
+    description: Connection duration in seconds (unset if not ended)
+    constraints:
+      min_value: 0
   - name: orig_bytes
     type: integer
     required: false
@@ -210,24 +211,61 @@ output:
     }
 
 # Cross-field validators
+
+# Typed record contracts; evaluated after scalar validation.
 validators:
-  # If duration is set, it should be non-negative
-  - if:
-      - "!=": [{"var": "duration"}, null]
-    then:
-      ">=": [{"var": "duration"}, 0]
-
-  # If service is set, duration should also be set (established connection)
-  - if:
-      - "!=": [{"var": "service"}, null]
-    then:
-      "!=": [{"var": "duration"}, null]
-
-  # SF state (normal connection) should have duration and bytes
-  - if:
-      - "==": [{"var": "conn_state"}, "SF"]
-    then:
-      and:
-        - "!=": [{"var": "duration"}, null]
-        - "!=": [{"var": "orig_bytes"}, null]
-        - "!=": [{"var": "resp_bytes"}, null]
+- id: zeek_conn.legacy-1
+  message: Completed connection (SF) has duration
+  severity: error
+  when:
+  - op: compare
+    field: conn_state
+    relation: eq
+    value: SF
+  checks:
+  - op: presence
+    field: duration
+    present: true
+- id: zeek_conn.legacy-2
+  message: Completed connection (SF) has byte counts
+  severity: error
+  when:
+  - op: compare
+    field: conn_state
+    relation: eq
+    value: SF
+  checks:
+  - op: presence
+    field: orig_bytes
+    present: true
+  - op: presence
+    field: resp_bytes
+    present: true
+- id: zeek_conn.legacy-3
+  message: Connection has valid protocol
+  severity: error
+  when: []
+  checks:
+  - op: membership
+    field: proto
+    values:
+    - tcp
+    - udp
+    - icmp
+- id: zeek_conn.legacy-4
+  message: Completed TCP (SF) cannot have zero duration
+  severity: warning
+  when:
+  - op: compare
+    field: conn_state
+    relation: eq
+    value: SF
+  - op: compare
+    field: proto
+    relation: eq
+    value: tcp
+  checks:
+  - op: compare
+    field: duration
+    relation: ne
+    value: 0

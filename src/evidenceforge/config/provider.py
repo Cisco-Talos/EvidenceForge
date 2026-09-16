@@ -135,6 +135,7 @@ _TRUSTED_DERIVED_CACHE_SLOTS: tuple[tuple[str, str], ...] = (
     ),
     ("evidenceforge.generation.storage_world", "_load_catalog_config"),
     ("evidenceforge.evaluation.thresholds", "load_thresholds"),
+    ("evidenceforge.formats.snare", "load_snare_projections"),
 )
 _TIMING_PROFILE_MODULE_NAME = "evidenceforge.generation.activity.timing_profiles"
 _TIMING_PROFILE_CACHE_SLOT = "_CACHED_TIMING_PROFILES"
@@ -258,7 +259,7 @@ def _make_derived_runtime_cache_registry() -> tuple[
     Callable[[str, str, dict[str, Any], Any], None],
     Callable[[], tuple[_DerivedRuntimeCacheAnchor, ...]],
 ]:
-    """Build immutable per-owner identities for the three audited LRU caches."""
+    """Build immutable per-owner identities for the audited LRU caches."""
 
     registration_lock = threading.Lock()
     registered: dict[tuple[str, str], _DerivedRuntimeCacheAnchor] = {}

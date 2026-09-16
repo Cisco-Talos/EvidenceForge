@@ -45,6 +45,7 @@ CHATGPT_SKILL_NAMES = (
 
 _CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/config-apps-processes.md",
         "references/config-compatibility.md",
@@ -56,6 +57,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/config-validation.md",
     ),
     "evaluate": (
+        "references/record-validation.md",
         "references/evidence-endpoint-linux.md",
         "references/evidence-network-ids.md",
         "references/evidence-web-email.md",
@@ -63,6 +65,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "generate": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/checkpoint-recovery.md",
         "references/evidence-endpoint-linux.md",
@@ -72,6 +75,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "industry-pack": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/pack-reference.md",
         "references/scenario-baseline-output.md",
@@ -82,6 +86,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-smb.md",
     ),
     "organization-pack": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/pack-reference.md",
         "references/scenario-baseline-output.md",
@@ -92,9 +97,18 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-http.md",
         "references/scenario-smb.md",
     ),
-    "pack": ("references/project-context.md", "references/pack-reference.md"),
-    "pack-release": ("references/project-context.md", "references/pack-reference.md"),
+    "pack": (
+        "references/project-context.md",
+        "references/pack-reference.md",
+        "references/record-validation.md",
+    ),
+    "pack-release": (
+        "references/project-context.md",
+        "references/pack-reference.md",
+        "references/record-validation.md",
+    ),
     "scenario": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/evidence-endpoint-linux.md",
         "references/evidence-network-ids.md",
@@ -118,6 +132,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-storyline.md",
     ),
     "validate": (
+        "references/record-validation.md",
         "references/project-context.md",
         "references/validation-safety.md",
         "references/validation-storage.md",

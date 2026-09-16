@@ -127,8 +127,8 @@ WEB_ACCESS_SPEC = SofElkSourceSpec(
     filter_files=(
         "1000-preprocess-all.conf",
         "6100-httpd.conf",
-        "8060-postprocess-useragent.conf",
-        "8110-postprocess-httpd.conf",
+        "8054-postprocess-useragent.conf",
+        "8004-postprocess-httpd.conf",
         "8999-postprocess-all.conf",
     ),
     output_label_type="httpdlog",

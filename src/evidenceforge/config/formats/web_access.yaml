@@ -32,7 +32,7 @@ fields:
     required: true
     description: "HTTP method"
     constraints:
-      allowed_values: [GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH, TRACE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK]
+      allowed_values: [GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH, TRACE, CONNECT, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK]
 
   - name: path
     type: string
@@ -55,8 +55,9 @@ fields:
   - name: bytes_sent
     type: integer
     required: false
-    description: "Response size in bytes"
-
+    description: Response size in bytes
+    constraints:
+      min_value: 0
   - name: referer
     type: string
     required: false
@@ -73,3 +74,39 @@ output:
   encoding: utf-8
   template: |
     {{ client_ip }} - {{ username if username else '-' }} [{{ timestamp.strftime('%d/%b/%Y:%H:%M:%S %z') }}] "{{ method }} {{ path }} {{ protocol }}" {{ status_code }} {{ bytes_sent if bytes_sent else '-' }} "{{ referer if referer else '-' }}" "{{ user_agent if user_agent else '-' }}"
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: web_access.legacy-1
+  message: Request has valid status code
+  severity: error
+  when: []
+  checks:
+  - op: bounds
+    field: status_code
+    minimum: 100
+    maximum: 599
+- id: web_access.legacy-2
+  message: Request has HTTP method
+  severity: error
+  when: []
+  checks:
+  - op: membership
+    field: method
+    values:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - HEAD
+    - OPTIONS
+    - PATCH
+    - TRACE
+    - CONNECT
+    - PROPFIND
+    - PROPPATCH
+    - MKCOL
+    - COPY
+    - MOVE
+    - LOCK
+    - UNLOCK

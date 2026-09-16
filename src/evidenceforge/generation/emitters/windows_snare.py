@@ -28,6 +28,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from evidenceforge.formats.snare import snare_projection
 from evidenceforge.generation.emitters.syslog_family import (
     render_rfc3164_syslog,
     syslog_priority,
@@ -109,39 +110,7 @@ _SYSMON_TASKS: dict[int, str] = {
     22: "Dns query",
 }
 
-_SECURITY_FIELD_LABELS: dict[str, str] = {
-    "SubjectUserSid": "Security ID",
-    "TargetUserSid": "Security ID",
-    "SubjectUserName": "Account Name",
-    "TargetUserName": "Account Name",
-    "SubjectDomainName": "Account Domain",
-    "TargetDomainName": "Account Domain",
-    "SubjectLogonId": "Logon ID",
-    "TargetLogonId": "Logon ID",
-    "NewProcessId": "Process ID",
-    "ProcessId": "Process ID",
-    "NewProcessName": "Process Name",
-    "ProcessName": "Process Name",
-    "Status": "Exit Status",
-    "SourcePort": "SourcePort",
-    "DestinationPort": "DestinationPort",
-    "SourceAddress": "SourceIp",
-    "DestAddress": "DestinationIp",
-}
-_INTERNAL_FIELDS = frozenset({"_storyline_origin"})
-_COMMON_SYSTEM_FIELDS = frozenset(
-    {
-        "EventID",
-        "TimeCreated",
-        "Computer",
-        "Channel",
-        "Level",
-        "EventRecordID",
-        "ExecutionProcessID",
-        "ExecutionThreadID",
-        "Provider",
-    }
-)
+_COMMON_SYSTEM_FIELDS = frozenset({"EventID", "Computer", "Channel", "Provider"})
 
 
 def render_windows_security_snare_syslog(event_data: dict[str, Any]) -> str:
@@ -160,7 +129,7 @@ def render_windows_security_snare_syslog(event_data: dict[str, Any]) -> str:
         category=_SECURITY_TASKS.get(event_id, "Audit"),
         summary=_SECURITY_SUMMARIES.get(event_id, f"Windows Security event {event_id}."),
         timestamp=timestamp,
-        field_labels=_SECURITY_FIELD_LABELS,
+        field_labels=snare_projection("windows_event_security", event_id).aliases,
     )
     severity = 5 if event_id in _SECURITY_FAILURE_EVENTS else 6
     return render_rfc3164_syslog(
@@ -179,8 +148,10 @@ def render_windows_sysmon_snare_syslog(event_data: dict[str, Any]) -> str:
     timestamp = _timestamp(event_data)
     computer = _clean_field(event_data.get("Computer") or "windows-host")
     summary = _SYSMON_TASKS.get(event_id, f"Sysmon event {event_id}.")
+    projected_data = dict(event_data)
+    projected_data.setdefault("UtcTime", _sysmon_utc_time(timestamp))
     payload = _snare_payload(
-        event_data={**event_data, "UtcTime": _sysmon_utc_time(timestamp)},
+        event_data=projected_data,
         computer=computer,
         channel="Microsoft-Windows-Sysmon/Operational",
         provider=_SYSMON_PROVIDER,
@@ -189,7 +160,7 @@ def render_windows_sysmon_snare_syslog(event_data: dict[str, Any]) -> str:
         category=summary,
         summary=summary,
         timestamp=timestamp,
-        field_labels={},
+        field_labels=snare_projection("windows_event_sysmon", event_id).aliases,
     )
     return render_rfc3164_syslog(
         pri=syslog_priority(1, 6),
@@ -214,7 +185,11 @@ def _snare_payload(
     timestamp: datetime,
     field_labels: dict[str, str],
 ) -> str:
-    expanded = _expanded_event_data(event_data, field_labels)
+    source = "windows_event_security" if channel == "Security" else "windows_event_sysmon"
+    projection = snare_projection(source, _event_id(event_data))
+    expanded = _expanded_event_data(
+        event_data, field_labels, projection.decimal_aliases, projection.fallback_aliases
+    )
     full_data = f"{summary}:  {expanded}" if expanded else summary
     columns = (
         computer,
@@ -235,16 +210,39 @@ def _snare_payload(
     return "\t".join(_clean_field(value) for value in columns)
 
 
-def _expanded_event_data(event_data: dict[str, Any], field_labels: dict[str, str]) -> str:
-    pieces: list[str] = []
+def _expanded_event_data(
+    event_data: dict[str, Any],
+    field_labels: dict[str, str],
+    decimal_aliases: dict[str, str],
+    fallback_aliases: dict[str, str],
+) -> str:
+    pieces: list[str] = ["ProjectionVersion: 1"]
+    for label, key in field_labels.items():
+        value = event_data.get(key)
+        if value not in (None, ""):
+            pieces.append(f"{label}: {_clean_field(value)}")
+    for label, key in decimal_aliases.items():
+        value = event_data.get(key)
+        if value not in (None, ""):
+            pieces.append(f"{label}: {int(value, 16)}")
+    if not any(piece.startswith(("Process ID: ", "New Process ID: ")) for piece in pieces):
+        for label, key in fallback_aliases.items():
+            if event_data.get(key) is not None:
+                pieces.append(f"{label}: {_clean_field(event_data[key])}")
     for key, value in event_data.items():
-        if key in _COMMON_SYSTEM_FIELDS or key in _INTERNAL_FIELDS or value in (None, ""):
+        if key in _COMMON_SYSTEM_FIELDS or key.startswith("_") or value is None:
             continue
-        label = field_labels.get(key, key)
+        if isinstance(value, datetime):
+            value = ensure_utc(value).isoformat()
+        # Upstream's unanchored LogonId pattern otherwise captures a scoped identity.
+        label = (
+            f"Canonical[{key}]"
+            if key
+            in {"SubjectLogonId", "TargetLogonId", "TargetLinkedLogonId", *decimal_aliases.values()}
+            else key
+        )
         pieces.append(f"{label}: {_clean_field(value)}")
-    if not pieces:
-        return ""
-    return "  ".join(pieces) + "  "
+    return "  ".join([*pieces, "ProjectionEnd: 1"]) + "  "
 
 
 def _event_id(event_data: dict[str, Any]) -> int:

@@ -494,6 +494,9 @@ class CausalityScorer(DimensionScorer):
                         normalized = CausalityScorer._normalize_index_value(ip_val)
                         if normalized:
                             index[f"{normalized}|{bucket}"][format_name].append(rec)
+                target_username = rec.fields.get("TargetUserName")
+                for alias in CausalityScorer._username_match_aliases(target_username):
+                    index[f"{alias}|{bucket}"][format_name].append(rec)
         return dict(index)
 
     @classmethod
@@ -722,6 +725,9 @@ class CausalityScorer(DimensionScorer):
             lookup_keys.append(str(expected_hostname).lower())
         if event_type == "smb_activity":
             lookup_keys.extend(host.casefold() for host in self._smb_expected_hosts(event))
+        if event_type == "failed_logon":
+            for username in self._expected_usernames_for_event(event):
+                lookup_keys.extend(self._username_match_aliases(username))
 
         seen: set[int] = set()
         for hostname_key in lookup_keys:
@@ -923,11 +929,15 @@ class CausalityScorer(DimensionScorer):
                 )
         elif event_type == "failed_logon":
             if format_name == "windows_event_security":
-                return (
-                    f.get("EventID") == 4625
-                    and self._host_matches(f.get("Computer"), event.system)
-                    and self._user_matches(f.get("TargetUserName"), event.actor)
-                )
+                event_id = f.get("EventID")
+                if event_id == 4625:
+                    return self._host_matches(
+                        f.get("Computer"), event.system
+                    ) and self._username_indicator_matches(f.get("TargetUserName"), event)
+                if event_id in {4771, 4776}:
+                    return self._is_modeled_domain_controller(
+                        f.get("Computer")
+                    ) and self._username_indicator_matches(f.get("TargetUserName"), event)
             if format_name == "ecar":
                 return (
                     f.get("object") == "USER_SESSION"
@@ -1941,6 +1951,19 @@ class CausalityScorer(DimensionScorer):
             for username in cls._expected_usernames_for_event(event)
         )
 
+    def _is_modeled_domain_controller(self, record_host: Any) -> bool:
+        """Return whether a source-native record belongs to a modeled domain controller."""
+        return any(
+            self._host_matches(record_host, hostname) for hostname in self._domain_controller_hosts
+        )
+
+    def _source_hostname_for_ip(self, source_ip: Any) -> str | None:
+        """Resolve an authored source address to its modeled hostname when available."""
+        normalized = self._normalize_pivot_ip(source_ip)
+        if not normalized:
+            return None
+        return self._pivot_ip_hosts.get(normalized)
+
     @classmethod
     def _user_matches(cls, record_user: Any, expected: str) -> bool:
         if record_user is None:
@@ -2575,10 +2598,15 @@ class CausalityScorer(DimensionScorer):
                         user_ok = self._username_indicator_matches(f[uf], event)
                     checks.append(("username", user_ok))
                     break
+        dc_validation_trace = trace.source_format == "windows_event_security" and f.get(
+            "EventID"
+        ) in {4771, 4776}
         if trace.source_format != "cisco_asa":
             for hf in ["Computer", "hostname"]:
                 if hf in f and f[hf]:
-                    if "smb_activity" in event.event_types:
+                    if dc_validation_trace:
+                        host_matches = self._is_modeled_domain_controller(f[hf])
+                    elif "smb_activity" in event.event_types:
                         expected_hosts = self._smb_expected_hosts(event)
                         host_matches = any(
                             self._host_matches(f[hf], expected_host)
@@ -2588,14 +2616,32 @@ class CausalityScorer(DimensionScorer):
                         host_matches = self._host_matches(f[hf], event.system)
                     checks.append(("hostname", host_matches))
                     break
+        if "source_ip" in details and f.get("EventID") == 4776:
+            expected_workstation = self._source_hostname_for_ip(details["source_ip"])
+            if expected_workstation is not None:
+                checks.append(
+                    (
+                        "source_workstation",
+                        self._host_matches(f.get("Workstation"), expected_workstation),
+                    )
+                )
         if "source_ip" in details:
+            source_field_found = False
             for ipf in ["IpAddress", "id.orig_h", "src_ip"]:
-                if ipf in f and f[ipf] and f[ipf] != "-":
-                    source_ok = self._ip_matches(f[ipf], details["source_ip"])
+                if ipf in f:
+                    source_field_found = True
+                    source_value = f[ipf]
+                    source_ok = (
+                        bool(source_value)
+                        and source_value != "-"
+                        and self._ip_matches(source_value, details["source_ip"])
+                    )
                     if not source_ok and self._is_explicit_proxy_egress_trace(f, details):
                         source_ok = True
                     checks.append(("source_ip", source_ok))
                     break
+            if not source_field_found and self._failed_logon_source_address_required(event, trace):
+                checks.append(("source_ip", False))
         if "dst_ip" in details:
             for df in ["id.resp_h", "dst_ip"]:
                 if df in f and f[df]:
@@ -2605,6 +2651,24 @@ class CausalityScorer(DimensionScorer):
                     checks.append(("dst_ip", dst_ok))
                     break
         return checks
+
+    @staticmethod
+    def _failed_logon_source_address_required(
+        event: ResolvedEvent,
+        trace: ParsedRecord,
+    ) -> bool:
+        """Return whether a matched failed-auth trace natively carries a client address."""
+
+        if "failed_logon" not in event.event_types:
+            return False
+        fields = trace.fields
+        if trace.source_format == "windows_event_security":
+            return fields.get("EventID") in {4625, 4771}
+        return (
+            trace.source_format == "ecar"
+            and fields.get("object") == "USER_SESSION"
+            and fields.get("action") == "LOGIN"
+        )
 
     def _smb_expected_hosts(self, event: ResolvedEvent) -> set[str]:
         """Return legitimate client and server hosts for dual-view SMB evidence."""
@@ -2775,8 +2839,11 @@ class CausalityScorer(DimensionScorer):
         self._pivot_host_aliases: dict[str, str] = {}
         self._pivot_host_ips: dict[str, str] = {}
         self._pivot_ip_hosts: dict[str, str] = {}
+        self._domain_controller_hosts: set[str] = set()
         for system in scenario.environment.systems:
             canonical = system.hostname.lower().rstrip(".")
+            if system.type == "domain_controller":
+                self._domain_controller_hosts.add(canonical)
             aliases = {canonical, canonical.split(".", 1)[0]}
             for alias in aliases:
                 self._pivot_host_aliases[alias] = canonical

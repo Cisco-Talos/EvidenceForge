@@ -53,7 +53,7 @@ fields:
 
   - name: trans_id
     type: integer
-    required: true
+    required: false
     description: "DNS transaction ID"
     constraints:
       min_value: 0
@@ -62,11 +62,12 @@ fields:
   - name: rtt
     type: float
     required: false
-    description: "Round-trip time for the query (seconds)"
-
+    description: Round-trip time for the query (seconds)
+    constraints:
+      min_value: 0
   - name: query
     type: string
-    required: true
+    required: false
     description: "Domain name queried"
 
   - name: qclass
@@ -86,10 +87,8 @@ fields:
 
   - name: qtype_name
     type: string
-    required: true
+    required: false
     description: "Query type name"
-    constraints:
-      allowed_values: ["A", "AAAA", "CNAME", "MX", "NIMLOC", "NS", "PTR", "SOA", "SRV", "TXT"]
 
   - name: rcode
     type: integer
@@ -98,49 +97,47 @@ fields:
 
   - name: rcode_name
     type: string
-    required: true
+    required: false
     description: "Response code name"
-    constraints:
-      allowed_values: ["NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED", "NOTIMP"]
 
   - name: AA
     type: boolean
-    required: true
+    required: false
     description: "Authoritative Answer flag"
 
   - name: TC
     type: boolean
-    required: true
+    required: false
     description: "Truncation flag"
 
   - name: RD
     type: boolean
-    required: true
+    required: false
     description: "Recursion Desired flag"
 
   - name: RA
     type: boolean
-    required: true
+    required: false
     description: "Recursion Available flag"
 
   - name: Z
     type: integer
-    required: true
+    required: false
     description: "DNS header reserved bits (Z field), typically 0"
 
   - name: answers
     type: list
     required: false
-    description: "Answer records (JSON array of strings)"
-
+    description: Answer records (JSON array of strings)
+    item_type: string
   - name: TTLs
     type: list
     required: false
-    description: "Answer TTLs (JSON array of floats)"
-
+    description: Answer TTLs (JSON array of floats)
+    item_type: float
   - name: rejected
     type: boolean
-    required: true
+    required: false
     description: "Whether the query was rejected"
 
   - name: opcode
@@ -192,3 +189,111 @@ output:
       "opcode": {{ opcode | tojson }},
       "opcode_name": {{ opcode_name | tojson }}
     }
+
+# Typed record contracts; evaluated after scalar validation.
+validators:
+- id: zeek_dns.legacy-1
+  message: DNS query has non-empty query field
+  severity: warning
+  when: []
+  checks:
+  - op: length
+    field: query
+    minimum: 1
+- id: zeek_dns.legacy-2
+  message: DNS response has rcode
+  severity: warning
+  when: []
+  checks:
+  - op: presence
+    field: rcode_name
+    present: true
+- id: dns.qtype-name
+  message: qtype and its name must agree
+  severity: error
+  when:
+  - op: presence
+    field: qtype
+  - op: presence
+    field: qtype_name
+  - op: membership
+    field: qtype
+    values:
+    - 1
+    - 28
+    - 5
+    - 15
+    - 2
+    - 12
+    - 6
+    - 33
+    - 16
+    - 32
+  checks:
+  - op: combination
+    field: qtype
+    other_field: qtype_name
+    pairs:
+    - - 1
+      - A
+    - - 28
+      - AAAA
+    - - 5
+      - CNAME
+    - - 15
+      - MX
+    - - 2
+      - NS
+    - - 12
+      - PTR
+    - - 6
+      - SOA
+    - - 33
+      - SRV
+    - - 16
+      - TXT
+    - - 32
+      - NIMLOC
+- id: dns.rcode-name
+  message: rcode and its name must agree
+  severity: error
+  when:
+  - op: presence
+    field: rcode
+  - op: presence
+    field: rcode_name
+  - op: membership
+    field: rcode
+    values:
+    - 0
+    - 3
+    - 2
+    - 5
+    - 4
+  checks:
+  - op: combination
+    field: rcode
+    other_field: rcode_name
+    pairs:
+    - - 0
+      - NOERROR
+    - - 3
+      - NXDOMAIN
+    - - 2
+      - SERVFAIL
+    - - 5
+      - REFUSED
+    - - 4
+      - NOTIMP
+- id: dns.answer-ttls
+  message: Answers and TTLs must correspond
+  severity: error
+  when:
+  - op: presence
+    field: answers
+  - op: presence
+    field: TTLs
+  checks:
+  - op: same_length
+    field: answers
+    other_field: TTLs

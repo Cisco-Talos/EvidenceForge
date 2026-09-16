@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.support.output_equivalence import deterministic_bundle_files
@@ -29,9 +30,13 @@ def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
     return result.stdout
 
 
-def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["default", "sof-elk"])
+def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path, target: str) -> None:
     scenario_data = yaml.safe_load(
-        Path("tests/fixtures/scenarios/minimal.yaml").read_text(encoding="utf-8")
+        Path(
+            "tests/fixtures/scenarios"
+            / Path("checkpoint-all-formats.yaml" if target == "sof-elk" else "minimal.yaml")
+        ).read_text(encoding="utf-8")
     )
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
@@ -67,6 +72,8 @@ def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path) -> No
                 str(output),
                 "--seed",
                 "42",
+                "--target",
+                target,
                 "--checkpoint-hours",
                 "1",
             ],
@@ -115,12 +122,16 @@ def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path) -> No
         "42",
         "--checkpoint-hours",
         "0",
+        "--target",
+        target,
         environment=environment,
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
     assert any(
-        b"<Event " in content for name, content in resumed_files.items() if name.startswith("data/")
+        (b"MSWinEventLog" if target == "sof-elk" else b"<Event ") in content
+        for name, content in resumed_files.items()
+        if name.startswith("data/")
     )
     assert any(
         any(line and not line.startswith(b"#") for line in content.splitlines())

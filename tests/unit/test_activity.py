@@ -9117,10 +9117,10 @@ class TestActivityGenerator:
         assert event.auth.subject_username == "jsmith"
         assert event.auth.subject_logon_id == "0xabc123"
 
-    def test_kerberos_preauth_failed_preserves_missing_source_ip(
+    def test_kerberos_preauth_failed_renders_missing_source_as_localhost(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
-        """4771 should not render missing source IP as invalid ::ffff:-."""
+        """A DC-local 4771 should use the native localhost address and port zero."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         activity_gen._dc_systems = {
@@ -9141,7 +9141,7 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "kerberos_preauth_failed"
-        assert event.kerberos.source_ip == "-"
+        assert event.kerberos.source_ip == "::1"
         assert event.kerberos.source_port == 0
 
     def test_kerberos_preauth_failed_status_0x18_never_emits_type_zero(

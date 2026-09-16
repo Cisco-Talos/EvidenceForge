@@ -442,7 +442,7 @@ def test_sysmon_terminal_seal_sorts_late_earlier_row_and_defers_public_output(
         (
             OutputTarget.SOF_ELK,
             "windows_event_sysmon_snare.log",
-            "30182c0082491dcfe200b4e537f5da3ac8504a4230399959330422cad481c197",
+            "bae90967265a2ff9a94727ac2193dc6dc913931619b1e2d90c10c4b787957875",
         ),
     ],
 )
