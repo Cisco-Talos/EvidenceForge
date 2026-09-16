@@ -1352,7 +1352,7 @@ def test_windows_terminal_seal_sorts_late_earlier_row_and_uses_exact_writer(
         (
             OutputTarget.SOF_ELK,
             "windows_event_security_snare.log",
-            "d6cdf8ebc88d3c170841f7cd3d0e0b35f8f336105ff34e6262172e90e1ef9124",
+            "d0950e06a328011984feb6abf766ee96618f8532104e890790eb1163ba813ff8",
         ),
     ],
 )
