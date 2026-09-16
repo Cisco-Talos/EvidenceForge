@@ -6,6 +6,41 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.1.1 (2026-09-16)
+
+This patch release makes record validation representation-aware, preserves complete Windows Snare
+facts, corrects failed-logon requester semantics, and updates the external parser harness to the
+current validated SOF-ELK rules. Existing authored schemas and public APIs remain unchanged.
+
+**Record validation and evaluation**
+
+- Replace the external JSON-logic dependency with package-owned typed record predicates and apply
+  the same validation contracts across CLI preflight, generation, and evaluation. Cover incomplete
+  Windows XML wrappers and every successful proxy CONNECT response (`0ca530b2`, `c7a7517f`,
+  `3c4323fb`).
+- Route artifacts to their native validators, distinguish malformed evidence from evaluator
+  execution faults, and add reproducible compatibility, mutation, and readiness evidence
+  (`ef7175b8`, `9c89e83d`, `54cf6ac3`).
+- Parse Splunk web and proxy evidence during evaluation and normalize anonymous identities before
+  applying Windows Snare projections (`68cd5dd8`, `2c899b06`).
+
+**Windows Snare and external parser compatibility**
+
+- Preserve canonical Windows facts through typed Snare projections for all supported event
+  variants, with frozen compatibility tests and documented field dispositions (`1e91cf1b`,
+  `7b2ea369`, `e9beeca2`).
+- Update the SOF-ELK pin and harness for the newer parser filenames and scoped generic-syslog probe
+  tags while retaining fatal handling for malformed source records (`d25e71ba`).
+
+**Checkpoint and authentication correctness**
+
+- Decode recognized legacy validation snapshots and resolve checkpoint scratch paths before
+  mixed-format hydration (`cd6463f7`, `2526cda3`).
+- Preserve failed-logon requester identity independently from the authentication target and domain
+  controller, including coherent optional 4771 and 4776 evidence (`2619b865`).
+- Normalize ordinary host-log framing to LF so Windows checkpoint resume matches uninterrupted
+  generation (`1146b5a3`).
+
 ## v2.1.0 (2026-09-14)
 
 This release adds native Windows generation and checkpoint recovery on local NTFS, including
