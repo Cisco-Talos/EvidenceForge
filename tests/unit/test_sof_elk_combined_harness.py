@@ -92,6 +92,10 @@ def test_build_sof_elk_configs_uses_one_pipeline_and_all_inputs(
     ).read_text(encoding="utf-8")
     assert "6018-cisco_asa.conf" in config.sof_elk_filter_files
     assert "6100-httpd.conf" in config.sof_elk_filter_files
+    assert "8054-postprocess-useragent.conf" in config.sof_elk_filter_files
+    assert "8004-postprocess-httpd.conf" in config.sof_elk_filter_files
+    assert "8060-postprocess-useragent.conf" not in config.sof_elk_filter_files
+    assert "8110-postprocess-httpd.conf" not in config.sof_elk_filter_files
     assert "6015-sshd.conf" in config.sof_elk_filter_files
     assert not (config.pipeline_dir / "6018-cisco_asa.conf").exists()
     assert not (config.pipeline_dir / "6100-httpd.conf").exists()

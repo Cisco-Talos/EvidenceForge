@@ -807,3 +807,35 @@ Generation behavior revision **95** declares the Windows-only output normalizati
 verification passes the focused regression and the SOF-ELK checkpoint suspend/resume smoke test;
 Ruff, behavior-manifest, and whitespace checks also pass. Windows CI remains the authoritative
 cross-platform confirmation before merge.
+
+## SOF-ELK upstream pin refresh
+
+Updated the default SOF-ELK revision from `517af9445574cc084cd5f4b80539fc244dab82b0` to
+`d9f9bdd113a606c7b3fa1b2eafaa2d4400a16668`, which contains the upstream OpenSSH pre-auth close
+parser repair. The web/proxy harness now follows the upstream content-preserving postprocessor
+renames from `8060` to `8054` for user-agent enrichment and from `8110` to `8004` for HTTP
+postprocessing. The emitted optional page-classification tag remains `_grokparsefail_8110-01`.
+
+The pinned upstream Cisco ASA filter also removed its scoped `tag_on_failure` value, so an expected
+ASA classifier miss on an otherwise-valid generic Linux syslog record now receives Logstash's
+generic `_grokparsefailure`. Record-for-record comparison showed that the 2,562 generic misses at
+the new pin are an exact subset of the old revision's 2,575 `_grokparsefail_6018-01` misses; the 13
+removed records are exactly the OpenSSH rows repaired upstream. The harness accepts the generic tag
+only for archived Linux syslog rows with complete parsed envelope fields, no successful specialized
+parser, and no UniFi application-name shape. Generic failures remain fatal for malformed base
+syslog, UniFi parsing, and Cisco ASA source records; ASA records still require `got_cisco` and
+`parse_done`. The historical scoped rule remains supported for explicit older-revision tests.
+
+Verification:
+
+- Focused combined/source/Zeek/runtime harness tests: **56 passed**.
+- Full retained iteration SOF-ELK pipeline: **PASS**, with exact expected/observed counts for all
+  **119,532 supported records** across 18 source families. The run used the repository default pin
+  without an override. Artifacts are under
+  `/private/tmp/eforge-record-validation-fixed-20260915/sof-elk-ingest-d9f9bdd-harness/sof-elk/`.
+- External Docker compatibility suite: **5 passed in 277.88s**. This includes the 45-record Snare
+  field-extraction matrix at both the historical and new revisions, the default-pin Windows Snare
+  smoke test, every generated Zeek type, and intentional corrupt-Zeek rejection.
+- Routine suite: **11,640 passed, 48 skipped, 2,026 deselected in 361.89s**, without coverage.
+- Repository-wide Ruff check and format check pass. Generated records, scenario files, package
+  version, and `TODO.md` are unchanged.

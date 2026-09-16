@@ -121,8 +121,9 @@ not-applicable findings; malformed values and contradictions still fail. Parseab
 not proof that unavailable facts were correct. Current projections must provide required metadata.
 
 External compatibility is tested against revisions `517af9445574cc084cd5f4b80539fc244dab82b0` and
-`a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b`, checking extracted values as well as ingestion. The harness
+`d9f9bdd113a606c7b3fa1b2eafaa2d4400a16668`, checking extracted values as well as ingestion. The harness
 uses uncompressed staged files and path identity for small fixtures; it removes upstream gzip auto
-detection from this transport adapter. Upstream Logstash filters remain unchanged. The existing
-optional-enrichment tag policy remains in force, with no new exemptions. See the branch worklog and
-field inventory for source/version-specific extraction limitations and executed gate results.
+detection from this transport adapter. Upstream Logstash filters remain unchanged. Tag policy keeps
+generic parser failures fatal except for the pinned Cisco ASA probe miss on a fully parsed generic
+Linux syslog envelope. See the ignored-tag reference, branch worklog, and field inventory for exact
+predicates, nearby fatal cases, source/version-specific limitations, and executed gate results.
