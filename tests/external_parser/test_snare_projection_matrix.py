@@ -21,7 +21,7 @@ from evidenceforge.generation.emitters.windows_snare import (
 )
 
 pytestmark = pytest.mark.external_parser
-REVISIONS = ["517af9445574cc084cd5f4b80539fc244dab82b0", "a85fe99b9dd296faeb39edb7b9eff0bbb87fdd4b"]
+REVISIONS = ["517af9445574cc084cd5f4b80539fc244dab82b0", "d9f9bdd113a606c7b3fa1b2eafaa2d4400a16668"]
 CASES = json.loads(
     (Path(__file__).parents[1] / "fixtures/record_validation/snare_full_variants.json").read_text()
 )

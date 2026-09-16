@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -126,6 +127,27 @@ def _is_parsed_pam_auth_failure(event: JsonMapping) -> bool:
     ) or message.startswith("authentication failure; ")
 
 
+def _is_parsed_generic_syslog_asa_probe_miss(event: JsonMapping) -> bool:
+    tags = event.get("tags", [])
+    if not isinstance(tags, list):
+        return False
+    tag_set = {str(tag) for tag in tags}
+    if "process_archive" not in tag_set or {"got_cisco", "parse_done"} & tag_set:
+        return False
+    if _get_path(event, "labels.type") != "syslog":
+        return False
+    if any(
+        _get_path(event, path) in (None, "")
+        for path in ("log.syslog.hostname", "log.syslog.appname", "event.original", "@timestamp")
+    ):
+        return False
+    process_name = _get_path(event, "process.name")
+    return not (
+        isinstance(process_name, str)
+        and re.fullmatch(r"[0-9A-Fa-f]{12},.*", process_name) is not None
+    )
+
+
 def _is_parsed_snare_windows_event(event: JsonMapping) -> bool:
     tags = event.get("tags", [])
     if not isinstance(tags, list):
@@ -189,7 +211,7 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         log_type="web_access",
         tag="_grokparsefail_8110-01",
         disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
-        source="SOF-ELK configfiles/8110-postprocess-httpd.conf",
+        source="SOF-ELK configfiles/8004-postprocess-httpd.conf",
         reason=(
             "Optional page/not-page URL path classification after the HTTP access "
             "record has already been parsed."
@@ -200,7 +222,7 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         log_type="proxy_access",
         tag="_grokparsefail_8110-01",
         disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
-        source="SOF-ELK configfiles/8110-postprocess-httpd.conf",
+        source="SOF-ELK configfiles/8004-postprocess-httpd.conf",
         reason=(
             "Optional page/not-page URL path classification after the HTTP access "
             "record has already been parsed."
@@ -217,6 +239,18 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
             "records. A miss on ordinary Linux syslog does not mean the syslog "
             "record failed to parse."
         ),
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_SYSLOG_VALIDATOR,
+        log_type="syslog",
+        tag="_grokparsefailure",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/6018-cisco_asa.conf at d9f9bdd",
+        reason=(
+            "The pinned SOF-ELK Cisco ASA filter uses Logstash's generic failure tag when its "
+            "opportunistic probe misses an otherwise-valid archived Linux syslog record."
+        ),
+        event_predicate=_is_parsed_generic_syslog_asa_probe_miss,
     ),
     ParserTagRule(
         validator=SOF_ELK_SYSLOG_VALIDATOR,

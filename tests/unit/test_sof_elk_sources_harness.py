@@ -347,6 +347,87 @@ def test_validate_source_parsed_output_accepts_syslog_parse(tmp_path: Path) -> N
     assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
 
 
+def test_validate_source_parsed_output_accepts_pinned_asa_probe_miss(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        SYSLOG_SPEC,
+        Path("syslog/2026/linux-01/syslog.log"),
+        "syslog.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_syslog_event()
+    event["tags"] = ["filebeat", "process_archive", "_grokparsefailure"]
+    event["process"] = {"name": "packagekitd"}
+    log = event["log"]
+    assert isinstance(log, dict)
+    syslog = log["syslog"]
+    assert isinstance(syslog, dict)
+    syslog["appname"] = "packagekitd"
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    events = validate_source_parsed_output(manifest, parsed_dir)
+
+    assert len(events) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("process_name", "remove_hostname"),
+    [("AABBCCDDEEFF,UAP-AC-Pro", False), ("packagekitd", True)],
+)
+def test_validate_source_parsed_output_keeps_other_generic_grok_failures_fatal(
+    tmp_path: Path,
+    process_name: str,
+    remove_hostname: bool,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        SYSLOG_SPEC,
+        Path("syslog/2026/linux-01/syslog.log"),
+        "syslog.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_syslog_event()
+    event["tags"] = ["filebeat", "process_archive", "_grokparsefailure"]
+    event["process"] = {"name": process_name}
+    if remove_hostname:
+        log = event["log"]
+        assert isinstance(log, dict)
+        syslog = log["syslog"]
+        assert isinstance(syslog, dict)
+        del syslog["hostname"]
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefailure"):
+        validate_source_parsed_output(manifest, parsed_dir)
+
+
+def test_validate_source_parsed_output_keeps_cisco_generic_grok_failure_fatal(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        CISCO_ASA_SPEC,
+        Path("syslog/2026/fw-01/cisco_asa.log"),
+        "cisco_asa.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_cisco_asa_event()
+    event["tags"] = ["filebeat", "process_archive", "_grokparsefailure"]
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefailure"):
+        validate_source_parsed_output(manifest, parsed_dir)
+
+
 def test_validate_source_parsed_output_reports_syslog_parser_context(
     tmp_path: Path,
 ) -> None:

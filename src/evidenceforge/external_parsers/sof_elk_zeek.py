@@ -49,7 +49,7 @@ from evidenceforge.external_parsers.tag_policy import (
 )
 
 SOF_ELK_REPO_URL = "https://github.com/philhagen/sof-elk.git"
-SOF_ELK_COMMIT = "517af9445574cc084cd5f4b80539fc244dab82b0"
+SOF_ELK_COMMIT = "d9f9bdd113a606c7b3fa1b2eafaa2d4400a16668"
 FILEBEAT_IMAGE = "docker.elastic.co/beats/filebeat-oss:9.4.1"
 LOGSTASH_IMAGE = "docker.elastic.co/logstash/logstash-oss:9.4.1"
 HARNESS_CONTAINER_LABEL = "evidenceforge.external_parser=sof-elk-zeek"
