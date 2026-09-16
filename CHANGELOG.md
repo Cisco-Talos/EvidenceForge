@@ -28,7 +28,7 @@ current validated SOF-ELK rules. Existing authored schemas and public APIs remai
 
 - Preserve canonical Windows facts through typed Snare projections for all supported event
   variants, with frozen compatibility tests and documented field dispositions (`1e91cf1b`,
-  `7b2ea369`, `e9beeca2`, `39615693`).
+  `7b2ea369`, `e9beeca2`, `39615693`, `f5847ed8`).
 - Update the SOF-ELK pin and harness for the newer parser filenames and scoped generic-syslog probe
   tags while retaining fatal handling for malformed source records (`d25e71ba`).
 
