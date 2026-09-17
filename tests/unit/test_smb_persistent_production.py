@@ -614,6 +614,31 @@ def test_persistent_smb_file_analysis_declares_digest_provenance(
     )
 
 
+def test_persistent_smb_target_file_excludes_remote_client_process_identity(
+    windows_read_control: tuple[tuple[str, bytes], ...],
+) -> None:
+    """A server-local FILE row must not inherit its remote SMB client actor."""
+
+    payloads = dict(windows_read_control)
+    server_rows = [
+        json.loads(line)
+        for line in payloads["FS-01.example.com/ecar.json"].decode("utf-8").splitlines()
+    ]
+    server_file = next(row for row in server_rows if row["object"] == "FILE")
+
+    remote_identity_fields = {
+        "source_process_uuid",
+        "source_pid",
+        "source_tid",
+        "source_image_path",
+        "source_principal",
+        "src_pid",
+        "src_tid",
+    }
+    assert remote_identity_fields.isdisjoint(server_file.get("properties", {}))
+    assert "actorID" not in server_file
+
+
 def test_persistent_smb_tree_connect_has_packet_stage_microsecond_texture(
     windows_read_control: tuple[tuple[str, bytes], ...],
 ) -> None:

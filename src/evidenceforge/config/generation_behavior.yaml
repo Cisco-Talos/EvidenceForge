@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 104
+current_revision: 105
 history_start_revision: 1
-behavior_surface_sha256: 54d13b9b1b71e0a5f4c639918c4e3470f9c5112e4f2e4ee06ffe11f1f737db02
+behavior_surface_sha256: 1d5025e1c752a1a18b0b2fe71e18737fabb5c19245dd9309fe12675a21117e6e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -954,3 +954,13 @@ changes:
       - windows_sysmon
       - zeek_conn
     summary: Bound process-dependent holds, child termination, and SSH client transports before immutable action-bundle session deadlines so target process trees terminate coherently before RDP logout.
+  - revision: 105
+    id: smb-target-host-local-process-attribution
+    impact: localized
+    domains:
+      - smb-client-attribution
+      - endpoint-process-identity
+      - source-native-projection
+    formats:
+      - ecar
+    summary: Prevent target-side SMB FILE telemetry from projecting the remote client process identity while preserving authenticated target-local service ownership when available.

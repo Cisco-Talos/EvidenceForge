@@ -278,3 +278,32 @@
 - Highest-confidence surviving families: foreign SMB client process identity on target-side
   Windows FILE telemetry, Windows creator/parent-principal disagreement, near-unique
   Kerberos/LDAP byte shapes, repeated compound bash commands, and templated suspicious DNS names.
+
+## Loop 84 Family Contract
+
+### Host-local SMB endpoint process attribution
+
+- **Classification:** `hard_contradiction` and `family_level`; Loop 83 found the same remote
+  client process UUID, PID, image, and principal rendered as target-side Windows FILE telemetry
+  across three servers.
+- **Owning abstractions:** the canonical SMB action owns the remote client actor and optional
+  target service identity; the eCAR endpoint-projection boundary owns which canonical identity is
+  local and therefore admissible on each host's source-native row.
+- **Invariant:** a client process identity may appear on client-side SMB FLOW and local-file
+  companions, but never as the actor, PID, image, or process UUID of a target-side FILE row. A
+  target FILE row uses an authenticated target-local service identity when one exists, otherwise
+  it omits process identity rather than borrowing the remote client. Linux Samba remains bound to
+  its local `smbd` process.
+- **Entry paths:** persistent and compatibility SMB reads/writes, copy/move/create/delete/rename,
+  Windows and Linux targets, storyline and baseline actions, process-attributed clients, and
+  process-free clients.
+- **Consumers:** eCAR client FLOW, client local-file companion, target FILE, Windows Security,
+  Samba syslog/audit, Zeek SMB/files, identity correlation, and process lifecycle state.
+- **Layer rationale:** the canonical occurrence must retain the remote actor for source-side
+  evidence, while only the endpoint renderer knows which host-local source-native record it is
+  constructing. Host-local admission at that projection boundary prevents the shared occurrence
+  from leaking a remote identity without destroying legitimate client correlation.
+- **Sibling risks:** preserve client FLOW/process attribution, client copy/move file provenance,
+  Windows target rows without a modeled service process, Linux `smbd` attribution, symmetric
+  source/target identity fields for genuinely cross-process events, and stable occurrence/file
+  identities.

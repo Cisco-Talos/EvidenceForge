@@ -782,6 +782,26 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["source_file_path"] = smb.previous_server_path
         self._apply_session_properties(event_data, event)
         self._apply_edr_context(event_data, event)
+        # One canonical SMB occurrence also owns source-side client evidence. Its
+        # actor is therefore the remote client process, not the process that a
+        # target endpoint sensor could attribute to this server-local FILE row.
+        # Admit only an authenticated target-local identity below.
+        for key in (
+            "source_process_uuid",
+            "source_pid",
+            "source_tid",
+            "source_image_path",
+            "source_principal",
+            "src_pid",
+            "src_tid",
+            "target_process_uuid",
+            "target_pid",
+            "target_tid",
+            "target_image_path",
+            "target_principal",
+            "tgt_tid",
+        ):
+            event_data.pop(key, None)
         state_manager = getattr(self, "_state_manager", None)
         local_identity = None
         if state_manager is not None and host is not None and event.network is not None:
@@ -807,23 +827,6 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
             ):
                 local_identity = target
-        if _is_linux_smb_event(event):
-            for key in (
-                "source_process_uuid",
-                "source_pid",
-                "source_tid",
-                "source_image_path",
-                "source_principal",
-                "src_pid",
-                "src_tid",
-                "target_process_uuid",
-                "target_pid",
-                "target_tid",
-                "target_image_path",
-                "target_principal",
-                "tgt_tid",
-            ):
-                event_data.pop(key, None)
         if local_identity is None:
             event_data.pop("actorID", None)
         else:
