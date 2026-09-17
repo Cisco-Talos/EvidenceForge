@@ -324,3 +324,29 @@
 - Highest-confidence surviving families: bounded-uniform Windows Security provider ThreadIDs,
   three-value scanner TCP-window sampling, issuer-inconsistent X.509 serial widths, mixed Windows
   binary build catalogs, and repeated fleet-wide Linux background templates.
+
+## Loop 85 Family Contract
+
+### Windows Security provider worker-thread allocation
+
+- **Classification:** `distribution_texture` and `family_level`; Loop 84 Detection and Host/EDR
+  reviewers independently measured near-uniform Security `Execution.ThreadID` populations across
+  the same approximate 0–4,000,000 range on every Windows host.
+- **Owning abstraction:** the Windows Security source-native provider execution model owns the
+  provider PID, host-scoped worker pools, thread-lifetime epochs, reuse, and rendered Execution
+  thread identity.
+- **Invariant:** provider ThreadIDs remain positive, four-byte aligned, deterministic, host- and
+  provider-scoped, and reused within bounded worker lifetimes; one collection window occupies
+  clustered allocator neighborhoods rather than independently filling a shared global range.
+- **Entry paths:** every canonical Windows Security event family, direct emitter compatibility,
+  exact multi-sink publication/retry, threaded and non-threaded rendering, log-clear record-ID
+  resets, and checkpoint-resumed generation.
+- **Consumers:** Windows Security XML/Snare, downstream parsers and SIEM fields, deterministic
+  bundle identity, source-finalization replay, and blind detection/host review.
+- **Layer rationale:** `Execution.ThreadID` is provider-owned source metadata, not canonical actor
+  identity. The Security renderer already owns its deterministic host/provider lifecycle model;
+  moving it into process state would conflate audit-provider workers with observed subject
+  processes and complicate replay.
+- **Sibling risks:** preserve stable results independent of render order, keep valid alignment and
+  numeric bounds, retain enough concurrent workers for high-volume PID 4 events, avoid cross-host
+  identical pools, and do not change canonical process/thread identities used by Sysmon or eCAR.

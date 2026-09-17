@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 105
+current_revision: 106
 history_start_revision: 1
-behavior_surface_sha256: 1d5025e1c752a1a18b0b2fe71e18737fabb5c19245dd9309fe12675a21117e6e
+behavior_surface_sha256: 398a513bdb5340b210dcfd13716bb382ac39c62471215e1c8dae572ea1992f37
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -964,3 +964,13 @@ changes:
     formats:
       - ecar
     summary: Prevent target-side SMB FILE telemetry from projecting the remote client process identity while preserving authenticated target-local service ownership when available.
+  - revision: 106
+    id: windows-provider-thread-pool-texture
+    impact: localized
+    domains:
+      - windows-security-provider
+      - source-native-identity
+      - distribution-texture
+    formats:
+      - windows_security
+    summary: Replace full-range per-event Security provider ThreadID hashing with deterministic host/provider worker pools that reuse clustered allocator neighborhoods across bounded lifetimes.

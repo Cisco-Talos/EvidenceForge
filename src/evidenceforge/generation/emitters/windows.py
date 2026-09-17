@@ -1259,8 +1259,20 @@ class WindowsEventEmitter(LogEmitter):
             )
             % pool_size
         )
-        thread_seed = _stable_seed(f"windows-thread-id:{provider_scope}:{lifecycle_epoch}:{slot}")
-        return 4 * (64 + (thread_seed % 1_000_000))
+        # Windows provider workers reuse a small pool while the system-wide TID
+        # allocator advances through a local neighborhood. Preserve that shape
+        # without retaining renderer state: the host anchor separates machines,
+        # the provider anchor separates worker populations, and successive
+        # lifetime epochs advance by one bounded pool width. A long-period ring
+        # prevents unbounded identifiers while avoiding a shared full-range
+        # uniform distribution within an ordinary collection window.
+        host_anchor = (
+            _stable_seed(f"windows-thread-host-anchor:{host.hostname.casefold()}") % 700_000
+        )
+        provider_anchor = _stable_seed(f"windows-thread-provider-anchor:{provider_scope}") % 8_192
+        lifecycle_position = lifecycle_epoch % 4_096
+        allocator_unit = host_anchor + provider_anchor + (lifecycle_position * 64) + slot
+        return 4 * (64 + allocator_unit)
 
     def _event_rng(self, event: CanonicalOccurrence, salt: str = "") -> random.Random:
         """Return a deterministic renderer-local RNG for incidental Windows fields."""
