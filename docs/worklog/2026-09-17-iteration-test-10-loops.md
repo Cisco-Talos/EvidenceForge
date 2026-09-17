@@ -307,3 +307,20 @@
   Windows target rows without a modeled service process, Linux `smbd` attribution, symmetric
   source/target identity fields for genuinely cross-process events, and stable occurrence/file
   identities.
+
+## Loop 84 Result
+
+- Commit: `cb7c756a` (`fix: keep SMB target process attribution local`).
+- Verification: 11,654 passed, 48 skipped, 2,028 deselected; focused persistent-SMB and
+  behavior-manifest tests, two Linux Samba slow sibling tests, Ruff check/format, behavior
+  manifest revision 105, and all 92 config files passed.
+- Automated evaluation: 97.0585 / PASS across 122,995 records. The evaluator again required the
+  authored-scenario mismatch override against the authoritative bundle.
+- Initial blind mean: 70.50; deliberated mean 76.00 after required Inconclusive/Synthetic verdict
+  disagreement review.
+- Target probes found zero foreign-process violations across 72 Windows target SMB FILE rows,
+  preserved process attribution on 490 client SMB FLOW rows, and preserved local `smbd`
+  attribution on all 35 Linux Samba target rows.
+- Highest-confidence surviving families: bounded-uniform Windows Security provider ThreadIDs,
+  three-value scanner TCP-window sampling, issuer-inconsistent X.509 serial widths, mixed Windows
+  binary build catalogs, and repeated fleet-wide Linux background templates.
