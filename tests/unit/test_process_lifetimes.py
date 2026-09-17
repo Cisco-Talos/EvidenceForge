@@ -1976,6 +1976,112 @@ def test_dependent_hold_extends_registered_foreground_finalizer() -> None:
     assert state.get_process(system.hostname, pid) is None
 
 
+def test_dependent_hold_stays_before_action_bundle_session_deadline() -> None:
+    """Dependent transport activity cannot outlive an immutable bundle-owned session."""
+    start = datetime(2024, 3, 18, 17, 45, tzinfo=UTC)
+    deadline = start + timedelta(minutes=15)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.2.30",
+        os="Windows 11",
+        type="workstation",
+    )
+    logon_id = state.create_session(
+        username="analyst",
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=5),
+        session_kind="rdp",
+    )
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    state.set_current_time(start)
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c curl https://example.test/report",
+        username="analyst",
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+
+    generator._remember_process_dependent_hold(
+        system=system,
+        pid=pid,
+        required_until=deadline + timedelta(minutes=45),
+    )
+
+    hold_until = generator._process_connection_hold_until[
+        generator._process_instance_key(system.hostname, pid)
+    ]
+    process = state.get_process(system.hostname, pid)
+    session = state.get_session(logon_id)
+    assert hold_until < deadline
+    assert process is not None and process.last_activity_time == hold_until
+    assert session is not None and session.last_activity_time == hold_until
+
+
+def test_process_termination_stays_before_action_bundle_session_deadline() -> None:
+    """A requested child close after an RDP-style hard deadline is clamped before it."""
+    start = datetime(2024, 3, 18, 17, 45, tzinfo=UTC)
+    deadline = start + timedelta(minutes=15)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.2.30",
+        os="Windows 11",
+        type="workstation",
+    )
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=5),
+        session_kind="rdp",
+    )
+    end_plan = SessionEndPlan(canonical_end=deadline, authority="action_bundle")
+    assert state.plan_session_end(logon_id, end_plan)
+    state.set_current_time(start)
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\curl.exe",
+        command_line="curl.exe https://example.test/report",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+    process = state.get_process(system.hostname, pid)
+    assert process is not None
+
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=deadline + timedelta(minutes=45),
+        pid=pid,
+        process_name=process.image,
+        logon_id=logon_id,
+    )
+
+    terminated_at = generator._terminated_process_times[
+        generator._process_instance_key(system.hostname, pid, process.start_time)
+    ]
+    assert process.start_time < terminated_at < deadline
+
+
 def test_process_watermark_drops_pid_scoped_state_before_reuse() -> None:
     """A reused PID must not inherit timing, holds, or modules from its old instance."""
     start = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)

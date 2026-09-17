@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 103
+current_revision: 104
 history_start_revision: 1
-behavior_surface_sha256: 233f1906cf6be1854d340195fe27282f787eac95250e4e27abbd9ca0789d5cf3
+behavior_surface_sha256: 54d13b9b1b71e0a5f4c639918c4e3470f9c5112e4f2e4ee06ffe11f1f737db02
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -939,3 +939,18 @@ changes:
       - proxy_access
       - zeek_http
     summary: Separate HTTP entity-body sizes from proxy wire bytes for no-body responses and replace fixed persistent-request spacing with response-aware lifecycle-scoped timing.
+  - revision: 104
+    id: action-bundle-process-hold-deadline
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - action-bundle-deadlines
+      - ssh-transport-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - windows_security
+      - windows_sysmon
+      - zeek_conn
+    summary: Bound process-dependent holds, child termination, and SSH client transports before immutable action-bundle session deadlines so target process trees terminate coherently before RDP logout.

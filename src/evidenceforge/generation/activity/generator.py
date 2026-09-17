@@ -4387,7 +4387,7 @@ class ActivityGenerator:
             return
         close_time = ensure_utc(required_until)
         end_plan = self.state_manager.process_session_end_plan(system.hostname, pid)
-        if end_plan is not None and end_plan.is_authoritative:
+        if end_plan is not None and end_plan.is_hard_deadline:
             deadline = ensure_utc(end_plan.canonical_end)
             close_gap_ms = 100 + (
                 _stable_seed(
@@ -5050,6 +5050,7 @@ class ActivityGenerator:
         step = available / max(2, len(processes) + 1)
         planned: list[tuple[ProcessIdentity, datetime]] = []
         prior = disconnect_at
+        prior_process: RunningProcess | None = None
         for ordinal, process in enumerate(processes, start=1):
             retained_child_close = (
                 self._lifecycle_authority.process_latest_closed_child_at_for_object(
@@ -5081,10 +5082,15 @@ class ActivityGenerator:
                     f"start={process.start_time.isoformat()}, "
                     f"last_activity={(process.last_activity_time or process.start_time).isoformat()}, "
                     f"disconnect={disconnect_at.isoformat()}, logout={logout_time.isoformat()}, "
-                    f"minimum={minimum.isoformat()}"
+                    f"retained_child_close="
+                    f"{retained_child_close.isoformat() if retained_child_close else '-'}, "
+                    f"prior_pid={prior_process.pid if prior_process else '-'}, "
+                    f"prior_image={prior_process.image if prior_process else '-'}, "
+                    f"prior={prior.isoformat()}, minimum={minimum.isoformat()}"
                 )
             planned.append((process_identity, terminate_at))
             prior = terminate_at + timedelta(microseconds=1)
+            prior_process = process
         return tuple(planned)
 
     def _logout_exact_rdp_entry(

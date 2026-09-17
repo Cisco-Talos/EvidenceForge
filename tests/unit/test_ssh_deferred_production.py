@@ -377,6 +377,52 @@ def test_ssh_source_teardown_fits_before_authoritative_source_session_end() -> N
     assert close_time < terminate_time < source_session_end
 
 
+def test_ssh_transport_fits_before_action_bundle_source_session_end(tmp_path: Path) -> None:
+    """A source process owned by an RDP-style session cannot carry SSH past its fence."""
+    fixture = _fixture(tmp_path)
+    source_session_end = _START + timedelta(seconds=20)
+    logon_id = fixture.state.create_session(
+        username=fixture.user.username,
+        system=fixture.source.hostname,
+        logon_type=10,
+        source_ip="10.0.0.5",
+        start_time=_START - timedelta(hours=1),
+        session_kind="rdp",
+    )
+    assert fixture.state.plan_session_end(
+        logon_id,
+        SessionEndPlan(source_session_end, "action_bundle"),
+    )
+    source_pid = fixture.state.create_process(
+        system=fixture.source.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+        command_line="ssh.exe analyst@DB-01",
+        username=fixture.user.username,
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+    fixture.generator._lifecycle_authority.ensure_process(fixture.source.hostname, source_pid)
+
+    SshSessionActionBundle(
+        replace(
+            fixture.request(),
+            source_pid=source_pid,
+            source_process_image=r"C:\Windows\System32\OpenSSH\ssh.exe",
+            duration=3600.0,
+        ),
+        fixture.generator,
+    ).execute()
+
+    _ecar_rows, zeek_rows = fixture.close_and_read()
+    connection = next(row for row in zeek_rows if row.get("id.resp_p") == 22)
+    observed_close = datetime.fromtimestamp(
+        float(connection["ts"]) + float(connection["duration"]),
+        tz=UTC,
+    )
+    assert observed_close < source_session_end
+
+
 def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path) -> None:
     """Hydration reconstructs untouched SSH close work against fresh runtime owners."""
 
