@@ -115,6 +115,49 @@ class BaselineTimingPlanner:
         )
         return microseconds / 1_000_000
 
+    def windows_session_bootstrap_delays(
+        self,
+        *,
+        stable_id: str,
+        host: str,
+        lifecycle_id: str,
+        remote: bool = False,
+    ) -> tuple[float, float]:
+        """Return user-manager and desktop-shell startup delays for one Windows session."""
+
+        if remote:
+            user_manager_bounds = (0.18, 0.72, 2.4)
+            desktop_shell_bounds = (0.55, 2.4, 8.5)
+        else:
+            # Local compatibility paths often schedule the first foreground
+            # action one second after logon. Retain that contract without
+            # reintroducing a fleet-wide fixed cadence.
+            user_manager_bounds = (0.08, 0.17, 0.28)
+            desktop_shell_bounds = (0.18, 0.39, 0.68)
+        user_manager_delay = self.right_skew_seconds(
+            relationship_key="windows.session.user_manager_start",
+            stable_id=stable_id,
+            minimum=user_manager_bounds[0],
+            median=user_manager_bounds[1],
+            maximum=user_manager_bounds[2],
+            sigma=0.58,
+            host=host,
+            lifecycle_id=lifecycle_id,
+            sample_key="user-manager-start",
+        )
+        desktop_shell_delay = self.right_skew_seconds(
+            relationship_key="windows.session.desktop_shell_start",
+            stable_id=stable_id,
+            minimum=desktop_shell_bounds[0],
+            median=desktop_shell_bounds[1],
+            maximum=desktop_shell_bounds[2],
+            sigma=0.68,
+            host=host,
+            lifecycle_id=lifecycle_id,
+            sample_key="desktop-shell-start",
+        )
+        return user_manager_delay, desktop_shell_delay
+
     def packet_observation_delta(
         self,
         *,

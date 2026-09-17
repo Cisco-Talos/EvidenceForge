@@ -178,3 +178,43 @@
 - **Sibling risks:** preserve legitimate analyzer gaps for reset/partial flows, keep certificate
   companions coherent, never fabricate cipher/certificate fields for unsuccessful handshakes, and
   retain independent sensor timing and transport capture-loss semantics.
+
+## Loop 81 Result
+
+- Commit: `284e01bc` (`fix: preserve TLS analyzer observations`).
+- Verification: 11,648 passed, 48 skipped, 2,027 deselected; Ruff check/format and all 92 config
+  files passed validation.
+- Automated evaluation: 96.2451 / PASS across 124,747 records. The verified authoritative bundle
+  required the evaluator's authored-scenario mismatch override even against its newly generated
+  resolved scenario; this is tracked as an evaluator-side guardrail defect.
+- Initial blind mean: 42.00, down 0.75 points from loop 80; deliberated mean 47.25 after required
+  three-way verdict disagreement review.
+- The target probe found zero missing SSL companions across 2,216 substantial, lossless successful
+  TLS observations and seven source-native partial handshake rows with zero cipher, certificate, or
+  successful-transport contradictions.
+- Highest-confidence surviving families: fixed Windows interactive-shell bootstrap timing, Linux
+  use of the Windows `0x3e7` system-session sentinel, fleet-wide sysstat texture, shallow visible GUI
+  process families, and one network-logon teardown identity hole.
+
+## Loop 82 Family Contract
+
+### Windows interactive-session bootstrap timing
+
+- **Classification:** `family_level`; Loop 81 unanimous timing/distribution finding across the
+  Windows Security and Sysmon projections of server interactive sessions.
+- **Owning abstraction:** the shared Windows interactive-session bootstrap planner owns the
+  winlogon, userinit, Explorer ordering and dwell-time relationships before process materialization.
+- **Invariant:** userinit and Explorer remain causally ordered within their owning logon session,
+  but their startup gaps are deterministic per lifecycle and broadly distributed rather than a
+  fleet-wide fixed 100/150 millisecond signature; local and RDP entry paths use the same timing
+  contract without collapsing unrelated hosts or sessions.
+- **Entry paths:** baseline and storyline local interactive logons, initial and deferred RDP
+  sessions, direct logon compatibility calls, lazy Explorer bootstrap, and checkpoint replay.
+- **Consumers:** Security 4624/4688/4689, Sysmon 1/5, eCAR USER_SESSION/PROCESS, StateManager
+  process/session ownership, source timing, evaluation, and blind host-forensics review.
+- **Layer rationale:** the repeated cadence is assigned before process publication and appears in
+  every endpoint projection. Renderer-local jitter would disagree across sources and break the
+  canonical parent/child lifecycle.
+- **Sibling risks:** preserve transport-before-auth RDP ordering, source-observation headroom,
+  winlogon/userinit/Explorer parentage, exact PID/GUID/logon ownership, termination after desktop
+  readiness, deterministic regeneration, and hard session/transport deadlines.

@@ -2818,6 +2818,11 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert winlogon.parent_pid == pid4.pid
     assert userinit.parent_pid == winlogon.pid
     assert explorer.parent_pid == userinit.pid
+    user_manager_delay = (userinit.started_at - session_identity.started_at).total_seconds()
+    desktop_shell_delay = (explorer.started_at - userinit.started_at).total_seconds()
+    assert 1.43 < user_manager_delay < 3.65
+    assert 0.55 < desktop_shell_delay < 8.5
+    assert desktop_shell_delay != pytest.approx(0.15)
 
     harness.generator.advance_rdp_session_lifecycle_watermark(_START + timedelta(seconds=30))
     assert harness.state.get_process(harness.target_hostname, userinit.pid) is None
@@ -2974,7 +2979,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     ]
     assert len(userinit_closes) == 1
     rendered_userinit_lifetime = _event_time(userinit_closes[0]) - rendered_times["userinit.exe"]
-    assert timedelta(milliseconds=650) < rendered_userinit_lifetime < timedelta(seconds=5.5)
+    assert timedelta(milliseconds=650) < rendered_userinit_lifetime < timedelta(seconds=14)
 
 
 def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:

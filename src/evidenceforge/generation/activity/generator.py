@@ -8896,7 +8896,7 @@ class ActivityGenerator:
         )
         if root_pid is None:
             return None
-        chain_time = max(ensure_utc(session.start_time), shell_time - timedelta(seconds=1))
+        chain_time = max(ensure_utc(session.start_time), shell_time - timedelta(seconds=12))
         winlogon_pid = session.session_winlogon_pid
         if winlogon_pid is not None and self._is_pid_active_at(system, winlogon_pid, shell_time):
             winlogon_source = self._process_source_frontier_or_bound(
@@ -8914,32 +8914,24 @@ class ActivityGenerator:
             )
         if winlogon_source is None:
             return None
-        userinit_time = chain_time + timedelta(
-            milliseconds=80
-            + (
-                _stable_seed(
-                    "windows_session_userinit_start:"
-                    f"{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
-                )
-                % 171
+        bootstrap_id = (
+            f"windows-session:{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
+        )
+        user_manager_delay, desktop_shell_delay = (
+            self._activity_timing_planner.windows_session_bootstrap_delays(
+                stable_id=bootstrap_id,
+                host=system.hostname,
+                lifecycle_id=session.logon_id,
             )
         )
+        userinit_time = chain_time + timedelta(seconds=user_manager_delay)
         userinit_source = self._process_create_source_bound(
             system=system,
             canonical_time=userinit_time,
             parent_source_time=winlogon_source,
             session_source_time=session_source_time,
         )
-        explorer_time = userinit_time + timedelta(
-            milliseconds=150
-            + (
-                _stable_seed(
-                    "windows_session_explorer_start:"
-                    f"{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
-                )
-                % 251
-            )
-        )
+        explorer_time = userinit_time + timedelta(seconds=desktop_shell_delay)
         explorer_source = self._process_create_source_bound(
             system=system,
             canonical_time=explorer_time,
@@ -35005,16 +34997,17 @@ class ActivityGenerator:
                 event_logon_id="0x3e7",
                 integrity_level="System",
             )
-            userinit_time = logon_time + timedelta(
-                milliseconds=80
-                + (
-                    _stable_seed(
-                        "windows_session_userinit_start:"
-                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
-                    )
-                    % 171
+            bootstrap_id = (
+                f"windows-session:{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
+            )
+            user_manager_delay, desktop_shell_delay = (
+                self._activity_timing_planner.windows_session_bootstrap_delays(
+                    stable_id=bootstrap_id,
+                    host=system.hostname,
+                    lifecycle_id=session.logon_id,
                 )
             )
+            userinit_time = logon_time + timedelta(seconds=user_manager_delay)
             self.state_manager.set_current_time(userinit_time)
             userinit_pid = self.state_manager.create_process(
                 system.hostname,
@@ -35033,16 +35026,7 @@ class ActivityGenerator:
                 event_logon_id=session.logon_id,
                 integrity_level="Medium",
             )
-            explorer_time = userinit_time + timedelta(
-                milliseconds=150
-                + (
-                    _stable_seed(
-                        "windows_session_explorer_start:"
-                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
-                    )
-                    % 251
-                )
-            )
+            explorer_time = userinit_time + timedelta(seconds=desktop_shell_delay)
             self.state_manager.set_current_time(explorer_time)
             explorer_pid = self.state_manager.create_process(
                 system.hostname,
