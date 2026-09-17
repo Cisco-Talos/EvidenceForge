@@ -509,7 +509,7 @@ class TestSysmonEventEmitter:
         content = output_file.read_text()
         assert '<Data Name="TargetProcessId">688</Data>' in content
         assert '<Data Name="NewThreadId">840</Data>' in content
-        assert '<Data Name="StartAddress">0x02060000</Data>' in content
+        assert '<Data Name="StartAddress">0x0000000002060000</Data>' in content
         assert '<Data Name="StartModule">C:\\Windows\\System32\\ntdll.dll</Data>' in content
         assert '<Data Name="StartFunction">NtCreateThreadEx</Data>' in content
         assert r'<Data Name="SourceUser">CORP\jsmith</Data>' in content

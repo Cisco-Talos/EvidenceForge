@@ -33,3 +33,37 @@
   regeneration, checkpoint continuity, stable daemon PIDs, non-cron systemd timer skip/jitter
   semantics, and collection-window admission.
 
+## Loop 77 Result
+
+- Commit: `81cdf1e4` (`fix: bind Linux background activity to host state`).
+- Verification: 11,643 passed, 48 skipped, 2,026 deselected; Ruff check/format and all 92 config
+  files passed validation.
+- Automated evaluation: 97.0715 / PASS across 131,365 records.
+- Initial blind mean: 51.75, down 22.25 points from loop 76; deliberated mean 60.50.
+- Target probes passed for per-host IRQ identity, complete sub-millisecond cron cadence, and
+  coherent host-variable resolver episodes.
+- Highest-confidence surviving families: TCP DNS transport state/accounting, complete
+  `runas /netonly` effects, file dependency ordering, Sysmon pointer rendering, and host-role
+  software inventory.
+
+## Loop 78 Family Contract
+
+### TCP DNS transport semantics and native Sysmon pointer rendering
+
+- **Classification:** two bounded `hard_contradiction` / `schema_or_format_defect` families from
+  the loop-77 detection review and deliberation.
+- **Owning abstractions:** the canonical network transaction planner owns protocol-specific
+  connection state, history, and packet accounting; the Sysmon renderer owns Windows-native
+  pointer presentation.
+- **Invariants:** a successful TCP DNS transaction carries TCP handshake/data/close history and
+  enough packets for that history, never UDP-style `Dd` with one packet per direction; Sysmon
+  Event 8 `StartAddress` renders as `0x` plus 16 uppercase hexadecimal digits.
+- **Entry paths:** explicit and inferred/fallback TCP DNS responses, including SERVFAIL synthesis;
+  every CreateRemoteThread event with or without a populated remote-thread context.
+- **Consumers:** canonical network state, Zeek `conn.log` and `dns.log`, packet/IP-byte accounting,
+  source timing, Sysmon XML, eCAR remote-thread projection, validation, and blind review.
+- **Layer rationale:** TCP semantics must be corrected before source observation and rendering so
+  all consumers share one defensible ledger. Pointer padding is source-native presentation and
+  therefore belongs in the Sysmon renderer without changing the canonical integer.
+- **Sibling risks:** preserve UDP DNS `Dd` semantics, capture-loss accounting, failed TCP states,
+  DNS RTT/close bounds, eCAR lowercase pointer format, and zero/default Event 8 behavior.

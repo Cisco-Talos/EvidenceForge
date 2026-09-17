@@ -4156,7 +4156,7 @@ class NetworkTransactionPlanner:
             )
         elif dns_has_response:
             conn_state = "SF"
-            history = "Dd"
+            history = _tcp_success_history(rng) if protocol_evidence.proto == "tcp" else "Dd"
             orig_bytes = max(orig_bytes or 0, 28)
             resp_bytes = max(resp_bytes or 0, 40)
             if protocol_evidence.dns.rtt is not None and (
@@ -4782,7 +4782,9 @@ class NetworkTransactionPlanner:
                 committed_suppressed = True
             if not had_response_payload:
                 event.network.conn_state = "SF"
-                event.network.history = "Dd"
+                event.network.history = (
+                    _tcp_success_history(rng) if protocol_evidence.proto == "tcp" else "Dd"
+                )
                 event.network.resp_bytes = rng.randint(80, 220)
                 if protocol_evidence.proto == "udp":
                     event.network.orig_pkts = event.network.history.count("D")
@@ -4798,8 +4800,24 @@ class NetworkTransactionPlanner:
                         event.network.resp_bytes + event.network.resp_pkts * overhead
                     )
                 else:
-                    event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
-                    event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                    event.network.orig_pkts, event.network.resp_pkts = (
+                        _tcp_packet_counts_from_payload_and_history(
+                            event.network.orig_bytes,
+                            event.network.resp_bytes,
+                            event.network.history,
+                            rng,
+                        )
+                    )
+                    event.network.orig_ip_bytes = _tcp_ip_byte_count(
+                        event.network.orig_bytes,
+                        event.network.orig_pkts,
+                        rng,
+                    )
+                    event.network.resp_ip_bytes = _tcp_ip_byte_count(
+                        event.network.resp_bytes,
+                        event.network.resp_pkts,
+                        rng,
+                    )
             event.network.duration = self._dns_transport_duration_seconds(
                 request,
                 synthesized_rtt,

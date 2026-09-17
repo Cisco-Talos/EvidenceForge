@@ -1947,7 +1947,7 @@ class SysmonEventEmitter(LogEmitter):
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
             "NewThreadId": remote_thread.new_thread_id if remote_thread else 0,
-            "StartAddress": f"0x{remote_thread.start_address:08X}" if remote_thread else "0x0",
+            "StartAddress": f"0x{remote_thread.start_address:016X}" if remote_thread else "0x0",
             "StartModule": remote_thread.start_module if remote_thread else "",
             "StartFunction": remote_thread.start_function if remote_thread else "",
             "SourceUser": source_user,

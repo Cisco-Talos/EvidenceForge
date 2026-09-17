@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 96
+current_revision: 97
 history_start_revision: 1
-behavior_surface_sha256: 2a559e1cfa02c2512e458ad865a91e8c21edd917b2018d57fc90439acde7af09
+behavior_surface_sha256: 50f01f645eab73f4fff70d27f4f18064b4fabb721be3ca40a0c71dbac73ead49
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -860,3 +860,14 @@ changes:
       - ecar
       - syslog
     summary: Bind Linux hardware and resolver background vocabulary to persistent host state, preserve configured cron executions, and add source-native sub-millisecond cron timestamp texture.
+  - revision: 97
+    id: tcp-dns-and-sysmon-pointer-fidelity
+    impact: localized
+    domains:
+      - network-transport-accounting
+      - source-native-projection
+    formats:
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_dns
+    summary: Give successful TCP DNS transactions TCP-native handshake, data, close, and packet accounting, and render Sysmon Event 8 addresses at native 64-bit width.
