@@ -296,7 +296,7 @@ system_services:
       roles_any: [mail_server]
       services_any: [edge_transport, exchange, msexchangetransport, smtp]
       command_templates:
-        - '"C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\EdgeTransport.exe" -service'
+        - '"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe" -service'
       parent: services
     - image: "C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\Microsoft.Exchange.Imap4.exe"
       id: microsoft-exchange-imap4
@@ -305,7 +305,7 @@ system_services:
       roles_any: [mail_server]
       services_any: [exchange, imap, imap4, imaps, msexchangeimap4]
       command_templates:
-        - '"C:\\Program Files\\Microsoft\\Exchange Server\\V15\\Bin\\Microsoft.Exchange.Imap4.exe"'
+        - '"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe"'
       parent: services
 
   workstation:

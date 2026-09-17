@@ -86,6 +86,26 @@ def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
 
 
+def test_exchange_system_process_commands_reuse_native_image_paths():
+    """Exchange command templates must not retain YAML-escaped separators."""
+    catalog = load_system_processes()
+    exchange_entries = {
+        entry["id"]: entry
+        for entries in catalog["system_services"].values()
+        for entry in entries
+        if entry.get("id", "").startswith("microsoft-exchange-")
+    }
+
+    assert set(exchange_entries) == {
+        "microsoft-exchange-edge-transport",
+        "microsoft-exchange-imap4",
+    }
+    for entry in exchange_entries.values():
+        command = entry["command_templates"][0]
+        assert command.split('"', 2)[1] == entry["image"]
+        assert r"\\" not in command
+
+
 def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     """Kernel bracket timestamps should be monotonic within a host boot stream."""
     scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)

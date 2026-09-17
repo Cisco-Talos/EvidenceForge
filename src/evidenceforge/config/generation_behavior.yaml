@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 97
+current_revision: 98
 history_start_revision: 1
-behavior_surface_sha256: 50f01f645eab73f4fff70d27f4f18064b4fabb721be3ca40a0c71dbac73ead49
+behavior_surface_sha256: 9439556c5364058f3587b66abc9caa73d6cfe3ef0896d447dffcf8673bee3c04
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -871,3 +871,15 @@ changes:
       - zeek_conn
       - zeek_dns
     summary: Give successful TCP DNS transactions TCP-native handshake, data, close, and packet accounting, and render Sysmon Event 8 addresses at native 64-bit width.
+  - revision: 98
+    id: icmp-history-and-exchange-command-paths
+    impact: localized
+    domains:
+      - network-transport-accounting
+      - windows-process-command-lines
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Preserve directional ICMP packet history through sensor projection and use native single-separator Exchange service command paths across endpoint sources.

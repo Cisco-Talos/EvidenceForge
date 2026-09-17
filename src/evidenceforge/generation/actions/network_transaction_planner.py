@@ -4143,7 +4143,6 @@ class NetworkTransactionPlanner:
         # ICMP is connectionless — always OTH regardless of what the caller passed
         if protocol_evidence.proto == "icmp":
             conn_state = "OTH"
-            history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
             orig_bytes, resp_bytes, duration = self._plan_icmp_payload(
@@ -4154,6 +4153,7 @@ class NetworkTransactionPlanner:
                 stable_id=facts.stable_id,
                 conn_id=conn_id,
             )
+            history = "Dd" if (resp_bytes or 0) > 0 else "D"
         elif dns_has_response:
             conn_state = "SF"
             history = _tcp_success_history(rng) if protocol_evidence.proto == "tcp" else "Dd"

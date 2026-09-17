@@ -67,3 +67,39 @@
   therefore belongs in the Sysmon renderer without changing the canonical integer.
 - **Sibling risks:** preserve UDP DNS `Dd` semantics, capture-loss accounting, failed TCP states,
   DNS RTT/close bounds, eCAR lowercase pointer format, and zero/default Event 8 behavior.
+
+## Loop 78 Result
+
+- Commit: `3992a09e` (`fix: preserve TCP DNS and Sysmon native semantics`).
+- Verification: 11,643 passed, 48 skipped, 2,027 deselected; Ruff check/format and all 92 config
+  files passed validation.
+- Automated evaluation: 96.7550 / PASS across 122,555 records.
+- Initial blind mean: 37.50, down 14.25 points from loop 77; deliberated mean 39.00.
+- Target probes passed for 13 TCP DNS flows and 11 Sysmon Event 8 records. The probe's initial
+  four-packet threshold was corrected to the source-native three-packet minimum for combined TCP
+  flags before the result was finalized.
+- Highest-confidence surviving families: ICMP directional history, Windows local-path command-line
+  escaping, duplicate endpoint publication, partial TLS analysis, and persistent Exchange service
+  instance ownership.
+
+## Loop 79 Family Contract
+
+### ICMP directional observation and Windows system-process command paths
+
+- **Classification:** two loop-78 multi-reviewer `schema_or_format` / `source_native_single_schema`
+  defects with exact rendered censuses.
+- **Owning abstractions:** the canonical network transaction planner owns ICMP request/reply
+  direction before sensor observation; the data-driven Windows system-process catalog owns native
+  command templates before Security, Sysmon, and eCAR projection.
+- **Invariants:** ICMP with origin packets renders origin-direction history and adds responder
+  direction when response packets exist; local drive-qualified Windows command paths contain one
+  separator per component, while UNC prefixes and intentional shell escaping remain unchanged.
+- **Entry paths:** baseline and storyline ICMP, scanner/probe ICMP, direct canonical connections,
+  every Zeek sensor observation, and Exchange EdgeTransport/Imap4 background service starts.
+- **Consumers:** canonical traffic/state, sensor observation snapshots, Zeek `conn.log`, Security
+  4688, Sysmon Event 1, eCAR PROCESS/FLOW, config validation, and blind probes.
+- **Layer rationale:** observation replaces emitter-local history from canonical facts, so fixing
+  the renderer would be overwritten; the Exchange defect is literal catalog data propagated
+  consistently by all endpoint renderers.
+- **Sibling risks:** preserve TCP/UDP Zeek history, unanswered ICMP duration omission, packet/IP-byte
+  accounting, sensor-local loss rules, legitimate UNC double prefixes, and non-Exchange templates.

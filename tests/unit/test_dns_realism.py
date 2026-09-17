@@ -1501,8 +1501,8 @@ class TestWeirdProtocolConstraint:
         assert "D" in event.network.history
         assert "d" in event.network.history
         assert event.network.history.endswith(("Ff", "F", "f"))
-        assert event.network.orig_pkts >= 4
-        assert event.network.resp_pkts >= 4
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
 
     def test_inferred_servfail_dns_row_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
@@ -1576,8 +1576,8 @@ class TestWeirdProtocolConstraint:
         assert "D" in event.network.history
         assert "d" in event.network.history
         assert event.network.history.endswith(("Ff", "F", "f"))
-        assert event.network.orig_pkts >= 4
-        assert event.network.resp_pkts >= 4
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
         assert event.network.resp_ip_bytes > event.network.resp_bytes
 
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(

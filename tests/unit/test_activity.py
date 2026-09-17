@@ -16511,11 +16511,38 @@ class TestActivityGenerator:
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
-        activity_gen.generate_connection("10.0.0.1", "93.184.216.34", timestamp, proto="icmp")
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            proto="icmp",
+            orig_bytes=32,
+            resp_bytes=32,
+        )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.protocol == "icmp"
         assert event.network.ip_proto == 1
+        assert event.network.history == "Dd"
+
+    def test_generate_connection_unanswered_icmp_owns_origin_history(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Unanswered ICMP should retain only originator packet direction."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            proto="icmp",
+            orig_bytes=32,
+            resp_bytes=0,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.history == "D"
 
 
 @pytest.fixture()
