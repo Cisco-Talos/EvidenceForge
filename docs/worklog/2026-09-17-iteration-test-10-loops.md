@@ -138,3 +138,18 @@
 - **Sibling risks:** preserve non-RunAs 4648 behavior, strict non-desktop Type 9 semantics,
   caller-process reuse, target-unavailable suppression, connection tuple uniqueness, and bounded
   lifecycle timing.
+
+## Loop 80 Result
+
+- Commit: `b3e5eb40` (`fix: complete RunAs explicit credential actions`).
+- Verification: 11,646 passed, 48 skipped, 2,027 deselected; Ruff check/format and all 92 config
+  files passed validation.
+- Automated evaluation: 96.2407 / PASS across 124,736 records.
+- Initial blind mean: 42.75, down 1.00 point from loop 79; deliberated mean 46.50 after the required
+  verdict-disagreement review.
+- The target probe found one logical RunAs action and zero violations across local 4648 source
+  semantics, cloned Type 9 ownership, requested child execution, SMB transport, target Type 3
+  authentication, and ordered unique lifecycle closure.
+- Highest-confidence surviving families: partial TLS observation, eCAR semantic identity collapse,
+  fixed explicit-proxy subrequest cadence, dense irqbalance notices, and remote WMI initiator gaps.
+- Paused after loop 80 at user request; loops 81–86 remain unstarted.
