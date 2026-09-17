@@ -103,3 +103,38 @@
   consistently by all endpoint renderers.
 - **Sibling risks:** preserve TCP/UDP Zeek history, unanswered ICMP duration omission, packet/IP-byte
   accounting, sensor-local loss rules, legitimate UNC double prefixes, and non-Exchange templates.
+
+## Loop 79 Result
+
+- Commit: `66f61766` (`fix: preserve ICMP and Exchange source semantics`).
+- Verification: 11,645 passed, 48 skipped, 2,027 deselected; Ruff check/format and all 92 config
+  files passed validation.
+- Automated evaluation: 96.7550 / PASS across 122,555 records.
+- Initial blind mean: 43.75; deliberated mean 50.75 after the required verdict-disagreement review.
+- Target probes passed for 694/694 packet-bearing ICMP observations, 76/76 Exchange command lines,
+  and 61/61 comparable quoted executable/image pairs.
+- Highest-confidence surviving families: incomplete explicit-credential action semantics,
+  ProcessAccess duplicate publication, DNS refusal projection, Exchange service-instance ownership,
+  and partial TLS analysis.
+
+## Loop 80 Family Contract
+
+### Successful `runas /netonly` action completion and local source semantics
+
+- **Classification:** repeated loop-77/79 `hard_contradiction` and `contract_gap`, promoted by the
+  loop-79 panel as the highest-confidence family-level defect.
+- **Owning abstraction:** the explicit-credential action bundle owns the caller, cloned Type 9
+  token, requested child command, remote transport/authentication result, and lifecycle closure.
+- **Invariant:** a successful modeled `runas /netonly` action creates the requested child under the
+  cloned token, realizes its remote ADMIN$ transport and target network logon when the target is
+  modeled, and closes those child/session resources in causal order; local Event 4648 source fields
+  never inherit an upstream RDP client address.
+- **Entry paths:** typed explicit-credential storyline events, baseline RunAs actions, direct
+  generator calls, materialized and pre-existing caller processes, and modeled/unmodeled targets.
+- **Consumers:** Security 4624/4634/4648/4688/4689, Sysmon process/network events, eCAR
+  PROCESS/FLOW/USER_SESSION, Zeek transport, state lifecycles, evaluation, and blind review.
+- **Layer rationale:** these are one action's semantic effects and identities; emitter-local rows
+  cannot safely infer the child, token ownership, remote target, or close ordering.
+- **Sibling risks:** preserve non-RunAs 4648 behavior, strict non-desktop Type 9 semantics,
+  caller-process reuse, target-unavailable suppression, connection tuple uniqueness, and bounded
+  lifecycle timing.

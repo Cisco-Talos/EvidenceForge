@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 98
+current_revision: 99
 history_start_revision: 1
-behavior_surface_sha256: 9439556c5364058f3587b66abc9caa73d6cfe3ef0896d447dffcf8673bee3c04
+behavior_surface_sha256: cda8568387d698c9e95cb805c558b665911eca3d746eab7fdf5d34972512ac97
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -883,3 +883,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Preserve directional ICMP packet history through sensor projection and use native single-separator Exchange service command paths across endpoint sources.
+  - revision: 99
+    id: runas-netonly-action-completion
+    impact: localized
+    domains:
+      - windows-explicit-credentials
+      - remote-authentication-lifecycle
+      - network-transport-accounting
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Complete successful runas netonly actions with cloned-token child execution, modeled SMB transport and target authentication, and local Event 4648 source semantics.

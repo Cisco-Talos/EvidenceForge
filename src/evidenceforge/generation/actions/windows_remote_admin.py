@@ -380,6 +380,25 @@ class WindowsRemoteAdminExecutor(Protocol):
         """Emit the Type 9 token clone owned by runas /netonly."""
         ...
 
+    def _explicit_credentials_target_system(self, target_server: str) -> System | None:
+        """Resolve a modeled target for explicit-credential effects."""
+        ...
+
+    def _user_model_for_username(self, username: str) -> User:
+        """Resolve a modeled user or construct a safe fallback."""
+        ...
+
+    def generate_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_type: int = 2,
+        **kwargs: Any,
+    ) -> str:
+        """Generate canonical session-start evidence."""
+        ...
+
     def _emit_remote_service_control_network_evidence(
         self,
         user: User,
@@ -457,6 +476,15 @@ class ExplicitCredentialUseActionBundle:
             subject_user,
             subject_logon_id,
         )
+        running_process = self._executor.state_manager.get_process(
+            self._request.system.hostname,
+            process_pid,
+        )
+        is_runas_netonly = (
+            ntpath.basename(self._request.process_name).casefold() == "runas.exe"
+            and running_process is not None
+            and "/netonly" in running_process.command_line.casefold()
+        )
         event_time = self._request.time
         if process_pid > 0:
             event_time = self._executor._clamp_after_visible_process_create(
@@ -470,10 +498,14 @@ class ExplicitCredentialUseActionBundle:
             self._request.target_server,
             self._request.system,
         )
-        network_source_ip = self._executor._explicit_credentials_source_ip(
-            self._request.system,
-            self._request.target_server,
-            self._request.source_ip,
+        network_source_ip = (
+            "-"
+            if is_runas_netonly
+            else self._executor._explicit_credentials_source_ip(
+                self._request.system,
+                self._request.target_server,
+                self._request.source_ip,
+            )
         )
         network_source_port = 0
         if self._request.source_port > 0:
@@ -504,16 +536,8 @@ class ExplicitCredentialUseActionBundle:
             ),
         )
         self._executor.dispatcher.dispatch_builder(event)
-        running_process = self._executor.state_manager.get_process(
-            self._request.system.hostname,
-            process_pid,
-        )
-        is_runas_netonly = (
-            ntpath.basename(self._request.process_name).casefold() == "runas.exe"
-            and running_process is not None
-            and "/netonly" in running_process.command_line.casefold()
-        )
         new_credentials_logon_id = ""
+        child_close_time: datetime | None = None
         if is_runas_netonly:
             new_credentials_logon_id = self._executor._emit_new_credentials_logon(
                 user=subject_user,
@@ -524,9 +548,19 @@ class ExplicitCredentialUseActionBundle:
                 outbound_domain=target_domain,
                 lifecycle_group_id=self._request.stable_id,
             )
+            child_close_time = self._realize_runas_remote_action(
+                subject_user=subject_user,
+                new_credentials_logon_id=new_credentials_logon_id,
+                event_time=event_time,
+            )
         if materialized_caller:
             lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
             termination_time = event_time + timedelta(milliseconds=lifetime_ms)
+            if child_close_time is not None:
+                termination_time = max(
+                    termination_time,
+                    child_close_time + timedelta(milliseconds=20),
+                )
             self._executor.generate_process_termination(
                 subject_user,
                 self._request.system,
@@ -543,6 +577,114 @@ class ExplicitCredentialUseActionBundle:
                     new_credentials_logon_id,
                     logon_type=9,
                 )
+
+    def _realize_runas_remote_action(
+        self,
+        *,
+        subject_user: User,
+        new_credentials_logon_id: str,
+        event_time: datetime,
+    ) -> datetime:
+        """Execute the child command and modeled ADMIN$ authentication result."""
+
+        child_time = event_time + timedelta(milliseconds=10)
+        target_system = self._executor._explicit_credentials_target_system(
+            self._request.target_server
+        )
+        target_name = (
+            target_system.hostname
+            if target_system is not None
+            else self._request.target_server.split(".", 1)[0]
+        )
+        command_line = f"cmd.exe /c dir \\\\{target_name}\\ADMIN$"
+        child_image = r"C:\Windows\System32\cmd.exe"
+        child_pid = self._executor.generate_process(
+            subject_user,
+            self._request.system,
+            child_time,
+            new_credentials_logon_id,
+            child_image,
+            command_line,
+            # NewCredentials owns a distinct token/session lifecycle. The durable
+            # caller relationship is carried by the action group and cloned-token
+            # metadata; the process registry deliberately forbids a structural
+            # parent edge that crosses exact session ownership.
+            parent_pid=0,
+            lifecycle_group_id=self._request.stable_id,
+        )
+        if target_system is None:
+            close_time = child_time + timedelta(milliseconds=750)
+            self._executor.generate_process_termination(
+                subject_user,
+                self._request.system,
+                close_time,
+                child_pid,
+                child_image,
+                new_credentials_logon_id,
+            )
+            return close_time
+
+        connection_time = child_time + timedelta(milliseconds=20)
+        seed = _stable_seed(f"{self._request.stable_id}:runas_smb")
+        source_port = 49152 + (seed % (65535 - 49152 + 1))
+        duration = 0.35 + ((seed >> 16) % 651) / 1000.0
+        transport_id = self._executor.generate_connection(
+            src_ip=self._request.system.ip,
+            dst_ip=target_system.ip,
+            time=connection_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=duration,
+            orig_bytes=640 + ((seed >> 32) % 1025),
+            resp_bytes=900 + ((seed >> 48) % 1801),
+            src_port=source_port,
+            pid=child_pid,
+            source_system=self._request.system,
+            conn_state="SF",
+            process_image=child_image,
+            suppress_application_side_effects=True,
+            kerberos_audit_username=self._request.target_username,
+            kerberos_audit_service_name=f"cifs/{target_system.hostname}",
+            parent_action_group_id=self._request.stable_id,
+        )
+        target_username = self._request.target_username.split("\\")[-1].split("@", 1)[0]
+        target_user = self._executor._user_model_for_username(target_username)
+        target_logon_time = connection_time + timedelta(milliseconds=40)
+        target_logon_id = self._executor.generate_logon(
+            target_user,
+            target_system,
+            target_logon_time,
+            logon_type=3,
+            source_ip=self._request.system.ip,
+            source_system=self._request.system,
+            source_port=source_port,
+            emit_network_evidence=False,
+            remote_authentication_transport_id=transport_id,
+            remote_auth_destination_port=445,
+            session_kind="smb",
+            lifecycle_group_id=f"{self._request.stable_id}:target_logon",
+            source="windows_explicit_credentials",
+        )
+        network_close = connection_time + timedelta(seconds=duration)
+        target_logoff_time = network_close + timedelta(milliseconds=20)
+        self._executor.generate_logoff(
+            target_user,
+            target_system,
+            target_logoff_time,
+            target_logon_id,
+            logon_type=3,
+        )
+        child_close_time = target_logoff_time + timedelta(milliseconds=20)
+        self._executor.generate_process_termination(
+            subject_user,
+            self._request.system,
+            child_close_time,
+            child_pid,
+            child_image,
+            new_credentials_logon_id,
+        )
+        return child_close_time
 
     def _resolve_process_pid(
         self,

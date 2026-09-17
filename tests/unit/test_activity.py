@@ -11092,7 +11092,11 @@ class TestActivityGenerator:
         ]
         process = next(event for event in emitted if event.event_type == "process_create")
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        terminated = next(event for event in emitted if event.event_type == "process_terminate")
+        terminated = next(
+            event
+            for event in emitted
+            if event.event_type == "process_terminate" and event.process.pid == process.process.pid
+        )
         assert explicit.auth.process_pid == process.process.pid
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
@@ -11165,6 +11169,70 @@ class TestActivityGenerator:
             for event in (
                 call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
             )
+        )
+
+    def test_runas_netonly_realizes_child_transport_and_target_logon(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A successful RunAs action owns its requested child and remote result."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        target_system = System(
+            hostname="DC01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="server",
+        )
+        activity_gen._ip_to_system[target_system.ip] = target_system
+        activity_gen._all_system_ips = [test_system.ip, target_system.ip]
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\admin01",
+            target_server=target_system.ip,
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.1.99",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        type9 = next(
+            event for event in emitted if event.event_type == "logon" and event.auth.logon_type == 9
+        )
+        child = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create"
+            and event.process.image.endswith("cmd.exe")
+            and event.auth.logon_id == type9.auth.logon_id
+        )
+        target_logon = next(
+            event
+            for event in emitted
+            if event.event_type == "logon"
+            and event.auth.logon_type == 3
+            and event.dst_host.hostname == target_system.hostname
+            and event.auth.username == "admin01"
+        )
+
+        assert explicit.auth.source_ip == "-"
+        assert child.process.command_line == rf"cmd.exe /c dir \\{target_system.hostname}\ADMIN$"
+        assert target_logon.auth.source_ip == test_system.ip
+        assert target_logon.auth.source_port > 0
+        assert any(
+            event.event_type == "logoff"
+            and event.auth.logon_id == target_logon.auth.logon_id
+            and event.auth.logon_type == 3
+            for event in emitted
+        )
+        assert any(
+            event.event_type == "process_terminate" and event.process.pid == child.process.pid
+            for event in emitted
         )
 
     def test_direct_type9_logon_rejects_missing_new_credentials_facts(
