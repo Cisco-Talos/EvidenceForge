@@ -158,6 +158,46 @@ class BaselineTimingPlanner:
         )
         return user_manager_delay, desktop_shell_delay
 
+    def http_persistent_request_gap_seconds(
+        self,
+        *,
+        stable_id: str,
+        host: str,
+        lifecycle_id: str,
+        ordinal: int,
+        response_body_bytes: int,
+    ) -> float:
+        """Return a request gap that includes client pacing and prior-response transfer time."""
+
+        client_pacing = self.right_skew_seconds(
+            relationship_key="web.http.persistent_request_pacing",
+            stable_id=stable_id,
+            minimum=0.12,
+            median=0.42,
+            maximum=1.3,
+            sigma=0.64,
+            host=host,
+            lifecycle_id=lifecycle_id,
+            ordinal=ordinal,
+            sample_key="client-pacing",
+        )
+        throughput_bytes_per_second = self.triangular_seconds(
+            relationship_key="web.http.persistent_response_throughput",
+            stable_id=stable_id,
+            minimum=750_000.0,
+            mode=4_000_000.0,
+            maximum=12_000_000.0,
+            host=host,
+            lifecycle_id=lifecycle_id,
+            ordinal=ordinal,
+            sample_key="response-throughput",
+        )
+        transfer_seconds = min(
+            2.2,
+            max(0, response_body_bytes) / throughput_bytes_per_second,
+        )
+        return client_pacing + transfer_seconds
+
     def packet_observation_delta(
         self,
         *,

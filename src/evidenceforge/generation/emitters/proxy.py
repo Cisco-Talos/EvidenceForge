@@ -242,6 +242,22 @@ def _int_value(value: object, default: int = 0) -> int:
         return default
 
 
+def _proxy_response_body_bytes(event_data: dict[str, Any]) -> int:
+    """Return source-native HTTP entity bytes, excluding control/header bytes."""
+
+    method = str(event_data.get("method") or "").upper()
+    status_code = _int_value(event_data.get("status_code"), 0)
+    if (
+        method == "HEAD"
+        or (method == "CONNECT" and status_code < 400)
+        or 100 <= status_code < 200
+        or status_code in {204, 205, 304}
+    ):
+        return 0
+    body_bytes = _int_value(event_data.get("response_body_bytes"), 0)
+    return body_bytes if body_bytes > 0 else _int_value(event_data.get("sc_bytes"), 0)
+
+
 def _proxy_url_parts(
     *,
     method: str,
@@ -325,7 +341,7 @@ def _proxy_metadata(event_data: dict[str, Any]) -> str:
         parts.append(f"cs_bytes={_int_value(cs_bytes, 0)}")
     sc_bytes = event_data.get("sc_bytes")
     if sc_bytes not in {None, ""}:
-        parts.append(f"sc_bytes={_int_value(sc_bytes, 0)}")
+        parts.append(f"wire_sc_bytes={_int_value(sc_bytes, 0)}")
     proxy_action = str(event_data.get("proxy_action") or "")
     if proxy_action:
         parts.append(f"proxy_action={proxy_action}")
@@ -453,6 +469,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                 "protocol": "HTTP/1.1",
                 "status_code": px.tunnel_status_code if px.tunnel_status_code is not None else 200,
                 "sc_bytes": setup["sc_bytes"],
+                "response_body_bytes": 0,
                 "cs_bytes": setup["cs_bytes"],
                 "time_taken": setup["time_taken"],
                 "user_agent": px.user_agent,
@@ -497,6 +514,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "protocol": "HTTP/1.1",
             "status_code": px.status_code,
             "sc_bytes": px.sc_bytes,
+            "response_body_bytes": px.response_body_bytes,
             "cs_bytes": px.cs_bytes,
             "time_taken": px.time_taken,
             "user_agent": px.user_agent,
@@ -614,7 +632,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "url": _combined_log_token(event_data.get("url")),
             "protocol": _combined_log_token(event_data.get("protocol")),
             "status_code": event_data.get("status_code"),
-            "sc_bytes": event_data.get("sc_bytes"),
+            "sc_bytes": _proxy_response_body_bytes(event_data),
             "user_agent": _combined_log_quoted(event_data.get("user_agent")),
             "referrer": _combined_log_quoted(event_data.get("referrer")),
             "proxy_metadata": ""
@@ -652,7 +670,8 @@ class ProxyEmitter(HostMultiplexEmitter):
             "http_referrer": str(event_data.get("referrer") or ""),
             "http_user_agent": str(event_data.get("user_agent") or ""),
             "bytes_in": _int_value(event_data.get("cs_bytes"), 0),
-            "bytes_out": _int_value(event_data.get("sc_bytes"), 0),
+            "bytes_out": _proxy_response_body_bytes(event_data),
+            "wire_sc_bytes": _int_value(event_data.get("sc_bytes"), 0),
             "response_time_microseconds": _int_value(event_data.get("time_taken"), 0) * 1000,
             "cache_result": str(event_data.get("cache_result") or ""),
             "proxy_action": proxy_action,

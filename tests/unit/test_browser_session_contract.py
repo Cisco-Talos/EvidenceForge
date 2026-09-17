@@ -32,6 +32,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.browser_session import (
     BrowserSessionActionBundle,
     BrowserSessionRequest,
+    _plan_http_request_groups,
 )
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.browsing_session import BrowsingRequest
@@ -172,6 +173,39 @@ def test_browser_session_reuses_parent_http_uid_for_same_host_subresources(monke
     assert second_http.network.src_port == first_http.network.src_port
     assert second_http.network.application_layer_only is True
     assert [event.protocol.http.trans_depth for event in http_emitter.events] == [1, 2]
+    request_gap = (second_http.timestamp - first_http.timestamp).total_seconds()
+    assert request_gap != 0.6
+
+
+def test_http_request_group_spacing_has_no_fixed_six_hundred_ms_atom() -> None:
+    """Persistent child requests use lifecycle-scoped response-aware spacing."""
+
+    requests = [
+        BrowsingRequest(
+            time_offset_ms=0,
+            hostname="portal.example.com",
+            path=f"/assets/{index}.js",
+            method="GET",
+            content_type="application/javascript",
+            referrer="http://portal.example.com/",
+            trans_depth=index + 1,
+            is_page_load=index == 0,
+            response_body_len=1_000 * (index + 1),
+            request_body_len=0,
+            status_code=200,
+        )
+        for index in range(8)
+    ]
+
+    plan, _groups = _plan_http_request_groups(
+        requests,
+        stable_id="browser-session-spacing-test",
+    )
+    offsets = [plan[index][3] for index in range(len(requests))]
+    gaps = [later - earlier for earlier, later in zip(offsets, offsets[1:], strict=False)]
+    assert all(gap > 120_000 for gap in gaps)
+    assert 600_000 not in gaps
+    assert len(set(gaps)) == len(gaps)
 
 
 def test_caller_http_large_download_attaches_zeek_file_transfer():

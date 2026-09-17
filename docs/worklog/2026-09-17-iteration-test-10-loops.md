@@ -218,3 +218,43 @@
 - **Sibling risks:** preserve transport-before-auth RDP ordering, source-observation headroom,
   winlogon/userinit/Explorer parentage, exact PID/GUID/logon ownership, termination after desktop
   readiness, deterministic regeneration, and hard session/transport deadlines.
+
+## Loop 82 Result
+
+- Commit: `fcb2b5fc` (`fix: vary Windows session bootstrap timing`).
+- Verification: 11,649 passed, 48 skipped, 2,027 deselected; Ruff check/format, the targeted slow
+  RDP production test, the behavior manifest, and all 92 config files passed validation.
+- Automated evaluation: 97.1394 / PASS across 120,731 records. The verified authoritative bundle
+  again required the evaluator's authored-scenario mismatch override.
+- Initial blind mean: 53.75, up 11.75 points from loop 81; deliberated mean 67.00 after required
+  Real/Inconclusive/Synthetic verdict disagreement review.
+- The target probe found 30 paired userinit/Explorer chains across ten hosts, 29 distinct gaps from
+  216–4,918 ms, and zero remnants of the former 149–151 ms timing cluster.
+- Highest-confidence surviving families: proxy no-body response accounting, fixed 600 ms HTTP child
+  cadence, one RDP source-timing/readiness inversion, failed-preauth SSH child termination, and
+  incomplete PsExec source attribution.
+
+## Loop 83 Family Contract
+
+### HTTP no-body accounting and child-request timing
+
+- **Classification:** `family_level`; Loop 82 confirmed `hard_contradiction` and
+  `distribution_texture` findings across explicit-proxy and reused HTTP transaction paths.
+- **Owning abstractions:** the canonical HTTP/proxy transaction owns semantic body lengths versus
+  wire/control bytes; the browser/web-session timing planner owns ordered child-request timing on
+  persistent connections.
+- **Invariant:** successful CONNECT, HEAD, 1xx, 204, and 304 responses render no entity-body bytes
+  in source-native body-size fields while retaining separately named wire/control accounting; child
+  requests remain ordered within an HTTP/1.x connection but use deterministic lifecycle-scoped
+  delays influenced by transaction response timing rather than an exact fleet-wide 600 ms step.
+- **Entry paths:** direct and explicit-proxy browsing, allowed/denied CONNECT, bumped tunnels,
+  cache hits/revalidation, multi-object page sessions, web access projection, and compatibility
+  transaction helpers.
+- **Consumers:** proxy combined logs, web access logs, Zeek HTTP/conn, firewall byte accounting,
+  file analyzers, source timing, evaluation, and blind network review.
+- **Layer rationale:** renderers cannot reinterpret canonical body bytes without risking disagreement
+  with Zeek/files/network accounting, while request cadence is assigned before sensor fan-out and
+  must remain identical for observations of one physical transaction.
+- **Sibling risks:** preserve non-body header/control bytes, deny/error payloads that legitimately
+  contain bodies, HTTP/1.x serialization, connection interval bounds, cache semantics, multi-sensor
+  clock independence, deterministic replay, and total transport accounting.

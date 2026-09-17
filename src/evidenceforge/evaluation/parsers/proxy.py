@@ -79,6 +79,7 @@ def _parse_proxy_metadata(metadata: str) -> dict[str, str]:
         elif key in {
             "cs_bytes",
             "sc_bytes",
+            "wire_sc_bytes",
             "tunnel_cs_bytes",
             "tunnel_sc_bytes",
             "tunnel_duration_ms",

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 102
+current_revision: 103
 history_start_revision: 1
-behavior_surface_sha256: fe558aa5d310ef149abb3ad1fdc9a948d1587c8de9b49d0b5148662bedb97f71
+behavior_surface_sha256: 233f1906cf6be1854d340195fe27282f787eac95250e4e27abbd9ca0789d5cf3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -928,3 +928,14 @@ changes:
       - windows_security
       - windows_sysmon
     summary: Replace fixed Windows interactive-session userinit and Explorer startup gaps with deterministic lifecycle-scoped timing shared by local and RDP bootstrap paths.
+  - revision: 103
+    id: http-no-body-and-request-spacing
+    impact: localized
+    domains:
+      - proxy-http-semantics
+      - browser-session-timing
+      - source-byte-accounting
+    formats:
+      - proxy_access
+      - zeek_http
+    summary: Separate HTTP entity-body sizes from proxy wire bytes for no-body responses and replace fixed persistent-request spacing with response-aware lifecycle-scoped timing.
