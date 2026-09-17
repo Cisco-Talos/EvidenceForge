@@ -350,3 +350,21 @@
 - **Sibling risks:** preserve stable results independent of render order, keep valid alignment and
   numeric bounds, retain enough concurrent workers for high-volume PID 4 events, avoid cross-host
   identical pools, and do not change canonical process/thread identities used by Sysmon or eCAR.
+
+## Loop 85 Result
+
+- Commit: `b8bdf849` (`fix: cluster Windows provider thread identities`).
+- Verification: 11,654 passed, 48 skipped, 2,028 deselected; 149 focused emitter/manifest tests and
+  five exact-retry tests passed; Ruff check/format, behavior manifest revision 106, and all 92
+  configuration files passed.
+- Automated evaluation: 97.0585 / PASS across 122,995 records.
+- Initial blind mean: 57.25; deliberated mean 70.00 after required Synthetic/Real verdict
+  disagreement review. The reconciled verdict was Synthetic.
+- Target probes confirmed four-byte alignment on all ten Windows hosts, reduced the maximum
+  within-host ThreadID span from 3,997,704 to 928,532, observed reuse on every host, and found zero
+  identical host ThreadID sets.
+- Highest-confidence surviving family: two near-simultaneous RDP transports materialize as
+  overlapping same-user Type 10 desktop sessions on a Windows client. Secondary findings are a
+  cross-logon SMB staging ownership gap, a `services.exe`-owned user shell without launch evidence,
+  identical Linux scheduled-task cardinality, and shared diagnostic command texture.
+- Per user request, the assessment run is paused after Loop 85. Loop 86 has not started.
