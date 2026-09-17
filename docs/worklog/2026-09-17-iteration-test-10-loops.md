@@ -258,3 +258,23 @@
 - **Sibling risks:** preserve non-body header/control bytes, deny/error payloads that legitimately
   contain bodies, HTTP/1.x serialization, connection interval bounds, cache semantics, multi-sensor
   clock independence, deterministic replay, and total transport accounting.
+
+## Loop 83 Result
+
+- Commits: `f8374d39` (`fix: preserve HTTP body and request timing semantics`) and `6d4ca336`
+  (`fix: bound bundle process activity to session deadlines`).
+- Verification: 11,653 passed, 48 skipped, 2,028 deselected; the 67-test extended RDP suite, Ruff
+  check/format, behavior manifest revision 104, and all 92 config files passed.
+- Automated evaluation: 97.0585 / PASS across 122,995 records. The evaluator again required the
+  authored-scenario mismatch override against the authoritative bundle.
+- Initial blind mean: 56.25; deliberated mean 64.00 after required Real/Inconclusive/Synthetic
+  verdict disagreement review.
+- Target probes found zero entity-body violations across 1,396 no-body proxy rows, wire-byte
+  retention on every row, zero exact 600 ms atoms across 84 within-UID HTTP gaps, and both members
+  of the formerly crashing RDP-owned process chain terminating before logout.
+- The expanded HTTP timing surface exposed and the loop repaired a pre-existing action-bundle
+  deadline propagation defect spanning process holds, termination, and exact/deferred SSH source
+  transports.
+- Highest-confidence surviving families: foreign SMB client process identity on target-side
+  Windows FILE telemetry, Windows creator/parent-principal disagreement, near-unique
+  Kerberos/LDAP byte shapes, repeated compound bash commands, and templated suspicious DNS names.
