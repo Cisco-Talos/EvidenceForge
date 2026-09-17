@@ -48,7 +48,6 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
         return (
             event.event_type in self._supported_types
             and event.network is not None
-            and event.network.conn_state == "SF"
             and event.protocol.ssl is not None
         )
 

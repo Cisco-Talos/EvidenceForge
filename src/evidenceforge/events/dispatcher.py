@@ -16087,6 +16087,7 @@ class EventDispatcher:
         self._promote_zeek_parent(decisions, "zeek_conn", {"zeek_files"})
         self._preserve_zeek_ocsp_transaction_companions(event, decisions)
         self._preserve_zeek_tls_certificate_companions(event, decisions)
+        self._preserve_zeek_tls_analyzer_companion(event, decisions)
         self._preserve_remote_interactive_transport_companions(event, decisions)
 
     @staticmethod
@@ -16154,6 +16155,38 @@ class EventDispatcher:
                     status=anchor.status,
                     delay=anchor.delay,
                 )
+
+    @staticmethod
+    def _preserve_zeek_tls_analyzer_companion(
+        event: CanonicalOccurrence,
+        decisions: dict[str, ObservationDecision],
+    ) -> None:
+        """Keep ssl.log for a clean successful TLS transport seen in conn.log."""
+
+        network = event.network
+        ssl = event.protocol.ssl
+        if (
+            network is None
+            or ssl is None
+            or not ssl.established
+            or network.conn_state != "SF"
+            or network.traffic.missed_orig_bytes > 0
+            or network.traffic.missed_resp_bytes > 0
+        ):
+            return
+        conn_decision = decisions.get("zeek_conn")
+        ssl_decision = decisions.get("zeek_ssl")
+        if (
+            conn_decision is None
+            or conn_decision.status == "dropped"
+            or ssl_decision is None
+            or ssl_decision.status != "dropped"
+        ):
+            return
+        decisions["zeek_ssl"] = ObservationDecision(
+            status=conn_decision.status,
+            delay=conn_decision.delay,
+        )
 
     @staticmethod
     def _promote_zeek_parent(

@@ -153,3 +153,28 @@
 - Highest-confidence surviving families: partial TLS observation, eCAR semantic identity collapse,
   fixed explicit-proxy subrequest cadence, dense irqbalance notices, and remote WMI initiator gaps.
 - Paused after loop 80 at user request; loops 81–86 remain unstarted.
+
+## Loop 81 Family Contract
+
+### TLS analyzer observation and companion coherence
+
+- **Classification:** `family_level`; Loop 80 multi-reviewer `contract_gap` and
+  `distribution_texture` findings at the canonical TLS analyzer/observation boundary.
+- **Owning abstraction:** canonical SSL context owns whether the analyzer identified a complete or
+  partial handshake; source observation contracts own whether a lossless successful TLS transport
+  retains its analyzer companion when the parent connection remains visible.
+- **Invariant:** canonical partial TLS handshakes can render `established: false` SSL rows without
+  pretending that they completed, while a lossless successful `SF` TLS connection with canonical
+  SSL context cannot independently lose its SSL analyzer owner when its conn row survives.
+- **Entry paths:** baseline and storyline HTTPS/TLS, explicit and transparent proxy origin legs,
+  SMTP STARTTLS, caller-pinned TLS connections, direct compatibility generation, and failed
+  handshake sampling.
+- **Consumers:** canonical network traffic/state, observation profiles, Zeek `conn.log` and
+  `ssl.log`, TLS timing, certificate/file analyzers, eval correlation, and blind network/detection
+  review.
+- **Layer rationale:** emitters cannot infer whether an absent row is a modeled analyzer failure or
+  an observation drop. The canonical context and observation contract already own those facts; the
+  SSL emitter should render every admitted context source-natively.
+- **Sibling risks:** preserve legitimate analyzer gaps for reset/partial flows, keep certificate
+  companions coherent, never fabricate cipher/certificate fields for unsuccessful handshakes, and
+  retain independent sensor timing and transport capture-loss semantics.

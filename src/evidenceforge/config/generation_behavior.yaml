@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 100
+current_revision: 101
 history_start_revision: 1
-behavior_surface_sha256: 5862db941d6a456d86e36679688713ec956d00eedd5fe5181aac299b09c9c95c
+behavior_surface_sha256: ca2823cf5da2f43e8eaa6daa905da9af2a4428da919be933b64309af895f6de4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -905,3 +905,14 @@ changes:
       - capacity-management
     formats: []
     summary: Preserve atomic boot materialization for ordinary environments while preflighting and committing wide system fleets in bounded host pages below retained transaction limits.
+  - revision: 101
+    id: tls-analyzer-observation-contract
+    impact: localized
+    domains:
+      - network-observation
+      - tls-analyzer-lifecycle
+      - source-companion-coherence
+    formats:
+      - zeek_conn
+      - zeek_ssl
+    summary: Render canonical partial TLS handshakes as unsuccessful SSL analyzer rows and retain the SSL companion when a lossless successful TLS transport remains visible.
