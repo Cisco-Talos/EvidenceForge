@@ -481,7 +481,8 @@ programs:
   - app: systemd-resolved
     distro: ubuntu
     weight: 1
-    max_per_host_window: 4
+    max_per_host_window: 6
+    episode_pair_budgets: [1, 2, 3]
     params:
       feature_set:
         - UDP

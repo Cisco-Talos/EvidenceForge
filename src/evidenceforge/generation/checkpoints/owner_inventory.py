@@ -955,6 +955,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_last_storyline_process_command_by_system",
         "_last_storyline_service_by_system",
         "_last_storyline_system",
+        "_linux_background_host_profiles",
         "_linux_dbus_bus_ids",
         "_linux_effective_timezones",
         "_linux_polkit_agents",

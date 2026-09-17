@@ -1110,6 +1110,7 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     assert syslog_call.kwargs["message"] == (
         "(sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)"
     )
+    assert syslog_call.kwargs["time"].microsecond % 1000 != 0
     term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
     assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
     assert {call.kwargs["concurrency_group_id"] for call in term_calls} == {
@@ -1134,6 +1135,7 @@ def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
         "typical_hour": 0,
         "jitter_minutes": 8,
         "slot_jitter_seconds": 45,
+        "slot_skip_probability": 1.0,
         "distro": "debian",
         "cron_user": "sysstat",
         "cron_commands": {"debian": "debian-sa1 1 1"},
@@ -1154,6 +1156,96 @@ def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
     assert len(fire_times) == 2
     assert all(fire_time.second == 0 for fire_time in fire_times)
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
+
+
+def test_systemd_timer_preserves_configured_slot_skipping(linux_system):
+    """Removing cron gaps must not disable modeled skipping for systemd timers."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "php-sessionclean",
+        "type": "systemd_timer",
+        "frequency": "30min",
+        "typical_hour": 0,
+        "jitter_minutes": 5,
+        "slot_skip_probability": 1.0,
+        "distro": "debian",
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [sched]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"systemd": 1},
+            False,
+            False,
+        )
+
+    engine._emit_scheduled_event.assert_not_called()
+
+
+def test_linux_background_profiles_are_host_stable_and_fleet_diverse():
+    """Persistent hardware texture should vary by host, never by message draw."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._linux_background_host_profile = BaselineMixin._linux_background_host_profile.__get__(
+        engine,
+        type(engine),
+    )
+    entry = next(entry for entry in load_extra_syslog_messages() if entry["app"] == "irqbalance")
+
+    first = engine._linux_background_host_profile(entry, "LNX-01")
+    repeated = engine._linux_background_host_profile(entry, "LNX-01")
+    fleet = {
+        tuple(sorted(engine._linux_background_host_profile(entry, f"LNX-{index:02d}").items()))
+        for index in range(1, 9)
+    }
+
+    assert first == repeated
+    assert {"irq", "device", "cpu", "numa_node", "affinity_mask", "moved"} <= first.keys()
+    assert len(fleet) > 1
+
+
+def test_systemd_resolved_host_budget_and_episode_binding(linux_system):
+    """Resolver degradation is budgeted per host and recovery keeps its DNS server."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._render_systemd_resolved_message = (
+        BaselineMixin._render_systemd_resolved_message.__get__(
+            engine,
+            type(engine),
+        )
+    )
+    entry = next(
+        entry for entry in load_extra_syslog_messages() if entry["app"] == "systemd-resolved"
+    )
+    systems = [
+        linux_system.model_copy(update={"hostname": f"LNX-{index:02d}"}) for index in range(8)
+    ]
+    limits = {
+        _extra_syslog_effective_limit(system, entry, datetime(2024, 3, 18, tzinfo=UTC))
+        for system in systems
+    }
+
+    degraded = engine._render_systemd_resolved_message(
+        entry, "LNX-01", ["10.0.0.53", "10.0.0.54"], random.Random(1)
+    )
+    recovered = engine._render_systemd_resolved_message(
+        entry, "LNX-01", ["10.0.0.53", "10.0.0.54"], random.Random(999)
+    )
+    degraded_server = degraded.rsplit(" ", 1)[-1].rstrip(".")
+    recovered_server = recovered.rsplit(" ", 1)[-1].rstrip(".")
+
+    assert len(limits) > 1
+    assert limits <= {2, 4, 6}
+    assert "degraded feature set" in degraded
+    assert "resuming full feature set" in recovered
+    assert degraded_server == recovered_server
 
 
 def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):

@@ -1134,6 +1134,19 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
     max_per_host_window: int | None = Field(default=None, gt=0)
+    episode_pair_budgets: list[int] | None = None
+
+    @field_validator("episode_pair_budgets")
+    @classmethod
+    def episode_pair_budgets_are_positive_unique(cls, value: list[int] | None) -> list[int] | None:
+        """Require meaningful deterministic resolver-episode choices."""
+        if value is None:
+            return None
+        if not value or any(type(item) is not int or item <= 0 for item in value):
+            raise ValueError("episode_pair_budgets must contain positive integers")
+        if len(value) != len(set(value)):
+            raise ValueError("episode_pair_budgets must not contain duplicates")
+        return value
 
 
 # --- TLS Issuers ---

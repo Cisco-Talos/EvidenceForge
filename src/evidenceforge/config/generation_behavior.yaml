@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 95
+current_revision: 96
 history_start_revision: 1
-behavior_surface_sha256: 8257de43a05cc766305c694351e1159864335f1cd577028a556cc6f344b5ed5c
+behavior_surface_sha256: 2a559e1cfa02c2512e458ad865a91e8c21edd917b2018d57fc90439acde7af09
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -849,3 +849,14 @@ changes:
       - proxy_access
       - web_access
     summary: Use canonical LF framing for ordinary host text output so Windows checkpoint resume matches uninterrupted generation.
+  - revision: 96
+    id: persistent-linux-background-host-state
+    impact: localized
+    domains:
+      - periodic-generation
+      - linux-host-state
+      - source-timing
+    formats:
+      - ecar
+      - syslog
+    summary: Bind Linux hardware and resolver background vocabulary to persistent host state, preserve configured cron executions, and add source-native sub-millisecond cron timestamp texture.

@@ -934,6 +934,16 @@ def _extra_syslog_effective_limit(
     """
     configured_limit = int(entry.get("max_per_host_window", 0) or 0)
     app = entry.get("app")
+    if app == "systemd-resolved" and configured_limit > 0:
+        budgets = entry.get("episode_pair_budgets") or []
+        valid_budgets = [
+            int(value)
+            for value in budgets
+            if type(value) is int and value > 0 and int(value) * 2 <= configured_limit
+        ]
+        if valid_budgets:
+            budget_seed = _stable_seed(f"resolved_episode_budget:{system.hostname}")
+            return valid_budgets[budget_seed % len(valid_budgets)] * 2
     if configured_limit <= 0 or app not in {"sudo", "rsyslogd", "unattended-upgr"}:
         return configured_limit
 
@@ -2442,15 +2452,29 @@ class BaselineMixin:
             states = {}
             self._linux_resolved_feature_states = states
         state = states.get(hostname)
-        degraded = state is not None and state[0] == "degraded"
+        if isinstance(state, tuple):
+            # Normalize checkpoints written before resolver episodes tracked their index.
+            state = {
+                "phase": state[0],
+                "dns_server": state[1],
+                "episode_index": 0,
+            }
+        if state is None:
+            state = {"phase": "full", "dns_server": "", "episode_index": 0}
+        degraded = state["phase"] == "degraded"
         if degraded:
             message_index = 1
-            dns_server = state[1]
-            states[hostname] = ("full", dns_server)
+            dns_server = state["dns_server"]
+            state["phase"] = "full"
+            state["episode_index"] += 1
         else:
             message_index = 0
-            dns_server = rng.choice(dns_server_ips)
-            states[hostname] = ("degraded", dns_server)
+            episode_index = state["episode_index"]
+            server_seed = _stable_seed(f"resolved_episode_server:{hostname}:{episode_index}")
+            dns_server = dns_server_ips[server_seed % len(dns_server_ips)]
+            state["phase"] = "degraded"
+            state["dns_server"] = dns_server
+        states[hostname] = state
         messages = entry.get("messages") or []
         selected_entry = {**entry, "messages": [messages[message_index]]}
         return render_extra_syslog_message(
@@ -2460,6 +2484,36 @@ class BaselineMixin:
             system_services=[],
             values={"dns_server": dns_server},
         )
+
+    def _linux_background_host_profile(
+        self,
+        entry: dict[str, Any],
+        hostname: str,
+    ) -> dict[str, Any]:
+        """Return stable data-driven parameters for one host background daemon."""
+
+        profiles = getattr(self, "_linux_background_host_profiles", None)
+        if profiles is None:
+            profiles = {}
+            self._linux_background_host_profiles = profiles
+        app = str(entry.get("app") or "unknown")
+        key = f"{hostname}:{app}"
+        existing = profiles.get(key)
+        if existing is not None:
+            return existing
+
+        seed = _stable_seed(f"linux_background_profile:{key}")
+        values: dict[str, Any] = {}
+        parameter_profiles = entry.get("parameter_profiles") or []
+        if parameter_profiles:
+            selected = parameter_profiles[seed % len(parameter_profiles)]
+            if isinstance(selected, dict):
+                values.update({str(name): value for name, value in selected.items()})
+        for index, (name, candidates) in enumerate((entry.get("params") or {}).items()):
+            if candidates:
+                values[str(name)] = candidates[(seed >> (index * 7 + 8)) % len(candidates)]
+        profiles[key] = values
+        return values
 
     def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
         """Return a plausible monotonic system bus name suffix for one host."""
@@ -3755,8 +3809,12 @@ class BaselineMixin:
                         f"sched_slot:{system.hostname}:{service}:{current_hour.isoformat()}:{fm}"
                     )
                     skip_probability = sched.get("slot_skip_probability")
-                    if skip_probability is not None and not _deterministic_probability_enabled(
-                        slot_key, 1.0 - float(skip_probability)
+                    if (
+                        sched_type != "cron"
+                        and skip_probability is not None
+                        and not _deterministic_probability_enabled(
+                            slot_key, 1.0 - float(skip_probability)
+                        )
                     ):
                         continue
                     configured_jitter = sched.get("slot_jitter_seconds")
@@ -3894,7 +3952,18 @@ class BaselineMixin:
             )
             self.activity_generator.generate_syslog_event(
                 system=system,
-                time=ts + timedelta(milliseconds=rng.randint(10, 120)),
+                time=ts
+                + timedelta(
+                    milliseconds=rng.randint(10, 120),
+                    microseconds=1
+                    + (
+                        _stable_seed(
+                            f"cron_syslog_submillisecond:{system.hostname}:{service}:"
+                            f"{ts.isoformat()}"
+                        )
+                        % 999
+                    ),
+                ),
                 app_name="CRON",
                 message=f"({cron_user}) CMD ({cmd})",
                 pid=shell_pid or cron_parent_pid,
@@ -11818,6 +11887,14 @@ class BaselineMixin:
                             system.hostname,
                             dns_ips_by_host[system.hostname],
                             rng,
+                        )
+                    elif app == "irqbalance":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=0,
+                            system_services=system.services,
+                            values=self._linux_background_host_profile(entry, system.hostname),
                         )
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
