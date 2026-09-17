@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 99
+current_revision: 100
 history_start_revision: 1
-behavior_surface_sha256: cda8568387d698c9e95cb805c558b665911eca3d746eab7fdf5d34972512ac97
+behavior_surface_sha256: 5862db941d6a456d86e36679688713ec956d00eedd5fe5181aac299b09c9c95c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -896,3 +896,12 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Complete successful runas netonly actions with cloned-token child execution, modeled SMB transport and target authentication, and local Event 4648 source semantics.
+  - revision: 100
+    id: paged-wide-fleet-boot-materialization
+    impact: localized
+    domains:
+      - lifecycle-materialization
+      - generator-initialization
+      - capacity-management
+    formats: []
+    summary: Preserve atomic boot materialization for ordinary environments while preflighting and committing wide system fleets in bounded host pages below retained transaction limits.

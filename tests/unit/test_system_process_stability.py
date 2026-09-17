@@ -2028,8 +2028,8 @@ class TestSystemProcessProtection:
         assert state_manager.materialization_version == 0
         assert registry.stats().live_processes == 0
 
-    def test_supported_wide_fleet_terminal_nodes_reject_before_state_planning(self) -> None:
-        """A 180-host supported fleet fails its terminal ceiling before PID/RNG planning."""
+    def test_supported_wide_fleet_materializes_in_bounded_pages(self) -> None:
+        """A supported 180-host fleet uses bounded boot pages instead of failing its ceiling."""
 
         start = datetime(2024, 3, 15, 8, 0, tzinfo=UTC)
         state_manager = StateManager()
@@ -2048,26 +2048,15 @@ class TestSystemProcessProtection:
         engine._kernel_boot_uptimes = {
             system.hostname: 300.0 + index for index, system in enumerate(systems)
         }
-        before_state = state_manager.materialization_digest()
-        before_pid_allocator = state_manager.pid_allocator_census()
-        before_system_pids = {host: dict(pids) for host, pids in engine._system_pids.items()}
-        before_machine_ids = dict(engine._machine_ids)
+        engine._seed_system_process_trees()
 
-        with patch.object(
-            state_manager,
-            "begin_materialization_batch",
-            side_effect=AssertionError("wide terminal entered State planning"),
-        ) as begin_batch:
-            for _attempt in range(2):
-                with pytest.raises(StateError, match="too many retained members"):
-                    engine._seed_system_process_trees()
-
-        assert begin_batch.call_count == 0
-        assert state_manager.materialization_digest() == before_state
-        assert state_manager.pid_allocator_census() == before_pid_allocator
-        assert registry.stats().live_processes == 0
-        assert engine._system_pids == before_system_pids
-        assert engine._machine_ids == before_machine_ids
+        assert state_manager.materialization_version == 6
+        assert registry.stats().live_processes == len(state_manager.list_running_processes())
+        assert {system.hostname for system in systems} <= set(engine._system_pids)
+        assert {system.hostname for system in systems} <= set(engine._machine_ids)
+        assert engine._system_pids["preexisting"] == {"sentinel": 999}
+        assert engine._machine_ids["preexisting"] == "sentinel-machine-id"
+        assert all(state_manager.get_boot_time(system.hostname) is not None for system in systems)
         assert authority.census().materialization_batch_transactions == 0
         assert not hasattr(engine, "_boot_materialization_transaction")
 
