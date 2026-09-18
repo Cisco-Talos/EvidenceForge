@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 107
+current_revision: 108
 history_start_revision: 1
-behavior_surface_sha256: 5fee91b782eb6bef7e35fb87c84caaf3ea5e316b60f2b71b7e5343cf31b58414
+behavior_surface_sha256: 4281f314c1c37b0609bac6db346f21c1b7d7b9a51dd3f386f48470b7fce681ea
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -988,3 +988,14 @@ changes:
       - windows_sysmon
       - zeek_conn
     summary: Cap process-owned network activity before every hard session deadline and omit optional Linux process groups when their complete lifecycle cannot fit.
+  - revision: 108
+    id: tcp-dns-response-transport-coherence
+    impact: localized
+    domains:
+      - network-transport-accounting
+      - dns-analyzer-lifecycle
+      - source-companion-coherence
+    formats:
+      - zeek_conn
+      - zeek_dns
+    summary: Treat a modeled TCP DNS response as proof of a successful transport so DNS answers cannot coexist with rejected connection evidence.
