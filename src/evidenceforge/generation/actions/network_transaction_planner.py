@@ -4134,7 +4134,7 @@ class NetworkTransactionPlanner:
         canonical_terminal_duration = duration
 
         dns_has_response = (
-            protocol_evidence.proto == "udp"
+            protocol_evidence.proto in {"udp", "tcp"}
             and service == "dns"
             and protocol_evidence.dns is not None
             and (

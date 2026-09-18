@@ -29,7 +29,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.contexts import IdsAlertPlan
+from evidenceforge.events.contexts import DnsContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -274,6 +274,43 @@ def test_state_manager_accumulates_persistent_application_transactions() -> None
     assert connection.traffic_ledger.resp.payload_bytes == 4396
     assert connection.traffic_ledger.orig.packets == 9
     assert connection.traffic_ledger.resp.packets == 14
+
+
+def test_tcp_dns_response_owns_successful_transport_state() -> None:
+    """A modeled TCP DNS response cannot coexist with a rejected transport."""
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+
+    generator.generate_connection(
+        src_ip="10.0.0.10",
+        dst_ip="10.0.0.53",
+        time=start,
+        dst_port=53,
+        proto="tcp",
+        service="dns",
+        dns=DnsContext(
+            query="zone.example.com",
+            answers=["10.0.0.20"],
+            rtt=0.08,
+        ),
+    )
+
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network is not None
+    assert event.network.conn_state == "SF"
+    assert event.network.history.startswith("ShA")
+    assert "D" in event.network.history
+    assert "d" in event.network.history
+    assert event.network.history.endswith(("Ff", "F", "f"))
+    assert event.dns is not None
+    assert event.dns.rtt == 0.08
+    assert event.network.duration >= event.dns.rtt
+    assert event.network.orig_pkts >= 3
+    assert event.network.resp_pkts >= 3
 
 
 @pytest.mark.parametrize("authority", ["explicit_storyline", "action_bundle"])
