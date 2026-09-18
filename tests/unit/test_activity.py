@@ -5959,7 +5959,7 @@ class TestActivityGenerator:
                 "cmd.exe /c whoami",
             )
 
-        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
         assert tuple(state_manager.list_running_processes()) == processes_before
         assert state_manager.get_current_time() == current_time_before
         assert activity_gen._lifecycle_authority.census() == lifecycle_before
@@ -14194,6 +14194,231 @@ class TestActivityGenerator:
         assert session.last_activity_time is not None
         assert session.last_activity_time < planned_logoff
 
+    @staticmethod
+    def _prepare_bash_hard_deadline_session(
+        *,
+        activity_gen: ActivityGenerator,
+        state_manager: StateManager,
+        user: User,
+        command_time: datetime,
+        deadline: datetime,
+    ) -> tuple[System, ActiveSession, int]:
+        """Create one SSH shell with an action-bundle hard deadline."""
+
+        system = System(
+            hostname="LNX-DEADLINE-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        state_manager.set_current_time(command_time - timedelta(minutes=30))
+        systemd_pid = state_manager.create_process(
+            system.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id="0xbashdeadline",
+            username=user.username,
+            system=system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(minutes=20),
+            session_kind="ssh",
+        )
+        bash_pid = state_manager.create_process(
+            system.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            session.logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        assert state_manager.plan_session_end(
+            session.logon_id,
+            SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+        )
+        activity_gen._system_pids = {system.hostname: {"systemd": systemd_pid, "bash": bash_pid}}
+        return system, session, bash_pid
+
+    def test_bash_history_survives_unavailable_optional_journalctl_lifecycle(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Crash-3 history remains while impossible optional process telemetry is omitted."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+        deadline = command_time + timedelta(seconds=5)
+        linux, _session, _bash_pid = self._prepare_bash_hard_deadline_session(
+            activity_gen=activity_gen,
+            state_manager=state_manager,
+            user=test_user,
+            command_time=command_time,
+            deadline=deadline,
+        )
+        impossible_start = deadline - timedelta(seconds=1.411280)
+
+        reserve_calls = 0
+
+        def reserve_time(**_kwargs: object) -> datetime:
+            nonlocal reserve_calls
+            reserve_calls += 1
+            return command_time if reserve_calls == 1 else impossible_start
+
+        monkeypatch.setattr(
+            activity_gen,
+            "_reserve_foreground_shell_time",
+            reserve_time,
+        )
+        cadence_before = dict(activity_gen._foreground_shell_next_time)
+
+        scheduled = activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "journalctl -u systemd-resolved -n 20",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert scheduled == command_time
+        assert any(
+            event.event_type == "bash_command"
+            and event.shell is not None
+            and event.shell.command == "journalctl -u systemd-resolved -n 20"
+            for event in events
+        )
+        assert not any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "journalctl -u systemd-resolved -n 20"
+            for event in events
+        )
+        assert activity_gen._foreground_shell_next_time == cadence_before
+
+    def test_bash_pipeline_process_projection_is_all_or_none_at_hard_deadline(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """One inadmissible pipeline member suppresses every process row in its group."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+        deadline = command_time + timedelta(seconds=5)
+        linux, _session, _bash_pid = self._prepare_bash_hard_deadline_session(
+            activity_gen=activity_gen,
+            state_manager=state_manager,
+            user=test_user,
+            command_time=command_time,
+            deadline=deadline,
+        )
+        first_start = deadline - timedelta(seconds=1.450)
+        second_start = deadline - timedelta(seconds=1.411280)
+
+        reserve_calls = 0
+
+        def reserve_time(**_kwargs: object) -> datetime:
+            nonlocal reserve_calls
+            reserve_calls += 1
+            return command_time if reserve_calls == 1 else first_start
+
+        monkeypatch.setattr(
+            activity_gen,
+            "_reserve_foreground_shell_time",
+            reserve_time,
+        )
+        monkeypatch.setattr(
+            generator_module,
+            "plan_linux_pipeline_stage_times",
+            lambda *_args, **_kwargs: (first_start, second_start),
+        )
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "cat /etc/passwd | head -5",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        projected_commands = {
+            event.process.command_line
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        }
+        assert projected_commands.isdisjoint({"cat /etc/passwd", "head -5"})
+
+    def test_skipped_bash_group_does_not_delay_following_viable_group(
+        self,
+        activity_gen,
+        test_user,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """An omitted group consumes no foreground cadence before the next command group."""
+
+        command_time = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+        deadline = command_time + timedelta(seconds=20)
+        linux, _session, _bash_pid = self._prepare_bash_hard_deadline_session(
+            activity_gen=activity_gen,
+            state_manager=state_manager,
+            user=test_user,
+            command_time=command_time,
+            deadline=deadline,
+        )
+        requested_times: list[datetime] = []
+
+        def reserve_group_time(**kwargs: object) -> datetime:
+            requested_time = kwargs["requested_time"]
+            assert isinstance(requested_time, datetime)
+            requested_times.append(requested_time)
+            if len(requested_times) == 1:
+                return command_time
+            if len(requested_times) == 2:
+                return deadline - timedelta(seconds=1.411280)
+            return command_time + timedelta(seconds=1)
+
+        monkeypatch.setattr(activity_gen, "_reserve_foreground_shell_time", reserve_group_time)
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "journalctl -u systemd-resolved -n 20 && date -u",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        creates = [
+            event
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        ]
+        assert requested_times[2] == requested_times[1]
+        assert not any(
+            event.process.command_line == "journalctl -u systemd-resolved -n 20"
+            for event in creates
+        )
+        date_event = next(event for event in creates if event.process.command_line == "date -u")
+        assert date_event.timestamp == command_time + timedelta(seconds=1)
+
     def test_serialized_bash_process_is_omitted_after_ssh_transport_close(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -14956,7 +15181,7 @@ class TestActivityGenerator:
                 parent_pid=old_shell_pid,
             )
 
-        assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+        assert exc_info.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
 
     def test_generate_bash_command_moves_history_with_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters

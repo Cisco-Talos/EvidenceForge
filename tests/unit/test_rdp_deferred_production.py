@@ -1800,6 +1800,107 @@ def _xml_events(rendered: str, event_id: int) -> tuple[str, ...]:
     )
 
 
+@pytest.mark.parametrize(
+    "outer_trigger",
+    ("next-rdp-bundle", "retention-watermark"),
+)
+def test_explorer_connection_before_rdp_logout_is_capped_for_outer_lifecycle_trigger(
+    outer_trigger: str,
+    tmp_path: Path,
+) -> None:
+    """The two observed outer drains cannot inherit an Explorer frontier past logout."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        session_end_plan=SessionEndPlan(
+            canonical_end=_START + timedelta(hours=2),
+            authority="action_bundle",
+        ),
+    )
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None
+    assert session.explorer_pid is not None
+    assert session.end_plan is not None and session.end_plan.is_hard_deadline
+    deadline = session.end_plan.canonical_end
+    explorer = harness.state.get_process(harness.target_hostname, session.explorer_pid)
+    assert explorer is not None
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+
+    uid = harness.generator.generate_connection(
+        src_ip=target.ip,
+        dst_ip="203.0.113.80",
+        time=deadline - timedelta(seconds=1),
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=4.0,
+        source_system=target,
+        pid=explorer.pid,
+        conn_state="SF",
+        preserve_dst_ip=True,
+        preserve_start_time=True,
+        suppress_prereq_dns=True,
+    )
+
+    connection = harness.state.get_connection_by_zeek_uid(uid)
+    assert connection is not None and connection.close_time is not None
+    assert connection.close_time < deadline
+    assert connection.initiating_pid == explorer.pid
+    assert explorer.last_activity_time is not None
+    assert explorer.last_activity_time < deadline
+    assert session.last_activity_time is not None
+    assert session.last_activity_time < deadline
+
+    if outer_trigger == "next-rdp-bundle":
+        entry = next(iter(harness.generator._pending_rdp_lifecycle_continuations.values()))
+        prepared = entry.continuation.prepared
+        harness.generator._execute_rdp_session_bundle(
+            user=prepared.user,
+            target_system=prepared.target_system,
+            time=deadline + timedelta(seconds=1),
+            source_ip="198.51.100.26",
+            source_system=None,
+            source_port=50_002,
+            preserve_explicit_source=True,
+        )
+    else:
+        harness.generator.advance_rdp_session_retention_watermark(deadline)
+
+    assert harness.state.get_session(harness.logon_id) is None
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    disconnects = tuple(
+        event
+        for event in _xml_events(rendered_windows, 4779)
+        if harness.logon_id.casefold() in event.casefold()
+    )
+    logouts = tuple(
+        event
+        for event in _xml_events(rendered_windows, 4634)
+        if harness.logon_id.casefold() in event.casefold()
+    )
+    assert len(disconnects) == len(logouts) == 1
+
+    def event_time(event: str) -> datetime:
+        match = re.search(r'<TimeCreated\s+SystemTime="([^"]+)"', event)
+        assert match is not None
+        return datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
+
+    assert event_time(disconnects[0]) < event_time(logouts[0])
+
+
 def _windows_security_time(
     rendered: str,
     event_id: int,

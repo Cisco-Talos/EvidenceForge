@@ -1832,7 +1832,7 @@ class NetworkTransactionPlanner:
         pid: int,
         stable_id: str,
     ) -> float | None:
-        """Bound process-owned transport lifetime by an authoritative session end."""
+        """Bound process-owned transport lifetime by its owning session hard deadline."""
 
         if source_system is None or pid <= 0:
             return duration
@@ -1840,8 +1840,13 @@ class NetworkTransactionPlanner:
             source_system.hostname,
             pid,
         )
-        if end_plan is None or not end_plan.is_authoritative:
+        if end_plan is None or not end_plan.is_hard_deadline:
             return duration
+        relationship_key = (
+            "network.action_bundle_session_close_gap"
+            if end_plan.authority == "action_bundle"
+            else "network.authoritative_session_close_gap"
+        )
         canonical_start = ensure_utc(start)
         deadline = ensure_utc(end_plan.canonical_end)
         if canonical_start >= deadline:
@@ -1852,17 +1857,17 @@ class NetworkTransactionPlanner:
                 else ""
             )
             raise StateError(
-                "Process-owned network activity cannot begin at or after its authoritative "
-                f"session end: {source_system.hostname} pid={pid} "
+                "Process-owned network activity cannot begin at or after its owning session "
+                f"hard deadline: {source_system.hostname} pid={pid} "
                 f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
                 f"{process_detail}"
             )
         available_us = round((deadline - canonical_start).total_seconds() * 1_000_000)
         if available_us <= 3:
-            self._timing_runtime.audit.record_saturation("network.authoritative_session_close_gap")
+            self._timing_runtime.audit.record_saturation(relationship_key)
             raise StateError(
                 "Process-owned network activity has no microsecond interior before its "
-                f"authoritative session end: {source_system.hostname} pid={pid} "
+                f"owning session hard deadline: {source_system.hostname} pid={pid} "
                 f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
             )
         maximum_gap_us = min(1_500_001, available_us)
@@ -1887,7 +1892,7 @@ class NetworkTransactionPlanner:
                 minimum=float(minimum_gap_us),
                 maximum=float(maximum_gap_us),
             ),
-            relationship_key="network.authoritative_session_close_gap",
+            relationship_key=relationship_key,
             scope=scope,
             sample_key=deadline.isoformat(),
         )
@@ -2650,7 +2655,7 @@ class NetworkTransactionPlanner:
                 )
             )
             is not None
-            and owning_end_plan.is_authoritative
+            and owning_end_plan.is_hard_deadline
             and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
         ):
             logger.debug(
@@ -4434,7 +4439,7 @@ class NetworkTransactionPlanner:
                 )
                 if (
                     final_end_plan is not None
-                    and final_end_plan.is_authoritative
+                    and final_end_plan.is_hard_deadline
                     and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
                 ):
                     logger.debug(

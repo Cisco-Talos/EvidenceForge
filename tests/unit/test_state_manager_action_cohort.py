@@ -745,6 +745,60 @@ def test_action_cohort_live_closes_reject_retained_activity_without_mutation() -
     session_builder.cancel()
 
 
+@pytest.mark.parametrize("activity_kind", ["process", "session"])
+@pytest.mark.parametrize("deadline_offset", [0, 1])
+def test_action_cohort_rejects_activity_at_or_after_hard_session_deadline(
+    activity_kind: str,
+    deadline_offset: int,
+) -> None:
+    """A forged cohort cannot move process/session activity across a hard fence."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    logon_id = manager.create_session(
+        "operator",
+        "WS-RDP-01",
+        10,
+        "10.0.0.10",
+        start_time=_START,
+        session_kind="rdp",
+    )
+    deadline = _START + timedelta(seconds=10)
+    assert manager.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    pid = manager.create_process(
+        "WS-RDP-01",
+        0,
+        r"C:\Windows\explorer.exe",
+        "explorer.exe",
+        "operator",
+        "Medium",
+        logon_id=logon_id,
+    )
+    process_identity = manager.get_process_identity("WS-RDP-01", pid)
+    session_identity = manager.get_session_identity(logon_id)
+    assert process_identity is not None and session_identity is not None
+    builder = manager.begin_action_cohort_materialization()
+    activity_time = deadline + timedelta(seconds=deadline_offset)
+    if activity_kind == "process":
+        builder.patch_process_activity(process_identity, activity_time)
+    else:
+        builder.patch_session_activity(session_identity, activity_time)
+    digest = manager.materialization_digest()
+    version = manager.materialization_version
+
+    with pytest.raises(StateError, match="strictly earlier"):
+        builder.seal()
+
+    assert manager.materialization_digest() == digest
+    assert manager.materialization_version == version
+    assert manager.get_process("WS-RDP-01", pid).last_activity_time is None
+    assert manager.get_session(logon_id).last_activity_time is None
+    builder.cancel()
+
+
 def test_action_cohort_rejects_copied_parent_before_allocator_use_and_retries() -> None:
     manager = StateManager()
     manager.set_current_time(_START)

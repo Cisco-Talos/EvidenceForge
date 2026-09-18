@@ -67,7 +67,10 @@ if TYPE_CHECKING:
         ProcessForegroundLifecycle,
     )
     from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
-    from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
+    from evidenceforge.generation.actions.process_support.preflight import (
+        ProcessLifetimeAdmission,
+        ProcessPreflightPlanner,
+    )
     from evidenceforge.generation.actions.process_support.queries import ProcessStateQueries
     from evidenceforge.generation.actions.process_support.reuse import ProcessReusePolicy
     from evidenceforge.generation.actions.process_support.scheduling import ProcessLaunchScheduler
@@ -167,6 +170,8 @@ from evidenceforge.generation.actions import (
     ExecutionEffectAuditCounter,
     ExecutionEffectAuditSnapshot,
     ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
     ExecutionEffectReconciliation,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
@@ -25168,6 +25173,10 @@ class ActivityGenerator:
         if parent_pid is None:
             return
 
+        network_close_time = getattr(session, "network_close_time", None)
+        if network_close_time is not None:
+            network_close_time = ensure_utc(network_close_time)
+
         rng = random.Random(
             _stable_seed(
                 f"bash_process_telemetry:{system.hostname}:{user.username}:{time}:{command}"
@@ -25223,18 +25232,13 @@ class ActivityGenerator:
                 # child to an already-closed SSH session (or publishing only a
                 # prefix of one pipeline).
                 continue
-            for (image, process_command_line), process_time in zip(
-                process_group, stage_times, strict=True
+            if network_close_time is not None and any(
+                stage_time >= network_close_time - timedelta(milliseconds=750)
+                for stage_time in stage_times
             ):
-                network_close_time = getattr(session, "network_close_time", None)
-                if network_close_time is not None:
-                    if network_close_time.tzinfo is None:
-                        network_close_time = network_close_time.replace(tzinfo=UTC)
-                    else:
-                        network_close_time = network_close_time.astimezone(UTC)
-                    if process_time >= network_close_time - timedelta(milliseconds=750):
-                        continue
-                pid = self.generate_process(
+                continue
+            requests = tuple(
+                ProcessExecutionRequest(
                     user=user,
                     system=system,
                     time=process_time,
@@ -25245,24 +25249,49 @@ class ActivityGenerator:
                     suppress_command_file_effect=True,
                     concurrency_group_id=concurrency_group_id,
                 )
+                for (image, process_command_line), process_time in zip(
+                    process_group, stage_times, strict=True
+                )
+            )
+            try:
+                for request in requests:
+                    self._admit_process_lifecycle(request)
+            except ExecutionEffectPlanError as exc:
+                if exc.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE:
+                    continue
+                raise
+            for request in requests:
+                pid = self.generate_process(
+                    user=request.user,
+                    system=request.system,
+                    time=request.time,
+                    logon_id=request.logon_id,
+                    process_name=request.process_name,
+                    command_line=request.command_line,
+                    parent_pid=request.parent_pid,
+                    suppress_command_file_effect=request.suppress_command_file_effect,
+                    concurrency_group_id=request.concurrency_group_id,
+                )
                 running_proc = self.state_manager.get_process(system.hostname, pid)
                 actual_process_start = (
-                    running_proc.start_time if running_proc is not None else process_time
+                    running_proc.start_time if running_proc is not None else request.time
                 )
-                self._process_parents()._record_user_process(system, user, pid, image)
-                lifetime = _linux_foreground_lifetime(image, process_command_line)
+                self._process_parents()._record_user_process(
+                    system, user, pid, request.process_name
+                )
+                lifetime = _linux_foreground_lifetime(request.process_name, request.command_line)
                 if lifetime is not None:
                     termination_time = self._generate_bounded_foreground_process_termination(
                         user=user,
                         system=system,
                         start_time=actual_process_start,
                         pid=pid,
-                        process_name=image,
+                        process_name=request.process_name,
                         logon_id=session.logon_id,
                         lifetime=lifetime,
                         rng=rng,
                     )
-                    group_release_times.append((termination_time, process_command_line))
+                    group_release_times.append((termination_time, request.command_line))
             for termination_time, process_command_line in group_release_times:
                 self._remember_foreground_shell_available(
                     system=system,
@@ -35590,6 +35619,14 @@ class ActivityGenerator:
             bounded_reuse_intent=self._process_execution_service().bounded_reuse_intent,
             plan_scanner=self._plan_nmap_command_probes,
         )
+
+    def _admit_process_lifecycle(
+        self,
+        request: ProcessExecutionRequest,
+    ) -> "ProcessLifetimeAdmission":
+        """Return allocation-free lifecycle admission for an optional projection."""
+
+        return self._process_preflight().admit_process_lifecycle(request)
 
     def _process_actors(self) -> "ProcessActorResolver":
         """Bind current process actors owners for this call only."""

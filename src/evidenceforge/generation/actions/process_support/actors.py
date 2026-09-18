@@ -136,15 +136,15 @@ class ProcessActorResolver:
         ):
             deadline = ensure_utc(session_end_plan.canonical_end)
             raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
-                "prepared process actor begins at or after its authoritative session end: "
+                ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
+                "prepared process actor begins at or after its hard session end: "
                 f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
                 f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
             )
         if session_deadline is not None and started_at >= ensure_utc(session_deadline):
             deadline = ensure_utc(session_deadline)
             raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
                 "prepared process actor begins at or after its session deadline: "
                 f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
                 f"started_at={started_at.isoformat()} deadline={deadline.isoformat()}",
@@ -224,7 +224,7 @@ class ProcessActorResolver:
             )
             if started_at is None:
                 raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
                     "process parent shell has a foreground command without a modeled release",
                 )
         if not request.from_storyline and request.source_visible_by is None:
@@ -237,7 +237,7 @@ class ProcessActorResolver:
         effective_deadline = ensure_utc(session_deadline) if session_deadline is not None else None
         if effective_deadline is not None and started_at >= effective_deadline:
             raise ExecutionEffectPlanError(
-                ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
                 "prepared process actor leaves no session interval after launch spacing: "
                 f"host={system.hostname} logon_id={process_logon_id} image={process_name!r} "
                 f"started_at={started_at.isoformat()} deadline={effective_deadline.isoformat()}",

@@ -2032,7 +2032,7 @@ def test_session_deadline_contradiction_is_not_rewound_before_root_mutation() ->
             command,
         )
 
-    assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+    assert exc_info.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
     assert tuple(state.list_running_processes()) == before_processes
     assert state.state.current_time == before_time
     assert _events(emitter) == []
@@ -2083,7 +2083,7 @@ def test_ssh_transport_close_precedes_session_end_and_rejects_without_root_mutat
             command,
         )
 
-    assert exc_info.value.code == ExecutionEffectPlanErrorCode.INVALID_ACTOR
+    assert exc_info.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
     message = str(exc_info.value)
     assert f"host={system.hostname}" in message
     assert f"logon_id={logon_id}" in message

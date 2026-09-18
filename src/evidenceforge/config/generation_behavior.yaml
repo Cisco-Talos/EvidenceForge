@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 106
+current_revision: 107
 history_start_revision: 1
-behavior_surface_sha256: 398a513bdb5340b210dcfd13716bb382ac39c62471215e1c8dae572ea1992f37
+behavior_surface_sha256: 5fee91b782eb6bef7e35fb87c84caaf3ea5e316b60f2b71b7e5343cf31b58414
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -974,3 +974,17 @@ changes:
     formats:
       - windows_security
     summary: Replace full-range per-event Security provider ThreadID hashing with deterministic host/provider worker pools that reuse clustered allocator neighborhoods across bounded lifetimes.
+  - revision: 107
+    id: hard-deadline-network-and-process-admission
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - network-lifecycle
+      - action-bundle-deadlines
+    formats:
+      - ecar
+      - windows_security
+      - windows_sysmon
+      - zeek_conn
+    summary: Cap process-owned network activity before every hard session deadline and omit optional Linux process groups when their complete lifecycle cannot fit.

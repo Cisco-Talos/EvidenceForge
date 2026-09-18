@@ -12,8 +12,14 @@ import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
-from evidenceforge.generation.actions.process_execution import ProcessLifetimeMode
+from evidenceforge.generation.actions.command_effects import (
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
+)
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionRequest,
+    ProcessLifetimeMode,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
@@ -705,6 +711,166 @@ def test_windows_one_shot_lifetime_is_frozen_during_process_preflight(
     termination = generator.foreground_process_termination_time(system.hostname, pid)
     assert termination is not None
     assert start < termination < start + timedelta(minutes=4)
+
+
+def test_linux_lifecycle_admission_rejects_exact_journalctl_crash_window() -> None:
+    """The 1.411280-second crash window is unavailable before State mutation."""
+
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    deadline = start + timedelta(seconds=1.411280)
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/journalctl",
+        command_line="journalctl -u systemd-resolved -n 20",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        from_storyline=True,
+    )
+    digest = state.materialization_digest()
+    version = state.materialization_version
+
+    with pytest.raises(ExecutionEffectPlanError) as admission_error:
+        generator._admit_process_lifecycle(request)
+    with pytest.raises(ExecutionEffectPlanError) as required_error:
+        generator.generate_process(
+            user=user,
+            system=system,
+            time=start,
+            logon_id=logon_id,
+            process_name=request.process_name,
+            command_line=request.command_line,
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            from_storyline=True,
+        )
+
+    assert admission_error.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
+    assert required_error.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
+    assert state.materialization_digest() == digest
+    assert state.materialization_version == version
+
+
+def test_windows_lifecycle_admission_caps_bounded_process_before_rdp_deadline() -> None:
+    """The shared admission contract applies Windows policy under an RDP hard fence."""
+
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    deadline = start + timedelta(seconds=1)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    generator = ActivityGenerator(state, {})
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.1.44",
+        os="Windows 11",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=4),
+        session_kind="rdp",
+    )
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name=r"C:\Windows\System32\runas.exe",
+        command_line="runas.exe /user:EXAMPLE\\admin cmd.exe",
+        from_storyline=True,
+    )
+    digest = state.materialization_digest()
+
+    admission = generator._admit_process_lifecycle(request)
+
+    assert admission.lifetime_plan.mode == ProcessLifetimeMode.BOUNDED
+    assert admission.effective_start == start
+    assert admission.hard_deadline == deadline
+    assert admission.release_margin == timedelta(milliseconds=25)
+    assert admission.termination_time is not None
+    assert start < admission.termination_time < deadline
+    assert state.materialization_digest() == digest
+
+
+@pytest.mark.parametrize("platform", ["linux", "windows"])
+def test_viable_cross_platform_lifecycle_admission_preserves_policy_bounds(
+    platform: str,
+) -> None:
+    """Ordinary Linux and Windows requests retain their platform-specific lifetime policy."""
+
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    if platform == "linux":
+        generator, _state, system, user, logon_id, parent_pid, _events = _linux_interactive_shell(
+            session_kind="interactive"
+        )
+        image = "/usr/bin/journalctl"
+        command_line = "journalctl -u systemd-resolved -n 20"
+        expected_bounds = _linux_foreground_lifetime(image, command_line)
+    else:
+        state = StateManager()
+        state.set_current_time(start - timedelta(minutes=5))
+        generator = ActivityGenerator(state, {})
+        user = User(
+            username="analyst",
+            full_name="Alicia Analyst",
+            email="analyst@example.local",
+        )
+        system = System(
+            hostname="WS-01",
+            ip="10.10.1.44",
+            os="Windows 11",
+            type="workstation",
+        )
+        logon_id = state.create_session(
+            username=user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=start - timedelta(minutes=4),
+        )
+        parent_pid = 4
+        image = r"C:\Windows\System32\runas.exe"
+        command_line = "runas.exe /user:EXAMPLE\\admin cmd.exe"
+        expected_bounds = _windows_process_lifetime_plan(image, command_line).bounds
+    assert expected_bounds is not None
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name=image,
+        command_line=command_line,
+        parent_pid=parent_pid,
+        suppress_command_file_effect=True,
+        from_storyline=True,
+    )
+
+    admission = generator._admit_process_lifecycle(request)
+
+    assert admission.effective_start == start
+    assert admission.hard_deadline is None
+    assert admission.lifetime_plan.bounds == expected_bounds
+    assert admission.termination_time is not None
+    duration = (admission.termination_time - start).total_seconds()
+    assert expected_bounds[0] <= duration <= expected_bounds[1]
 
 
 def test_windows_continuous_tool_has_no_provisional_termination() -> None:

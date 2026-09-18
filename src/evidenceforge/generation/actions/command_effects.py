@@ -52,6 +52,7 @@ class ExecutionEffectPlanErrorCode(StrEnum):
     DUPLICATE_NODE_ID = "duplicate_node_id"
     MISSING_DEPENDENCY = "missing_dependency"
     INVALID_ACTOR = "invalid_actor"
+    LIFECYCLE_WINDOW_UNAVAILABLE = "lifecycle_window_unavailable"
     INVALID_PHASE_EDGE = "invalid_phase_edge"
     CYCLIC_DEPENDENCY = "cyclic_dependency"
     DUPLICATE_OUTCOME = "duplicate_outcome"
