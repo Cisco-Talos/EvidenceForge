@@ -663,40 +663,6 @@ def test_boot_epoch_and_explicit_thread_allocation_fence_prepared_process_plan()
             )
         assert sm.get_session_end_plan(logon_id) == deadline
 
-    def test_explicit_end_refines_earlier_action_bundle_fence(self):
-        """An exact authored close may tighten a provisional action-owned ceiling."""
-
-        sm = StateManager()
-        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
-        logon_id = sm.create_session(
-            username="alice",
-            system="WS-01",
-            logon_type=10,
-            source_ip="10.0.1.50",
-            start_time=start,
-            session_kind="rdp",
-        )
-        action_fence = SessionEndPlan(start + timedelta(hours=8), "action_bundle")
-        explicit_close = SessionEndPlan(
-            start + timedelta(hours=2),
-            "explicit_storyline",
-            "story-rdp-close",
-        )
-
-        assert sm.plan_session_end(logon_id, action_fence)
-        assert sm.plan_session_end(logon_id, explicit_close)
-        assert sm.get_session_end_plan(logon_id) == explicit_close
-
-        with pytest.raises(StateError, match="Cannot replace authoritative"):
-            sm.plan_session_end(
-                logon_id,
-                SessionEndPlan(
-                    start + timedelta(hours=3),
-                    "explicit_storyline",
-                    "later-story-close",
-                ),
-            )
-
     def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
         """Collision bumps should not recreate an exact session-time delta."""
         import random

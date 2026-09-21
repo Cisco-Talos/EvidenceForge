@@ -380,12 +380,13 @@
   and reuse before the RDP action bundle materializes transport, authentication, session, or
   desktop evidence. The typed legacy `logon_type: 10` handler is an adapter that must route through
   that planner instead of invoking the lower-level logon compatibility bundle directly.
-- **Invariant:** on a Windows client-class host, a later same-user, same-source remote-interactive
-  request that falls inside an already-connected RDP session reuses that canonical session even
-  when a caller would otherwise force a new bootstrap. It must not create a second transport,
-  LogonID, terminal-session ID, or `winlogon/userinit/explorer` tree. Effective Windows identity is
-  resolved before admission, an explicit storyline close may refine an earlier action-bundle
-  ceiling, and Windows server/domain-controller targets retain their multi-session semantics.
+- **Invariant:** on a Windows client-class host, an equivalent same-user, same-source
+  remote-interactive request reuses the one materialized desktop even when source-session
+  alignment placed that desktop after the later request's nominal authored timestamp. It must not
+  create a second overlapping LogonID, terminal-session ID, or `winlogon/userinit/explorer` tree.
+  Effective Windows identity is resolved before admission, equivalent authored starts receive one
+  explicit close plan before lifecycle publication, and Windows server/domain-controller targets
+  retain their multi-session semantics.
 - **Entry paths:** typed `rdp_session` events, legacy remote `logon_type: 10` events, prepared
   baseline/world-planner RDP bootstraps, direct world-planner calls, and existing-session requests
   with either modeled or network-only sources.
@@ -397,7 +398,8 @@
   transports, identities, and child trees exist, and the low-level RDP bundle should continue to
   materialize an already-reconciled request exactly once.
 - **Sibling risks:** preserve distinct concurrent RDP sessions on server-class hosts, do not reuse
-  ended, future, or disconnected sessions, do not collapse different-user activity, retain
-  source-IP affinity, and preserve authoritative end plans and storyline protection. The existing
-  exact reconnect bundle remains the owner of true disconnected-session reconnection; planner-wide
-  automatic reconnect admission is outside this loop and must not be replaced by silent reuse.
+  ended sessions or collapse different-user/different-source activity, retain source-IP affinity,
+  and keep action-bundle and authoritative deadlines immutable after publication. The existing
+  exact reconnect bundle remains the owner of disconnected-session reconnection; equivalent
+  client starts may share an explicit close only when the pairing prepass proves the same target
+  and source before either lifecycle is materialized.

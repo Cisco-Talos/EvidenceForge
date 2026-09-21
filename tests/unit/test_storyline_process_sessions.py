@@ -21,6 +21,98 @@ class ResolutionCompleteError(RuntimeError):
     """Stop a typed event after session selection, before process generation."""
 
 
+def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:
+    """Equivalent authored client RDP starts must receive the same close fence."""
+
+    engine = StorylineMixin()
+    engine.start_time = datetime(2024, 3, 18, 12, tzinfo=UTC)
+    client = System(
+        hostname="WS-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    engine.scenario = SimpleNamespace(
+        environment=SimpleNamespace(systems=[client]),
+        storyline=[
+            SimpleNamespace(
+                id="first",
+                actor="root",
+                system=client.hostname,
+                time="+1h",
+                events=[SimpleNamespace(type="rdp_session", source_ip="10.0.0.99")],
+            ),
+            SimpleNamespace(
+                id="alias",
+                actor="alice",
+                system=client.hostname,
+                time="+1h20m",
+                events=[SimpleNamespace(type="logon", logon_type=10, source_ip="10.0.0.99")],
+            ),
+            SimpleNamespace(
+                id="close",
+                actor="alice",
+                system=client.hostname,
+                time="+2h",
+                events=[SimpleNamespace(type="logoff")],
+            ),
+        ],
+    )
+
+    engine._ensure_storyline_session_end_pairs()
+
+    assert engine._storyline_start_to_logoff == {
+        "first:0": "close:0",
+        "alias:0": "close:0",
+    }
+    assert engine._storyline_session_end_plans["close:0"].canonical_end == (
+        engine.start_time + timedelta(hours=2)
+    )
+
+
+def test_server_rdp_starts_retain_independent_logoff_pairing() -> None:
+    """Server multi-session semantics must not merge separate authored starts."""
+
+    engine = StorylineMixin()
+    engine.start_time = datetime(2024, 3, 18, 12, tzinfo=UTC)
+    server = System(
+        hostname="APP-01",
+        ip="10.0.0.20",
+        os="Windows Server 2022",
+        type="server",
+    )
+    engine.scenario = SimpleNamespace(
+        environment=SimpleNamespace(systems=[server]),
+        storyline=[
+            SimpleNamespace(
+                id="first",
+                actor="alice",
+                system=server.hostname,
+                time="+1h",
+                events=[SimpleNamespace(type="rdp_session", source_ip="10.0.0.99")],
+            ),
+            SimpleNamespace(
+                id="second",
+                actor="alice",
+                system=server.hostname,
+                time="+1h20m",
+                events=[SimpleNamespace(type="rdp_session", source_ip="10.0.0.99")],
+            ),
+            SimpleNamespace(
+                id="close",
+                actor="alice",
+                system=server.hostname,
+                time="+2h",
+                events=[SimpleNamespace(type="logoff")],
+            ),
+        ],
+    )
+
+    engine._ensure_storyline_session_end_pairs()
+
+    assert engine._storyline_start_to_logoff == {"second:0": "close:0"}
+
+
 @pytest.mark.parametrize("entrypoint", ["typed", "spill"])
 @pytest.mark.parametrize(
     ("username", "os_name", "existing", "path"),

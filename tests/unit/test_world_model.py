@@ -1165,8 +1165,12 @@ def test_world_planner_reconciles_duplicate_client_rdp_desktop(
     """A Windows client must not materialize two live same-user RDP desktops."""
 
     first_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
-    action_deadline = first_time + timedelta(hours=2)
     explicit_deadline = first_time + timedelta(hours=1)
+    explicit_plan = SessionEndPlan(
+        explicit_deadline,
+        "explicit_storyline",
+        "story-rdp-close",
+    )
     first = planner.bootstrap_user_session(
         user=users["alice.admin"],
         target_system=systems["WKS-01"],
@@ -1175,7 +1179,7 @@ def test_world_planner_reconciles_duplicate_client_rdp_desktop(
         session_kind="rdp",
         source_system=systems["WKS-02"],
         allow_existing=False,
-        session_end_plan=SessionEndPlan(action_deadline, "action_bundle"),
+        session_end_plan=explicit_plan,
     )
     second = planner.bootstrap_user_session(
         user=users["alice.admin"],
@@ -1185,11 +1189,7 @@ def test_world_planner_reconciles_duplicate_client_rdp_desktop(
         session_kind="rdp",
         source_system=systems["WKS-02"],
         allow_existing=False,
-        session_end_plan=SessionEndPlan(
-            explicit_deadline,
-            "explicit_storyline",
-            "story-rdp-close",
-        ),
+        session_end_plan=explicit_plan,
     )
 
     assert second.session is first.session
@@ -1200,11 +1200,7 @@ def test_world_planner_reconciles_duplicate_client_rdp_desktop(
         if session.system == systems["WKS-01"].hostname and session.session_kind == "rdp"
     ]
     assert client_sessions == [first.session]
-    assert state_manager.get_session_end_plan(first.session.logon_id) == SessionEndPlan(
-        explicit_deadline,
-        "explicit_storyline",
-        "story-rdp-close",
-    )
+    assert state_manager.get_session_end_plan(first.session.logon_id) == explicit_plan
     rdp_connections = [
         connection
         for connection in state_manager.list_open_connections()

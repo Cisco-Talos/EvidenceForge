@@ -8556,12 +8556,7 @@ class StateManager:
                 return False
             existing = session.end_plan
             if existing is not None and existing != plan:
-                refines_action_fence = (
-                    existing.authority == "action_bundle"
-                    and plan.is_authoritative
-                    and ensure_utc(plan.canonical_end) <= ensure_utc(existing.canonical_end)
-                )
-                if existing.is_hard_deadline and not refines_action_fence:
+                if existing.is_hard_deadline:
                     raise StateError(
                         "Cannot replace authoritative or action-bundle session end plan for "
                         f"{logon_id}: {existing.canonical_end.isoformat()}"

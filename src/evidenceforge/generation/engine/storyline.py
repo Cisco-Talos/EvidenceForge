@@ -1634,9 +1634,14 @@ class StorylineMixin:
         if hasattr(self, "_storyline_start_to_logoff"):
             return
         pending: dict[tuple[str, str], list[str]] = {}
+        client_rdp_starts: dict[str, tuple[str, str]] = {}
         start_to_logoff: dict[str, str] = {}
         logoff_plans: dict[str, SessionEndPlan] = {}
         scenario = getattr(self, "scenario", None)
+        systems = {
+            system.hostname: system
+            for system in getattr(getattr(scenario, "environment", None), "systems", ())
+        }
         for storyline_event in getattr(scenario, "storyline", []):
             if not all(
                 hasattr(storyline_event, field)
@@ -1648,9 +1653,43 @@ class StorylineMixin:
                 spec_id = f"{storyline_event.id}:{spec_index}"
                 if spec.type in {"ssh_session", "rdp_session", "logon"}:
                     pending.setdefault(key, []).append(spec_id)
+                    system = systems.get(storyline_event.system)
+                    source_ip = str(getattr(spec, "source_ip", "") or "").casefold()
+                    is_remote_rdp = spec.type == "rdp_session" or (
+                        spec.type == "logon" and getattr(spec, "logon_type", None) == 10
+                    )
+                    if (
+                        is_remote_rdp
+                        and system is not None
+                        and _get_os_category(system.os) == "windows"
+                        and (system.type or "workstation").casefold()
+                        not in {"server", "domain_controller"}
+                        and source_ip not in {"", "-", system.ip.casefold()}
+                    ):
+                        client_rdp_starts[spec_id] = (
+                            storyline_event.system.casefold(),
+                            source_ip,
+                        )
                 elif spec.type == "logoff" and pending.get(key):
                     start_id = pending[key].pop()
-                    start_to_logoff[start_id] = spec_id
+                    matched_start_ids = [start_id]
+                    client_rdp_key = client_rdp_starts.get(start_id)
+                    if client_rdp_key is not None:
+                        for pending_key, pending_ids in pending.items():
+                            duplicate_ids = [
+                                candidate_id
+                                for candidate_id in pending_ids
+                                if client_rdp_starts.get(candidate_id) == client_rdp_key
+                            ]
+                            if duplicate_ids:
+                                pending[pending_key] = [
+                                    candidate_id
+                                    for candidate_id in pending_ids
+                                    if candidate_id not in duplicate_ids
+                                ]
+                                matched_start_ids.extend(duplicate_ids)
+                    for matched_start_id in matched_start_ids:
+                        start_to_logoff[matched_start_id] = spec_id
                     end_time = self._parse_storyline_time(storyline_event.time)
                     if end_time.tzinfo is None:
                         end_time = end_time.replace(tzinfo=UTC)
