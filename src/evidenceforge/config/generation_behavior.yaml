@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 112
+current_revision: 113
 history_start_revision: 1
-behavior_surface_sha256: 8290756c908c5bade888bc213e7f3a20e9dd348f149dab8d711b207a61e03373
+behavior_surface_sha256: 680ba6a45a1371c96e0673a3b438489f86b80f7bbdd58b2d71e06e176db39fa8
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1050,3 +1050,14 @@ changes:
       - proxy_access
       - zeek_http
     summary: Preserve process-bound browser identity even when an explicit proxy client carries an authoritative caller PID and therefore suppresses process inference.
+  - revision: 113
+    id: deployment-bound-remote-thread-entry-identity
+    impact: localized
+    domains:
+      - process-thread-lifecycle
+      - windows-binary-deployment
+      - sysmon-remote-thread
+    formats:
+      - ecar
+      - windows_event_sysmon
+    summary: Bind remote-thread entry functions to target-side routines and derive stable function addresses from build-aware RVAs plus deterministic per-host, per-boot module ASLR.

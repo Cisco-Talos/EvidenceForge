@@ -31109,6 +31109,7 @@ class ActivityGenerator:
         )
         from evidenceforge.generation.activity.create_remote_thread_patterns import (
             pick_remote_thread_start,
+            resolve_remote_thread_start_address,
         )
 
         start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
@@ -31131,11 +31132,15 @@ class ActivityGenerator:
             )
         else:
             target_image = normalize_defender_platform_path(target_image, system.hostname)
-        module_key = (start_module or target_image).rsplit("\\", 1)[-1].lower()
-        module_base = (
-            0x00007FF600000000 + (_stable_seed(f"module_base:{module_key}") % 0x700000) * 0x1000
+        boot_time = self.state_manager.get_boot_time(system.hostname)
+        start_address = resolve_remote_thread_start_address(
+            hostname=system.hostname,
+            os_build=system.os_build or system.os,
+            architecture=system.architecture or "x64",
+            boot_time=boot_time,
+            start_module=start_module or target_image,
+            start_function=start_function,
         )
-        start_address = module_base + rng.randrange(0x1000, 0x1F000, 0x10)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)

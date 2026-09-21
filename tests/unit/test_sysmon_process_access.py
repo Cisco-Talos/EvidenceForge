@@ -32,6 +32,8 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
+    pick_remote_thread_start,
+    resolve_remote_thread_start_address,
 )
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
@@ -326,3 +328,40 @@ class TestCreateRemoteThreadPatterns:
         }
 
         assert picked == {"a", "c"}
+
+    def test_remote_thread_start_never_uses_creation_api(self):
+        """Event 8 start functions must describe entry routines, not creation APIs."""
+        forbidden = {
+            "createremotethread",
+            "createremotethreadex",
+            "ntcreatethreadex",
+            "rtlcreateuserthread",
+        }
+
+        for seed in range(100):
+            _module, function = pick_remote_thread_start(
+                r"C:\Program Files\Microsoft Defender\MsMpEng.exe",
+                r"C:\Windows\System32\lsass.exe",
+                random.Random(seed),
+            )
+            assert function.casefold() not in forbidden
+
+    def test_remote_thread_address_is_stable_within_boot_and_varies_by_host(self):
+        """Function RVAs stay stable while deterministic ASLR varies host module bases."""
+        boot_time = datetime(2024, 3, 14, 8, 0, tzinfo=UTC)
+        parameters = {
+            "os_build": "10.0.20348.1",
+            "architecture": "x64",
+            "boot_time": boot_time,
+            "start_module": r"C:\Windows\System32\ntdll.dll",
+            "start_function": "RtlUserThreadStart",
+        }
+
+        first = resolve_remote_thread_start_address(hostname="DC-01", **parameters)
+        repeated = resolve_remote_thread_start_address(hostname="DC-01", **parameters)
+        second_host = resolve_remote_thread_start_address(hostname="DC-02", **parameters)
+
+        assert first == repeated
+        assert first != second_host
+        assert 0x00007FF800000000 <= first < 0x00007FFF00000000
+        assert 0x00007FF800000000 <= second_host < 0x00007FFF00000000

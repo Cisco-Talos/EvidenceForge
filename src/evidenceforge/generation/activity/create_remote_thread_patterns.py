@@ -4,10 +4,12 @@
 """Sysmon Event 8 CreateRemoteThread baseline pattern loader."""
 
 import random
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _PATTERNS_PATH = get_activity_directory() / "create_remote_thread_patterns.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -42,6 +44,11 @@ def _merge_create_remote_thread_patterns(default: dict, overlay: dict) -> dict:
                 )
             target_overrides[exe_name] = existing
         result["target_overrides"] = target_overrides
+    if "forbidden_start_functions" in overlay:
+        result["forbidden_start_functions"] = extend_list(
+            default.get("forbidden_start_functions", []),
+            overlay["forbidden_start_functions"],
+        )
     return result
 
 
@@ -129,5 +136,49 @@ def pick_remote_thread_start(
     )
     target_override = (config.get("target_overrides") or {}).get(target_exe, {})
     locations.extend(target_override.get("start_locations") or [])
+    forbidden = {
+        str(function).strip().casefold()
+        for function in config.get("forbidden_start_functions", [])
+        if str(function).strip()
+    }
+    locations = [
+        location
+        for location in locations
+        if str(location.get("function", "")).strip().casefold() not in forbidden
+    ]
     picked = _pick_weighted_location(locations, rng)
     return picked.get("module", ""), picked.get("function", "")
+
+
+def resolve_remote_thread_start_address(
+    *,
+    hostname: str,
+    os_build: str,
+    architecture: str,
+    boot_time: datetime | None,
+    start_module: str,
+    start_function: str,
+) -> int:
+    """Resolve a stable target-side function address for one host boot.
+
+    The function RVA follows the module build while the module base follows the
+    host boot's deterministic ASLR placement. This preserves a stable address
+    within one boot without collapsing unrelated hosts onto one global band.
+    """
+    normalized_module = start_module.replace("/", "\\").strip().casefold()
+    normalized_function = start_function.strip().casefold()
+    build_key = os_build.strip().casefold() or "unknown-build"
+    architecture_key = architecture.strip().casefold() or "x64"
+    boot_key = boot_time.isoformat() if boot_time is not None else "unknown-boot"
+    binary_key = f"{normalized_module}:{build_key}:{architecture_key}"
+
+    module_slot = (
+        _stable_seed(f"remote_thread_module_base:{hostname.casefold()}:{boot_key}:{binary_key}")
+        % 0x60000
+    )
+    module_base = 0x00007FF800000000 + module_slot * 0x10000
+    function_rva = 0x1000 + (
+        _stable_seed(f"remote_thread_function_rva:{binary_key}:{normalized_function}") % 0x1E000
+    )
+    function_rva &= ~0xF
+    return module_base + function_rva
