@@ -1,7 +1,7 @@
 schema_version: "1.0"
 current_revision: 110
 history_start_revision: 1
-behavior_surface_sha256: b147ba8607c350b3e20ccc656d98a8b8df59a71e95d9dd26f71151682bfa770e
+behavior_surface_sha256: f8d64f1e6dee8a724d14fe88bdc0f45d2af0eddeb963a472e54a2cc299c21855
 changes:
   - revision: 1
     id: initial-generation-behavior-contract

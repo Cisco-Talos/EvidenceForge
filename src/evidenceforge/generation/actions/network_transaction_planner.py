@@ -4900,6 +4900,38 @@ class NetworkTransactionPlanner:
             )
         return proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer
 
+    def _process_browser_user_agent(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        hostname: str,
+        domain_tags: list[str],
+    ) -> str:
+        """Return the stable browser identity of the process that owns this flow."""
+        if endpoints.source_system is None or event.network.initiating_pid is None:
+            return ""
+        process = self._executor.state_manager.get_process(
+            endpoints.source_system.hostname,
+            event.network.initiating_pid,
+        )
+        if process is None:
+            return ""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            stable_browser_user_agent_for_process,
+        )
+
+        process_identity = process.ecar_object_id or (
+            f"{process.pid}:{process.start_time.isoformat()}"
+        )
+        return stable_browser_user_agent_for_process(
+            endpoints.source_system,
+            process.image,
+            process_identity,
+            hostname=hostname,
+            domain_tags=domain_tags,
+        )
+
     def _prepare_transparent_proxy_evidence(
         self,
         *,
@@ -4940,6 +4972,14 @@ class NetworkTransactionPlanner:
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
 
             domain_tags = get_domain_tags(proxy_hostname)
+            process_ua = self._process_browser_user_agent(
+                event=event,
+                endpoints=endpoints,
+                hostname=proxy_hostname,
+                domain_tags=domain_tags,
+            )
+            if process_ua and event.http is not None:
+                event.http = replace(event.http, user_agent=process_ua)
             proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
                 self._proxy_request_presentation(
                     event.http,
@@ -4949,6 +4989,9 @@ class NetworkTransactionPlanner:
                     rng=rng,
                 )
             )
+            if process_ua:
+                proxy_ua_override = process_ua
+                user_agent = process_ua
             from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
             apply_domain_user_agent = event.http is None or (
@@ -5115,27 +5158,12 @@ class NetworkTransactionPlanner:
             source_system_type=getattr(endpoints.source_system, "type", None),
             allow_canonical_protocol_templates=False,
         )
-        process_ua = ""
-        if endpoints.source_system is not None and event.network.initiating_pid is not None:
-            process = executor.state_manager.get_process(
-                endpoints.source_system.hostname,
-                event.network.initiating_pid,
-            )
-            if process is not None:
-                from evidenceforge.generation.activity.proxy_user_agents import (
-                    stable_browser_user_agent_for_process,
-                )
-
-                process_identity = process.ecar_object_id or (
-                    f"{process.pid}:{process.start_time.isoformat()}"
-                )
-                process_ua = stable_browser_user_agent_for_process(
-                    endpoints.source_system,
-                    process.image,
-                    process_identity,
-                    hostname=web_host,
-                    domain_tags=web_domain_tags,
-                )
+        process_ua = self._process_browser_user_agent(
+            event=event,
+            endpoints=endpoints,
+            hostname=web_host,
+            domain_tags=web_domain_tags,
+        )
         ua = process_ua or executor._proxy_user_agent_for_context(
             rng,
             endpoints.source_system,
