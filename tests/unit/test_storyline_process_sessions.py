@@ -128,6 +128,51 @@ def test_storyline_rdp_process_admission_clamps_to_lifecycle_frontier() -> None:
     assert admitted_at == lifecycle_frontier
 
 
+def test_linux_process_resolves_session_after_shell_availability_shift() -> None:
+    """A serialized Linux child must not retain a session selected at its stale anchor."""
+
+    engine = StorylineMixin()
+    actor = User(username="root", full_name="root", email="root@example.com")
+    system = System(hostname="WEB-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
+    authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    shell_available_at = authored_time + timedelta(minutes=5)
+    rng = random.Random(137)
+    engine._storyline_shell_available_at = {
+        (system.hostname, actor.username): shell_available_at,
+    }
+    engine._linux_native_service_user_for_storyline_actor = lambda *args: actor
+    engine._resolve_storyline_process_logon_id = Mock(return_value="fresh-session")
+
+    def capture_selection(user: User, host: System, logon_id: str) -> User:
+        raise ResolutionCompleteError
+
+    engine._storyline_local_process_actor_for_logon = capture_selection
+    context = TypedEventContext(
+        actor=actor,
+        system=system,
+        time=authored_time,
+        activity="process",
+        explicit_types={"process"},
+        future_specs=(),
+        authored_time_shift=timedelta(),
+        session_required_until=None,
+        rng=rng,
+        dispatcher=None,
+        malicious_event={},
+        _ground_truth_uid=lambda *args: "uid",
+    )
+
+    with pytest.raises(ResolutionCompleteError):
+        handle_process(
+            engine,
+            ProcessEventSpec(type="process", process_name="/usr/sbin/ip"),
+            context,
+        )
+
+    resolved_time = engine._resolve_storyline_process_logon_id.call_args.args[2]
+    assert shell_available_at < resolved_time < shell_available_at + timedelta(seconds=2)
+
+
 def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:
     """Equivalent authored client RDP starts must receive the same close fence."""
 

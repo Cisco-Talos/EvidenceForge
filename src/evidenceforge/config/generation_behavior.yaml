@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 127
+current_revision: 128
 history_start_revision: 1
-behavior_surface_sha256: 835a890f8f082c5d2b3acfa998ac7c77b505cee2aac51204103653bc03549437
+behavior_surface_sha256: c104ca374bbb45c3709dee1ea09960413b2650b12bcad83434fcb34c5cca6f35
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1254,3 +1254,15 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Clamp follow-on interactive process admission to the canonical RDP lifecycle frontier when source-workstation alignment moves reconnect publication later than the authored child timestamp.
+  - revision: 128
+    id: linux-process-session-after-shell-availability
+    impact: localized
+    domains:
+      - ssh-session-lifecycle
+      - storyline-process-timing
+      - linux-shell-serialization
+    formats:
+      - bash_history
+      - ecar
+      - syslog
+    summary: Resolve Linux storyline process session ownership after shell serialization fixes the canonical start, preventing a shifted child from retaining an SSH session whose transport deadline has already passed.

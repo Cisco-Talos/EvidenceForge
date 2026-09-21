@@ -53,13 +53,27 @@ def handle_process(
     rng = context.rng
     malicious_event = context.malicious_event
     os_category = _get_os_category(system.os)
-    logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
 
     process_actor = self._linux_native_service_user_for_storyline_actor(
         actor,
         system,
         time,
     )
+
+    if os_category == "linux":
+        if not hasattr(self, "_storyline_shell_available_at"):
+            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+        native_shell_key = (system.hostname, process_actor.username)
+        available_times = [
+            ts
+            for key in {native_shell_key, (system.hostname, actor.username)}
+            if (ts := self._storyline_shell_available_at.get(key)) is not None
+        ]
+        available_at = max(available_times) if available_times else None
+        if available_at is not None and time < available_at:
+            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
+
+    logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
     process_actor = self._storyline_local_process_actor_for_logon(
         process_actor,
         system,
@@ -72,18 +86,6 @@ def handle_process(
     )
     command_line = spec.command_line or process_name
     shell_key = (system.hostname, process_actor.username)
-
-    if os_category == "linux":
-        if not hasattr(self, "_storyline_shell_available_at"):
-            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
-        available_times = [
-            ts
-            for key in {shell_key, (system.hostname, actor.username)}
-            if (ts := self._storyline_shell_available_at.get(key)) is not None
-        ]
-        available_at = max(available_times) if available_times else None
-        if available_at is not None and time < available_at:
-            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
     if "<base64_encoded_command>" in command_line:
         command_line = command_line.replace(
