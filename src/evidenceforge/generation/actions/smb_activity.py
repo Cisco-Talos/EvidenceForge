@@ -1002,7 +1002,7 @@ class SmbActivityActionBundle:
                 ),
                 preferred_pid=self.request.process_pid or -1,
                 client_logon_id=self.request.client_logon_id,
-                source_visible_by=self.request.time,
+                source_visible_by=(None if self.request.client_logon_id else self.request.time),
             )
         process = self._process_context(
             client_system,

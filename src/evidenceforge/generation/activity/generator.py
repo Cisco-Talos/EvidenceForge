@@ -8296,10 +8296,13 @@ class ActivityGenerator:
                 or process.logon_id != client_logon_id
                 or process.start_time is None
                 or ensure_utc(process.start_time) > ensure_utc(time)
-                or not self._process_source_visible_by(
-                    system=client_system,
-                    pid=preferred_pid,
-                    deadline=source_visible_by,
+                or (
+                    source_visible_by is not None
+                    and not self._process_source_visible_by(
+                        system=client_system,
+                        pid=preferred_pid,
+                        deadline=source_visible_by,
+                    )
                 )
             ):
                 raise StateError("SMB client request lost its exact credentialed process")

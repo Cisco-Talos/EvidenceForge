@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 121
+current_revision: 122
 history_start_revision: 1
-behavior_surface_sha256: 7d08806ae75715a6daebe412f8c1bfa6f7f3082dc1fb97b4cf6f80822ad507e4
+behavior_surface_sha256: 0cf38af7e1a7e3cb60febadc93260b59ac42ba83864878dc6a3f03cad9e66115
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1177,3 +1177,16 @@ changes:
       - zeek_files
       - zeek_smb_files
     summary: Carry an explicit credential-session process through nonpersistent SMB transports and client file effects, including Samba-backed share operations that previously fell back to anonymous attribution.
+  - revision: 122
+    id: nonpersistent-smb-copy-source-ordering
+    impact: localized
+    domains:
+      - process-source-timing
+      - smb-client-attribution
+      - network-source-ordering
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Delegate exact credentialed SMB copy ordering to the canonical network bundle instead of rejecting valid process identity against the earlier nonpersistent intent timestamp.

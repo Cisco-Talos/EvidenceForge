@@ -7731,6 +7731,11 @@ class TestActivityGenerator:
             "evidenceforge.generation.activity.generator.client_process_for_operation",
             lambda *_args, **_kwargs: None,
         )
+        monkeypatch.setattr(
+            activity_gen,
+            "_process_source_visible_by",
+            lambda **_kwargs: False,
+        )
 
         plan = activity_gen.ensure_smb_client_process(
             client_system=test_system,
