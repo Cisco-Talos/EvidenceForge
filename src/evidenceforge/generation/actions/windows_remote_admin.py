@@ -103,6 +103,7 @@ class ExplicitCredentialUseRequest:
     source_ip: str = ""
     source_port: int = 0
     create_new_credentials_session: bool = True
+    lifecycle_group_id: str = ""
     source: str = "activity_generator"
 
     @property
@@ -114,7 +115,7 @@ class ExplicitCredentialUseRequest:
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.target_username}:{self.target_server}:{self.process_name}:"
             f"{self.process_pid or ''}:{self.source_ip}:{self.source_port}:"
-            f"{self.create_new_credentials_session}:{self.source}"
+            f"{self.create_new_credentials_session}:{self.lifecycle_group_id}:{self.source}"
         )
         return f"windows-explicit-credentials-{seed:016x}"
 
@@ -516,6 +517,8 @@ class ExplicitCredentialUseActionBundle:
                 if self._request.source_ip.strip().removeprefix("::ffff:") == network_source_ip
                 else 0
             )
+        lifecycle_group_id = self._request.lifecycle_group_id or self._request.stable_id
+        new_credentials_lifecycle_id = f"{lifecycle_group_id}:new_credentials"
         event = OccurrenceBuilder(
             timestamp=event_time,
             event_type="explicit_credentials",
@@ -536,6 +539,20 @@ class ExplicitCredentialUseActionBundle:
                 source_ip=network_source_ip or "-",
                 source_port=network_source_port,
             ),
+            lifecycle=(
+                ActionLifecycleContext(
+                    group_id=new_credentials_lifecycle_id,
+                    canonical_start=event_time,
+                    phase="credential_use",
+                    parent_group_id=lifecycle_group_id,
+                )
+                if is_runas_netonly
+                and (
+                    self._request.create_new_credentials_session
+                    or bool(self._request.lifecycle_group_id)
+                )
+                else None
+            ),
         )
         self._executor.dispatcher.dispatch_builder(event)
         new_credentials_logon_id = ""
@@ -544,17 +561,18 @@ class ExplicitCredentialUseActionBundle:
             new_credentials_logon_id = self._executor._emit_new_credentials_logon(
                 user=subject_user,
                 system=self._request.system,
-                time=event_time + timedelta(milliseconds=1),
+                time=event_time + timedelta(milliseconds=150),
                 caller_logon_id=subject_logon_id,
                 outbound_username=self._request.target_username,
                 outbound_domain=target_domain,
-                lifecycle_group_id=self._request.stable_id,
+                lifecycle_group_id=lifecycle_group_id,
             )
             child_close_time = self._realize_runas_remote_action(
                 subject_user=subject_user,
                 new_credentials_logon_id=new_credentials_logon_id,
-                event_time=event_time,
+                new_credentials_time=event_time + timedelta(milliseconds=150),
                 caller_pid=process_pid,
+                lifecycle_group_id=new_credentials_lifecycle_id,
             )
         if materialized_caller:
             lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
@@ -586,12 +604,13 @@ class ExplicitCredentialUseActionBundle:
         *,
         subject_user: User,
         new_credentials_logon_id: str,
-        event_time: datetime,
+        new_credentials_time: datetime,
         caller_pid: int,
+        lifecycle_group_id: str,
     ) -> datetime:
         """Execute the child command and modeled ADMIN$ authentication result."""
 
-        child_time = event_time + timedelta(milliseconds=10)
+        child_time = new_credentials_time + timedelta(milliseconds=150)
         target_system = self._executor._explicit_credentials_target_system(
             self._request.target_server
         )
@@ -610,7 +629,7 @@ class ExplicitCredentialUseActionBundle:
             child_image,
             command_line,
             parent_pid=caller_pid,
-            lifecycle_group_id=self._request.stable_id,
+            lifecycle_group_id=lifecycle_group_id,
             require_exact_parent=True,
         )
         if target_system is None:

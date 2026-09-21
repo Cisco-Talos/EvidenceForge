@@ -57,6 +57,7 @@ def handle_logon(
             system.hostname,
             system,
         )
+        lifecycle_group_id = f"storyline:{getattr(self, '_current_storyline_spec_id', 'logon')}"
         caller_pid = self._ensure_storyline_new_credentials_caller_process(
             caller=caller,
             system=system,
@@ -73,6 +74,7 @@ def handle_logon(
             process_name=r"C:\Windows\System32\runas.exe",
             process_pid=caller_pid,
             create_new_credentials_session=False,
+            lifecycle_group_id=lifecycle_group_id,
         )
         logon_id = self.activity_generator._emit_new_credentials_logon(
             user=caller,
@@ -81,9 +83,7 @@ def handle_logon(
             caller_logon_id=caller_logon_id,
             outbound_username=actor.username,
             outbound_domain=outbound_domain,
-            lifecycle_group_id=(
-                f"storyline:{getattr(self, '_current_storyline_spec_id', 'logon')}"
-            ),
+            lifecycle_group_id=lifecycle_group_id,
         )
         self._ensure_storyline_new_credentials_controller(
             actor=caller,

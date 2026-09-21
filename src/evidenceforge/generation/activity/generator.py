@@ -28917,6 +28917,7 @@ class ActivityGenerator:
         source_ip: str = "",
         source_port: int = 0,
         create_new_credentials_session: bool = True,
+        lifecycle_group_id: str = "",
     ) -> None:
         """Generate explicit credentials event (4648) on source system.
 
@@ -28936,6 +28937,7 @@ class ActivityGenerator:
                 source_ip=source_ip,
                 source_port=source_port,
                 create_new_credentials_session=create_new_credentials_session,
+                lifecycle_group_id=lifecycle_group_id,
             ),
         )
         bundle.execute()

@@ -1502,7 +1502,7 @@ class StorylineMixin:
         ):
             return existing_pid
 
-        controller_time = ensure_utc(time) + timedelta(milliseconds=50)
+        controller_time = ensure_utc(time) + timedelta(milliseconds=150)
         process_name = r"C:\Windows\System32\cmd.exe"
         pid = self.activity_generator.generate_process(
             user=actor,

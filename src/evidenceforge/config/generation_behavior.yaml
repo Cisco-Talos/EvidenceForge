@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 140
+current_revision: 141
 history_start_revision: 1
-behavior_surface_sha256: 0899fccd55c38583f34bf4c96b10e3dcead8bb126ae84fc9a1a6cba837e4f595
+behavior_surface_sha256: 3c60383d001c2d4ffcde93243ad6e269fa4bcb339d1eabeef53d8868ce2dc7e0
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1409,3 +1409,15 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Preserve the validated runas parent identity across the Type 9 token boundary without making the short-lived caller own the cloned process lifetime.
+  - revision: 141
+    id: new-credentials-source-order
+    impact: material
+    domains:
+      - windows-new-credentials
+      - source-observation
+      - process-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Share one observation lifecycle and bounded causal spacing across runas credential use, the Type 9 clone, and its first child process.

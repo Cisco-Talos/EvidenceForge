@@ -11320,6 +11320,10 @@ class TestActivityGenerator:
         assert new_credentials.auth.process_name.endswith("svchost.exe")
         assert new_credentials.auth.logon_process == "seclogo"
         assert new_credentials.auth.auth_package == "Negotiate"
+        assert explicit.lifecycle is not None
+        assert new_credentials.lifecycle is not None
+        assert explicit.lifecycle.group_id == new_credentials.lifecycle.group_id
+        assert explicit.timestamp < new_credentials.timestamp
 
         shell_names = {"winlogon.exe", "userinit.exe", "explorer.exe"}
         assert not any(
@@ -11392,6 +11396,11 @@ class TestActivityGenerator:
         )
 
         assert explicit.auth.source_ip == "-"
+        assert explicit.lifecycle is not None
+        assert type9.lifecycle is not None
+        assert child.lifecycle is not None
+        assert explicit.lifecycle.group_id == type9.lifecycle.group_id == child.lifecycle.group_id
+        assert explicit.timestamp < type9.timestamp < child.timestamp
         assert child.process.command_line == rf"cmd.exe /c dir \\{target_system.hostname}\ADMIN$"
         assert target_logon.auth.source_ip == test_system.ip
         assert target_logon.auth.source_port > 0

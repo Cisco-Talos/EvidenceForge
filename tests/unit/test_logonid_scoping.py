@@ -249,6 +249,9 @@ class TestLogonIdSystemScoping:
         assert explicit.auth.process_pid == runas.pid
         assert explicit.auth.subject_logon_id == caller_logon_id
         assert explicit.auth.username == outbound_user.username
+        assert explicit.lifecycle is not None
+        assert type9_event.lifecycle is not None
+        assert explicit.lifecycle.group_id == type9_event.lifecycle.group_id
         assert explicit.timestamp < type9_event.timestamp
         assert child.auth.logon_id == type9_id
         assert child.auth.username == local_user.username
