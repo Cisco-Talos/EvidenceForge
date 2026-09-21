@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 125
+current_revision: 126
 history_start_revision: 1
-behavior_surface_sha256: ca282fad545c9488b6bc354d638dc4e1a7bf6fda4827f35a5a29358259f92f38
+behavior_surface_sha256: 61aca2ed62562a4e50e1de11ada331b8ca2f526e4686c86cb8379b6780257faf
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1228,3 +1228,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Require fresh storyline desktop processes to consume an exact RDP reconnect generation after disconnect, or skip admission when no valid modeled controller remains.
+  - revision: 126
+    id: rdp-planner-reconnect-precedes-generic-reuse
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - world-session-planning
+      - remote-interactive-state
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Prevent generic session reuse from bypassing the RDP planner's connected-transport check so a disconnected client desktop consumes the exact reconnect path.

@@ -1240,7 +1240,7 @@ def test_world_planner_reconnects_disconnected_client_desktop_through_bundle(
         rng=random.Random(17),
         session_kind="rdp",
         source_system=systems["WKS-02"],
-        allow_existing=False,
+        allow_existing=True,
         rdp_transport_time=reconnect_time,
     )
 

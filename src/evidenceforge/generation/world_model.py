@@ -1358,7 +1358,7 @@ class WorldPlanner:
         existing = self._find_user_session(
             user.username, target_system.hostname, session_kind, at_time=time
         )
-        if allow_existing and existing is not None:
+        if allow_existing and existing is not None and session_kind != "rdp":
             # Require exact session_kind match when the caller specifies one.
             # Prevents interactive requests from reusing network/rdp sessions
             # and vice versa — each kind carries different transport evidence.
