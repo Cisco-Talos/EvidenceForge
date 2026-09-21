@@ -5,11 +5,14 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from threading import RLock
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
 
+from evidenceforge.events.rdp import RdpSessionState
+from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.engine.typed_handlers.context import TypedEventContext
 from evidenceforge.generation.engine.typed_handlers.process import handle_process
@@ -19,6 +22,84 @@ from evidenceforge.models.scenario import ProcessEventSpec
 
 class ResolutionCompleteError(RuntimeError):
     """Stop a typed event after session selection, before process generation."""
+
+
+def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -> None:
+    """Fresh desktop work consumes the exact reconnect path before process admission."""
+
+    source = System(
+        hostname="WS-01",
+        ip="10.10.0.25",
+        os="Windows 11",
+        type="workstation",
+    )
+    target = System(
+        hostname="RDS-01",
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+    user = User(
+        username="analyst",
+        full_name="Security Analyst",
+        email="analyst@example.test",
+    )
+    activity_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    ready_time = activity_time + timedelta(milliseconds=750)
+    session_identity = SimpleNamespace(object_id="rdp-logical", session_kind="rdp")
+    snapshot = SimpleNamespace(
+        state=RdpSessionState.DISCONNECTED,
+        generation=SimpleNamespace(ordinal=3),
+        identity=SimpleNamespace(
+            affinity=SimpleNamespace(source_address=source.ip),
+        ),
+    )
+    prepared = SimpleNamespace(source_system=source, user=user)
+    entry = SimpleNamespace(
+        continuation=SimpleNamespace(
+            session=SimpleNamespace(
+                identity=SimpleNamespace(logical_session_id="rdp-logical"),
+                generation=SimpleNamespace(ordinal=3),
+            ),
+            prepared=prepared,
+        )
+    )
+    live_session = SimpleNamespace(source_ready_time=ready_time)
+    state = SimpleNamespace(
+        get_session_identity=lambda logon_id: session_identity,
+        get_session=lambda logon_id: live_session,
+    )
+    reconnect_calls: list[dict[str, object]] = []
+    owner = SimpleNamespace(
+        state_manager=state,
+        _rdp_session_manager=SimpleNamespace(get=lambda logical_id: snapshot),
+        _rdp_lifecycle_journal_lock=RLock(),
+        _pending_rdp_lifecycle_continuations={"entry": entry},
+        advance_rdp_session_lifecycle_watermark=lambda cutoff: None,
+        _active_user_interactive_windows_session=lambda actor, system, at_time: object(),
+        _execute_rdp_session_bundle=lambda **kwargs: reconnect_calls.append(kwargs),
+    )
+
+    admitted_at = ActivityGenerator.ensure_storyline_rdp_session_connected(
+        owner,
+        logon_id="0xabc",
+        target_system=target,
+        activity_time=activity_time,
+    )
+
+    assert admitted_at == ready_time + timedelta(milliseconds=1)
+    assert reconnect_calls == [
+        {
+            "user": user,
+            "target_system": target,
+            "time": activity_time,
+            "source_ip": source.ip,
+            "source_system": source,
+            "logon_id": "0xabc",
+            "preserve_explicit_source": True,
+        }
+    ]
 
 
 def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:

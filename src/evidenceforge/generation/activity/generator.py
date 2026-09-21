@@ -5281,6 +5281,80 @@ class ActivityGenerator:
         ]
         return max(frontiers) if frontiers else None
 
+    def ensure_storyline_rdp_session_connected(
+        self,
+        *,
+        logon_id: str,
+        target_system: System,
+        activity_time: datetime,
+    ) -> datetime | None:
+        """Reconnect a disconnected RDP owner before fresh interactive activity.
+
+        Returns the earliest canonical time at which a child process may start. A
+        ``None`` result means the exact session can no longer accept new desktop
+        activity because its modeled controller is unavailable or it has logged out.
+        """
+
+        canonical_time = ensure_utc(activity_time)
+        session_identity = self.state_manager.get_session_identity(logon_id)
+        if session_identity is None or session_identity.session_kind != "rdp":
+            return canonical_time
+
+        self.advance_rdp_session_lifecycle_watermark(canonical_time)
+        snapshot = self._rdp_session_manager.get(session_identity.object_id)
+        if snapshot is None:
+            return None
+
+        from evidenceforge.events.rdp import RdpSessionState
+
+        if snapshot.state is RdpSessionState.CONNECTED:
+            session = self.state_manager.get_session(logon_id)
+            if session is None:
+                return None
+            return max(canonical_time, ensure_utc(session.source_ready_time))
+        if snapshot.state is RdpSessionState.LOGGED_OUT:
+            return None
+
+        with self._rdp_lifecycle_journal_lock:
+            candidates = tuple(
+                entry
+                for entry in self._pending_rdp_lifecycle_continuations.values()
+                if entry.continuation.session.identity.logical_session_id
+                == session_identity.object_id
+                and entry.continuation.session.generation.ordinal == snapshot.generation.ordinal
+            )
+        if len(candidates) != 1:
+            return None
+        prepared = candidates[0].continuation.prepared
+        source_system = prepared.source_system
+        if (
+            source_system is None
+            or self._active_user_interactive_windows_session(
+                prepared.user,
+                source_system,
+                canonical_time,
+            )
+            is None
+        ):
+            return None
+
+        self._execute_rdp_session_bundle(
+            user=prepared.user,
+            target_system=target_system,
+            time=canonical_time,
+            source_ip=snapshot.identity.affinity.source_address,
+            source_system=source_system,
+            logon_id=logon_id,
+            preserve_explicit_source=True,
+        )
+        reconnected = self.state_manager.get_session(logon_id)
+        if reconnected is None:
+            raise StateError("Exact RDP reconnect returned without its live State session")
+        return max(
+            canonical_time,
+            ensure_utc(reconnected.source_ready_time) + timedelta(milliseconds=1),
+        )
+
     def assert_rdp_session_lifecycles_drained(self) -> None:
         """Reject sink shutdown while exact RDP terminal work remains."""
 

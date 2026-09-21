@@ -136,8 +136,10 @@ def handle_process(
         malicious_event["command_line"] = command_line
         malicious_event["skipped_reason"] = "no_live_parent_ref"
         return malicious_event
+    requires_interactive_session = False
     if explicit_parent is not None:
         parent_pid, _parent_image = explicit_parent
+        requires_interactive_session = True
     elif service_process_identity is not None:
         process_actor, _service_name, service_lifecycle_group_id = service_process_identity
         process_logon_id = {
@@ -165,6 +167,31 @@ def handle_process(
                 service_lifecycle_group_id,
             ) = service_context
         else:
+            parent_pid = None
+            requires_interactive_session = True
+    if requires_interactive_session:
+        ensure_rdp_connected = getattr(
+            type(self.activity_generator),
+            "ensure_storyline_rdp_session_connected",
+            None,
+        )
+        interactive_ready_at = (
+            ensure_rdp_connected(
+                self.activity_generator,
+                logon_id=process_logon_id,
+                target_system=system,
+                activity_time=time,
+            )
+            if callable(ensure_rdp_connected)
+            else time
+        )
+        if interactive_ready_at is None:
+            malicious_event["process_name"] = process_name
+            malicious_event["command_line"] = command_line
+            malicious_event["skipped_reason"] = "rdp_session_not_connected"
+            return malicious_event
+        time = max(time, interactive_ready_at)
+        if parent_pid is None:
             parent_pid = self.activity_generator._resolve_parent(
                 system,
                 process_actor,

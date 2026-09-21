@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 124
+current_revision: 125
 history_start_revision: 1
-behavior_surface_sha256: 64abff378ac7bd7c2449c93433ca2e42c16c938ff5f40f77870925e9179e656a
+behavior_surface_sha256: ca282fad545c9488b6bc354d638dc4e1a7bf6fda4827f35a5a29358259f92f38
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1215,3 +1215,16 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Declare Exchange transport and IMAP service processes as canonical per-host singletons so repeated baseline requests reuse one live SCM-owned process instead of publishing overlapping instances.
+  - revision: 125
+    id: state-aware-rdp-storyline-process-admission
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - process-session-ownership
+      - remote-interactive-state
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Require fresh storyline desktop processes to consume an exact RDP reconnect generation after disconnect, or skip admission when no valid modeled controller remains.
