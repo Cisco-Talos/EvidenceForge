@@ -346,6 +346,11 @@ class TestStorylineCommandNetworks:
         assert created[0]["parent_pid"] == 6868
         assert created[0]["require_exact_parent"] is True
         assert (
+            timedelta(milliseconds=900)
+            <= (datetime(2026, 5, 11, 12, 0, tzinfo=UTC) - created[0]["time"])
+            <= timedelta(milliseconds=1300)
+        )
+        assert (
             "Copy-Item -LiteralPath '\\\\FILE-SRV-01\\Finance\\Q1\\Q1-budget.xlsx'"
             in (created[0]["command_line"])
         )

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 115
+current_revision: 116
 history_start_revision: 1
-behavior_surface_sha256: c5547cab9a12d4ee38a479bf0d20080dd289a985e711ec69d478088ef84ed478
+behavior_surface_sha256: 6650b4149725ee5c94ee03271ba9b6a44f5e2cac5c986c3fd7307a3ba0a55328
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1094,3 +1094,15 @@ changes:
       - zeek_smb_files
       - zeek_smb_mapping
     summary: Materialize credentialed SMB downloads through an exact-session PowerShell process whose visible Copy-Item command expresses the remote source selection and local staging destination before that process owns transport and file effects.
+  - revision: 116
+    id: credentialed-smb-copy-source-headroom
+    impact: localized
+    domains:
+      - process-source-timing
+      - smb-client-attribution
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Reserve enough deterministic source-observation headroom for the exact-parent SMB copy process to become visible before its canonical transport begins.

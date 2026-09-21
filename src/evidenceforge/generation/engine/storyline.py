@@ -1652,12 +1652,12 @@ class StorylineMixin:
         if not command_line:
             return parent_pid, "", False
         process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-        lead_ms = 250 + (
+        lead_ms = 900 + (
             _stable_seed(
                 f"storyline_smb_copy_process:{system.hostname}:{client_logon_id}:"
                 f"{time.isoformat()}:{command_line}"
             )
-            % 451
+            % 401
         )
         process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
         pid = self.activity_generator.generate_process(
