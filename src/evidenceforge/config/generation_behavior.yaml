@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 118
+current_revision: 119
 history_start_revision: 1
-behavior_surface_sha256: 7a6beb6da96e09f31dc7e877bb455304f00cd6bfd32415cc9518266daa70cf47
+behavior_surface_sha256: a5cce16709682216779dcd2d94376b0a4785f63c030aae433f4a3c9a525b418d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1132,3 +1132,18 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Let the canonical SMB and network bundles place transport after the exact copy process becomes source-visible instead of suppressing that process through a duplicate process-level deadline.
+  - revision: 119
+    id: credentialed-smb-copy-identity-headroom
+    impact: localized
+    domains:
+      - process-source-timing
+      - smb-client-attribution
+      - network-source-ordering
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+    summary: Start credentialed SMB copy workers early enough for every Windows and Samba staging leg to retain exact process and LogonID ownership instead of taking the source-late identity-omission fallback.

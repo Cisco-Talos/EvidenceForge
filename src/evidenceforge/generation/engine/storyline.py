@@ -1674,12 +1674,12 @@ class StorylineMixin:
                 )
                 parent_pid = parent.pid
                 parent_started_at = ensure_utc(parent.start_time)
-        lead_ms = 900 + (
+        lead_ms = 2500 + (
             _stable_seed(
                 f"storyline_smb_copy_process:{system.hostname}:{client_logon_id}:"
                 f"{time.isoformat()}:{command_line}"
             )
-            % 401
+            % 701
         )
         process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
         if parent_started_at is not None:
