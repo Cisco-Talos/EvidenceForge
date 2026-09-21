@@ -1001,6 +1001,7 @@ class SmbActivityActionBundle:
                     else None
                 ),
                 preferred_pid=self.request.process_pid or -1,
+                client_logon_id=self.request.client_logon_id,
                 source_visible_by=self.request.time,
             )
         process = self._process_context(
@@ -1039,7 +1040,7 @@ class SmbActivityActionBundle:
             preserve_explicit_payload=True,
             suppress_application_side_effects=True,
             suppress_source_pid_inference=(
-                self.client_access == "cifs_mount"
+                (self.client_access == "cifs_mount" and not self.request.client_logon_id)
                 or (process_plan is not None and transport_pid <= 0)
             ),
             parent_action_group_id=self.anchor.stable_id,
@@ -1289,7 +1290,7 @@ class SmbActivityActionBundle:
                     server=server,
                     client=client_system,
                     auth=auth,
-                    process=None,
+                    process=(process if self.request.client_logon_id else None),
                     timestamp=current_lease.started_at,
                 )
                 operation_truth.append(truth)

@@ -7696,6 +7696,67 @@ class TestActivityGenerator:
         assert plan.transport_pid == -1
         assert plan.transport_image == ""
 
+    def test_exact_credentialed_smb_process_overrides_optional_profile_attribution(
+        self, activity_gen, test_user, test_system, state_manager, monkeypatch
+    ) -> None:
+        """An authored credential process owns nonpersistent transport without a profile actor."""
+
+        timestamp = datetime(2024, 3, 18, 14, 20, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=9,
+            source_ip="-",
+            session_kind="new_credentials",
+        )
+        state_manager.set_current_time(timestamp - timedelta(minutes=1))
+        image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        command_line = (
+            'powershell.exe -NoProfile -Command "Copy-Item '
+            "'\\\\SAMBA-01\\Research\\report.csv' "
+            "'C:\\ProgramData\\VaultCache\\report.csv'\""
+        )
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=image,
+            command_line=command_line,
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.generator.client_process_for_operation",
+            lambda *_args, **_kwargs: None,
+        )
+
+        plan = activity_gen.ensure_smb_client_process(
+            client_system=test_system,
+            actor=test_user,
+            server="SAMBA-01",
+            share="Research",
+            path="report.csv",
+            client_path="/mnt/research/report.csv",
+            local_path=r"C:\ProgramData\VaultCache\report.csv",
+            source_path=r"\\SAMBA-01\Research\report.csv",
+            destination_path=r"C:\ProgramData\VaultCache\report.csv",
+            operation="copy",
+            transfer_direction="download",
+            time=timestamp,
+            client_access="windows_native",
+            preferred_pid=pid,
+            client_logon_id=logon_id,
+        )
+
+        assert plan.actor_pid == pid
+        assert plan.actor_image == image
+        assert plan.actor_command_line == command_line
+        assert plan.transport_pid == pid
+        assert plan.transport_image == image
+        assert not plan.terminate_after_operation
+
     def test_smb_actor_session_excludes_terminalized_historical_session(
         self, activity_gen, test_user, test_system, state_manager
     ) -> None:

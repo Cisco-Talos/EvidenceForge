@@ -8246,6 +8246,7 @@ class ActivityGenerator:
         auth_protocol: str = "",
         transfer_direction: Literal["download", "upload", "remote"] | None = None,
         preferred_pid: int = -1,
+        client_logon_id: str = "",
         source_visible_by: datetime | None = None,
     ) -> SmbClientProcessPlan:
         """Resolve source-native SMB actor and transport ownership.
@@ -8282,6 +8283,36 @@ class ActivityGenerator:
                 f"{operation}:{time.isoformat()}"
             ),
         )
+        if client_logon_id and preferred_pid > 0:
+            session = self.state_manager.get_session(client_logon_id)
+            process = self.state_manager.get_process(client_system.hostname, preferred_pid)
+            if (
+                session is None
+                or session.system != client_system.hostname
+                or session.username.casefold() != actor.username.casefold()
+                or ensure_utc(session.start_time) > ensure_utc(time)
+                or process is None
+                or process.username.casefold() != actor.username.casefold()
+                or process.logon_id != client_logon_id
+                or process.start_time is None
+                or ensure_utc(process.start_time) > ensure_utc(time)
+                or not self._process_source_visible_by(
+                    system=client_system,
+                    pid=preferred_pid,
+                    deadline=source_visible_by,
+                )
+            ):
+                raise StateError("SMB client request lost its exact credentialed process")
+            return SmbClientProcessPlan(
+                actor_pid=process.pid,
+                actor_image=process.image,
+                actor_command_line=process.command_line,
+                transport_pid=process.pid,
+                transport_image=process.image,
+                access_mode=profile.access_mode,
+                path_style=profile.path_style,
+                terminate_after_operation=False,
+            )
         process_profile = client_process_for_operation(
             profile,
             operation,

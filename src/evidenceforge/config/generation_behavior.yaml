@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 120
+current_revision: 121
 history_start_revision: 1
-behavior_surface_sha256: 6670217b297ebfc909ce8e595bf456a31ab9d5fe1b5be27237c044f95d50fe85
+behavior_surface_sha256: 7d08806ae75715a6daebe412f8c1bfa6f7f3082dc1fb97b4cf6f80822ad507e4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1162,3 +1162,18 @@ changes:
       - zeek_files
       - zeek_smb_files
     summary: Preserve an explicitly supplied credential-session process as the authoritative SMB transport and file-effect owner even when the selected client profile normally uses kernel attribution or no process.
+  - revision: 121
+    id: nonpersistent-credentialed-smb-process-authority
+    impact: localized
+    domains:
+      - smb-client-attribution
+      - credential-session-ownership
+      - client-file-lineage
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+    summary: Carry an explicit credential-session process through nonpersistent SMB transports and client file effects, including Samba-backed share operations that previously fell back to anonymous attribution.
