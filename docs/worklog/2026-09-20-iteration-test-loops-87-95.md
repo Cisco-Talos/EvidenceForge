@@ -305,3 +305,48 @@ family contracts, implementation/verification handoff facts, and surviving prior
   source `mstsc.exe` lifecycle, direct explicit logoff semantics, nested-session ordering,
   collection-boundary retention, observation grouping, atomic recovery, and checkpoint/retry
   determinism.
+
+## Loop 93 Result
+
+- **Implementation:** gated fresh RDP interactive ownership on canonical connected state and
+  extended the same lifecycle frontier through proxy, SMB, and SSH-adjacent process selection.
+- **Verification:** the routine suite reached 11,695 passed and 48 skipped before the final narrow
+  refinements; every subsequent focused lifecycle gate passed. Behavior revision 135 validated at
+  `b9793c1d50ff60e700de7bb1b6d48963739521801bff46d49e55c0a0c9ad411d`.
+- **Hard probe:** all 102 interactive creates respected 12 visible disconnects, with no fresh
+  process under a disconnected LUID and no skipped storyline event.
+- **Assessment:** deterministic score 96.0296/PASS across 117,967 records. Initial verdicts split
+  two Synthetic/two Realistic; deliberation converged on Synthetic at 82% confidence and 72
+  synthetic-confidence.
+- **Surviving priority:** canonical execution/session lifecycle permits implausible Windows
+  parent/token/session ownership and advances a Linux shell command before its predecessor ends.
+
+## Loop 94 Family Contract
+
+### Canonical execution/session lifecycle truth
+
+- **Classification:** `hard_contradiction`, `contract_gap`, and `family_level`; Loop 93 recorded a
+  `DB-PROD-01` shell-history command in the same second as its still-running predecessor began,
+  while Windows staging/exfiltration exposed user processes under incompatible service parents and
+  widespread zero Sysmon `LogonGuid` values.
+- **Owning abstractions:** canonical process/session state owns immutable parent, actor, token,
+  logon identity, start, and completion; action bundles own sequential versus concurrent execution
+  intent; source timing and observation may delay evidence but may not invent a different process
+  tree, session identity, or command order.
+- **Invariant:** a sequential shell command starts only after its predecessor completes. Every
+  Windows process projects one compatible canonical parent, token principal, LogonID, and stable
+  nonzero session GUID across Security, Sysmon, and eCAR. Remote/service execution must expose its
+  actual controller boundary rather than borrowing an unrelated interactive user or service tree.
+- **Entry paths:** typed process events, SSH command execution, bash-history rendering, RDP-owned
+  interactive work, Type 9 staging, proxy upload clients, WMI/service/task execution, baseline
+  process spawning, compatibility helpers, and terminal lifecycle finalization.
+- **Consumers:** Security 4688/4689, Sysmon 1/3/5/11, eCAR PROCESS/FLOW/FILE, bash history,
+  SSH/PAM/syslog, process and session registries, action continuations, truth manifests, and
+  evaluator temporal/pivot checks.
+- **Layer rationale:** an emitter can hide one bad parent or move one timestamp, but only canonical
+  process/session state plus bundle timing knows the shared actor, controller, dependency, and
+  lifecycle interval consumed by every source.
+- **Sibling risks:** preserve legitimate pipelines and background jobs, concurrent shells, durable
+  SSH sessions, service and SYSTEM execution, Type 9 local/outbound identity split, disconnected
+  RDP process survival, remote-controller ownership, source-native clock/observation delay,
+  bounded-window processes, checkpoint/retry determinism, and terminal cleanup.
