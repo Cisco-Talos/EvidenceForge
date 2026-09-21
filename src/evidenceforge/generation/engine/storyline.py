@@ -1509,7 +1509,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         spec: Any,
-    ) -> tuple[User, Any]:
+    ) -> tuple[User, Any, str]:
         """Separate a Type 9 local token from its outbound SMB credential."""
 
         logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=time)
@@ -1519,7 +1519,7 @@ class StorylineMixin:
             or session.logon_type != 9
             or session.username.casefold() == actor.username.casefold()
         ):
-            return actor, spec
+            return actor, spec, ""
         users = {
             candidate.username.casefold(): candidate
             for candidate in self.scenario.environment.users
@@ -1532,7 +1532,40 @@ class StorylineMixin:
                 "in environment.users"
             )
         smb_principal = spec.smb_principal or actor.username
-        return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
+        return (
+            local_actor,
+            spec.model_copy(update={"smb_principal": smb_principal}),
+            session.logon_id,
+        )
+
+    def _storyline_smb_client_process(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        client_logon_id: str,
+    ) -> tuple[int, str]:
+        """Return the live process that owns an explicit SMB credential session."""
+        if not client_logon_id:
+            return -1, ""
+        candidates = [
+            process
+            for process in self.state_manager.get_processes_on_system(system.hostname)
+            if process.logon_id == client_logon_id
+            and process.username.casefold() == actor.username.casefold()
+            and ensure_utc(process.start_time) <= ensure_utc(time)
+            and (process.end_time is None or ensure_utc(process.end_time) >= ensure_utc(time))
+        ]
+        if not candidates:
+            raise StateError(
+                "Storyline credentialed SMB requires a live client process under exact "
+                f"Type 9 LogonID {client_logon_id} on {system.hostname}"
+            )
+        process = max(
+            candidates, key=lambda candidate: (ensure_utc(candidate.start_time), candidate.pid)
+        )
+        return process.pid, process.image
 
     @staticmethod
     def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:

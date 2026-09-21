@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 113
+current_revision: 114
 history_start_revision: 1
-behavior_surface_sha256: 680ba6a45a1371c96e0673a3b438489f86b80f7bbdd58b2d71e06e176db39fa8
+behavior_surface_sha256: 61f46daa4610d50eee44f15c4c985693271f9f7ef8dae53ebfe07e1d808f06a4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1061,3 +1061,19 @@ changes:
       - ecar
       - windows_event_sysmon
     summary: Bind remote-thread entry functions to target-side routines and derive stable function addresses from build-aware RVAs plus deterministic per-host, per-boot module ASLR.
+  - revision: 114
+    id: type9-smb-client-process-ownership
+    impact: localized
+    domains:
+      - windows-new-credentials
+      - process-session-lifecycle
+      - smb-client-attribution
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+      - zeek_smb_mapping
+    summary: Carry the exact Type 9 LogonID and its live local-token process into persistent SMB planning so client flow and file evidence cannot fall back to an older desktop session while the target uses alternate credentials.

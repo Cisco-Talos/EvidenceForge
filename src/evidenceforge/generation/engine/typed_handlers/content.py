@@ -96,17 +96,26 @@ def handle_smb_activity(
         rng=rng,
     )
     malicious_event["time"] = time
-    smb_actor, smb_spec = self._storyline_smb_actor_and_spec(
+    smb_actor, smb_spec, client_logon_id = self._storyline_smb_actor_and_spec(
         actor,
         system,
         time,
         spec,
+    )
+    process_pid, process_image = self._storyline_smb_client_process(
+        system=system,
+        actor=smb_actor,
+        time=time,
+        client_logon_id=client_logon_id,
     )
     result = self.activity_generator.generate_smb_activity(
         spec=smb_spec,
         actor=smb_actor,
         parent_system=system,
         time=time,
+        process_pid=process_pid,
+        process_image=process_image,
+        client_logon_id=client_logon_id,
         client_source_override=self._storyline_smb_source_override(
             system=system,
             spec=smb_spec,

@@ -183,8 +183,8 @@ class TestStorylineCommandNetworks:
         assert captured[0].auth.username == local_actor
         assert captured[0].process.username == local_actor
 
-    def test_storyline_smb_activity_lets_bundle_choose_capable_process(self):
-        """Type 9 SMB keeps the local actor distinct and rejects a stale prior process."""
+    def test_storyline_type9_smb_uses_exact_credential_process(self):
+        """Type 9 SMB binds its local actor, exact LUID, and live child process."""
         local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
         actor = User(username="admin", full_name="Admin", email="admin@example.com")
         system = System(
@@ -216,6 +216,19 @@ class TestStorylineCommandNetworks:
             start_time=datetime(2026, 5, 11, 11, 59, tzinfo=UTC),
             network_close_time=None,
         )
+        credential_process = SimpleNamespace(
+            pid=6868,
+            parent_pid=6800,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile",
+            username=local_actor.username,
+            logon_id="0x900",
+            start_time=datetime(2026, 5, 11, 11, 59, 30, tzinfo=UTC),
+            end_time=None,
+        )
+        engine.state_manager.processes[(system.hostname, credential_process.pid)] = (
+            credential_process
+        )
         engine.scenario = SimpleNamespace(environment=SimpleNamespace(users=[local_actor, actor]))
         engine._storyline_logon_registry = {(actor.username, system.hostname): ["0x900"]}
         engine.activity_generator = SimpleNamespace(generate_smb_activity=generate_smb_activity)
@@ -235,8 +248,9 @@ class TestStorylineCommandNetworks:
             explicit_types={"smb_activity"},
         )
 
-        assert "process_pid" not in captured[0]
-        assert "process_image" not in captured[0]
+        assert captured[0]["process_pid"] == credential_process.pid
+        assert captured[0]["process_image"] == credential_process.image
+        assert captured[0]["client_logon_id"] == "0x900"
         assert captured[0]["actor"] == local_actor
         assert captured[0]["spec"].smb_principal == actor.username
 
@@ -1532,7 +1546,11 @@ class _FakeStateManager:
         return self.sessions.get(logon_id)
 
     def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
-        return []
+        return [
+            process
+            for (process_hostname, _pid), process in self.processes.items()
+            if process_hostname == hostname
+        ]
 
     def get_process(self, hostname: str, pid: int) -> SimpleNamespace | None:
         return self.processes.get((hostname, pid))

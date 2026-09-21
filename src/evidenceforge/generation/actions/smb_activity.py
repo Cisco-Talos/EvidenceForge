@@ -154,6 +154,7 @@ class SmbActivityRequest:
     time: datetime
     process_pid: int = -1
     process_image: str = ""
+    client_logon_id: str = ""
     activity_source: Literal["storyline", "baseline"] = "storyline"
     files_override: tuple[CompiledStorageFile, ...] = ()
     client_source_override: CompiledStorageFile | None = None
@@ -406,6 +407,7 @@ class SmbActivityActionBundle:
             self.request.parent_system.hostname,
             self.request.process_pid,
             self.request.process_image,
+            self.request.client_logon_id,
             self.request.spec.operation,
             self.request.spec.outcome,
             self.request.spec.purpose,
@@ -1573,11 +1575,21 @@ class SmbActivityActionBundle:
             operation=self.request.spec.operation,
             client_ip=client_system.ip,
         )
-        session = self.executor._smb_actor_session(
-            client_system,
-            self.request.actor,
-            self.request.time,
-        )
+        if self.request.client_logon_id:
+            session = self.executor.state_manager.get_session(self.request.client_logon_id)
+            if (
+                session is None
+                or session.system != client_system.hostname
+                or session.username.casefold() != self.request.actor.username.casefold()
+                or ensure_utc(session.start_time) > ensure_utc(self.request.time)
+            ):
+                raise StateError("Persistent SMB client request lost its exact credential session")
+        else:
+            session = self.executor._smb_actor_session(
+                client_system,
+                self.request.actor,
+                self.request.time,
+            )
         if session is None:
             return PersistentSmbClientProcessPreparation.none()
         session_identity = self.executor.state_manager.get_session_identity(session.logon_id)
@@ -4515,6 +4527,7 @@ class SmbActivityActionBundle:
             time=execution_time or self.request.time + timedelta(milliseconds=offset_ms),
             process_pid=self.request.process_pid,
             process_image=self.request.process_image,
+            client_logon_id=self.request.client_logon_id,
             activity_source=self.request.activity_source,
             files_override=files,
         )
