@@ -1422,6 +1422,60 @@ class TestExplicitProxyVisibility:
         assert client_event.process is None
         assert client_event.network.initiating_pid == -1
 
+    def test_explicit_proxy_uses_process_bound_browser_agent(self) -> None:
+        """Proxy delegation cannot replace one browser process with request-local versions."""
+        generator, emitters = _generator([])
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        browser_image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        browser_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=browser_image,
+            command_line=f'"{browser_image}" -osint -url https://example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=explorer.logon_id,
+        )
+
+        for offset, caller_agent in enumerate(("Firefox/119.0", "Firefox/121.0")):
+            generator.generate_connection(
+                src_ip=workstation.ip,
+                dst_ip=f"93.184.216.{34 + offset}",
+                time=datetime(2024, 1, 15, 10, 4, offset, tzinfo=UTC),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                pid=browser_pid,
+                source_system=workstation,
+                hostname=f"example{offset}.com",
+                conn_state="SF",
+                process_image=browser_image,
+                http=HttpContext(
+                    method="GET",
+                    host=f"example{offset}.com",
+                    uri="/",
+                    user_agent=caller_agent,
+                    response_body_len=4000,
+                    status_code=200,
+                    status_msg="OK",
+                ),
+            )
+
+        agents = [
+            call.args[0].protocol.proxy.user_agent
+            for call in emitters["proxy_access"].emit.call_args_list
+        ]
+        assert len(agents) == 2
+        assert agents[0] == agents[1]
+        assert "Firefox/" in agents[0]
+        assert agents[0] not in {"Firefox/119.0", "Firefox/121.0"}
+
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,
     ):

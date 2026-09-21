@@ -3113,6 +3113,17 @@ class NetworkTransactionPlanner:
 
         explicit_proxy = will_route_explicit_proxy
         if explicit_proxy:
+            if http is not None and source_system is not None and pid > 0 and hostname:
+                from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+                process_ua = self._browser_user_agent_for_pid(
+                    source_system=source_system,
+                    pid=pid,
+                    hostname=hostname,
+                    domain_tags=get_domain_tags(hostname),
+                )
+                if process_ua:
+                    http = replace(http, user_agent=process_ua)
             if command_http_needs_response_size and http is not None:
                 # The delegated proxy transaction, not this never-opened
                 # network root, owns this command-derived response estimate.
@@ -4911,9 +4922,25 @@ class NetworkTransactionPlanner:
         """Return the stable browser identity of the process that owns this flow."""
         if endpoints.source_system is None or event.network.initiating_pid is None:
             return ""
+        return self._browser_user_agent_for_pid(
+            source_system=endpoints.source_system,
+            pid=event.network.initiating_pid,
+            hostname=hostname,
+            domain_tags=domain_tags,
+        )
+
+    def _browser_user_agent_for_pid(
+        self,
+        *,
+        source_system: System,
+        pid: int,
+        hostname: str,
+        domain_tags: list[str],
+    ) -> str:
+        """Return the stable browser identity for one canonical process PID."""
         process = self._executor.state_manager.get_process(
-            endpoints.source_system.hostname,
-            event.network.initiating_pid,
+            source_system.hostname,
+            pid,
         )
         if process is None:
             return ""
@@ -4925,7 +4952,7 @@ class NetworkTransactionPlanner:
             f"{process.pid}:{process.start_time.isoformat()}"
         )
         return stable_browser_user_agent_for_process(
-            endpoints.source_system,
+            source_system,
             process.image,
             process_identity,
             hostname=hostname,
