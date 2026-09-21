@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.models.scenario import (
@@ -15,6 +16,7 @@ from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SpillageEventSpec,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 from .context import TypedEventContext
 
@@ -108,6 +110,17 @@ def handle_smb_activity(
         time=time,
         client_logon_id=client_logon_id,
     )
+    transfer_pid, transfer_image, terminate_transfer = self._storyline_smb_transfer_process(
+        system=system,
+        actor=smb_actor,
+        time=time,
+        spec=smb_spec,
+        client_logon_id=client_logon_id,
+        parent_pid=process_pid,
+    )
+    if terminate_transfer:
+        process_pid = transfer_pid
+        process_image = transfer_image
     result = self.activity_generator.generate_smb_activity(
         spec=smb_spec,
         actor=smb_actor,
@@ -121,6 +134,22 @@ def handle_smb_activity(
             spec=smb_spec,
         ),
     )
+    if terminate_transfer:
+        completed_at = getattr(result, "completed_at", time)
+        lifetime_tail_ms = 350 + (
+            _stable_seed(
+                f"smb-copy-process-tail:{system.hostname}:{process_pid}:{completed_at.isoformat()}"
+            )
+            % 901
+        )
+        self._queue_story_process_termination(
+            actor=smb_actor,
+            system=system,
+            time=completed_at + timedelta(milliseconds=lifetime_tail_ms),
+            pid=process_pid,
+            process_name=process_image,
+            logon_id=client_logon_id,
+        )
     malicious_event.update(
         {
             "session_id": result.session_id,

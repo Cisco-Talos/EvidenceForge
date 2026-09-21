@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 114
+current_revision: 115
 history_start_revision: 1
-behavior_surface_sha256: 61f46daa4610d50eee44f15c4c985693271f9f7ef8dae53ebfe07e1d808f06a4
+behavior_surface_sha256: c5547cab9a12d4ee38a479bf0d20080dd289a985e711ec69d478088ef84ed478
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1077,3 +1077,20 @@ changes:
       - zeek_smb_files
       - zeek_smb_mapping
     summary: Carry the exact Type 9 LogonID and its live local-token process into persistent SMB planning so client flow and file evidence cannot fall back to an older desktop session while the target uses alternate credentials.
+  - revision: 115
+    id: operation-semantic-smb-staging-process
+    impact: localized
+    domains:
+      - storyline-operation-intent
+      - process-session-lifecycle
+      - smb-client-attribution
+      - file-content-lineage
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+      - zeek_smb_mapping
+    summary: Materialize credentialed SMB downloads through an exact-session PowerShell process whose visible Copy-Item command expresses the remote source selection and local staging destination before that process owns transport and file effects.

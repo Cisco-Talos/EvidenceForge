@@ -89,6 +89,7 @@ from evidenceforge.models.scenario import (
     ConnectionEventSpec,
     EventSpacingConfig,
     SmbClientLocation,
+    SmbShareLocation,
     System,
     User,
 )
@@ -1566,6 +1567,123 @@ class StorylineMixin:
             candidates, key=lambda candidate: (ensure_utc(candidate.start_time), candidate.pid)
         )
         return process.pid, process.image
+
+    @staticmethod
+    def _quote_powershell_literal(value: str) -> str:
+        """Quote one path for a PowerShell single-quoted literal."""
+
+        return value.replace("'", "''")
+
+    def _storyline_smb_copy_command(self, spec: Any) -> str:
+        """Render a source-visible command capable of the authored SMB copy."""
+
+        source = getattr(spec, "source", None)
+        destination = getattr(spec, "destination", None)
+        if (
+            getattr(spec, "operation", "") != "copy"
+            or not isinstance(source, SmbShareLocation)
+            or not isinstance(destination, SmbClientLocation)
+        ):
+            return ""
+        world = getattr(self.activity_generator, "_storage_world", None)
+        if world is None:
+            return ""
+        share = world.share(source.share)
+        destination_path = destination.path or destination.directory
+        if not destination_path:
+            return ""
+
+        if source.file_ref is not None or source.path is not None:
+            selected = world.select(
+                source.share,
+                file_ref=source.file_ref,
+                path=source.path,
+                selector=source.selector,
+            )
+            if len(selected) != 1:
+                raise StateError(
+                    "Storyline SMB copy command requires one exact source file for "
+                    f"{source.share!r}, resolved {len(selected)}"
+                )
+            source_path = world.unc_path(share, selected[0].path)
+            return (
+                "powershell.exe -NoProfile -Command "
+                f"\"Copy-Item -LiteralPath '{self._quote_powershell_literal(source_path)}' "
+                f"-Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
+            )
+
+        path_glob = getattr(source.selector, "path_glob", "") or ""
+        search_root = path_glob.partition("*")[0].rstrip("\\/")
+        source_path = world.unc_path(share, search_root)
+        command = (
+            "powershell.exe -NoProfile -Command "
+            f"\"Get-ChildItem -Path '{self._quote_powershell_literal(source_path)}' "
+            "-File -Recurse"
+        )
+        extensions = tuple(getattr(source.selector, "extensions", ()) or ())
+        if extensions:
+            patterns = ",".join(f"'*{extension}'" for extension in extensions)
+            command += f" -Include {patterns}"
+        batch = getattr(spec, "batch", None)
+        count = getattr(batch, "count", None)
+        if count is not None:
+            command += f" | Select-Object -First {count}"
+        command += (
+            f" | Copy-Item -Destination '{self._quote_powershell_literal(destination_path)}' "
+            '-Force"'
+        )
+        return command
+
+    def _storyline_smb_transfer_process(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        spec: Any,
+        client_logon_id: str,
+        parent_pid: int,
+    ) -> tuple[int, str, bool]:
+        """Create a Type 9 process whose command expresses an SMB copy operation."""
+
+        if not client_logon_id or _get_os_category(system.os) != "windows":
+            return parent_pid, "", False
+        command_line = self._storyline_smb_copy_command(spec)
+        if not command_line:
+            return parent_pid, "", False
+        process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        lead_ms = 250 + (
+            _stable_seed(
+                f"storyline_smb_copy_process:{system.hostname}:{client_logon_id}:"
+                f"{time.isoformat()}:{command_line}"
+            )
+            % 451
+        )
+        process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=process_time,
+            logon_id=client_logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            source_visible_by=time,
+            require_exact_parent=True,
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline credentialed SMB copy could not materialize its transfer process"
+            )
+        record_process = getattr(self.activity_generator, "_record_user_process", None)
+        if callable(record_process):
+            record_process(system, actor, pid, process_name)
+        self._record_last_storyline_process(system, pid, process_name, command_line)
+        return pid, process_name, True
 
     @staticmethod
     def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:

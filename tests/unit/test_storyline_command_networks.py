@@ -254,6 +254,164 @@ class TestStorylineCommandNetworks:
         assert captured[0]["actor"] == local_actor
         assert captured[0]["spec"].smb_principal == actor.username
 
+    def test_storyline_type9_smb_copy_materializes_source_visible_transfer_process(self):
+        """Credentialed SMB copies run through a process whose command can create the files."""
+        actor = User(username="alice", full_name="Alice", email="alice@example.com")
+        system = System(
+            hostname="WS-ALICE-01",
+            ip="10.10.1.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        share_ref = "FILE-SRV-01.finance"
+        access = CompiledStorageAccess(
+            read=frozenset({"Domain Users"}),
+            modify=frozenset({"Domain Users"}),
+            admin=frozenset(),
+            deny=frozenset(),
+        )
+        source_file = CompiledStorageFile(
+            file_id="finance-q1-budget",
+            share=share_ref,
+            path=r"Q1\Q1-budget.xlsx",
+            size_bytes=125_000,
+            mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            tags=("finance",),
+            seed_ref="q1_budget",
+        )
+        world = StorageWorldModel(
+            volumes=(
+                CompiledStorageVolume(
+                    id="data",
+                    system="FILE-SRV-01",
+                    mount="D:\\",
+                    filesystem="ntfs",
+                    label="Finance",
+                ),
+            ),
+            shares=(
+                CompiledStorageShare(
+                    ref=share_ref,
+                    system="FILE-SRV-01",
+                    name="Finance",
+                    volume="data",
+                    root="",
+                    preset="collaboration",
+                    population="small",
+                    activity="low",
+                    encryption="required",
+                    smb_native_filesystem="NTFS",
+                    audit="standard",
+                    access=access,
+                    files=(source_file,),
+                ),
+            ),
+            mappings=(),
+        )
+        created: list[dict[str, Any]] = []
+
+        def generate_process(**kwargs: Any) -> int:
+            created.append(kwargs)
+            return 7001
+
+        engine = object.__new__(StorylineMixin)
+        engine.activity_generator = SimpleNamespace(
+            _storage_world=world,
+            generate_process=generate_process,
+        )
+        spec = SmbActivityEventSpec(
+            operation="copy",
+            source={"type": "share", "share": share_ref, "file_ref": "q1_budget"},
+            destination={
+                "type": "client",
+                "path": r"C:\ProgramData\VaultCache\Q1-budget.xlsx",
+            },
+        )
+
+        pid, image, owned = engine._storyline_smb_transfer_process(
+            system=system,
+            actor=actor,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            spec=spec,
+            client_logon_id="0x900",
+            parent_pid=6868,
+        )
+
+        assert (pid, image, owned) == (
+            7001,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            True,
+        )
+        assert created[0]["logon_id"] == "0x900"
+        assert created[0]["parent_pid"] == 6868
+        assert created[0]["require_exact_parent"] is True
+        assert (
+            "Copy-Item -LiteralPath '\\\\FILE-SRV-01\\Finance\\Q1\\Q1-budget.xlsx'"
+            in (created[0]["command_line"])
+        )
+        assert "C:\\ProgramData\\VaultCache\\Q1-budget.xlsx" in created[0]["command_line"]
+
+    def test_storyline_batched_smb_copy_command_expresses_selection_and_destination(self):
+        """Batched SMB staging commands expose source scope, count, and local destination."""
+        share_ref = "FILE-LNX-01.research"
+        access = CompiledStorageAccess(
+            read=frozenset({"Domain Users"}),
+            modify=frozenset(),
+            admin=frozenset(),
+            deny=frozenset(),
+        )
+        world = StorageWorldModel(
+            volumes=(
+                CompiledStorageVolume(
+                    id="research",
+                    system="FILE-LNX-01",
+                    mount="/srv/research",
+                    filesystem="ext4",
+                    label="Research",
+                ),
+            ),
+            shares=(
+                CompiledStorageShare(
+                    ref=share_ref,
+                    system="FILE-LNX-01",
+                    name="ClinicalResearch",
+                    volume="research",
+                    root="",
+                    preset="collaboration",
+                    population="small",
+                    activity="low",
+                    encryption="required",
+                    smb_native_filesystem="EXT4",
+                    audit="standard",
+                    access=access,
+                    files=(),
+                ),
+            ),
+            mappings=(),
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.activity_generator = SimpleNamespace(_storage_world=world)
+        spec = SmbActivityEventSpec(
+            operation="copy",
+            source={
+                "type": "share",
+                "share": share_ref,
+                "selector": {"extensions": [".docx", ".csv"]},
+            },
+            destination={
+                "type": "client",
+                "directory": "C:\\ProgramData\\VaultCache\\Research\\",
+            },
+            batch={"count": 3, "duration": "2s"},
+        )
+
+        command = engine._storyline_smb_copy_command(spec)
+
+        assert "Get-ChildItem -Path '\\\\FILE-LNX-01\\ClinicalResearch'" in command
+        assert "-Include '*.docx','*.csv'" in command
+        assert "Select-Object -First 3" in command
+        assert "C:\\ProgramData\\VaultCache\\Research\\" in command
+
     def test_new_credentials_logon_keeps_local_process_actor_immutable(self):
         """A Type 9 LUID must never acquire the outbound credential principal."""
         local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
