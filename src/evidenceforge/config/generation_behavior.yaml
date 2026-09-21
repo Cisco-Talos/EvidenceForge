@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 137
+current_revision: 138
 history_start_revision: 1
-behavior_surface_sha256: 29bc331612a11ed86210cce09768547b64119cfc9bb7f6f757d6abde41d89bb9
+behavior_surface_sha256: 286044103e9de50f17f726ffd793da8727b2c694935139522289d0270ab18594
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1375,3 +1375,14 @@ changes:
     formats:
       - windows_event_sysmon
     summary: Render a canonical parentless process with Sysmon's null ParentProcessGuid instead of requiring an invented parent process-create timestamp.
+  - revision: 138
+    id: canonical-unobserved-root-parent-image
+    impact: localized
+    domains:
+      - process-lifecycle
+      - parent-process-identity
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserve PID 0 as an unobserved process root instead of labeling the absent Windows parent as explorer.exe.

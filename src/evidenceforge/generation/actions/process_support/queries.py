@@ -31,10 +31,13 @@ class ProcessStateQueries:
     def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
+        PID 0 represents an unobserved root and must not be assigned a user-shell image.
         PID 4 is always the Windows System process (ntoskrnl.exe). Unknown
         Linux PIDs have no safe parent image: returning a shell there fabricates
         impossible eCAR parent relationships such as bash with ppid=4.
         """
+        if pid == 0:
+            return "-"
         if pid == 4 and os_category == "windows":
             return r"C:\Windows\System32\ntoskrnl.exe"
         key = (hostname, pid)

@@ -76,6 +76,14 @@ def _fixture(linux: bool = False) -> tuple[ActivityGenerator, System, User, str,
     return generator, system, user, logon_id, timestamp
 
 
+def test_parentless_process_name_does_not_fabricate_windows_explorer() -> None:
+    """PID 0 is an unobserved root, not a hidden explorer.exe process."""
+
+    generator, system, _user, _logon_id, _timestamp = _fixture()
+
+    assert generator._lookup_process_name(system.hostname, 0, "windows") == "-"
+
+
 @pytest.mark.parametrize("linux", [False, True])
 @pytest.mark.parametrize("candidate", ["valid", "future", "ended", "foreign", "missing"])
 def test_existing_parent_selection_never_materializes_or_consumes_rng(
