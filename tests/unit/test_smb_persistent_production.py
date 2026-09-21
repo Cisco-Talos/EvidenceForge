@@ -1487,6 +1487,82 @@ def test_windows_native_smb_does_not_retire_preferred_desktop_shell(
     assert int(result.completed_at.timestamp() * 1000) > shell_rows[0]["timestamp_ms"]
 
 
+def test_exact_credentialed_process_overrides_profile_transport_attribution(
+    scenarios_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exact credential-session caller remains authoritative for its SMB transport."""
+
+    scenario = _windows_read_scenario(scenarios_dir)
+    client = scenario.environment.systems[0]
+    actor = scenario.environment.users[0]
+    engine = GenerationEngine(scenario, tmp_path, resource_forecast=_forecast(tmp_path))
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        logon_id = generator.generate_logon(
+            actor,
+            client,
+            engine.start_time + timedelta(minutes=1),
+            logon_type=2,
+        )
+        session = generator.state_manager.get_session(logon_id)
+        assert session is not None and session.explorer_pid is not None
+        process_image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        command_line = (
+            'powershell.exe -NoProfile -Command "Copy-Item '
+            "'\\\\FS-01\\Shared\\report.docx' "
+            "'C:\\Users\\jsmith\\Documents\\report.docx'\""
+        )
+        process_pid = generator.generate_process(
+            actor,
+            client,
+            engine.start_time + timedelta(minutes=9),
+            logon_id,
+            process_image,
+            command_line,
+            parent_pid=session.explorer_pid,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+        )
+        assert process_pid > 0
+        storyline = scenario.storyline[0]
+        preparation = generator.prepare_smb_activity(
+            spec=storyline.events[0],
+            actor=actor,
+            parent_system=client,
+            time=engine.start_time + timedelta(minutes=10),
+            process_pid=process_pid,
+            process_image=process_image,
+            client_logon_id=logon_id,
+            activity_source="storyline",
+        )
+        monkeypatch.setattr(
+            "evidenceforge.generation.actions.smb_activity.client_process_for_operation",
+            lambda *_args, **_kwargs: None,
+        )
+        bundle = SmbActivityActionBundle(generator, preparation.request)
+        bundle._adopt_preparation(preparation)
+
+        process = bundle._prepare_persistent_client_process(
+            share=preparation.share,
+            selected=preparation.selected,
+            server=preparation.server,
+            client_system=preparation.client_system,
+            auth_protocol=preparation.auth_protocol,
+        )
+    finally:
+        engine._close_emitters()
+
+    assert process.disposition == "reuse"
+    assert process.pid == process_pid
+    assert process.logon_id == logon_id
+    assert process.command_line == command_line
+    assert process.transport_attribution == "process"
+    assert process.lifecycle == "resident"
+
+
 @pytest.mark.parametrize(
     "mode",
     (

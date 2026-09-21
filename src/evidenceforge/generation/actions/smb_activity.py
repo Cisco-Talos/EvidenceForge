@@ -1545,6 +1545,85 @@ class SmbActivityActionBundle:
             self.request.spec.operation,
             transfer_direction=transfer_direction,
         )
+        if self.request.client_logon_id:
+            session = self.executor.state_manager.get_session(self.request.client_logon_id)
+            if (
+                session is None
+                or session.system != client_system.hostname
+                or session.username.casefold() != self.request.actor.username.casefold()
+                or ensure_utc(session.start_time) > ensure_utc(self.request.time)
+            ):
+                raise StateError("Persistent SMB client request lost its exact credential session")
+        else:
+            session = self.executor._smb_actor_session(
+                client_system,
+                self.request.actor,
+                self.request.time,
+            )
+        if session is None:
+            return PersistentSmbClientProcessPreparation.none()
+        session_identity = self.executor.state_manager.get_session_identity(session.logon_id)
+        if session_identity is None:
+            raise StateError("Persistent SMB client process lost its exact local session")
+
+        running_candidates = self.executor.state_manager.get_processes_on_system(
+            client_system.hostname
+        )
+        preferred_pid = self.request.process_pid
+        if self.request.client_logon_id and preferred_pid > 0:
+            preferred = next(
+                (candidate for candidate in running_candidates if candidate.pid == preferred_pid),
+                None,
+            )
+            requested_image = self.request.process_image.casefold()
+            if (
+                preferred is None
+                or preferred.username.casefold() != self.request.actor.username.casefold()
+                or preferred.logon_id != session.logon_id
+                or preferred.start_time is None
+                or ensure_utc(preferred.start_time) > ensure_utc(self.request.time)
+                or (requested_image and preferred.image.casefold() != requested_image)
+                or self.executor._connection_owner_requires_unique_transport_process(
+                    preferred.image
+                )
+            ):
+                raise StateError(
+                    "Persistent SMB client request lost its exact credentialed process"
+                )
+            identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                preferred.pid,
+            )
+            if identity is None:
+                raise StateError("Persistent SMB credentialed process lost canonical identity")
+            parent_identity = self.executor.state_manager.get_process_identity(
+                client_system.hostname,
+                identity.parent_pid,
+            )
+            return PersistentSmbClientProcessPreparation(
+                disposition="reuse",
+                hostname=identity.hostname,
+                process_object_id=identity.object_id,
+                pid=identity.pid,
+                parent_pid=identity.parent_pid,
+                parent_object_id=(parent_identity.object_id if parent_identity is not None else ""),
+                image=identity.image,
+                command_line=identity.command_line,
+                username=identity.principal,
+                logon_id=identity.logon_id,
+                session_object_id=session_identity.object_id,
+                session_id=session_identity.session_id,
+                logon_type=session.logon_type,
+                started_at=identity.started_at,
+                lifecycle_group_id=identity.lifecycle_group_id,
+                os_category=os_category,
+                integrity_level=preferred.integrity_level or "Medium",
+                access_mode=profile.access_mode,
+                path_style=profile.path_style,
+                transport_attribution="process",
+                lifecycle="resident",
+            )
+
         if process_profile is None:
             return PersistentSmbClientProcessPreparation.none()
 
@@ -1575,34 +1654,10 @@ class SmbActivityActionBundle:
             operation=self.request.spec.operation,
             client_ip=client_system.ip,
         )
-        if self.request.client_logon_id:
-            session = self.executor.state_manager.get_session(self.request.client_logon_id)
-            if (
-                session is None
-                or session.system != client_system.hostname
-                or session.username.casefold() != self.request.actor.username.casefold()
-                or ensure_utc(session.start_time) > ensure_utc(self.request.time)
-            ):
-                raise StateError("Persistent SMB client request lost its exact credential session")
-        else:
-            session = self.executor._smb_actor_session(
-                client_system,
-                self.request.actor,
-                self.request.time,
-            )
-        if session is None:
-            return PersistentSmbClientProcessPreparation.none()
-        session_identity = self.executor.state_manager.get_session_identity(session.logon_id)
-        if session_identity is None:
-            raise StateError("Persistent SMB client process lost its exact local session")
-
         image_lower = rendered.image.casefold()
         require_exact_command = self.executor._connection_owner_requires_exact_command_line(
             rendered.image,
             rendered.command_line,
-        )
-        running_candidates = self.executor.state_manager.get_processes_on_system(
-            client_system.hostname
         )
         candidates = [
             candidate
@@ -1617,7 +1672,6 @@ class SmbActivityActionBundle:
                 candidate.image
             )
         ]
-        preferred_pid = self.request.process_pid
         if preferred_pid > 0:
             preferred = next(
                 (candidate for candidate in running_candidates if candidate.pid == preferred_pid),

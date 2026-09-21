@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 119
+current_revision: 120
 history_start_revision: 1
-behavior_surface_sha256: a5cce16709682216779dcd2d94376b0a4785f63c030aae433f4a3c9a525b418d
+behavior_surface_sha256: 6670217b297ebfc909ce8e595bf456a31ab9d5fe1b5be27237c044f95d50fe85
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1147,3 +1147,18 @@ changes:
       - zeek_files
       - zeek_smb_files
     summary: Start credentialed SMB copy workers early enough for every Windows and Samba staging leg to retain exact process and LogonID ownership instead of taking the source-late identity-omission fallback.
+  - revision: 120
+    id: exact-credentialed-smb-process-authority
+    impact: localized
+    domains:
+      - smb-client-attribution
+      - credential-session-ownership
+      - network-process-correlation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+      - zeek_files
+      - zeek_smb_files
+    summary: Preserve an explicitly supplied credential-session process as the authoritative SMB transport and file-effect owner even when the selected client profile normally uses kernel attribution or no process.
