@@ -122,7 +122,7 @@ def test_registry_inputs_tolerate_environment_before_observation_overrides() -> 
 
 
 def test_workload_estimate_counts_full_small_cidr_nmap_expansion() -> None:
-    """A five-port /24 process command must reserve all 1,270 canonical probes."""
+    """A default five-port /24 command reserves discovery plus worst-case service probes."""
 
     base = _minimal_scenario()
     scenario = base.model_copy(
@@ -147,7 +147,7 @@ def test_workload_estimate_counts_full_small_cidr_nmap_expansion() -> None:
 
     estimate = estimate_workload(scenario)
 
-    assert estimate.explicit_occurrences == 254 * 5
+    assert estimate.explicit_occurrences == 254 + 254 * 5
     assert estimate.canonical_occurrences >= estimate.explicit_occurrences * 8
     assert all(
         item.effect_occurrences == estimate.canonical_occurrences

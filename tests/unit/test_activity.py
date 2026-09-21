@@ -3517,7 +3517,7 @@ class TestActivityGenerator:
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
     ):
-        """Nmap process commands should leave network scan evidence."""
+        """Default Nmap service scans should discover hosts before probing their ports."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         source = System(
             hostname="WEB-01",
@@ -3588,29 +3588,44 @@ class TestActivityGenerator:
         visible_create = activity_gen.process_source_create_time(source.hostname, pid)
         assert visible_create is not None
         assert min(request["time"] for request in probe_requests) > visible_create
-        observed_targets = {request["dst_ip"] for request in probe_requests}
-        assert {target_a.ip, target_b.ip} < observed_targets
-        silent_targets = observed_targets - {target_a.ip, target_b.ip}
-        assert len(observed_targets) == 254
-        assert silent_targets == {
+        discovery_requests = [request for request in probe_requests if request["proto"] == "icmp"]
+        service_requests = [request for request in probe_requests if request["proto"] == "tcp"]
+        discovered_targets = {request["dst_ip"] for request in discovery_requests}
+        silent_targets = discovered_targets - {target_a.ip, target_b.ip}
+        assert len(discovery_requests) == 254
+        assert discovered_targets == {
             str(address) for address in ipaddress.ip_network("10.10.2.0/24").hosts()
-        } - {target_a.ip, target_b.ip}
-        assert len(probe_requests) == 1270
+        }
+        assert silent_targets == discovered_targets - {target_a.ip, target_b.ip}
+        assert len(service_requests) == 10
+        assert {request["dst_ip"] for request in service_requests} == {
+            target_a.ip,
+            target_b.ip,
+        }
+        assert len(probe_requests) == 264
         assert max(request["time"] for request in probe_requests) - min(
             request["time"] for request in probe_requests
-        ) <= timedelta(seconds=12.01)
+        ) <= timedelta(seconds=20)
         assert all(
-            request["conn_state"] == "S0" and request["resp_bytes"] == 0
-            for request in probe_requests
+            request["resp_bytes"] == 0
+            for request in discovery_requests
             if request["dst_ip"] in silent_targets
         )
         assert all(
-            {request["dst_port"] for request in probe_requests if request["dst_ip"] == target}
+            {request["dst_port"] for request in service_requests if request["dst_ip"] == target}
             == {22, 80, 443, 445, 3306}
-            for target in observed_targets
+            for target in {target_a.ip, target_b.ip}
         )
-        assert {request["dst_port"] for request in probe_requests} >= {22, 80, 443, 445, 3306}
-        assert {request.get("service") for request in probe_requests if request.get("service")} >= {
+        assert {request["dst_port"] for request in service_requests} == {
+            22,
+            80,
+            443,
+            445,
+            3306,
+        }
+        assert {
+            request.get("service") for request in service_requests if request.get("service")
+        } >= {
             "ssh",
             "http",
             "ssl",
@@ -3620,16 +3635,17 @@ class TestActivityGenerator:
         assert all(
             request["suppress_application_side_effects"] is True for request in probe_requests
         )
-        assert scan_events
-        assert {target_a.ip, target_b.ip} <= {event.network.dst_ip for event in scan_events}
-        assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445}
-        assert len({event.network.conn_state for event in scan_events}) > 1
-        assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
-        assert all(event.protocol.http is None for event in scan_events)
-        assert all(event.protocol.ssl is None for event in scan_events)
-        assert all(event.protocol.leaf_certificate is None for event in scan_events)
-        assert all(event.protocol.ocsp is None for event in scan_events)
-        assert all(event.protocol.primary_file_transfer is None for event in scan_events)
+        service_events = [event for event in scan_events if event.network.protocol == "tcp"]
+        assert service_events
+        assert {event.network.dst_ip for event in service_events} == {target_a.ip, target_b.ip}
+        assert {event.network.dst_port for event in service_events} >= {22, 80, 443, 445}
+        assert len({event.network.conn_state for event in service_events}) > 1
+        assert any(event.network.conn_state in {"S0", "REJ"} for event in service_events)
+        assert all(event.protocol.http is None for event in service_events)
+        assert all(event.protocol.ssl is None for event in service_events)
+        assert all(event.protocol.leaf_certificate is None for event in service_events)
+        assert all(event.protocol.ocsp is None for event in service_events)
+        assert all(event.protocol.primary_file_transfer is None for event in service_events)
         max_scan_close = max(
             event.network.closed_at for event in scan_events if event.network.closed_at is not None
         )
@@ -3722,7 +3738,7 @@ class TestActivityGenerator:
             time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             pid=4242,
             process_name="/usr/bin/nmap",
-            command_line="nmap -p 80 1.0.0.0/8",
+            command_line="nmap -Pn -p 80 1.0.0.0/8",
         )
         profile = SimpleNamespace(
             full_cidr_max_hosts=256,
@@ -3747,6 +3763,55 @@ class TestActivityGenerator:
         second_octets = {int(target.ip.split(".")[1]) for target in plan.targets}
         assert min(second_octets) < 20
         assert max(second_octets) > 230
+
+    def test_nmap_planner_requires_discovery_for_default_cidr_service_scan(self, test_user):
+        """CIDR service scans without -Pn may probe only discovered or explicit hosts."""
+
+        source = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target = System(
+            hostname="APP-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -sT -p 22,443 10.10.2.0/24",
+        )
+        profile = SimpleNamespace(
+            full_cidr_max_hosts=256,
+            max_expanded_targets=256,
+            large_cidr_connect_targets=20,
+            large_cidr_discovery_targets=24,
+            large_cidr_unmodeled_targets=12,
+            max_ports=12,
+            connect_window_seconds_min=6.0,
+            connect_window_seconds_max=12.0,
+            discovery_window_seconds_min=2.0,
+            discovery_window_seconds_max=5.0,
+        )
+
+        plan = NmapCommandProbePlanner(profile).plan(
+            request,
+            {source.ip: source, target.ip: target},
+        )
+
+        assert plan is not None
+        assert not plan.host_discovery_bypass
+        assert len(plan.discovery_targets) == 254
+        assert len(plan.service_targets) == 1
+        assert plan.service_targets[0].ip == target.ip
+        assert plan.service_targets[0].modeled
+        assert not plan.service_targets[0].explicit
 
     @pytest.mark.slow
     def test_nmap_ping_scan_emits_modeled_replies_and_silent_attempts(
@@ -3900,23 +3965,25 @@ class TestActivityGenerator:
 
         visible_create = activity_gen.process_source_create_time(source.hostname, pid)
         assert visible_create is not None
-        assert len(probe_requests) == 1
-        assert probe_requests[0]["time"] > visible_create
-        ecar_flow = next(
+        assert len(probe_requests) == 2
+        assert {request["proto"] for request in probe_requests} == {"icmp", "tcp"}
+        assert all(request["time"] > visible_create for request in probe_requests)
+        ecar_flows = [
             call.args[0]
             for call in mock_emitters["ecar"].emit.call_args_list
             if call.args[0].event_type == "connection"
             and call.args[0].network.initiating_pid == pid
-        )
-        assert (
-            ecar_flow.source_timing.finalized_times[
-                ecar_flow_render_key("outbound", source.hostname)
-            ]
-            > visible_create
-        )
-        assert ecar_flow.source_timing.finalized_flags[
-            ecar_flow_identity_key("outbound", source.hostname)
         ]
+        assert len(ecar_flows) == 2
+        assert all(
+            flow.source_timing.finalized_times[ecar_flow_render_key("outbound", source.hostname)]
+            > visible_create
+            for flow in ecar_flows
+        )
+        assert all(
+            flow.source_timing.finalized_flags[ecar_flow_identity_key("outbound", source.hostname)]
+            for flow in ecar_flows
+        )
 
     def test_nmap_explicit_ip_does_not_invent_neighbor_targets(self, test_user):
         """An explicit IP operand should remain exact rather than sampling its implicit /32."""

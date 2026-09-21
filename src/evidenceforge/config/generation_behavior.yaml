@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 122
+current_revision: 123
 history_start_revision: 1
-behavior_surface_sha256: 0cf38af7e1a7e3cb60febadc93260b59ac42ba83864878dc6a3f03cad9e66115
+behavior_surface_sha256: 4e00bb0d855f5867b0fd6312776520442220c4188e036244086ac207c61e7b1e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1190,3 +1190,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Delegate exact credentialed SMB copy ordering to the canonical network bundle instead of rejecting valid process identity against the earlier nonpersistent intent timestamp.
+  - revision: 123
+    id: command-semantic-nmap-host-discovery
+    impact: localized
+    domains:
+      - scanner-command-semantics
+      - scanner-target-planning
+      - network-process-correlation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Materialize default Nmap service scans as discovery attempts followed by service probes only for responsive modeled or explicit targets, while preserving all-target behavior for a visible host-discovery bypass.

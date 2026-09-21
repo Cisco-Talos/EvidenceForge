@@ -203,7 +203,9 @@ class ProcessPreflightPlanner:
     def _nmap_command_probe_count(plan: NmapCommandProbePlan) -> int:
         """Return exact canonical connection cardinality for one bounded plan."""
 
-        return len(plan.targets) if plan.discovery else len(plan.targets) * len(plan.ports)
+        if plan.discovery:
+            return len(plan.targets)
+        return len(plan.discovery_targets) + len(plan.service_targets) * len(plan.ports)
 
     def _plan_process_execution_effects(
         self,

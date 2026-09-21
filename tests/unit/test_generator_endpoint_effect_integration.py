@@ -1099,7 +1099,7 @@ def test_scanner_effect_intent_bypasses_process_endpoint_action_cohort(
         scanner_process_visibility.append(
             state.get_process(system.hostname, request.pid) is not None
         )
-        return 1
+        return 2
 
     monkeypatch.setattr(generator.dispatcher, "prepare_builder", capture_prepare)
     monkeypatch.setattr(
@@ -1203,9 +1203,11 @@ def test_no_session_linux_nmap_preserves_process_probes_and_foreground_hold() ->
         and event.network is not None
         and event.network.initiating_pid == pid
     ]
-    assert len(probes) == 1
-    probe_close = probes[0].network.closed_at
-    assert probe_close is not None
+    assert len(probes) == 2
+    assert {probe.network.protocol for probe in probes} == {"icmp", "tcp"}
+    probe_close = max(
+        probe.network.closed_at for probe in probes if probe.network.closed_at is not None
+    )
     process_key = generator._process_instance_key(source.hostname, pid)
     assert generator._process_connection_hold_until[process_key] == probe_close
     finalizer_time = generator.foreground_process_termination_time(source.hostname, pid)

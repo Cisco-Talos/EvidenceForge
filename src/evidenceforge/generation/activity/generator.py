@@ -17145,7 +17145,22 @@ class ActivityGenerator:
                 probe_anchor_plan.timing_delta.publish()
             return len(plan.targets)
 
-        probe_pairs = [(target, port) for target in plan.targets for port in plan.ports]
+        discovery_close = self._emit_nmap_discovery_probes(
+            request=request,
+            targets=plan.discovery_targets,
+            rng=rng,
+            probe_anchor=probe_anchor,
+            window_seconds=(
+                planning_profile.discovery_window_seconds_min,
+                planning_profile.discovery_window_seconds_max,
+            ),
+        )
+        connect_anchor = (
+            discovery_close + timedelta(milliseconds=50)
+            if discovery_close is not None
+            else probe_anchor
+        )
+        probe_pairs = [(target, port) for target in plan.service_targets for port in plan.ports]
         rng.shuffle(probe_pairs)
         offsets = self._nmap_concurrent_probe_offsets(
             count=len(probe_pairs),
@@ -17170,7 +17185,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=system.ip,
                 dst_ip=target.ip,
-                time=probe_anchor + offset,
+                time=connect_anchor + offset,
                 dst_port=port,
                 proto="tcp",
                 service=service,
@@ -17187,7 +17202,7 @@ class ActivityGenerator:
             )
         if probe_anchor_plan.timing_delta is not None and probe_pairs:
             probe_anchor_plan.timing_delta.publish()
-        return len(probe_pairs)
+        return len(plan.discovery_targets) + len(probe_pairs)
 
     def _nmap_probe_anchor_after_visible_process_create(
         self,
@@ -17219,8 +17234,8 @@ class ActivityGenerator:
         rng: random.Random,
         probe_anchor: datetime,
         window_seconds: tuple[float, float],
-    ) -> None:
-        """Emit bounded process-owned ICMP discovery attempts."""
+    ) -> datetime | None:
+        """Emit bounded process-owned ICMP discovery attempts and return their latest close."""
 
         offsets = self._nmap_concurrent_probe_offsets(
             count=len(targets),
@@ -17229,16 +17244,19 @@ class ActivityGenerator:
             rng=rng,
         )
         payload_bytes = rng.choice((56, 64, 84))
+        latest_close: datetime | None = None
         for target, offset in zip(targets, offsets, strict=True):
-            responded = bool(target.modeled)
+            responded = target.modeled or target.explicit
+            start_time = probe_anchor + offset
+            duration = rng.uniform(0.001, 0.08) if responded else rng.uniform(0.8, 2.5)
             self.generate_connection(
                 src_ip=request.system.ip,
                 dst_ip=target.ip,
-                time=probe_anchor + offset,
+                time=start_time,
                 dst_port=0,
                 proto="icmp",
                 service="icmp",
-                duration=(rng.uniform(0.001, 0.08) if responded else rng.uniform(0.8, 2.5)),
+                duration=duration,
                 orig_bytes=payload_bytes,
                 resp_bytes=payload_bytes if responded else 0,
                 emit_dns=False,
@@ -17248,6 +17266,9 @@ class ActivityGenerator:
                 process_image=request.process_name,
                 suppress_application_side_effects=True,
             )
+            close_time = start_time + timedelta(seconds=duration)
+            latest_close = close_time if latest_close is None else max(latest_close, close_time)
+        return latest_close
 
     @staticmethod
     def _nmap_concurrent_probe_offsets(
