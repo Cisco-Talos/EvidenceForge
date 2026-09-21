@@ -3113,6 +3113,39 @@ class NetworkTransactionPlanner:
 
         explicit_proxy = will_route_explicit_proxy
         if explicit_proxy:
+            if http is not None and source_system is not None and not suppress_source_pid_inference:
+                attribution = _NetworkOccurrenceDraft(
+                    timestamp=time,
+                    http=http,
+                    network=NetworkTransactionDraft(
+                        src_ip=src_ip,
+                        src_port=src_port or 0,
+                        dst_ip=dst_ip,
+                        dst_port=dst_port,
+                        protocol=proto,
+                        service=service or "",
+                        duration=duration,
+                        initiating_pid=pid,
+                    ),
+                )
+                if pid > 0:
+                    executor._set_connection_process_context(
+                        attribution,
+                        source_system=source_system,
+                        pid=pid,
+                        image=process_image,
+                    )
+                executor._repair_browser_http_process_attribution(
+                    attribution,
+                    source_system=source_system,
+                    time=time,
+                )
+                if attribution.network.initiating_pid != pid:
+                    pid = attribution.network.initiating_pid
+                    process_image = (
+                        attribution.process.image if attribution.process is not None else None
+                    )
+                http = attribution.http
             if http is not None and source_system is not None and pid > 0 and hostname:
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
 

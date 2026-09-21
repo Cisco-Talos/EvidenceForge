@@ -1430,7 +1430,7 @@ class TestExplicitProxyVisibility:
         explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
         assert explorer is not None
         browser_image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
-        browser_pid = generator.state_manager.create_process(
+        generator.state_manager.create_process(
             system=workstation.hostname,
             parent_pid=explorer_pid,
             image=browser_image,
@@ -1451,7 +1451,7 @@ class TestExplicitProxyVisibility:
                 duration=1.0,
                 orig_bytes=500,
                 resp_bytes=5000,
-                pid=browser_pid,
+                pid=-1,
                 source_system=workstation,
                 hostname=f"example{offset}.com",
                 conn_state="SF",
