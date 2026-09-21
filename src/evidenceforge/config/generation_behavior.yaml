@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 145
+current_revision: 146
 history_start_revision: 1
-behavior_surface_sha256: 4378d58c55b07020b85a97a12014437ae42c95f83a697c8493a9d0fae5c1029e
+behavior_surface_sha256: 0a16bb0b1dceac986677d3428590d1d2786c739af2cd57022212d43362fcc0d8
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1462,3 +1462,13 @@ changes:
       - syslog
       - zeek_conn
     summary: Make every forwarding-health row own a process-attributed canonical syslog transport through the sender's resolved receiver route.
+  - revision: 146
+    id: rsyslog-health-transport-rng-scope
+    impact: localized
+    domains:
+      - deterministic-rng
+      - network-connection
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Derive forwarding-health transport texture from a stable event-local seed so the new evidence cannot perturb unrelated baseline families.

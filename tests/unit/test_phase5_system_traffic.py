@@ -381,7 +381,6 @@ def test_rsyslog_health_owns_process_attributed_canonical_transport(linux_system
         sender=linux_system,
         time=event_time,
         route=route,
-        rng=random.Random(17),
     )
 
     assert emitted is True

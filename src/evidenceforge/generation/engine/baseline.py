@@ -2501,11 +2501,13 @@ class BaselineMixin:
         sender: System,
         time: datetime,
         route: _CanonicalSyslogRoute,
-        rng: random.Random,
     ) -> bool:
         """Emit the canonical transport owned by one rsyslog forwarding-health row."""
 
-        duration = rng.uniform(0.4, 6.0)
+        transport_rng = random.Random(
+            _stable_seed(f"rsyslog_health_transport:{sender.hostname}:{time.isoformat()}")
+        )
+        duration = transport_rng.uniform(0.4, 6.0)
         close_bound = self._baseline_network_close_bound_seconds(
             src_ip=sender.ip,
             dst_ip=route.receiver.ip,
@@ -2535,8 +2537,8 @@ class BaselineMixin:
             proto=route.protocol,
             service="syslog",
             duration=duration,
-            orig_bytes=rng.randint(180, 3200),
-            resp_bytes=0 if route.protocol == "udp" else rng.randint(40, 180),
+            orig_bytes=transport_rng.randint(180, 3200),
+            resp_bytes=0 if route.protocol == "udp" else transport_rng.randint(40, 180),
             source_system=sender,
             pid=forwarder_pid,
             process_image=forwarder_image,
@@ -12091,7 +12093,6 @@ class BaselineMixin:
                             sender=system,
                             time=ts,
                             route=route,
-                            rng=rng,
                         ):
                             continue
                         msg = self._render_rsyslog_health_message(
