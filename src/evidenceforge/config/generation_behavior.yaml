@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 126
+current_revision: 127
 history_start_revision: 1
-behavior_surface_sha256: 61aca2ed62562a4e50e1de11ada331b8ca2f526e4686c86cb8379b6780257faf
+behavior_surface_sha256: 835a890f8f082c5d2b3acfa998ac7c77b505cee2aac51204103653bc03549437
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1241,3 +1241,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Prevent generic session reuse from bypassing the RDP planner's connected-transport check so a disconnected client desktop consumes the exact reconnect path.
+  - revision: 127
+    id: rdp-process-admission-frontier-clamp
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - storyline-process-timing
+      - remote-interactive-state
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Clamp follow-on interactive process admission to the canonical RDP lifecycle frontier when source-workstation alignment moves reconnect publication later than the authored child timestamp.

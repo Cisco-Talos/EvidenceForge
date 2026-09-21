@@ -76,6 +76,7 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
         _rdp_session_manager=SimpleNamespace(get=lambda logical_id: snapshot),
         _rdp_lifecycle_journal_lock=RLock(),
         _pending_rdp_lifecycle_continuations={"entry": entry},
+        _rdp_session_lifecycle_frontier=lambda: activity_time - timedelta(seconds=1),
         advance_rdp_session_lifecycle_watermark=lambda cutoff: None,
         _active_user_interactive_windows_session=lambda actor, system, at_time: object(),
         _execute_rdp_session_bundle=lambda **kwargs: reconnect_calls.append(kwargs),
@@ -100,6 +101,31 @@ def test_storyline_activity_reconnects_disconnected_rdp_owner_before_process() -
             "preserve_explicit_source": True,
         }
     ]
+
+
+def test_storyline_rdp_process_admission_clamps_to_lifecycle_frontier() -> None:
+    """Source alignment cannot make a later process move the RDP watermark backward."""
+
+    authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    lifecycle_frontier = authored_time + timedelta(minutes=4)
+    owner = SimpleNamespace(
+        state_manager=SimpleNamespace(get_session_identity=lambda logon_id: None),
+        _rdp_session_lifecycle_frontier=lambda: lifecycle_frontier,
+    )
+
+    admitted_at = ActivityGenerator.ensure_storyline_rdp_session_connected(
+        owner,
+        logon_id="0xabc",
+        target_system=System(
+            hostname="RDS-01",
+            ip="10.20.0.10",
+            os="Windows Server 2022",
+            type="server",
+        ),
+        activity_time=authored_time,
+    )
+
+    assert admitted_at == lifecycle_frontier
 
 
 def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:
