@@ -212,3 +212,45 @@ family contracts, implementation/verification handoff facts, and surviving prior
   closed/filtered/open TCP state texture, timing bursts, source-port allocation, process lifetime,
   endpoint/network/IDS correlation, IPv4 range bounds, authored raw-command escape hatches, and
   checkpoint/retry determinism.
+
+## Loop 91 Result
+
+- **Implementation:** compiled Nmap commands into one discovery/service plan; ordinary scans probe
+  discovered or explicit hosts, while the authored all-address scan now visibly declares `-Pn`.
+- **Verification:** 11,691 routine tests passed; Ruff check/format and all 92 packaged config files
+  passed; behavior revision 123 validated at
+  `4e00bb0d855f5867b0fd6312776520442220c4188e036244086ac207c61e7b1e`.
+- **Hard probe:** the visible `-Pn` scan covered exactly 1,270 target/port pairs across all 254
+  usable addresses, with no hidden discovery and with mixed native TCP outcomes.
+- **Assessment:** deterministic score 96.9982/PASS across 120,040 records. Initial scores 34, 48,
+  25, and 78 triggered deliberation; the panel converged on Synthetic at mean 66.75 and unified
+  synthetic-confidence 67.
+- **Surviving priority:** Exchange transport and IMAP services accumulate overlapping
+  singleton-style instances across Security, Sysmon, and eCAR.
+
+## Loop 92 Family Contract
+
+### Canonical Windows service cardinality
+
+- **Classification:** `hard_contradiction` plus `family_level`; Loop 91 emitted multiple concurrent
+  `EdgeTransport.exe -service` and `Microsoft.Exchange.Imap4.exe` instances under SCM ownership,
+  reaching implausible in-window concurrency that three endpoint sources independently reproduce.
+- **Owning abstractions:** the data-driven system-service catalog declares service identity and
+  singleton versus bounded-worker cardinality; canonical process/service lifecycle authority owns
+  live-instance selection, restart, closure, and publication before any endpoint renderer runs.
+- **Invariant:** a cataloged singleton service has at most one canonical live process per host and
+  service identity at any instant. A later request reuses that process until its close, then may
+  start a replacement. Multi-instance services require an explicit worker-pool policy rather than
+  inheriting duplicate starts from baseline frequency.
+- **Entry paths:** hourly baseline service noise, profiled service workers, role-specific server
+  services, seeded boot processes, compatibility process helpers, terminal-pass generation, and
+  out-of-order deterministic visits.
+- **Consumers:** Security 4688/4689, Sysmon 1/5, eCAR PROCESS create/terminate, process-owned FLOW and
+  file/registry effects, service/process registry bindings, truth manifests, and evaluator pivots.
+- **Layer rationale:** emitters faithfully repeat the canonical overlap and cannot infer service
+  cardinality. The service catalog plus lifecycle authority is the earliest shared boundary that
+  knows service identity, policy, live state, process ownership, and every rendered consumer.
+- **Sibling risks:** preserve legitimate WMI and worker-pool concurrency, distinct named
+  `svchost -s` services, exact image-path matching, future/out-of-order canonical reuse, process
+  lifetime and terminal closure, role/service eligibility, observation grouping, checkpoint/retry
+  determinism, and source-native timestamps.
