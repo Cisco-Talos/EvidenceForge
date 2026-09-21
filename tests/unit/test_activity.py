@@ -2946,6 +2946,42 @@ class TestActivityGenerator:
         assert winlogon_terminate.auth.session_id == session.session_id
         assert winlogon_terminate.process.logon_id == "0x3e7"
 
+    def test_generate_logon_rdp_routes_compatibility_through_world_planner(
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+    ):
+        """Direct Type 10 compatibility calls must use planner admission when wired."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WKS-SOURCE-01",
+            ip="10.0.99.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system[source.ip] = source
+        planner = Mock()
+        planner.bootstrap_user_session.return_value = SimpleNamespace(
+            session=SimpleNamespace(logon_id="0x4f2a1b")
+        )
+        activity_gen._world_planner = planner
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=10,
+            source_ip=source.ip,
+        )
+
+        assert logon_id == "0x4f2a1b"
+        assert planner.bootstrap_user_session.call_args.kwargs["session_kind"] == "rdp"
+        assert planner.bootstrap_user_session.call_args.kwargs["source_system"] is source
+        assert planner.bootstrap_user_session.call_args.kwargs["source_ip_override"] == source.ip
+        assert planner.bootstrap_user_session.call_args.kwargs["allow_existing"] is True
+
     def test_generate_logon_rdp_preserves_explicit_modeled_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

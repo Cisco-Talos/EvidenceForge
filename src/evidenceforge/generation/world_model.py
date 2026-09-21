@@ -1227,6 +1227,52 @@ class WorldPlanner:
             return None
         return max(candidates, key=self._session_start_sort_key)
 
+    def _find_connected_single_desktop_rdp_session(
+        self,
+        username: str,
+        target_system: System,
+        source_ip: str | None,
+        at_time: datetime,
+    ) -> ActiveSession | None:
+        """Return a connected RDP desktop on a Windows client-class host.
+
+        Windows server and domain-controller targets intentionally retain their
+        existing multi-session behavior. Client endpoints reconcile a repeated
+        same-user request from the same source before a second transport or
+        desktop tree is materialized.
+        """
+
+        host = self.world_model.hosts.get(target_system.hostname)
+        if (
+            host is None
+            or host.os_category != "windows"
+            or (target_system.type or "workstation").casefold() in {"server", "domain_controller"}
+        ):
+            return None
+
+        canonical_source = (source_ip or "").casefold()
+        cutoff = self._canonical_aware_time(at_time, field_name="at_time")
+        candidates = [
+            session
+            for session in self.state_manager.get_active_sessions_for_user_at(username, cutoff)
+            if session.system == target_system.hostname
+            and session.logon_type == 10
+            and session.session_kind == "rdp"
+            and self._session_start_sort_key(session) <= cutoff
+            and (
+                session.network_close_time is None
+                or cutoff < ensure_utc(session.network_close_time)
+            )
+            and (
+                not canonical_source
+                or canonical_source == "-"
+                or session.source_ip.casefold() == canonical_source
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._session_start_sort_key)
+
     def bootstrap_user_session(
         self,
         user: User,
@@ -1253,6 +1299,31 @@ class WorldPlanner:
                 source_ip_override=source_ip_override,
                 session_kind=session_kind,
             )
+
+        if session_kind == "rdp":
+            requested_source_ip = (
+                _prepared_rdp_bootstrap.session_plan.source_ip
+                if _prepared_rdp_bootstrap is not None
+                else source_ip_override or (source_system.ip if source_system is not None else None)
+            )
+            effective_user = self.activity_generator._coerce_windows_rdp_user_from_existing_session(
+                user,
+                target_system,
+                requested_source_ip or "",
+            )
+            existing_rdp = self._find_connected_single_desktop_rdp_session(
+                effective_user.username,
+                target_system,
+                requested_source_ip,
+                time,
+            )
+            if existing_rdp is not None:
+                existing_rdp.last_activity_time = time
+                if session_end_plan is not None:
+                    self.state_manager.plan_session_end(existing_rdp.logon_id, session_end_plan)
+                if storyline_protected:
+                    existing_rdp.storyline_protected = True
+                return SessionBootstrapResult(session=existing_rdp, network_uid=None)
 
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(

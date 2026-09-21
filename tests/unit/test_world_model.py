@@ -29,6 +29,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.observation import ObservationPolicy
 from evidenceforge.generation.actions.rdp_session import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import ActivityGenerator
@@ -1153,6 +1154,148 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].protocol == "tcp"
     assert rdp_connections[0].initiating_pid > 0
     assert rdp_connections[0].source_system == "WKS-01"
+
+
+def test_world_planner_reconciles_duplicate_client_rdp_desktop(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """A Windows client must not materialize two live same-user RDP desktops."""
+
+    first_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    action_deadline = first_time + timedelta(hours=2)
+    explicit_deadline = first_time + timedelta(hours=1)
+    first = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=first_time,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+        session_end_plan=SessionEndPlan(action_deadline, "action_bundle"),
+    )
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=first_time + timedelta(minutes=20),
+        rng=random.Random(17),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+        session_end_plan=SessionEndPlan(
+            explicit_deadline,
+            "explicit_storyline",
+            "story-rdp-close",
+        ),
+    )
+
+    assert second.session is first.session
+    assert second.network_uid is None
+    client_sessions = [
+        session
+        for session in state_manager.get_sessions_for_user(users["alice.admin"].username)
+        if session.system == systems["WKS-01"].hostname and session.session_kind == "rdp"
+    ]
+    assert client_sessions == [first.session]
+    assert state_manager.get_session_end_plan(first.session.logon_id) == SessionEndPlan(
+        explicit_deadline,
+        "explicit_storyline",
+        "story-rdp-close",
+    )
+    rdp_connections = [
+        connection
+        for connection in state_manager.list_open_connections()
+        if connection.dst_ip == systems["WKS-01"].ip and connection.dst_port == 3389
+    ]
+    assert len(rdp_connections) == 1
+
+
+def test_world_planner_preserves_server_rdp_multi_session_behavior(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Server-class targets may still materialize distinct forced RDP sessions."""
+
+    first_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    first = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["APP-01"],
+        time=first_time,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["APP-01"],
+        time=first_time + timedelta(minutes=20),
+        rng=random.Random(17),
+        session_kind="rdp",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    assert second.session.logon_id != first.session.logon_id
+    server_sessions = [
+        session
+        for session in state_manager.get_sessions_for_user(users["alice.admin"].username)
+        if session.system == systems["APP-01"].hostname and session.session_kind == "rdp"
+    ]
+    assert len(server_sessions) == 2
+
+
+def test_world_planner_resolves_effective_principal_before_client_rdp_admission(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Linux-local authored actors must not bypass Windows desktop capacity."""
+
+    first_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=3,
+        source_ip=systems["WKS-02"].ip,
+        start_time=first_time - timedelta(minutes=2),
+        session_kind="network",
+    )
+    local_actor = User(username="root", full_name="root", email="root@corp.local")
+
+    first = planner.bootstrap_user_session(
+        user=local_actor,
+        target_system=systems["WKS-01"],
+        time=first_time,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+    )
+    second = planner.bootstrap_user_session(
+        user=local_actor,
+        target_system=systems["WKS-01"],
+        time=first_time + timedelta(minutes=1),
+        rng=random.Random(17),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+    )
+
+    assert first.session.username == users["alice.admin"].username
+    assert second.session is first.session
+    client_rdp_sessions = [
+        session
+        for session in state_manager.get_sessions_on_system(systems["WKS-01"].hostname)
+        if session.session_kind == "rdp"
+    ]
+    assert client_rdp_sessions == [first.session]
 
 
 def test_world_planner_preserves_authored_linux_rdp_source_as_network_only(

@@ -368,3 +368,36 @@
   cross-logon SMB staging ownership gap, a `services.exe`-owned user shell without launch evidence,
   identical Linux scheduled-task cardinality, and shared diagnostic command texture.
 - Per user request, the assessment run is paused after Loop 85. Loop 86 has not started.
+
+## Loop 86 Family Contract
+
+### Windows client RDP desktop capacity and compatibility-path reconciliation
+
+- **Classification:** `family_level` plus `adapter_to_family_model`; Loop 85 independently
+  confirmed two same-user RDP requests becoming overlapping Type 10 sessions and desktop trees on
+  one Windows client endpoint.
+- **Owning abstraction:** the world/session planner owns host-class interactive-session capacity
+  and reuse before the RDP action bundle materializes transport, authentication, session, or
+  desktop evidence. The typed legacy `logon_type: 10` handler is an adapter that must route through
+  that planner instead of invoking the lower-level logon compatibility bundle directly.
+- **Invariant:** on a Windows client-class host, a later same-user, same-source remote-interactive
+  request that falls inside an already-connected RDP session reuses that canonical session even
+  when a caller would otherwise force a new bootstrap. It must not create a second transport,
+  LogonID, terminal-session ID, or `winlogon/userinit/explorer` tree. Effective Windows identity is
+  resolved before admission, an explicit storyline close may refine an earlier action-bundle
+  ceiling, and Windows server/domain-controller targets retain their multi-session semantics.
+- **Entry paths:** typed `rdp_session` events, legacy remote `logon_type: 10` events, prepared
+  baseline/world-planner RDP bootstraps, direct world-planner calls, and existing-session requests
+  with either modeled or network-only sources.
+- **Consumers:** RDP network/action bundles, Security 4624/4634, Sysmon and eCAR desktop/process
+  trees, terminal-session allocation, storyline session readiness, ground-truth logon references,
+  and lifecycle finalization.
+- **Layer rationale:** the planner knows host class, user, source, interval, and existing session
+  state before any side effect. An emitter cannot safely delete a duplicate after distinct
+  transports, identities, and child trees exist, and the low-level RDP bundle should continue to
+  materialize an already-reconciled request exactly once.
+- **Sibling risks:** preserve distinct concurrent RDP sessions on server-class hosts, do not reuse
+  ended, future, or disconnected sessions, do not collapse different-user activity, retain
+  source-IP affinity, and preserve authoritative end plans and storyline protection. The existing
+  exact reconnect bundle remains the owner of true disconnected-session reconnection; planner-wide
+  automatic reconnect admission is outside this loop and must not be replaced by silent reuse.

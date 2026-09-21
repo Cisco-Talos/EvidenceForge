@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 108
+current_revision: 109
 history_start_revision: 1
-behavior_surface_sha256: 4281f314c1c37b0609bac6db346f21c1b7d7b9a51dd3f386f48470b7fce681ea
+behavior_surface_sha256: 943477bc9c331879c4d9daf7d8bf4fe9148f5d03df616b288456ccffb54c52cb
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -999,3 +999,17 @@ changes:
       - zeek_conn
       - zeek_dns
     summary: Treat a modeled TCP DNS response as proof of a successful transport so DNS answers cannot coexist with rejected connection evidence.
+  - revision: 109
+    id: windows-client-rdp-desktop-capacity
+    impact: material
+    domains:
+      - world-session-planning
+      - rdp-session-lifecycle
+      - windows-interactive-capacity
+      - storyline-compatibility
+    formats:
+      - ecar
+      - windows_security
+      - windows_sysmon
+      - zeek_conn
+    summary: Reconcile repeated same-user and same-source RDP requests on connected Windows client desktops before materializing duplicate transports, logons, terminal sessions, or process trees.

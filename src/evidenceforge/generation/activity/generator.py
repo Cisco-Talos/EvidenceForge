@@ -11704,6 +11704,21 @@ class ActivityGenerator:
             and source_ip not in (None, "", "-", system.ip)
             and emit_network_evidence
         ):
+            planner = getattr(self, "_world_planner", None)
+            if planner is not None:
+                planned_source_system = source_system or self._ip_to_system.get(source_ip)
+                result = planner.bootstrap_user_session(
+                    user=user,
+                    target_system=system,
+                    time=time,
+                    rng=_get_rng(),
+                    session_kind="rdp",
+                    source_system=planned_source_system,
+                    source_ip_override=source_ip,
+                    allow_existing=True,
+                    session_end_plan=request.session_end_plan,
+                )
+                return result.session.logon_id
             explicit_source_system = source_system
             if explicit_source_system is None and source_ip is not None:
                 explicit_source_system = self._ip_to_system.get(source_ip)
