@@ -6,6 +6,7 @@
 import random
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -22,6 +23,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.proxy import ProxyTransactionPlan
+from evidenceforge.events.rdp import RdpSessionState
 from evidenceforge.generation.actions import (
     network_transaction_planner as network_planner_module,
 )
@@ -1108,6 +1110,49 @@ def _seed_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User,
     }
     generator.state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
     return user, svchost_pid, explorer_pid
+
+
+def test_disconnected_rdp_session_cannot_own_fresh_proxy_client_process() -> None:
+    """Proxy synthesis must not launch a user process on a disconnected desktop."""
+
+    generator, _emitters = _generator([])
+    user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+    workstation = generator._ip_to_system["10.0.1.10"]
+    session = next(
+        candidate
+        for candidate in generator.state_manager.get_sessions_on_system(workstation.hostname)
+        if candidate.username == user.username
+    )
+    session.session_kind = "rdp"
+    generator.state_manager.get_session_identity = Mock(
+        return_value=SimpleNamespace(object_id="rdp-logical", session_kind="rdp")
+    )
+    generator._rdp_session_lifecycle_frontier = Mock(return_value=session.start_time)
+    generator.advance_rdp_session_lifecycle_watermark = Mock()
+    generator._rdp_session_manager = SimpleNamespace(
+        get=lambda logical_id: SimpleNamespace(state=RdpSessionState.DISCONNECTED)
+    )
+    request_time = session.start_time + timedelta(minutes=30)
+
+    pid, image = generator._ensure_explicit_proxy_client_process(
+        source_system=workstation,
+        time=request_time,
+        proxy_context=ProxyContext(
+            client_ip=workstation.ip,
+            method="GET",
+            url="http://example.org/",
+            host="example.org",
+            status_code=200,
+            user_agent="curl/8.4.0",
+            proxy_fqdn="PROXY-01.example.org",
+        ),
+        proxy_sys=generator._ip_to_system["10.0.3.10"],
+        dst_port=80,
+    )
+
+    assert (pid, image) == (-1, None)
+    assert generator.state_manager.get_process(workstation.hostname, explorer_pid) is not None
+    generator.advance_rdp_session_lifecycle_watermark.assert_called_once_with(request_time)
 
 
 def _seed_linux_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User, System, int]:

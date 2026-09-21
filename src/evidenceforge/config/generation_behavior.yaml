@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 129
+current_revision: 130
 history_start_revision: 1
-behavior_surface_sha256: 77a315355248a6235d569555efd5f0cee793e27f34518c3a82d925c53e237c9d
+behavior_surface_sha256: bd8f481c35f8da47e6f41f06c9e8e7350b6fa5b48fb48e133ae37b4f1c57b5aa
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1278,3 +1278,15 @@ changes:
       - ecar
       - syslog
     summary: Rebind a Linux storyline process to a fresh session and shell when canonical foreground serialization moves its start beyond the prior SSH or RDP transport close.
+  - revision: 130
+    id: disconnected-rdp-user-process-admission
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - explicit-proxy-process-ownership
+      - browser-process-ownership
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Exclude disconnected RDP desktops from fresh browser and explicit-proxy client process ownership while retaining transport evidence without a stale user PID.

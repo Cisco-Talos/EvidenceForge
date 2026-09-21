@@ -10160,6 +10160,7 @@ class ActivityGenerator:
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
             and _accepts_activity(session)
+            and self._interactive_session_accepts_activity(session, time)
             and not self._workstation_logon_locked_at(
                 source_system,
                 session.username,
@@ -10180,6 +10181,25 @@ class ActivityGenerator:
 
         session = max(sessions, key=lambda candidate: candidate.start_time)
         return known_users[session.username], session
+
+    def _interactive_session_accepts_activity(
+        self,
+        session: ActiveSession,
+        time: datetime,
+    ) -> bool:
+        """Return whether a transport-backed desktop can own fresh user activity."""
+
+        session_identity = self.state_manager.get_session_identity(session.logon_id)
+        if session_identity is None or session_identity.session_kind != "rdp":
+            return True
+        canonical_time = max(ensure_utc(time), self._rdp_session_lifecycle_frontier())
+        self.advance_rdp_session_lifecycle_watermark(canonical_time)
+        snapshot = self._rdp_session_manager.get(session_identity.object_id)
+        if snapshot is None:
+            return False
+        from evidenceforge.events.rdp import RdpSessionState
+
+        return snapshot.state is RdpSessionState.CONNECTED
 
     def _ensure_explicit_proxy_client_process(
         self,
@@ -10561,7 +10581,7 @@ class ActivityGenerator:
 
         image, command_line = hint
         session = self._active_interactive_windows_session(source_system, time)
-        if session is None:
+        if session is None or not self._interactive_session_accepts_activity(session, time):
             return -1, None
         user = self._user_model_for_username(session.username)
 
