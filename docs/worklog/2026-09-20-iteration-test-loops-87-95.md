@@ -165,3 +165,50 @@ family contracts, implementation/verification handoff facts, and surviving prior
   batched artifact order and hashes, source/target file semantics, Linux clients, ordinary Explorer
   browsing, command quoting, PowerShell process lifetime, causal timing, observation grouping,
   checkpoint determinism, and authored raw-command escape hatches.
+
+## Loop 90 Result
+
+- **Implementation:** expressed every staged SMB copy as a source-visible PowerShell operation and
+  carried its exact Type 9 process/LUID authority through persistent and Samba-backed SMB paths.
+- **Verification:** 11,690 routine tests passed; Ruff check/format and all 92 packaged config files
+  passed; behavior revision 122 validated at
+  `0cf38af7e1a7e3cb60febadc93260b59ac42ba83864878dc6a3f03cad9e66115`.
+- **Hard probe:** nine VaultCache files were owned by three compatible copy commands under the exact
+  Type 9 LUID; ten Marcus Chen target reads covered all nine staged object identities with no
+  command/effect, identity, timing, or artifact violation.
+- **Assessment:** deterministic score 96.8090/PASS across 124,311 records. The initial panel split
+  two Synthetic/two Inconclusive at mean 63.5 and spread 40; deliberation converged 4–0 Synthetic
+  with mean 70.75 and a unified synthetic-confidence score of 71.
+- **Surviving priority:** a visible non-`-Pn` Nmap command produces five service attempts against
+  every usable address after its immediately preceding discovery run found only nine responders.
+
+## Loop 91 Family Contract
+
+### Command-semantic network scan materialization
+
+- **Classification:** `hard_contradiction` plus `family_level`; Loop 90 joined the recorded command
+  `nmap -sT -p 22,80,443,445,3306 10.10.2.0/24` to exactly 1,270 TCP attempts—five ports on every
+  usable address—even though its immediately preceding discovery run received only nine replies
+  and the command does not bypass discovery with `-Pn`.
+- **Owning abstractions:** the canonical scanner action bundle owns target expansion, discovery
+  policy, discovered-host state, service-probe enumeration, timing, and process lifecycle; command
+  rendering must project that same plan rather than describe a different invocation.
+- **Invariant:** a source-visible scanner command and its network effects describe one executable
+  plan. A service scan without `-Pn` may probe only hosts discoverable by that invocation's modeled
+  discovery behavior. If every usable address is intentionally service-scanned, the command must
+  include `-Pn` or an equivalent visible bypass. Ports, target range, scan type, and TCP outcomes
+  must remain compatible with the command.
+- **Entry paths:** typed storyline scan events, compound discovery-plus-service scans, baseline and
+  red-herring scanners, compatibility scan helpers, authored raw commands with modeled effects, and
+  future tool-specific scanner adapters.
+- **Consumers:** eCAR/Sysmon/Security process evidence, Zeek conn and ICMP evidence, endpoint FLOW,
+  firewall records, IDS scan alerts, process lifetimes, ground-truth summaries, and evaluator
+  command/effect pivots.
+- **Layer rationale:** emitters cannot infer omitted scanner flags or safely delete already-planned
+  connections. The scanner action boundary is the first shared layer that knows the command,
+  discovery results, target/port expansion, timing, process identity, and every downstream network
+  consumer.
+- **Sibling risks:** preserve deterministic host ordering, existing discovery evidence, realistic
+  closed/filtered/open TCP state texture, timing bursts, source-port allocation, process lifetime,
+  endpoint/network/IDS correlation, IPv4 range bounds, authored raw-command escape hatches, and
+  checkpoint/retry determinism.
