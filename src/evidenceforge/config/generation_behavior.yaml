@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 123
+current_revision: 124
 history_start_revision: 1
-behavior_surface_sha256: 4e00bb0d855f5867b0fd6312776520442220c4188e036244086ac207c61e7b1e
+behavior_surface_sha256: 64abff378ac7bd7c2449c93433ca2e42c16c938ff5f40f77870925e9179e656a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1203,3 +1203,15 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Materialize default Nmap service scans as discovery attempts followed by service probes only for responsive modeled or explicit targets, while preserving all-target behavior for a visible host-discovery bypass.
+  - revision: 124
+    id: exchange-service-singleton-cardinality
+    impact: localized
+    domains:
+      - windows-service-lifecycle
+      - process-cardinality
+      - endpoint-cross-source-correlation
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Declare Exchange transport and IMAP service processes as canonical per-host singletons so repeated baseline requests reuse one live SCM-owned process instead of publishing overlapping instances.

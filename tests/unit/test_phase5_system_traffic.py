@@ -1755,6 +1755,58 @@ class TestGenerateSystemProcess:
         ]
         assert len(security_creates) == 1
 
+    def test_reuses_cataloged_exchange_singleton_service_processes(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Exchange SCM services keep one canonical live process per host and service."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        services = (
+            (
+                r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe",
+                r'"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe" -service',
+            ),
+            (
+                r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe",
+                r'"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe"',
+            ),
+        )
+
+        for process_name, command_line in services:
+            first_pid = activity_gen.generate_system_process(
+                system=win_system,
+                time=timestamp,
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+            )
+            reused_pid = activity_gen.generate_system_process(
+                system=win_system,
+                time=timestamp + timedelta(minutes=10),
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+            )
+
+            assert reused_pid == first_pid
+
+        exchange_creates = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "system_process_create"
+            and "\\Microsoft\\Exchange Server\\" in call[0][0].process.image
+        ]
+        assert len(exchange_creates) == 2
+
     def test_reuses_named_svchost_service_but_not_other_services(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
     ):
