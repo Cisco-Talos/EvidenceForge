@@ -75,3 +75,48 @@ family contracts, implementation/verification handoff facts, and surviving prior
 - **Sibling risks:** preserve canonical thread creation and termination, target/source PID validity,
   per-process object IDs, OS architecture, Defender platform paths, overlay extensibility, address
   formatting, Sysmon/eCAR agreement, behavior-manifest determinism, and checkpoint replay.
+
+## Loop 88 Result
+
+- **Implementation:** removed thread-creation APIs from entry-function selection and derived the
+  canonical start address from a build-specific function RVA plus deterministic host/boot ASLR.
+- **Verification:** 11,686 routine tests and 481 focused tests passed; Ruff check/format and all 92
+  packaged config files passed; behavior revision 113 validated at
+  `680ba6a45a1371c96e0673a3b438489f86b80f7bbdd58b2d71e06e176db39fa8`.
+- **Hard probe:** 13 Event 8 records on eight hosts had no creation-API entry, within-boot address
+  drift, cross-host address reuse, address-range failure, or Sysmon/eCAR mismatch.
+- **Assessment:** deterministic score 96.8088/PASS across 124,274 records. Initial blind mean 54.0;
+  deliberated mean 62.75 with two Synthetic and two Inconclusive final verdicts.
+- **Surviving priority:** one Type 9 SMB sequence gives Marcus Chen's outbound credential to a
+  PowerShell process but assigns the Marcus-authenticated transport and file effects to an older
+  Explorer process in Aisha Johnson's RDP session.
+
+## Loop 89 Family Contract
+
+### Type 9 credential-to-SMB ownership
+
+- **Classification:** `hard_contradiction` plus `family_level`; Loop 88 joined a Type 9 LUID and
+  PowerShell process to Marcus Chen's outbound identity, while the SMB transport and local file
+  effects were owned by Explorer under Aisha Johnson's older desktop LUID and targets authenticated
+  Marcus.
+- **Owning abstractions:** the Type 9 session owns the immutable local caller and outbound
+  credential; the canonical SMB action bundle owns client-process selection, channel affinity,
+  transport attribution, target authentication, and file effects. The storyline adapter must pass
+  the exact session/process relationship rather than only substituting an SMB principal.
+- **Invariant:** credentialed SMB uses one live client process whose LogonID is the exact Type 9
+  session. That process retains the local caller principal, owns every client-side FLOW and file
+  effect, and authenticates the outbound principal on the target. No older desktop process may
+  inherit the alternate credential merely because it is the default Windows-native SMB client.
+- **Entry paths:** typed Type 9 logon followed by SMB browse/read/copy/move, batched persistent SMB,
+  Windows-native and command-line clients, storyline file collection/staging, and compatibility
+  paths that supply an explicit preferred process.
+- **Consumers:** Security 4624/4688/5156, Sysmon 1/3/11, eCAR process/FLOW/file, Zeek conn/SMB/files,
+  target 4624/5140/5145, persistent SMB channel state, truth manifests, and evaluator pivots.
+- **Layer rationale:** emitters cannot repair a credential/process split after channel affinity and
+  canonical transport ownership are fixed. The storyline-to-bundle request and SMB preparation are
+  the earliest shared boundary holding the Type 9 LUID, live process identity, local principal,
+  outbound principal, transport, and every downstream consumer.
+- **Sibling risks:** preserve immutable local token ownership, outbound target principal, ordinary
+  desktop SMB without Type 9, Linux clients, explicit credential mappings, operation batching,
+  persistent channel/session reuse, exact retry/checkpoint behavior, process lifetimes, and
+  multi-source timestamp ordering.
