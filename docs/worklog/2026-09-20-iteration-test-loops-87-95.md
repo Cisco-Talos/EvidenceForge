@@ -350,3 +350,51 @@ family contracts, implementation/verification handoff facts, and surviving prior
   SSH sessions, service and SYSTEM execution, Type 9 local/outbound identity split, disconnected
   RDP process survival, remote-controller ownership, source-native clock/observation delay,
   bounded-window processes, checkpoint/retry determinism, and terminal cleanup.
+
+## Loop 94 Result
+
+- **Implementation:** added a long-lived Type 9 controller and stable nonzero session LogonGuid,
+  serialized Linux foreground shell commands, rendered parentless Sysmon roots source-natively,
+  and stopped the shared process lookup from labeling PID 0 as Explorer.
+- **Verification:** 11,701 routine tests passed before the two bounded generation-discovered
+  follow-ups; all 64 final focused regressions, repository-wide Ruff check/format, all 92 packaged
+  config files, and behavior revision 138 at
+  `286044103e9de50f17f726ffd793da8727b2c694935139522289d0270ab18594` passed.
+- **Hard probe:** all eight Type 9 creates shared one nonzero GUID and controller ancestry, ordinary
+  interactive users had no null Sysmon GUID, `mysqldump`/`gzip`/`scp` had positive 1.9-second gaps,
+  and no truth event was unemitted.
+- **Assessment:** deterministic score 96.0293/PASS across 117,928 records. Initial verdicts were
+  two Realistic, one Inconclusive, and one Synthetic at mean 78.5; deliberation converged on
+  Synthetic at 87% confidence, 68 synthetic-confidence, and mean recalibrated realism 75.75.
+- **Surviving priority:** the new Type 9 `cmd.exe` controller is itself visibly created by Windows
+  PID 0 across Security, Sysmon, and eCAR, and its bootstrap omits the expected 4648 companion.
+
+## Loop 95 Family Contract
+
+### Canonical Type 9/NewCredentials execution-session bootstrap
+
+- **Classification:** `hard_contradiction`, `contract_gap`, and `family_level`; Loop 94 made the
+  Type 9 descendants internally consistent but materialized their user-mode controller with
+  Windows PID 0 and emitted no adjacent 4648 explicit-credential event.
+- **Owning abstractions:** the Windows explicit-credential/NewCredentials action bundle owns the
+  live local caller, caller session, 4648 use, 4624 Type 9 clone, outbound identity, controller
+  process, and its durable lifecycle; canonical process/session state owns the cross-token parent
+  edge and stable identities consumed by renderers.
+- **Invariant:** every modeled Type 9 session begins with one live, source-visible caller in an
+  active local interactive session. The same action emits a caller-bound 4648 and a 4624 Type 9,
+  then creates the long-lived controller under a valid parent PID/GUID/image. Descendants use the
+  cloned Type 9 token while retaining the correct local principal and outbound credential; no
+  user-mode process may be created by PID 0.
+- **Entry paths:** typed `logon_type: 9`, typed `explicit_credentials`, `runas /netonly`, storyline
+  SMB staging, remote-admin helpers, compatibility explicit-credential calls, and future tools
+  that create NewCredentials tokens.
+- **Consumers:** Security 4648/4624/4688/4689, Sysmon 1/5 and dependent events, eCAR
+  USER_SESSION/PROCESS/FLOW/FILE, SMB and proxy action bundles, process/session state, truth
+  manifests, and evaluator pivots.
+- **Layer rationale:** emitters cannot invent a missing caller, 4648, or legal process/session edge.
+  The NewCredentials action family is the first shared boundary that knows the interactive caller,
+  outbound credential, cloned session, controller, and all downstream activity.
+- **Sibling risks:** preserve the immutable local-versus-outbound identity split, exact Type 9 LUID
+  and GUID, ordinary explicit-credential events that do not create Type 9, short-lived `runas`
+  actions, long-lived storyline controllers, process termination/logoff order, disconnected RDP
+  admission, SMB channel affinity, source timing, observation grouping, and checkpoint determinism.
