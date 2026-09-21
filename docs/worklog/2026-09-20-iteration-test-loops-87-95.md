@@ -254,3 +254,54 @@ family contracts, implementation/verification handoff facts, and surviving prior
   `svchost -s` services, exact image-path matching, future/out-of-order canonical reuse, process
   lifetime and terminal closure, role/service eligibility, observation grouping, checkpoint/retry
   determinism, and source-native timestamps.
+
+## Loop 92 Result
+
+- **Implementation:** declared Exchange transport and IMAP as per-host singleton services in the
+  data-driven catalog, routing every request through the existing canonical reuse authority.
+- **Verification:** 11,692 routine tests passed; Ruff check/format and all 92 packaged config files
+  passed; behavior revision 124 validated at
+  `64abff378ac7bd7c2449c93433ca2e42c16c938ff5f40f77870925e9179e656a`.
+- **Hard probe:** 13 eCAR flows, 13 Security 5156 rows, and 15 Sysmon rows for Exchange transport
+  all used PID 2724, with no second candidate in any source.
+- **Assessment:** deterministic score 95.8521 across 122,483 records, but acceptance failed on
+  pivot linkability 77.3 and temporal integrity 83.7; the failure was investigated as a distinct
+  scheduling/source-ordering family. Initial blind mean 35.5 triggered deliberation on verdict
+  disagreement; the chair returned Inconclusive at mean 40.75 and unified score 41.
+- **Surviving priority:** fresh interactive processes continue under disconnected RDP LUIDs without
+  a reconnect or alternate visible controller; RDP terminal outcomes also lack policy texture.
+
+## Loop 93 Family Contract
+
+### State-aware RDP interaction and terminal outcomes
+
+- **Classification:** `contract_gap`, `distribution_texture`, and `family_level`; Loop 92 emitted
+  Security 4779 for an RDP LUID, then attributed multiple new Explorer-launched interactive
+  processes to that disconnected session without Security 4778 or another controller. Across the
+  corpus, every visible RDP session disconnected before logoff, none reconnected, and cleanup
+  delays were independently sampled rather than host/policy-shaped.
+- **Owning abstractions:** the RDP action bundle and `RdpReconnectStateManager` own exact connected,
+  disconnected, reconnected, and logged-out states; a data-driven RDP outcome policy owns ordinary
+  direct-logoff, retained-disconnect, timeout-retirement, and reconnect selection. Process planning
+  must consult that state before assigning fresh interactive ownership.
+- **Invariant:** a disconnected RDP session may retain and execute already-running background work,
+  but it cannot own a fresh UI-driven process after 4779 until an exact later transport generation
+  commits and Security 4778 becomes visible. Otherwise the process must use another active
+  controller/session. Terminal outcomes are stable per explicit intent or host policy, not one
+  fleet-wide disconnect shape with an independent random cleanup delay.
+- **Entry paths:** typed `rdp_session`, compatibility Type 10 logon, baseline remote administration,
+  reconnect admission, storyline process selection, nested RDP clients, hourly lifecycle
+  watermarks, explicit logoff, hard-deadline closure, and checkpoint-restored continuations.
+- **Consumers:** Security 4624/4634/4778/4779/4688, Sysmon 1/5, eCAR USER_SESSION/PROCESS/FLOW,
+  Zeek/endpoint RDP transport, process-parent/session identities, truth manifests, and evaluator
+  timing/linkability pivots.
+- **Layer rationale:** emitters accurately render the disconnected state and cannot decide whether
+  later interaction is legal. The RDP bundle/state manager is the first shared owner of logical
+  session identity, immutable transport generations, reconnect deadlines, process/session binding,
+  and terminal lifecycle publication; outcome diversity belongs in data configuration consumed by
+  that owner.
+- **Sibling risks:** preserve disconnected process survival, exact LUID/session identity across
+  reconnect, new source ports and channel IDs per generation, transport-before-4778 ordering,
+  source `mstsc.exe` lifecycle, direct explicit logoff semantics, nested-session ordering,
+  collection-boundary retention, observation grouping, atomic recovery, and checkpoint/retry
+  determinism.
