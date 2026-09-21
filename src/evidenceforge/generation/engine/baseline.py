@@ -2494,6 +2494,56 @@ class BaselineMixin:
             r"C:\Windows\System32\svchost.exe",
         )
 
+    def _emit_rsyslog_health_transport(
+        self,
+        *,
+        current_hour: datetime,
+        sender: System,
+        time: datetime,
+        route: _CanonicalSyslogRoute,
+        rng: random.Random,
+    ) -> bool:
+        """Emit the canonical transport owned by one rsyslog forwarding-health row."""
+
+        duration = rng.uniform(0.4, 6.0)
+        close_bound = self._baseline_network_close_bound_seconds(
+            src_ip=sender.ip,
+            dst_ip=route.receiver.ip,
+            proto=route.protocol,
+            dst_port=route.port,
+            service="syslog",
+            requested_duration_max=6.0,
+            current_hour=current_hour,
+            start=time,
+            conn_state="",
+            payload_bytes=1,
+        )
+        if not self._baseline_pass_admits(
+            current_hour,
+            start=time,
+            end=time + timedelta(seconds=close_bound),
+        ):
+            return False
+
+        forwarder_pid, forwarder_image = self._syslog_forwarder_identity(sender)
+        self.state_manager.set_current_time(time)
+        self.activity_generator.generate_connection(
+            src_ip=sender.ip,
+            dst_ip=route.receiver.ip,
+            time=time,
+            dst_port=route.port,
+            proto=route.protocol,
+            service="syslog",
+            duration=duration,
+            orig_bytes=rng.randint(180, 3200),
+            resp_bytes=0 if route.protocol == "udp" else rng.randint(40, 180),
+            source_system=sender,
+            pid=forwarder_pid,
+            process_image=forwarder_image,
+            suppress_source_pid_inference=forwarder_pid <= 0,
+        )
+        return True
+
     def _render_systemd_resolved_message(
         self,
         entry: dict[str, Any],
@@ -12035,6 +12085,14 @@ class BaselineMixin:
                     elif app == "rsyslogd":
                         route = self._canonical_syslog_routes().get(system.hostname)
                         if route is None:
+                            continue
+                        if not self._emit_rsyslog_health_transport(
+                            current_hour=current_hour,
+                            sender=system,
+                            time=ts,
+                            route=route,
+                            rng=rng,
+                        ):
                             continue
                         msg = self._render_rsyslog_health_message(
                             entry,

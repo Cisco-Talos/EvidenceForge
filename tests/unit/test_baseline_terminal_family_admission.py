@@ -267,9 +267,10 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         return result
 
     literal_sinks = _calls("generate_connection")
-    assert len(literal_sinks) == 27
+    assert len(literal_sinks) == 28
     assert Counter(owner for owner, _call in literal_sinks) == Counter(
         {
+            "_emit_rsyslog_health_transport": 1,
             "_emit_affinity_event": 1,
             "_emit_browsing_session": 1,
             "_emit_conn": 1,
@@ -296,6 +297,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
     # Each tuple classifies literal sinks in source order. A new or moved raw
     # connection must be deliberately assigned an admission owner here.
     reviewed_sink_classes = {
+        "_emit_rsyslog_health_transport": ("direct-rendered-syslog-health",),
         "_emit_affinity_event": ("direct-rendered",),
         "_emit_browsing_session": ("persona-browser-outer",),
         "_emit_conn": ("direct-rendered",),
@@ -345,6 +347,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_baseline_user_activity_close_bound_seconds": 3,
             "_baseline_persona_connection_close_bounds_seconds": 2,
             "_baseline_ids_connection_close_bound_seconds": 1,
+            "_emit_rsyslog_health_transport": 1,
             "_emit_affinity_event": 3,
             "_emit_conn": 1,
             "_emit_web_server_access": 2,

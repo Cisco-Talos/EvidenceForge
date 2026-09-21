@@ -355,6 +355,46 @@ def test_syslog_forwarder_identity_uses_seeded_platform_daemon(linux_system):
     )
 
 
+def test_rsyslog_health_owns_process_attributed_canonical_transport(linux_system):
+    """An rsyslog forwarding-health row first emits its canonical transport."""
+    receiver = System(
+        hostname="LOG-01",
+        ip="10.0.0.40",
+        os="Ubuntu 22.04",
+        type="server",
+        services=["rsyslog"],
+        roles=["log_server"],
+    )
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[linux_system, receiver]))
+    engine._system_pids = {linux_system.hostname: {"rsyslogd": 741}}
+    engine.activity_generator = Mock()
+    engine.state_manager = Mock()
+    engine._baseline_network_close_bound_seconds = Mock(return_value=6.0)
+    engine._baseline_pass_admits = Mock(return_value=True)
+    current_hour = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    event_time = current_hour + timedelta(minutes=4)
+    route = engine._canonical_syslog_routes()[linux_system.hostname]
+
+    emitted = engine._emit_rsyslog_health_transport(
+        current_hour=current_hour,
+        sender=linux_system,
+        time=event_time,
+        route=route,
+        rng=random.Random(17),
+    )
+
+    assert emitted is True
+    call = engine.activity_generator.generate_connection.call_args.kwargs
+    assert call["src_ip"] == linux_system.ip
+    assert call["dst_ip"] == receiver.ip
+    assert call["dst_port"] == 514
+    assert call["service"] == "syslog"
+    assert call["pid"] == 741
+    assert call["process_image"] == "/usr/sbin/rsyslogd"
+    engine.state_manager.set_current_time.assert_called_once_with(event_time)
+
+
 def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):
     """Journald capacity rows should be housekeeping, not high-frequency filler."""
     engine = type("FakeEngine", (BaselineMixin,), {})()
