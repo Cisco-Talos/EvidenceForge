@@ -68,6 +68,12 @@ def handle_logon(
                 f"storyline:{getattr(self, '_current_storyline_spec_id', 'logon')}"
             ),
         )
+        self._ensure_storyline_new_credentials_controller(
+            actor=caller,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+        )
         source_ip = "-"
     else:
         source_ip = (

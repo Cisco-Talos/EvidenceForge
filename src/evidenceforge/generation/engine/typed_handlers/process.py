@@ -262,6 +262,8 @@ def handle_process(
             malicious_event["command_line"] = command_line
             malicious_event["skipped_reason"] = "shell_foreground_occupied"
             return malicious_event
+        if isinstance(reserved_start_time, datetime):
+            time = reserved_start_time
         self._emit_linux_storyline_shell_friction(
             actor=process_actor,
             system=system,
@@ -271,8 +273,6 @@ def handle_process(
             output_file=output_file,
             rng=rng,
         )
-        if isinstance(reserved_start_time, datetime):
-            time = reserved_start_time
         prepared_shell_command = self.activity_generator._prepare_bash_history_command(
             system,
             command_line,

@@ -197,6 +197,13 @@ class TestLogonIdSystemScoping:
         assert type9.username == local_user.username
         assert type9.source_ip == "-"
         assert type9.session_id == 0
+        assert type9.logon_guid != "{00000000-0000-0000-0000-000000000000}"
+        controller = state_manager.get_process(system.hostname, type9.process_tree_root or -1)
+        assert controller is not None
+        assert controller.image.endswith(r"\cmd.exe")
+        assert controller.command_line == "cmd.exe /d /q"
+        assert controller.parent_pid == 0
+        assert controller.logon_id == type9_id
         assert (
             engine._last_storyline_logon_for_actor_system(
                 outbound_user,
@@ -234,9 +241,11 @@ class TestLogonIdSystemScoping:
         assert type9_event.auth.cloned_from_logon_id == caller_logon_id
         assert type9_event.auth.username == local_user.username
         assert type9_event.auth.outbound_username == outbound_user.username
+        assert type9_event.auth.logon_guid == type9.logon_guid
         assert child.auth.logon_id == type9_id
         assert child.auth.username == local_user.username
         assert running_child.username == local_user.username
+        assert running_child.parent_pid == controller.pid
 
     def test_storyline_type9_rejects_missing_local_desktop(
         self, state_manager, mock_emitters, system_a, attacker

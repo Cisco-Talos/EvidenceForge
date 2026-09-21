@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 135
+current_revision: 136
 history_start_revision: 1
-behavior_surface_sha256: b9793c1d50ff60e700de7bb1b6d48963739521801bff46d49e55c0a0c9ad411d
+behavior_surface_sha256: 21f3197d0e633832db50e39f7496925202e33cc5203649da5f70bd6a1c00549e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1351,3 +1351,18 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Revalidate baseline SMB client sessions at execution time and omit stale process attribution when the selected RDP desktop has disconnected.
+  - revision: 136
+    id: canonical-command-session-lifecycle-truth
+    impact: material
+    domains:
+      - process-lifecycle
+      - windows-new-credentials
+      - windows-logon-identity
+      - linux-shell-sequencing
+    formats:
+      - bash_history
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Give typed Type 9 activity one visible long-lived controller and stable session LogonGuid, while scheduling Linux operator-prep commands after the prior foreground completion and before their owned process.

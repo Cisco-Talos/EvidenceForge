@@ -558,6 +558,37 @@ class TestStorylineCommandNetworks:
         assert all(time < process_time for time, _command in emitted)
         assert latest == emitted[-1][0]
 
+    def test_storyline_shell_friction_skips_when_prior_foreground_leaves_no_room(self):
+        """Preparation is omitted when it cannot fit after the preceding command."""
+
+        emitted: list[tuple[datetime, str]] = []
+        engine = object.__new__(StorylineMixin)
+        engine.activity_generator = SimpleNamespace(
+            _prepare_bash_history_command=lambda _system, command: command,
+            _emit_bash_command_event=lambda _actor, _system, time, command: emitted.append(
+                (time, command)
+            ),
+        )
+        actor = User(username="root", full_name="root", email="root@example.test")
+        system = System(hostname="DB01", ip="10.0.0.25", os="Ubuntu 22.04", type="server")
+        prior_completion = datetime(2026, 9, 7, 18, 25, tzinfo=UTC)
+        engine._storyline_shell_available_at = {
+            (system.hostname, actor.username): prior_completion,
+        }
+
+        latest = engine._emit_linux_storyline_shell_friction(
+            actor=actor,
+            system=system,
+            time=prior_completion + timedelta(seconds=1),
+            process_name="/usr/bin/gzip",
+            command_line="gzip -9 /tmp/archive.sql",
+            output_file=None,
+            rng=random.Random(7),
+        )
+
+        assert emitted == []
+        assert latest is None
+
     def test_explicit_storyline_process_ref_sets_child_parent_pid(self):
         """Explicit process_ref/parent_ref lineage should reach canonical process context."""
         captured: list[Any] = []
@@ -3240,10 +3271,11 @@ class TestStorylineCommandSideEffects:
             command for command, _scheduled in bash_entries if command not in main_commands
         ]
         assert main_bash_times == process_times
-        assert len(prep_commands) >= 6
+        # Preparation for the first command is retained. Later optional probes are
+        # omitted when the serialized shell leaves no idle window before the next
+        # authored process; they must not be backfilled across a running command.
+        assert len(prep_commands) >= 4
         assert any("SHOW TABLES FROM ehr" in command for command in prep_commands)
-        assert any("/tmp/rpt_0318.sql" in command for command in prep_commands)
-        assert any("/tmp/rpt_0318.sql.gz" in command for command in prep_commands)
         assert process_times == sorted(process_times)
         assert process_times[1] > process_times[0] + timedelta(seconds=5)
         assert process_times[2] > process_times[1] + timedelta(seconds=5)

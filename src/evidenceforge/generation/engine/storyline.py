@@ -1472,6 +1472,61 @@ class StorylineMixin:
             )
         return caller, caller_session.logon_id
 
+    def _ensure_storyline_new_credentials_controller(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> int:
+        """Materialize the long-lived command controller for a typed Type 9 session."""
+
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.username.casefold() != actor.username.casefold()
+            or session.logon_type != 9
+        ):
+            raise StateError(
+                "Storyline NewCredentials controller requires the exact Type 9 session: "
+                f"host={system.hostname} logon_id={logon_id} actor={actor.username}"
+            )
+        existing_pid = session.process_tree_root
+        if existing_pid is not None and self.state_manager.is_process_active_at(
+            system.hostname,
+            existing_pid,
+            time,
+        ):
+            return existing_pid
+
+        controller_time = ensure_utc(time) + timedelta(milliseconds=50)
+        process_name = r"C:\Windows\System32\cmd.exe"
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=controller_time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line="cmd.exe /d /q",
+            parent_pid=0,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            lifecycle_group_id=session.lifecycle_group_id,
+            require_exact_parent=True,
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline NewCredentials controller could not be materialized: "
+                f"host={system.hostname} logon_id={logon_id}"
+            )
+        session.process_tree_root = pid
+        self.activity_generator._record_user_process(system, actor, pid, process_name)
+        return pid
+
     def _last_storyline_logon_for_actor_system(
         self,
         actor: User,
@@ -2980,6 +3035,16 @@ class StorylineMixin:
         )
         first_anchor = time - timedelta(seconds=lead_seconds)
         spacing_seconds = lead_seconds / (len(commands) + 1)
+        shell_key = (system.hostname, actor.username)
+        prior_completion = getattr(self, "_storyline_shell_available_at", {}).get(shell_key)
+        if prior_completion is not None:
+            earliest_anchor = ensure_utc(prior_completion) + timedelta(milliseconds=350)
+            if first_anchor < earliest_anchor:
+                first_anchor = earliest_anchor
+                spacing_seconds = rng.uniform(1.6, 4.8)
+            latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
+            if latest_candidate >= ensure_utc(time) - timedelta(seconds=1):
+                return None
         latest_scheduled: datetime | None = None
         for command_index, command in enumerate(commands):
             scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))

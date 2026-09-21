@@ -12062,7 +12062,11 @@ class ActivityGenerator:
                 if auth_pkg.get("AuthenticationPackageName", "").casefold() == "ntlm"
                 else "kerberos"
             )
-        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
+        requires_logon_guid = auth_pkg.get(
+            "LogonGuid"
+        ) != "{00000000-0000-0000-0000-000000000000}" or (
+            os_cat == "windows" and logon_type in {2, 7, 9, 10, 11}
+        )
 
         # Phase 1: Allocate or resolve IDs from StateManager
         local_linux_session = (
@@ -28970,6 +28974,7 @@ class ActivityGenerator:
             source_ip="-",
             source_port=0,
             session_kind="new_credentials",
+            logon_guid_required=True,
             lifecycle_group_id=lifecycle_id,
             parent_lifecycle_group_id=lifecycle_group_id,
         )
@@ -28993,7 +28998,7 @@ class ActivityGenerator:
                 source_port=0,
                 logon_process="seclogo",
                 lm_package="-",
-                logon_guid="{00000000-0000-0000-0000-000000000000}",
+                logon_guid=session.logon_guid if session is not None else "",
                 subject_sid=subject["sid"],
                 subject_username=subject["username"],
                 subject_domain=subject["domain"],
