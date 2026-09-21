@@ -1254,6 +1254,50 @@ def test_world_planner_reconnects_disconnected_client_desktop_through_bundle(
     assert execute.call_args.kwargs["time"] == reconnect_time
 
 
+def test_world_planner_reuses_materialized_future_client_desktop(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Source alignment must not let a later storyline child duplicate a desktop."""
+
+    requested_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    first = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=requested_time,
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+    )
+    aligned_start = requested_time + timedelta(minutes=15)
+    first.session.start_time = aligned_start
+    first.session.last_activity_time = aligned_start
+    first.session.network_close_time = aligned_start + timedelta(minutes=30)
+
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=requested_time + timedelta(minutes=1),
+        rng=random.Random(17),
+        session_kind="rdp",
+        source_system=systems["WKS-02"],
+        allow_existing=False,
+    )
+
+    assert second.session is first.session
+    assert second.network_uid is None
+    assert second.session.last_activity_time == aligned_start
+    client_sessions = [
+        session
+        for session in state_manager.get_sessions_on_system(systems["WKS-01"].hostname)
+        if session.session_kind == "rdp"
+    ]
+    assert client_sessions == [first.session]
+
+
 def test_world_planner_preserves_server_rdp_multi_session_behavior(
     planner: WorldPlanner,
     state_manager: StateManager,

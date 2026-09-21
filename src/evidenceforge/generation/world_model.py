@@ -1259,7 +1259,6 @@ class WorldPlanner:
             if session.system == target_system.hostname
             and session.logon_type == 10
             and session.session_kind == "rdp"
-            and self._session_start_sort_key(session) <= cutoff
             and (session.end_plan is None or cutoff < ensure_utc(session.end_plan.canonical_end))
             and (
                 not canonical_source
@@ -1328,7 +1327,10 @@ class WorldPlanner:
                     time
                 ) < ensure_utc(existing_rdp.network_close_time)
                 if transport_connected:
-                    existing_rdp.last_activity_time = time
+                    existing_rdp.last_activity_time = max(
+                        ensure_utc(time),
+                        self._session_start_sort_key(existing_rdp),
+                    )
                     if session_end_plan is not None:
                         self.state_manager.plan_session_end(existing_rdp.logon_id, session_end_plan)
                     if storyline_protected:
