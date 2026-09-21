@@ -120,3 +120,48 @@ family contracts, implementation/verification handoff facts, and surviving prior
   desktop SMB without Type 9, Linux clients, explicit credential mappings, operation batching,
   persistent channel/session reuse, exact retry/checkpoint behavior, process lifetimes, and
   multi-source timestamp ordering.
+
+## Loop 89 Result
+
+- **Implementation:** passed the exact Type 9 LogonID and live credential-process identity into
+  canonical SMB preparation so the local caller owns client flows/file effects while targets use
+  the outbound credential.
+- **Verification:** 11,686 routine tests and 697 focused tests passed; Ruff check/format and all 92
+  packaged config files passed; behavior revision 114 validated at
+  `61f46daa4610d50eee44f15c4c985693271f9f7ef8dae53ebfe07e1d808f06a4`.
+- **Hard probe:** the split-token chain used one PowerShell process under the exact Type 9 LUID for
+  all five SMB flows and six VaultCache file effects, while target authentication used Marcus Chen.
+- **Assessment:** deterministic score 96.8088/PASS across 124,276 records. The unanimous Synthetic
+  panel scored 86, 78, 68, and 66 (mean 74.5); no deliberation trigger fired.
+- **Surviving priority:** the corrected PowerShell owner visibly runs only a directory-creation
+  command yet is credited with creating nine populated business documents.
+
+## Loop 90 Family Contract
+
+### Operation-semantic SMB staging lineage
+
+- **Classification:** `hard_contradiction` plus `family_level`; Loop 89 tied SMB and file effects to
+  the correct Type 9 process but exposed that its visible command only creates three directories and
+  cannot create or copy the nine populated documents attributed to it.
+- **Owning abstractions:** authored/storyline operation intent owns what the process was asked to do;
+  the canonical SMB action bundle owns remote read, local write, channel, artifact, and process
+  relationships; command rendering must express the same transfer semantics without inventing an
+  emitter-local explanation.
+- **Invariant:** every staged content file has one source-visible operation capable of producing it.
+  Directory creation may emit directory effects only. Remote documents copied through SMB must be
+  owned by a live process whose command expresses the source share/path and local destination, while
+  the exact Type 9 LUID, local token principal, outbound target credential, artifact identity, and
+  transfer timing remain consistent.
+- **Entry paths:** typed storyline SMB browse/read/copy/move, batched persistent SMB staging,
+  Windows-native PowerShell/robocopy/cmd clients, command-derived transfers, compatibility requests
+  with explicit process identity, and ordinary non-Type-9 desktop SMB.
+- **Consumers:** Security 4688/5156/5140/5145, Sysmon 1/3/11, eCAR process/FLOW/file, Zeek
+  conn/SMB/files, target authentication, ground-truth operation summaries, and evaluator pivots.
+- **Layer rationale:** emitters know neither the authored operation nor the artifact lifecycle, and
+  the SMB bundle cannot infer a credible command after a directory-only process has already been
+  selected. The storyline-to-bundle intent boundary is the first shared layer that knows source
+  share, destination tree, operation, credential session, client process, and all effects.
+- **Sibling risks:** preserve the Loop 89 Type 9 ownership fix, persistent SMB channel reuse,
+  batched artifact order and hashes, source/target file semantics, Linux clients, ordinary Explorer
+  browsing, command quoting, PowerShell process lifetime, causal timing, observation grouping,
+  checkpoint determinism, and authored raw-command escape hatches.
