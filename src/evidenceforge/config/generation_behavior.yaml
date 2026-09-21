@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 136
+current_revision: 137
 history_start_revision: 1
-behavior_surface_sha256: 21f3197d0e633832db50e39f7496925202e33cc5203649da5f70bd6a1c00549e
+behavior_surface_sha256: 29bc331612a11ed86210cce09768547b64119cfc9bb7f6f757d6abde41d89bb9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1366,3 +1366,12 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Give typed Type 9 activity one visible long-lived controller and stable session LogonGuid, while scheduling Linux operator-prep commands after the prior foreground completion and before their owned process.
+  - revision: 137
+    id: sysmon-unobserved-root-parent
+    impact: localized
+    domains:
+      - process-lifecycle
+      - sysmon-parent-projection
+    formats:
+      - windows_event_sysmon
+    summary: Render a canonical parentless process with Sysmon's null ParentProcessGuid instead of requiring an invented parent process-create timestamp.

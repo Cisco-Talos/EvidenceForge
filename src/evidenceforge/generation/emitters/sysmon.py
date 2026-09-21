@@ -159,6 +159,7 @@ _PROCESS_GUID_FIELDS: tuple[str, ...] = (
     "TargetProcessGUID",
 )
 _FROZEN_TIMING_MARKER = object()
+_NULL_GUID = "{00000000-0000-0000-0000-000000000000}"
 logger = logging.getLogger(__name__)
 
 _EXACT_CANDIDATE_MARKER = "exact-candidate-v1"
@@ -1683,29 +1684,32 @@ class SysmonEventEmitter(LogEmitter):
             if parent_proc is not None and parent_proc.start_time <= child_start
             else self._host_boot_times.get(host.hostname, child_start - timedelta(days=7))
         )
-        parent_render_time = (
-            plan.finalized_times.get(sysmon_parent_process_render_key(host.hostname))
-            if plan is not None
-            else None
-        )
-        if parent_render_time is None:
-            if plan is not None and not plan.compatibility_mode:
-                raise RuntimeError(
-                    "Sysmon Event 1 requires a frozen parent process-create source time: "
-                    f"host={host.hostname} parent_pid={proc.parent_pid} "
-                    f"started_at={ensure_utc(_parent_ts).isoformat()}"
-                )
-            parent_render_time = self._compatibility_parent_process_render_time(
-                host,
-                proc,
-                _parent_ts,
+        if proc.parent_pid == 0:
+            parent_guid = _NULL_GUID
+        else:
+            parent_render_time = (
+                plan.finalized_times.get(sysmon_parent_process_render_key(host.hostname))
+                if plan is not None
+                else None
             )
-        parent_guid = self._get_stable_process_guid(
-            host.hostname,
-            proc.parent_pid,
-            _parent_ts,
-            rendered_create_time=parent_render_time,
-        )
+            if parent_render_time is None:
+                if plan is not None and not plan.compatibility_mode:
+                    raise RuntimeError(
+                        "Sysmon Event 1 requires a frozen parent process-create source time: "
+                        f"host={host.hostname} parent_pid={proc.parent_pid} "
+                        f"started_at={ensure_utc(_parent_ts).isoformat()}"
+                    )
+                parent_render_time = self._compatibility_parent_process_render_time(
+                    host,
+                    proc,
+                    _parent_ts,
+                )
+            parent_guid = self._get_stable_process_guid(
+                host.hostname,
+                proc.parent_pid,
+                _parent_ts,
+                rendered_create_time=parent_render_time,
+            )
 
         # Determine user string
         if auth and auth.username:
