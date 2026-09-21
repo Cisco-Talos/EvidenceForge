@@ -472,6 +472,47 @@ def test_optional_baseline_smb_omits_first_exact_plan_that_closes_after_window()
     baseline.state_manager.set_current_time.assert_not_called()
 
 
+def test_baseline_smb_drops_process_owner_from_disconnected_rdp_session() -> None:
+    """A disconnected desktop leaves baseline SMB as transport-only evidence."""
+
+    source = System(
+        hostname="CLIENT-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    actor = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
+    baseline = BaselineMixin()
+    baseline.end_time = _WINDOW_START + timedelta(hours=1)
+    baseline.activity_generator = Mock()
+    baseline.activity_generator._interactive_session_accepts_activity.return_value = False
+    baseline.state_manager = Mock()
+    baseline.state_manager.get_process.return_value = SimpleNamespace(logon_id="0x900")
+    baseline.state_manager.get_session.return_value = SimpleNamespace(logon_id="0x900")
+    baseline._baseline_network_close_bound_seconds = Mock(return_value=2.0)
+    baseline._baseline_pass_admits = Mock(return_value=True)
+    intent = SimpleNamespace(
+        time=_WINDOW_START + timedelta(minutes=10),
+        duration=2.0,
+        actor=actor,
+        share_ref="FS-01.finance",
+        source_system=source,
+        process_pid=6168,
+        operation="browse",
+        target_ip="10.0.0.20",
+        orig_bytes=2_000,
+        resp_bytes=8_000,
+        emit_dns=True,
+    )
+    baseline._plan_baseline_smb_activity = Mock(return_value=(intent,))
+
+    baseline._generate_baseline_smb_activity(_WINDOW_START)
+
+    baseline.activity_generator.prepare_smb_activity.assert_not_called()
+    baseline.activity_generator.generate_connection.assert_called_once()
+    assert baseline.activity_generator.generate_connection.call_args.kwargs["pid"] == -1
+
+
 def test_terminal_optional_service_bounds_retain_embryonic_transport_branch() -> None:
     """Optional-service callers do not claim payload before runtime selects state."""
 

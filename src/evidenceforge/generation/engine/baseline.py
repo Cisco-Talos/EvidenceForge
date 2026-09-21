@@ -9378,7 +9378,25 @@ class BaselineMixin:
         for intent in self._plan_baseline_smb_activity(current_hour):
             preparation = None
             canonical_duration = intent.duration
-            if intent.actor is not None and intent.share_ref:
+            client_session_accepts_activity = True
+            if intent.process_pid > 0:
+                process = self.state_manager.get_process(
+                    intent.source_system.hostname,
+                    intent.process_pid,
+                )
+                session = (
+                    self.state_manager.get_session(process.logon_id)
+                    if process is not None and process.logon_id
+                    else None
+                )
+                client_session_accepts_activity = bool(
+                    session is not None
+                    and self.activity_generator._interactive_session_accepts_activity(
+                        session,
+                        intent.time,
+                    )
+                )
+            if intent.actor is not None and intent.share_ref and client_session_accepts_activity:
                 spec = SmbActivityEventSpec(
                     type="smb_activity",
                     operation=intent.operation,

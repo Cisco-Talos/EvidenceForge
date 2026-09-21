@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 134
+current_revision: 135
 history_start_revision: 1
-behavior_surface_sha256: 85c61f01a82201a85c07caf30c3ddb9a117e394135bbaba672b88e5b446b0e80
+behavior_surface_sha256: b9793c1d50ff60e700de7bb1b6d48963739521801bff46d49e55c0a0c9ad411d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1338,3 +1338,16 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Remove the temporary Type 9 process lifetime extension after correcting its upstream RDP-watermark timestamp shift, keeping connection and session lifecycle holds aligned.
+  - revision: 135
+    id: baseline-smb-disconnected-rdp-owner
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - baseline-smb
+      - network-process-ownership
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Revalidate baseline SMB client sessions at execution time and omit stale process attribution when the selected RDP desktop has disconnected.
