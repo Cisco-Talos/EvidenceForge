@@ -28916,6 +28916,7 @@ class ActivityGenerator:
         process_pid: int | None,
         source_ip: str = "",
         source_port: int = 0,
+        create_new_credentials_session: bool = True,
     ) -> None:
         """Generate explicit credentials event (4648) on source system.
 
@@ -28934,6 +28935,7 @@ class ActivityGenerator:
                 process_pid=process_pid,
                 source_ip=source_ip,
                 source_port=source_port,
+                create_new_credentials_session=create_new_credentials_session,
             ),
         )
         bundle.execute()
@@ -28976,7 +28978,7 @@ class ActivityGenerator:
             session_kind="new_credentials",
             logon_guid_required=True,
             lifecycle_group_id=lifecycle_id,
-            parent_lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=caller_session.lifecycle_group_id,
         )
         session = self.state_manager.get_session(logon_id)
         session_id = session.session_id if session is not None else 0

@@ -57,6 +57,23 @@ def handle_logon(
             system.hostname,
             system,
         )
+        caller_pid = self._ensure_storyline_new_credentials_caller_process(
+            caller=caller,
+            system=system,
+            time=time,
+            caller_logon_id=caller_logon_id,
+            outbound_username=actor.username,
+        )
+        self.activity_generator.generate_explicit_credentials(
+            user=caller,
+            system=system,
+            time=time - self._storyline_new_credentials_explicit_offset(),
+            target_username=actor.username,
+            target_server=system.hostname,
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=caller_pid,
+            create_new_credentials_session=False,
+        )
         logon_id = self.activity_generator._emit_new_credentials_logon(
             user=caller,
             system=system,
@@ -73,6 +90,7 @@ def handle_logon(
             system=system,
             time=time,
             logon_id=logon_id,
+            parent_pid=caller_pid,
         )
         source_ip = "-"
     else:

@@ -11381,6 +11381,7 @@ class TestActivityGenerator:
             and event.process.image.endswith("cmd.exe")
             and event.auth.logon_id == type9.auth.logon_id
         )
+        assert child.process.parent_pid == explicit.auth.process_pid
         target_logon = next(
             event
             for event in emitted

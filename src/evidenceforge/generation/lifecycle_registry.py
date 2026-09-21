@@ -2787,6 +2787,7 @@ class _LifecyclePartition:
         )
         self._validate_process_parent_membership(
             identity,
+            token,
             membership,
             staged_processes=staged_processes,
             staged_process_memberships=staged_process_memberships,
@@ -5833,6 +5834,7 @@ class _LifecyclePartition:
     def _validate_process_parent_membership(
         self,
         identity: ProcessLifecycleIdentity,
+        token: ProcessTokenIdentity,
         membership: LifecycleMembership,
         *,
         staged_processes: dict[str, ProcessLifecycleIdentity] | None = None,
@@ -5865,6 +5867,24 @@ class _LifecyclePartition:
 
         parent_session_id = parent_membership.session_object_id
         if parent_session_id and parent_session_id != child_session_id:
+            if parent is not None:
+                child_session = self._sessions.get(child_session_id)
+                parent_session = self._sessions.get(parent_session_id)
+                if (
+                    child_session is not None
+                    and parent_session is not None
+                    and child_session.identity.session_kind == "new_credentials"
+                    and token.logon_type == 9
+                    and token.logon_id == child_session.identity.logon_id
+                    and parent.token.logon_id == parent_session.identity.logon_id
+                    and token.principal.casefold() == parent.token.principal.casefold()
+                    and child_session.identity.principal.casefold()
+                    == parent_session.identity.principal.casefold()
+                    == token.principal.casefold()
+                    and parent_identity.image.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+                    == "runas.exe"
+                ):
+                    return
             raise StateError(
                 "Process lifecycle parent crosses session ownership: "
                 f"parent={parent_object_id} parent_session={parent_session_id} "

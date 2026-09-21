@@ -102,6 +102,7 @@ class ExplicitCredentialUseRequest:
     process_pid: int | None
     source_ip: str = ""
     source_port: int = 0
+    create_new_credentials_session: bool = True
     source: str = "activity_generator"
 
     @property
@@ -112,7 +113,8 @@ class ExplicitCredentialUseRequest:
             "action_bundle:windows_explicit_credentials:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.target_username}:{self.target_server}:{self.process_name}:"
-            f"{self.process_pid or ''}:{self.source_ip}:{self.source_port}:{self.source}"
+            f"{self.process_pid or ''}:{self.source_ip}:{self.source_port}:"
+            f"{self.create_new_credentials_session}:{self.source}"
         )
         return f"windows-explicit-credentials-{seed:016x}"
 
@@ -538,7 +540,7 @@ class ExplicitCredentialUseActionBundle:
         self._executor.dispatcher.dispatch_builder(event)
         new_credentials_logon_id = ""
         child_close_time: datetime | None = None
-        if is_runas_netonly:
+        if is_runas_netonly and self._request.create_new_credentials_session:
             new_credentials_logon_id = self._executor._emit_new_credentials_logon(
                 user=subject_user,
                 system=self._request.system,
@@ -552,6 +554,7 @@ class ExplicitCredentialUseActionBundle:
                 subject_user=subject_user,
                 new_credentials_logon_id=new_credentials_logon_id,
                 event_time=event_time,
+                caller_pid=process_pid,
             )
         if materialized_caller:
             lifetime_ms = 1800 + (_stable_seed(f"{self._request.stable_id}:caller_lifetime") % 5201)
@@ -584,6 +587,7 @@ class ExplicitCredentialUseActionBundle:
         subject_user: User,
         new_credentials_logon_id: str,
         event_time: datetime,
+        caller_pid: int,
     ) -> datetime:
         """Execute the child command and modeled ADMIN$ authentication result."""
 
@@ -605,12 +609,9 @@ class ExplicitCredentialUseActionBundle:
             new_credentials_logon_id,
             child_image,
             command_line,
-            # NewCredentials owns a distinct token/session lifecycle. The durable
-            # caller relationship is carried by the action group and cloned-token
-            # metadata; the process registry deliberately forbids a structural
-            # parent edge that crosses exact session ownership.
-            parent_pid=0,
+            parent_pid=caller_pid,
             lifecycle_group_id=self._request.stable_id,
+            require_exact_parent=True,
         )
         if target_system is None:
             close_time = child_time + timedelta(milliseconds=750)

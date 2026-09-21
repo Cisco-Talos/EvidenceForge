@@ -1479,6 +1479,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         logon_id: str,
+        parent_pid: int,
     ) -> int:
         """Materialize the long-lived command controller for a typed Type 9 session."""
 
@@ -1510,7 +1511,7 @@ class StorylineMixin:
             logon_id=logon_id,
             process_name=process_name,
             command_line="cmd.exe /d /q",
-            parent_pid=0,
+            parent_pid=parent_pid,
             from_storyline=True,
             suppress_command_file_effect=True,
             allow_existing_browser_reuse=False,
@@ -1525,6 +1526,58 @@ class StorylineMixin:
             )
         session.process_tree_root = pid
         self.activity_generator._record_user_process(system, actor, pid, process_name)
+        return pid
+
+    @staticmethod
+    def _storyline_new_credentials_explicit_offset() -> timedelta:
+        """Return the canonical lead from 4648 credential use to the Type 9 logon."""
+
+        return timedelta(milliseconds=250)
+
+    def _ensure_storyline_new_credentials_caller_process(
+        self,
+        *,
+        caller: User,
+        system: System,
+        time: datetime,
+        caller_logon_id: str,
+        outbound_username: str,
+    ) -> int:
+        """Materialize the live runas caller that owns one Type 9 bootstrap."""
+
+        caller_session = self.state_manager.get_session_at(caller_logon_id, time)
+        if caller_session is None or caller_session.system != system.hostname:
+            raise StateError(
+                "Storyline NewCredentials caller process requires the exact live session: "
+                f"host={system.hostname} logon_id={caller_logon_id}"
+            )
+        process_name = r"C:\Windows\System32\runas.exe"
+        # Reserve enough source-native headroom for the slowest configured eCAR
+        # CREATE observation (950 ms) and the dependent 4648 gap (650 ms).  The
+        # Type 9 logon must never render before the runas caller or credential use.
+        process_time = ensure_utc(time) - timedelta(seconds=2)
+        command_line = f'runas.exe /netonly /user:{outbound_username} "cmd.exe /d /q"'
+        preferred_parent = caller_session.process_tree_root or caller_session.explorer_pid or 4
+        pid = self.activity_generator.generate_process(
+            user=caller,
+            system=system,
+            time=process_time,
+            logon_id=caller_logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=preferred_parent,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            lifecycle_group_id=caller_session.lifecycle_group_id,
+            require_exact_parent=preferred_parent not in {0, 4},
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline NewCredentials runas caller could not be materialized: "
+                f"host={system.hostname} logon_id={caller_logon_id}"
+            )
         return pid
 
     def _last_storyline_logon_for_actor_system(

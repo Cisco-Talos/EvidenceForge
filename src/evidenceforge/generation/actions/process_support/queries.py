@@ -115,7 +115,18 @@ class ProcessStateQueries:
             return True
         if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
             return True
-        return parent_proc.logon_id == logon_id
+        if parent_proc.logon_id == logon_id:
+            return True
+        child_session = self.state_manager.get_session(logon_id)
+        parent_session = self.state_manager.get_session(parent_proc.logon_id)
+        return bool(
+            child_session is not None
+            and child_session.logon_type == 9
+            and child_session.session_kind == "new_credentials"
+            and parent_session is not None
+            and child_session.parent_lifecycle_group_id == parent_session.lifecycle_group_id
+            and child_session.username.casefold() == parent_proc.username.casefold()
+        )
 
     def _process_instance_key(
         self,
