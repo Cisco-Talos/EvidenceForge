@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 139
+current_revision: 140
 history_start_revision: 1
-behavior_surface_sha256: c93a56ef63ac164527201c475ca85e0f0c2280642c18ea431ed173f6e508ad8a
+behavior_surface_sha256: 0899fccd55c38583f34bf4c96b10e3dcead8bb126ae84fc9a1a6cba837e4f595
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1398,3 +1398,14 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Bootstrap Type 9 execution from one live runas caller, emit its 4648 companion, and retain the legal cross-token parent edge into the cloned NewCredentials session.
+  - revision: 140
+    id: new-credentials-parent-handoff
+    impact: material
+    domains:
+      - windows-new-credentials
+      - process-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserve the validated runas parent identity across the Type 9 token boundary without making the short-lived caller own the cloned process lifetime.

@@ -2425,8 +2425,15 @@ def test_runas_can_parent_same_principal_new_credentials_process() -> None:
     )
 
     children, cursor = registry.live_child_process_page(runas.object_id, limit=1)
-    assert [item.identity.object_id for item in children] == [child.object_id]
+    assert children == ()
     assert cursor is None
+    assert _request_and_close(
+        registry,
+        runas,
+        requested_at=_START + timedelta(seconds=3),
+    ) == _START + timedelta(seconds=3)
+    child_snapshot = registry.get_process(child.object_id)
+    assert child_snapshot is not None and child_snapshot.closed_at is None
 
 
 def test_non_runas_parent_cannot_cross_into_new_credentials_session() -> None:
