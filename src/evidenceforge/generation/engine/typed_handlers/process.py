@@ -478,14 +478,6 @@ def handle_process(
     if lifetime is not None:
         term_delay = rng.uniform(lifetime[0], lifetime[1])
         term_time = time + timedelta(seconds=term_delay)
-        type9_hold_until = self._storyline_type9_process_hold_until(
-            system=system,
-            logon_id=process_logon_id,
-            time=time,
-            future_specs=future_specs,
-        )
-        if type9_hold_until is not None:
-            term_time = max(term_time, type9_hold_until)
         shell_release_time = term_time
         terminate_immediately = False
         if os_category == "linux":

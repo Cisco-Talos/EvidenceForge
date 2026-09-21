@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 133
+current_revision: 134
 history_start_revision: 1
-behavior_surface_sha256: 9ac884c36eaa837738a28b5b155f8db13c80f408412f02e0b29408eb105c122d
+behavior_surface_sha256: 85c61f01a82201a85c07caf30c3ddb9a117e394135bbaba672b88e5b446b0e80
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1326,3 +1326,15 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Apply the RDP lifecycle watermark only after confirming RDP session identity, preserving authored timestamps for Type 9 and other non-RDP process owners.
+  - revision: 134
+    id: remove-type9-advisory-process-hold
+    impact: localized
+    domains:
+      - windows-new-credentials
+      - smb-client-process-ownership
+      - connection-lifecycle-holds
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Remove the temporary Type 9 process lifetime extension after correcting its upstream RDP-watermark timestamp shift, keeping connection and session lifecycle holds aligned.

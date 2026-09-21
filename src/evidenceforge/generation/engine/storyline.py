@@ -1568,31 +1568,6 @@ class StorylineMixin:
         )
         return process.pid, process.image
 
-    def _storyline_type9_process_hold_until(
-        self,
-        *,
-        system: System,
-        logon_id: str,
-        time: datetime,
-        future_specs: Sequence[Any],
-    ) -> datetime | None:
-        """Keep a NewCredentials client alive through its following SMB actions."""
-
-        session = self.state_manager.get_session(logon_id)
-        if (
-            session is None
-            or session.logon_type != 9
-            or not any(getattr(spec, "type", "") == "smb_activity" for spec in future_specs)
-        ):
-            return None
-        hold_seconds = 45 + (
-            _stable_seed(
-                f"storyline_type9_smb_hold:{system.hostname}:{logon_id}:{time.isoformat()}"
-            )
-            % 46
-        )
-        return ensure_utc(time) + timedelta(seconds=hold_seconds)
-
     @staticmethod
     def _quote_powershell_literal(value: str) -> str:
         """Quote one path for a PowerShell single-quoted literal."""
