@@ -1696,7 +1696,6 @@ class StorylineMixin:
             suppress_command_file_effect=True,
             allow_existing_browser_reuse=False,
             allow_browser_launch_spacing=False,
-            source_visible_by=time,
             require_exact_parent=True,
         )
         if pid <= 0:

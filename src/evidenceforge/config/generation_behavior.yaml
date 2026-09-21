@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 117
+current_revision: 118
 history_start_revision: 1
-behavior_surface_sha256: 550526dfef3f82bda189cf1e42b5cb5b06a56191f4c17ce41869373dc34fdd18
+behavior_surface_sha256: 7a6beb6da96e09f31dc7e877bb455304f00cd6bfd32415cc9518266daa70cf47
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1119,3 +1119,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Parent each credentialed SMB copy worker to the stable root process of its exact Type 9 session so adjacent copy operations do not form an observation-latency chain.
+  - revision: 118
+    id: smb-bundle-owned-copy-source-ordering
+    impact: localized
+    domains:
+      - process-source-timing
+      - smb-client-attribution
+      - network-source-ordering
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Let the canonical SMB and network bundles place transport after the exact copy process becomes source-visible instead of suppressing that process through a duplicate process-level deadline.
