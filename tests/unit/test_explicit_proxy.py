@@ -230,6 +230,70 @@ def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> Non
     assert "Edg/" not in first
 
 
+def test_direct_http_reuses_browser_process_agent_across_incoming_versions() -> None:
+    """Direct rendering projects one stable full version from the browser owner."""
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="client-tap",
+                monitoring_segments=["workstations"],
+                direction="outbound",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+    user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+    workstation = generator._ip_to_system["10.0.1.10"]
+    session = generator.state_manager.get_sessions_for_user(user.username)[0]
+    firefox_pid = generator.state_manager.create_process(
+        system=workstation.hostname,
+        parent_pid=explorer_pid,
+        image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+        command_line=r'"C:\Program Files\Mozilla Firefox\firefox.exe"',
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=session.logon_id,
+    )
+
+    for offset, version in enumerate(("120.0", "121.0")):
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip=f"93.184.216.{34 + offset}",
+            time=datetime(2024, 1, 15, 10, 0, offset, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            src_port=55000 + offset,
+            pid=firefox_pid,
+            source_system=workstation,
+            hostname=f"example-{offset}.com",
+            proxy_bypass=True,
+            http=HttpContext(
+                method="GET",
+                host=f"example-{offset}.com",
+                uri="/",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; "
+                    f"rv:{version}) Gecko/20100101 Firefox/{version}"
+                ),
+                status_code=200,
+                response_body_len=5000,
+            ),
+        )
+
+    user_agents = {
+        call.args[0].protocol.http.user_agent
+        for call in emitters["zeek_http"].emit.call_args_list
+        if call.args[0].protocol.http is not None
+    }
+    assert len(user_agents) == 1
+    assert "Firefox/" in next(iter(user_agents))
+
+
 def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
     """An exact curl form command owns its upload even beyond a generic curl timeout."""
     start = datetime(2024, 3, 18, 15, 58, 35, tzinfo=UTC)

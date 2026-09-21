@@ -3145,18 +3145,12 @@ class NetworkTransactionPlanner:
                     process_image = (
                         attribution.process.image if attribution.process is not None else None
                     )
-                http = attribution.http
-            if http is not None and source_system is not None and pid > 0 and hostname:
-                from evidenceforge.generation.activity.dns_registry import get_domain_tags
-
-                process_ua = self._browser_user_agent_for_pid(
+                self._bind_browser_user_agent_to_process(
+                    event=attribution,
                     source_system=source_system,
-                    pid=pid,
-                    hostname=hostname,
-                    domain_tags=get_domain_tags(hostname),
+                    hostname=hostname or http.host,
                 )
-                if process_ua:
-                    http = replace(http, user_agent=process_ua)
+                http = attribution.http
             if command_http_needs_response_size and http is not None:
                 # The delegated proxy transaction, not this never-opened
                 # network root, owns this command-derived response estimate.
@@ -3464,6 +3458,11 @@ class NetworkTransactionPlanner:
                 attribution,
                 source_system=resolved_source_system,
                 time=time,
+            )
+            self._bind_browser_user_agent_to_process(
+                event=attribution,
+                source_system=resolved_source_system,
+                hostname=hostname or http.host,
             )
             if attribution.network.initiating_pid != pid:
                 pid = attribution.network.initiating_pid
@@ -4991,6 +4990,27 @@ class NetworkTransactionPlanner:
             hostname=hostname,
             domain_tags=domain_tags,
         )
+
+    def _bind_browser_user_agent_to_process(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        source_system: System | None,
+        hostname: str,
+    ) -> None:
+        """Project one browser process identity onto its canonical HTTP request."""
+        if source_system is None or event.http is None or event.network.initiating_pid <= 0:
+            return
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+        process_ua = self._browser_user_agent_for_pid(
+            source_system=source_system,
+            pid=event.network.initiating_pid,
+            hostname=hostname,
+            domain_tags=get_domain_tags(hostname),
+        )
+        if process_ua:
+            event.http = replace(event.http, user_agent=process_ua)
 
     def _prepare_transparent_proxy_evidence(
         self,

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 110
+current_revision: 111
 history_start_revision: 1
-behavior_surface_sha256: f69e7bd3370a86dafa30f70fdcb2e3b0704bfa171b2f0aeb81daf44000004c92
+behavior_surface_sha256: d01f18651bd5f218084ad78738297a3a07c9ee487d2e0702b2efae5711075467
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1026,3 +1026,15 @@ changes:
       - proxy_access
       - zeek_http
     summary: Bind generated browser family and full User-Agent version to canonical process identity across baseline, automatic HTTP, and proxy-visible requests.
+  - revision: 111
+    id: direct-http-process-agent-projection
+    impact: localized
+    domains:
+      - process-lifecycle
+      - http-client-identity
+      - network-transaction-planning
+    formats:
+      - ecar
+      - proxy_access
+      - zeek_http
+    summary: Project the canonical browser process User-Agent onto direct and proxy-listener HTTP requests after process attribution so request-level versions cannot override the stable owner identity.
