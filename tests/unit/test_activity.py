@@ -2981,6 +2981,7 @@ class TestActivityGenerator:
         assert planner.bootstrap_user_session.call_args.kwargs["source_system"] is source
         assert planner.bootstrap_user_session.call_args.kwargs["source_ip_override"] == source.ip
         assert planner.bootstrap_user_session.call_args.kwargs["allow_existing"] is True
+        assert planner.bootstrap_user_session.call_args.kwargs["rdp_transport_time"] == timestamp
 
     def test_generate_logon_rdp_preserves_explicit_modeled_source(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

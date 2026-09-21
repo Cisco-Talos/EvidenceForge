@@ -11707,6 +11707,13 @@ class ActivityGenerator:
             planner = getattr(self, "_world_planner", None)
             if planner is not None:
                 planned_source_system = source_system or self._ip_to_system.get(source_ip)
+                if planned_source_system is None:
+                    planned_source_system = self._resolve_direct_rdp_source_system(
+                        user,
+                        system,
+                        source_ip,
+                        _get_rng(),
+                    )
                 result = planner.bootstrap_user_session(
                     user=user,
                     target_system=system,
@@ -11717,6 +11724,7 @@ class ActivityGenerator:
                     source_ip_override=source_ip,
                     allow_existing=True,
                     session_end_plan=request.session_end_plan,
+                    rdp_transport_time=time,
                 )
                 return result.session.logon_id
             explicit_source_system = source_system
