@@ -403,3 +403,22 @@
   exact reconnect bundle remains the owner of disconnected-session reconnection; equivalent
   client starts may share an explicit close only when the pairing prepass proves the same target
   and source before either lifecycle is materialized.
+
+## Loop 86 Result
+
+- Commits: `5055e714` (`fix: reconcile Windows client RDP sessions`), `dab03869`
+  (`fix: reconnect authored RDP session identity`), `6551d116` (`chore: sync RDP behavior surface
+  digest`), `733b96d6` (`fix: reuse source-aligned client RDP desktop`), and `e2ecb2b3`
+  (`fix: pair client RDP aliases before publication`).
+- Verification: 11,680 passed, 48 skipped, 2,030 deselected, followed by four focused passes after
+  correcting one stale test assertion; Ruff check/format, behavior manifest revision 109, and all
+  92 configuration files passed.
+- Automated evaluation: 96.9062 / PASS across 125,882 records.
+- Initial blind mean: 67.25; deliberated mean 83.75 after required Synthetic/Inconclusive verdict
+  disagreement and a 44-point score-spread review. The reconciled verdict was Synthetic.
+- Target probes found one TCP/3389 flow, one Type 10 login, one matching 4634, and zero overlapping
+  duplicate desktops for the formerly duplicated same-user client session.
+- Highest-confidence surviving family: stable browser processes change HTTP client family and major
+  version across owned requests; identical host-local curl paths also expose different versions.
+  Secondary findings are SSH source events after transport close, reversed gzip/hash dependency,
+  one-SYN-only failed connections, and mechanically complete fleet schedules.
