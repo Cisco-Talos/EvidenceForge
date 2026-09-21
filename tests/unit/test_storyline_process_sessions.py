@@ -109,8 +109,18 @@ def test_storyline_rdp_process_admission_clamps_to_lifecycle_frontier() -> None:
     authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
     lifecycle_frontier = authored_time + timedelta(minutes=4)
     owner = SimpleNamespace(
-        state_manager=SimpleNamespace(get_session_identity=lambda logon_id: None),
+        state_manager=SimpleNamespace(
+            get_session_identity=lambda logon_id: SimpleNamespace(
+                object_id="rdp-logical",
+                session_kind="rdp",
+            ),
+            get_session=lambda logon_id: SimpleNamespace(source_ready_time=authored_time),
+        ),
         _rdp_session_lifecycle_frontier=lambda: lifecycle_frontier,
+        advance_rdp_session_lifecycle_watermark=lambda cutoff: None,
+        _rdp_session_manager=SimpleNamespace(
+            get=lambda logical_id: SimpleNamespace(state=RdpSessionState.CONNECTED)
+        ),
     )
 
     admitted_at = ActivityGenerator.ensure_storyline_rdp_session_connected(
@@ -126,6 +136,35 @@ def test_storyline_rdp_process_admission_clamps_to_lifecycle_frontier() -> None:
     )
 
     assert admitted_at == lifecycle_frontier
+
+
+def test_non_rdp_process_admission_preserves_authored_time() -> None:
+    """A global RDP watermark must not delay Type 9 or local session activity."""
+
+    authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    owner = SimpleNamespace(
+        state_manager=SimpleNamespace(
+            get_session_identity=lambda logon_id: SimpleNamespace(
+                object_id="new-credentials",
+                session_kind="new_credentials",
+            )
+        ),
+        _rdp_session_lifecycle_frontier=lambda: authored_time + timedelta(hours=1),
+    )
+
+    admitted_at = ActivityGenerator.ensure_storyline_rdp_session_connected(
+        owner,
+        logon_id="0x900",
+        target_system=System(
+            hostname="WS-01",
+            ip="10.20.0.10",
+            os="Windows 11",
+            type="workstation",
+        ),
+        activity_time=authored_time,
+    )
+
+    assert admitted_at == authored_time
 
 
 def test_linux_process_resolves_session_after_shell_availability_shift() -> None:

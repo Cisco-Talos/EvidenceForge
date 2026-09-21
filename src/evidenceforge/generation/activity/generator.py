@@ -5295,13 +5295,14 @@ class ActivityGenerator:
         activity because its modeled controller is unavailable or it has logged out.
         """
 
+        session_identity = self.state_manager.get_session_identity(logon_id)
+        if session_identity is None or session_identity.session_kind != "rdp":
+            return ensure_utc(activity_time)
+
         canonical_time = max(
             ensure_utc(activity_time),
             self._rdp_session_lifecycle_frontier(),
         )
-        session_identity = self.state_manager.get_session_identity(logon_id)
-        if session_identity is None or session_identity.session_kind != "rdp":
-            return canonical_time
 
         self.advance_rdp_session_lifecycle_watermark(canonical_time)
         snapshot = self._rdp_session_manager.get(session_identity.object_id)

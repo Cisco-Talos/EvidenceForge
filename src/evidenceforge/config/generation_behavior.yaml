@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 132
+current_revision: 133
 history_start_revision: 1
-behavior_surface_sha256: 296c2cab8ba0806dc64bf321effb28a53f203791fcfee81e10f8e5b9d3c10e72
+behavior_surface_sha256: 9ac884c36eaa837738a28b5b155f8db13c80f408412f02e0b29408eb105c122d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1314,3 +1314,15 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Keep an explicitly resolved NewCredentials process under its exact local-token LUID instead of replacing it with an ambient recent service context.
+  - revision: 133
+    id: rdp-watermark-only-for-rdp-processes
+    impact: localized
+    domains:
+      - rdp-session-lifecycle
+      - windows-new-credentials
+      - storyline-process-timing
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Apply the RDP lifecycle watermark only after confirming RDP session identity, preserving authored timestamps for Type 9 and other non-RDP process owners.
