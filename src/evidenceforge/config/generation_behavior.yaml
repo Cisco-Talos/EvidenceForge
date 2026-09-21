@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 141
+current_revision: 142
 history_start_revision: 1
-behavior_surface_sha256: 3c60383d001c2d4ffcde93243ad6e269fa4bcb339d1eabeef53d8868ce2dc7e0
+behavior_surface_sha256: 42a680d425650fb17ff18f573b1ce49c7f710e145f8e533dbc888ada22122349
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1421,3 +1421,12 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Share one observation lifecycle and bounded causal spacing across runas credential use, the Type 9 clone, and its first child process.
+  - revision: 142
+    id: new-credentials-admitted-anchor
+    impact: material
+    domains:
+      - windows-new-credentials
+      - source-timing
+    formats:
+      - windows_event_security
+    summary: Anchor an externally owned Type 9 clone after the admitted source-visible 4648 time when conservative process-create headroom shifts credential use.

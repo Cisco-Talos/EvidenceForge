@@ -3194,7 +3194,7 @@ class _FailedLogonAttemptPreparedCommit:
         self,
         owner: "ActivityGenerator",
         reservation: _FailedLogonAttemptReservation,
-    ) -> None:
+    ) -> datetime | None:
         self._owner = owner
         self._reservation = reservation
         self._active = True
@@ -28940,7 +28940,7 @@ class ActivityGenerator:
                 lifecycle_group_id=lifecycle_group_id,
             ),
         )
-        bundle.execute()
+        return bundle.execute()
 
     def _emit_new_credentials_logon(
         self,

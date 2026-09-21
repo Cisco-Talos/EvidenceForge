@@ -65,7 +65,7 @@ def handle_logon(
             caller_logon_id=caller_logon_id,
             outbound_username=actor.username,
         )
-        self.activity_generator.generate_explicit_credentials(
+        explicit_time = self.activity_generator.generate_explicit_credentials(
             user=caller,
             system=system,
             time=time - self._storyline_new_credentials_explicit_offset(),
@@ -76,10 +76,18 @@ def handle_logon(
             create_new_credentials_session=False,
             lifecycle_group_id=lifecycle_group_id,
         )
+        if explicit_time is None:
+            raise StateError(
+                "Storyline NewCredentials bootstrap did not emit its explicit credential use"
+            )
+        new_credentials_time = max(
+            time,
+            explicit_time + self._storyline_new_credentials_explicit_offset(),
+        )
         logon_id = self.activity_generator._emit_new_credentials_logon(
             user=caller,
             system=system,
-            time=time,
+            time=new_credentials_time,
             caller_logon_id=caller_logon_id,
             outbound_username=actor.username,
             outbound_domain=outbound_domain,
@@ -88,7 +96,7 @@ def handle_logon(
         self._ensure_storyline_new_credentials_controller(
             actor=caller,
             system=system,
-            time=time,
+            time=new_credentials_time,
             logon_id=logon_id,
             parent_pid=caller_pid,
         )

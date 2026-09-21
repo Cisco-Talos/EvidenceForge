@@ -446,14 +446,14 @@ class ExplicitCredentialUseActionBundle:
             source=self._request.source,
         )
 
-    def execute(self) -> None:
+    def execute(self) -> datetime | None:
         """Emit Windows Security 4648 evidence for explicit credential use."""
 
         target_account = self._request.target_username.split("\\")[-1].split("@", 1)[0].lower()
         if _get_os_category(self._request.system.os) == "windows" and (
             target_account in _LINUX_LOCAL_ACCOUNTS
         ):
-            return
+            return None
 
         subject_user = self._executor._coerce_windows_explicit_credentials_subject(
             self._request.user,
@@ -598,6 +598,7 @@ class ExplicitCredentialUseActionBundle:
                     new_credentials_logon_id,
                     logon_type=9,
                 )
+        return event_time
 
     def _realize_runas_remote_action(
         self,
