@@ -1034,6 +1034,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_storyline_account_lifecycle_cache",
         "_storyline_authored_ip_by_hostname",
         "_storyline_dhcp_times_by_host",
+        "_syslog_transport_routes",
         "_system_service_defaults",
         "_user_time_offsets",
         "activity_generator",

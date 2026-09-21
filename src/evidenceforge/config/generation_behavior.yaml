@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 142
+current_revision: 144
 history_start_revision: 1
-behavior_surface_sha256: 42a680d425650fb17ff18f573b1ce49c7f710e145f8e533dbc888ada22122349
+behavior_surface_sha256: 2d7babc1e5a560552f7d8657d44f869696b0c99e20e87f0fadc2aeefa7f49b21
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1430,3 +1430,23 @@ changes:
     formats:
       - windows_event_security
     summary: Anchor an externally owned Type 9 clone after the admitted source-visible 4648 time when conservative process-create headroom shifts credential use.
+  - revision: 143
+    id: canonical-syslog-transport-route
+    impact: material
+    domains:
+      - source-routing
+      - network-connection
+      - process-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - zeek_conn
+    summary: Resolve each sender's syslog-capable receiver and forwarding process once, then derive health diagnostics and every transport projection from that canonical route.
+  - revision: 144
+    id: checkpoint-system-process-logon-id
+    impact: localized
+    domains:
+      - checkpoint-resume
+      - process-lifecycle
+    formats: []
+    summary: Preserve valid foreground finalizers for system-owned processes whose canonical session has no interactive logon identifier.

@@ -271,15 +271,88 @@ def test_rsyslog_ambient_health_uses_durable_queue_state(linux_system):
             "checkpoint {checkpoint}"
         ],
     }
+    receiver = System(
+        hostname="LOG-01",
+        ip="10.0.0.40",
+        os="Ubuntu 22.04",
+        type="server",
+        services=["rsyslog"],
+        roles=["log_server"],
+    )
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[linux_system, receiver]))
+    route = engine._canonical_syslog_routes()[linux_system.hostname]
 
-    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
-    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng, route)
+    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng, route)
 
     first_checkpoint = int(first.rsplit(" ", 1)[-1])
     second_checkpoint = int(second.rsplit(" ", 1)[-1])
     assert second_checkpoint > first_checkpoint
+    assert "target 10.0.0.40" in first
     assert "reload" not in first.lower()
     assert "reload" not in second.lower()
+
+
+def test_canonical_syslog_routes_use_only_declared_receivers_and_never_self_target():
+    """Syslog diagnostics and flows share a stable, capability-gated receiver plan."""
+    senders = [
+        System(
+            hostname=f"APP-{index}",
+            ip=f"10.0.1.{index}",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        for index in range(1, 9)
+    ]
+    receivers = [
+        System(
+            hostname="FILE-LOG-01",
+            ip="10.0.2.21",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["syslog"],
+        ),
+        System(
+            hostname="LOG-MON-01",
+            ip="10.0.2.40",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["rsyslog"],
+            roles=["log_server"],
+        ),
+    ]
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[*senders, *receivers]))
+
+    first = engine._canonical_syslog_routes()
+    second = engine._canonical_syslog_routes()
+
+    assert first == second
+    assert set(first) == {system.hostname for system in [*senders, *receivers]}
+    assert {route.receiver.ip for route in first.values()} == {"10.0.2.21", "10.0.2.40"}
+    assert all(route.sender.ip != route.receiver.ip for route in first.values())
+    assert {route.protocol for route in first.values()} == {"tcp", "udp"}
+
+
+def test_syslog_forwarder_identity_uses_seeded_platform_daemon(linux_system):
+    """Outbound syslog FLOW attribution uses the live platform forwarding process."""
+    windows_system = System(
+        hostname="WS-01",
+        ip="10.0.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine._system_pids = {
+        linux_system.hostname: {"rsyslogd": 741},
+        windows_system.hostname: {"svchost_net_svc": 912},
+    }
+
+    assert engine._syslog_forwarder_identity(linux_system) == (741, "/usr/sbin/rsyslogd")
+    assert engine._syslog_forwarder_identity(windows_system) == (
+        912,
+        r"C:\Windows\System32\svchost.exe",
+    )
 
 
 def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):

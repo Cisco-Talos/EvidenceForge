@@ -45,10 +45,6 @@ programs:
         - action-remote
         - main
         - local-spool
-      relay_target:
-        - logrelay01
-        - siem-forwarder
-        - 10.10.2.30
       worker_count:
         - "1"
         - "2"
