@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 128
+current_revision: 129
 history_start_revision: 1
-behavior_surface_sha256: c104ca374bbb45c3709dee1ea09960413b2650b12bcad83434fcb34c5cca6f35
+behavior_surface_sha256: 77a315355248a6235d569555efd5f0cee793e27f34518c3a82d925c53e237c9d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1266,3 +1266,15 @@ changes:
       - ecar
       - syslog
     summary: Resolve Linux storyline process session ownership after shell serialization fixes the canonical start, preventing a shifted child from retaining an SSH session whose transport deadline has already passed.
+  - revision: 129
+    id: linux-process-session-rebind-after-foreground-reservation
+    impact: localized
+    domains:
+      - ssh-session-lifecycle
+      - storyline-process-timing
+      - linux-shell-serialization
+    formats:
+      - bash_history
+      - ecar
+      - syslog
+    summary: Rebind a Linux storyline process to a fresh session and shell when canonical foreground serialization moves its start beyond the prior SSH or RDP transport close.

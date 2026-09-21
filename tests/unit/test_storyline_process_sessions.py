@@ -173,6 +173,72 @@ def test_linux_process_resolves_session_after_shell_availability_shift() -> None
     assert shell_available_at < resolved_time < shell_available_at + timedelta(seconds=2)
 
 
+def test_linux_process_rebinds_when_shell_reservation_crosses_ssh_close() -> None:
+    """A delayed command must bootstrap a new session instead of using a closed SSH shell."""
+
+    engine = StorylineMixin()
+    actor = User(username="root", full_name="root", email="root@example.com")
+    system = System(hostname="WEB-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
+    authored_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    reserved_time = authored_time + timedelta(minutes=18)
+    old_session = SimpleNamespace(session_kind="ssh")
+    fresh_session = SimpleNamespace(session_kind="ssh")
+    engine.state_manager = SimpleNamespace(
+        get_session=lambda logon_id: old_session if logon_id == "old" else fresh_session,
+        get_session_at=lambda logon_id, at_time: fresh_session if logon_id == "fresh" else None,
+    )
+    activity = Mock()
+    activity.reserve_linux_foreground_process_start.side_effect = [
+        reserved_time,
+        reserved_time,
+    ]
+    activity._resolve_parent.side_effect = [101, 202]
+    activity._prepare_bash_history_command.side_effect = lambda host, command: command
+    activity.generate_process.side_effect = ResolutionCompleteError
+    engine.activity_generator = activity
+    engine._linux_native_service_user_for_storyline_actor = lambda *args: actor
+    engine._resolve_storyline_process_logon_id = Mock(side_effect=["old", "fresh"])
+    engine._storyline_local_process_actor_for_logon = lambda user, host, logon_id: user
+    engine._extract_output_file = lambda *args: None
+    engine._storyline_process_ref_for_parent = lambda **kwargs: None
+    engine._storyline_service_process_identity = lambda **kwargs: None
+    engine._storyline_service_context_for_process = lambda **kwargs: None
+    engine._emit_linux_storyline_shell_friction = lambda **kwargs: None
+    context = TypedEventContext(
+        actor=actor,
+        system=system,
+        time=authored_time,
+        activity="process",
+        explicit_types={"process"},
+        future_specs=(),
+        authored_time_shift=timedelta(),
+        session_required_until=None,
+        rng=random.Random(137),
+        dispatcher=None,
+        malicious_event={},
+        _ground_truth_uid=lambda *args: "uid",
+    )
+
+    with pytest.raises(ResolutionCompleteError):
+        handle_process(
+            engine,
+            ProcessEventSpec(type="process", process_name="/usr/sbin/ip"),
+            context,
+        )
+
+    assert engine._resolve_storyline_process_logon_id.call_args_list == [
+        call(actor, system, authored_time, context.rng),
+        call(actor, system, reserved_time, context.rng),
+    ]
+    assert activity._resolve_parent.call_args_list == [
+        call(system, actor, authored_time, "old", "/usr/sbin/ip", "/usr/sbin/ip"),
+        call(system, actor, reserved_time, "fresh", "/usr/sbin/ip", "/usr/sbin/ip"),
+    ]
+    assert activity.generate_process.call_args.kwargs["logon_id"] == "fresh"
+    assert activity.generate_process.call_args.kwargs["parent_pid"] == 202
+    assert activity.generate_process.call_args.kwargs["time"] == reserved_time
+
+
 def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:
     """Equivalent authored client RDP starts must receive the same close fence."""
 

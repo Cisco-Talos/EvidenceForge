@@ -203,16 +203,55 @@ def handle_process(
                 process_command_line,
             )
     if os_category == "linux":
-        reserved_start_time = self.activity_generator.reserve_linux_foreground_process_start(
-            system=system,
-            username=process_actor.username,
-            logon_id=process_logon_id,
-            parent_pid=parent_pid,
-            requested_time=time,
-            process_name=process_name,
-            command_line=process_command_line,
-            authoritative_time=True,
-        )
+        reserved_start_time: datetime | None = None
+        for _attempt in range(2):
+            reserved_start_time = self.activity_generator.reserve_linux_foreground_process_start(
+                system=system,
+                username=process_actor.username,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                requested_time=time,
+                process_name=process_name,
+                command_line=process_command_line,
+                authoritative_time=True,
+            )
+            if reserved_start_time is None:
+                break
+            session = self.state_manager.get_session(process_logon_id)
+            if (
+                session is None
+                or session.session_kind.casefold() not in {"ssh", "rdp"}
+                or self.state_manager.get_session_at(process_logon_id, reserved_start_time)
+                is not None
+            ):
+                break
+            if explicit_parent is not None:
+                reserved_start_time = None
+                break
+            rebound_logon_id = self._resolve_storyline_process_logon_id(
+                actor,
+                system,
+                reserved_start_time,
+                rng,
+            )
+            if rebound_logon_id == process_logon_id:
+                reserved_start_time = None
+                break
+            process_logon_id = rebound_logon_id
+            process_actor = self._storyline_local_process_actor_for_logon(
+                process_actor,
+                system,
+                process_logon_id,
+            )
+            time = reserved_start_time
+            parent_pid = self.activity_generator._resolve_parent(
+                system,
+                process_actor,
+                time,
+                process_logon_id,
+                process_name,
+                process_command_line,
+            )
         if reserved_start_time is None:
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
