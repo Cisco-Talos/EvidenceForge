@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 111
+current_revision: 112
 history_start_revision: 1
-behavior_surface_sha256: d01f18651bd5f218084ad78738297a3a07c9ee487d2e0702b2efae5711075467
+behavior_surface_sha256: 8290756c908c5bade888bc213e7f3a20e9dd348f149dab8d711b207a61e03373
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1038,3 +1038,15 @@ changes:
       - proxy_access
       - zeek_http
     summary: Project the canonical browser process User-Agent onto direct and proxy-listener HTTP requests after process attribution so request-level versions cannot override the stable owner identity.
+  - revision: 112
+    id: authoritative-browser-pid-agent-projection
+    impact: localized
+    domains:
+      - process-lifecycle
+      - http-client-identity
+      - explicit-proxy-client
+    formats:
+      - ecar
+      - proxy_access
+      - zeek_http
+    summary: Preserve process-bound browser identity even when an explicit proxy client carries an authoritative caller PID and therefore suppresses process inference.

@@ -3416,11 +3416,7 @@ class NetworkTransactionPlanner:
                 )
             )
 
-        if (
-            resolved_source_system is not None
-            and http is not None
-            and not suppress_source_pid_inference
-        ):
+        if resolved_source_system is not None and http is not None:
             # Direct HTTP and client-to-proxy listener traffic own a real client
             # process prerequisite (for example curl/wget/browser), independent of
             # whether the later transport root is admitted. Resolve or start that
@@ -3449,16 +3445,17 @@ class NetworkTransactionPlanner:
                     pid=pid,
                     image=process_image,
                 )
-            executor._repair_explicit_proxy_listener_process_attribution(
-                attribution,
-                source_system=resolved_source_system,
-                time=time,
-            )
-            executor._repair_browser_http_process_attribution(
-                attribution,
-                source_system=resolved_source_system,
-                time=time,
-            )
+            if not suppress_source_pid_inference:
+                executor._repair_explicit_proxy_listener_process_attribution(
+                    attribution,
+                    source_system=resolved_source_system,
+                    time=time,
+                )
+                executor._repair_browser_http_process_attribution(
+                    attribution,
+                    source_system=resolved_source_system,
+                    time=time,
+                )
             self._bind_browser_user_agent_to_process(
                 event=attribution,
                 source_system=resolved_source_system,

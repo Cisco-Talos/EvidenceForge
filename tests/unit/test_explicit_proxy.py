@@ -230,8 +230,8 @@ def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> Non
     assert "Edg/" not in first
 
 
-def test_direct_http_reuses_browser_process_agent_across_incoming_versions() -> None:
-    """Direct rendering projects one stable full version from the browser owner."""
+def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> None:
+    """Authoritative-PID rendering projects one stable version from its browser owner."""
     generator, emitters = _generator(
         [
             NetworkSensor(
@@ -272,6 +272,7 @@ def test_direct_http_reuses_browser_process_agent_across_incoming_versions() -> 
             source_system=workstation,
             hostname=f"example-{offset}.com",
             proxy_bypass=True,
+            suppress_source_pid_inference=True,
             http=HttpContext(
                 method="GET",
                 host=f"example-{offset}.com",
