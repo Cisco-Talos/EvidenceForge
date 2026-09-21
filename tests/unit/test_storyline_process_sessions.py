@@ -239,6 +239,61 @@ def test_linux_process_rebinds_when_shell_reservation_crosses_ssh_close() -> Non
     assert activity.generate_process.call_args.kwargs["time"] == reserved_time
 
 
+def test_type9_process_does_not_reuse_ambient_service_context() -> None:
+    """An explicit NewCredentials process must retain its exact LUID and local token."""
+
+    engine = StorylineMixin()
+    actor = User(username="admin", full_name="Admin", email="admin@example.com")
+    local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
+    system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")
+    event_time = datetime(2024, 3, 15, 10, tzinfo=UTC)
+    engine.state_manager = SimpleNamespace(
+        get_session=lambda logon_id: SimpleNamespace(logon_type=9),
+    )
+    activity = Mock()
+    activity._resolve_parent.return_value = 4321
+    activity.generate_process.side_effect = ResolutionCompleteError
+    engine.activity_generator = activity
+    engine._linux_native_service_user_for_storyline_actor = lambda *args: actor
+    engine._resolve_storyline_process_logon_id = Mock(return_value="0x900")
+    engine._storyline_local_process_actor_for_logon = lambda *args: local_actor
+    engine._extract_output_file = lambda *args: None
+    engine._storyline_process_ref_for_parent = lambda **kwargs: None
+    engine._storyline_service_process_identity = lambda **kwargs: None
+    engine._storyline_service_context_for_process = Mock(
+        return_value=(local_actor, "0x3e4", 9999, "stale-service")
+    )
+    context = TypedEventContext(
+        actor=actor,
+        system=system,
+        time=event_time,
+        activity="process",
+        explicit_types={"process"},
+        future_specs=(SimpleNamespace(type="smb_activity"),),
+        authored_time_shift=timedelta(),
+        session_required_until=None,
+        rng=random.Random(137),
+        dispatcher=None,
+        malicious_event={},
+        _ground_truth_uid=lambda *args: "uid",
+    )
+
+    with pytest.raises(ResolutionCompleteError):
+        handle_process(
+            engine,
+            ProcessEventSpec(
+                type="process",
+                process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            ),
+            context,
+        )
+
+    engine._storyline_service_context_for_process.assert_not_called()
+    assert activity.generate_process.call_args.kwargs["user"] == local_actor
+    assert activity.generate_process.call_args.kwargs["logon_id"] == "0x900"
+    assert activity.generate_process.call_args.kwargs["parent_pid"] == 4321
+
+
 def test_client_rdp_alias_starts_share_one_explicit_logoff_plan() -> None:
     """Equivalent authored client RDP starts must receive the same close fence."""
 

@@ -155,11 +155,16 @@ def handle_process(
             0x1F4,
         )
     else:
-        service_context = self._storyline_service_context_for_process(
-            actor=process_actor,
-            system=system,
-            time=time,
-            process_name=process_name,
+        process_session = self.state_manager.get_session(process_logon_id)
+        service_context = (
+            None
+            if process_session is not None and getattr(process_session, "logon_type", None) == 9
+            else self._storyline_service_context_for_process(
+                actor=process_actor,
+                system=system,
+                time=time,
+                process_name=process_name,
+            )
         )
         if service_context is not None:
             (

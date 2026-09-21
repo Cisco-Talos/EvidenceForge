@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 131
+current_revision: 132
 history_start_revision: 1
-behavior_surface_sha256: 619b186dc3ece67e34ce667a634c5c924ade4f204f6452d1c455a69eb3cc03ab
+behavior_surface_sha256: 296c2cab8ba0806dc64bf321effb28a53f203791fcfee81e10f8e5b9d3c10e72
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1302,3 +1302,15 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Preserve an authored NewCredentials client process through its following SMB actions so exact Type 9 process ownership does not depend on unrelated helper telemetry.
+  - revision: 132
+    id: type9-process-precedes-service-context-reuse
+    impact: localized
+    domains:
+      - windows-new-credentials
+      - storyline-process-ownership
+      - windows-service-context
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Keep an explicitly resolved NewCredentials process under its exact local-token LUID instead of replacing it with an ambient recent service context.
