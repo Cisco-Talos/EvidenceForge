@@ -196,6 +196,40 @@ def test_generated_windows_browser_proxy_agents_exclude_legacy_ie():
     )
 
 
+def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> None:
+    """One process retains browser family and full version across destinations."""
+    from evidenceforge.generation.activity.proxy_user_agents import (
+        stable_browser_user_agent_for_process,
+    )
+
+    workstation = System(
+        hostname="WS-01",
+        ip="10.0.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+
+    first = stable_browser_user_agent_for_process(
+        workstation,
+        image,
+        "process-object-1",
+        hostname="calendar.google.com",
+        domain_tags=["saas"],
+    )
+    second = stable_browser_user_agent_for_process(
+        workstation,
+        image,
+        "process-object-1",
+        hostname="www.reddit.com",
+        domain_tags=["web"],
+    )
+
+    assert first == second
+    assert "Firefox/" in first
+    assert "Edg/" not in first
+
+
 def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
     """An exact curl form command owns its upload even beyond a generic curl timeout."""
     start = datetime(2024, 3, 18, 15, 58, 35, tzinfo=UTC)

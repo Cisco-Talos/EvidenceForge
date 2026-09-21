@@ -10740,27 +10740,23 @@ class BaselineMixin:
                 and exact_browser_process
             ):
                 user_agent_override: str | None = None
-                if conn.get("pack_application"):
-                    from evidenceforge.generation.activity.proxy_user_agents import (
-                        browser_user_agent_for_process,
-                    )
+                from evidenceforge.generation.activity.proxy_user_agents import (
+                    stable_browser_user_agent_for_process,
+                )
 
-                    if selected_process is not None:
-                        ua_rng = random.Random(
-                            _stable_seed(
-                                "pack_application_user_agent:"
-                                f"{system.hostname}:{selected_process.image.lower()}"
-                            )
-                        )
-                        user_agent_override = browser_user_agent_for_process(
-                            ua_rng,
-                            system,
-                            selected_process.image,
-                            hostname=hostname,
-                            domain_tags=list(conn.get("dns_tags") or []),
-                        )
-                    else:
-                        user_agent_override = ""
+                if selected_process is not None:
+                    process_identity = selected_process.ecar_object_id or (
+                        f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
+                    )
+                    user_agent_override = stable_browser_user_agent_for_process(
+                        system,
+                        selected_process.image,
+                        process_identity,
+                        hostname=hostname,
+                        domain_tags=list(conn.get("dns_tags") or []),
+                    )
+                else:
+                    user_agent_override = ""
                 self._emit_browsing_session(
                     system=system,
                     user_obj=user_obj,

@@ -5115,7 +5115,28 @@ class NetworkTransactionPlanner:
             source_system_type=getattr(endpoints.source_system, "type", None),
             allow_canonical_protocol_templates=False,
         )
-        ua = executor._proxy_user_agent_for_context(
+        process_ua = ""
+        if endpoints.source_system is not None and event.network.initiating_pid is not None:
+            process = executor.state_manager.get_process(
+                endpoints.source_system.hostname,
+                event.network.initiating_pid,
+            )
+            if process is not None:
+                from evidenceforge.generation.activity.proxy_user_agents import (
+                    stable_browser_user_agent_for_process,
+                )
+
+                process_identity = process.ecar_object_id or (
+                    f"{process.pid}:{process.start_time.isoformat()}"
+                )
+                process_ua = stable_browser_user_agent_for_process(
+                    endpoints.source_system,
+                    process.image,
+                    process_identity,
+                    hostname=web_host,
+                    domain_tags=web_domain_tags,
+                )
+        ua = process_ua or executor._proxy_user_agent_for_context(
             rng,
             endpoints.source_system,
             hostname=web_host,

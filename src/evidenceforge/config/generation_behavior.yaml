@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 109
+current_revision: 110
 history_start_revision: 1
-behavior_surface_sha256: 627fc57774160c94bf86297a2ef8b7edbcca3529060ded1e93b2d81cb542cad3
+behavior_surface_sha256: b147ba8607c350b3e20ccc656d98a8b8df59a71e95d9dd26f71151682bfa770e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1013,3 +1013,16 @@ changes:
       - windows_sysmon
       - zeek_conn
     summary: Reconcile repeated same-user and same-source RDP requests on connected Windows client desktops before materializing duplicate transports, logons, terminal sessions, or process trees.
+  - revision: 110
+    id: process-bound-http-client-identity
+    impact: material
+    domains:
+      - process-lifecycle
+      - http-client-identity
+      - browser-session
+      - proxy-correlation
+    formats:
+      - ecar
+      - proxy_access
+      - zeek_http
+    summary: Bind generated browser family and full User-Agent version to canonical process identity across baseline, automatic HTTP, and proxy-visible requests.
