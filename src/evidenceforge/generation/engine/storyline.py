@@ -1652,6 +1652,28 @@ class StorylineMixin:
         if not command_line:
             return parent_pid, "", False
         process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        state_manager = getattr(self, "state_manager", None)
+        parent_started_at: datetime | None = None
+        if state_manager is not None:
+            session_processes = [
+                process
+                for process in state_manager.get_processes_on_system(system.hostname)
+                if process.logon_id == client_logon_id
+                and process.username.casefold() == actor.username.casefold()
+                and ensure_utc(process.start_time) <= ensure_utc(time)
+                and (process.end_time is None or ensure_utc(process.end_time) >= ensure_utc(time))
+            ]
+            session_pids = {process.pid for process in session_processes}
+            roots = [
+                process for process in session_processes if process.parent_pid not in session_pids
+            ]
+            if roots:
+                parent = max(
+                    roots,
+                    key=lambda process: (ensure_utc(process.start_time), process.pid),
+                )
+                parent_pid = parent.pid
+                parent_started_at = ensure_utc(parent.start_time)
         lead_ms = 900 + (
             _stable_seed(
                 f"storyline_smb_copy_process:{system.hostname}:{client_logon_id}:"
@@ -1660,6 +1682,8 @@ class StorylineMixin:
             % 401
         )
         process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
+        if parent_started_at is not None:
+            process_time = max(process_time, parent_started_at + timedelta(milliseconds=1))
         pid = self.activity_generator.generate_process(
             user=actor,
             system=system,
@@ -1677,7 +1701,9 @@ class StorylineMixin:
         )
         if pid <= 0:
             raise StateError(
-                "Storyline credentialed SMB copy could not materialize its transfer process"
+                "Storyline credentialed SMB copy could not materialize its transfer process: "
+                f"host={system.hostname}, LogonID={client_logon_id}, parent_pid={parent_pid}, "
+                f"process_time={process_time.isoformat()}, deadline={ensure_utc(time).isoformat()}"
             )
         record_process = getattr(self.activity_generator, "_record_user_process", None)
         if callable(record_process):

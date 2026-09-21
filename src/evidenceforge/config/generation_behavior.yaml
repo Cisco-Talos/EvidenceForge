@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 116
+current_revision: 117
 history_start_revision: 1
-behavior_surface_sha256: 6650b4149725ee5c94ee03271ba9b6a44f5e2cac5c986c3fd7307a3ba0a55328
+behavior_surface_sha256: 550526dfef3f82bda189cf1e42b5cb5b06a56191f4c17ce41869373dc34fdd18
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1106,3 +1106,16 @@ changes:
       - windows_event_sysmon
       - zeek_conn
     summary: Reserve enough deterministic source-observation headroom for the exact-parent SMB copy process to become visible before its canonical transport begins.
+  - revision: 117
+    id: credentialed-smb-copy-stable-parent
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - process-source-timing
+      - smb-client-attribution
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_conn
+    summary: Parent each credentialed SMB copy worker to the stable root process of its exact Type 9 session so adjacent copy operations do not form an observation-latency chain.

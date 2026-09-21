@@ -315,6 +315,30 @@ class TestStorylineCommandNetworks:
             return 7001
 
         engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        for process in (
+            SimpleNamespace(
+                pid=6868,
+                parent_pid=6800,
+                image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                command_line="powershell.exe -NoProfile",
+                username=actor.username,
+                logon_id="0x900",
+                start_time=datetime(2026, 5, 11, 11, 59, 30, tzinfo=UTC),
+                end_time=None,
+            ),
+            SimpleNamespace(
+                pid=6999,
+                parent_pid=6868,
+                image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                command_line="powershell.exe -NoProfile -Command Copy-Item",
+                username=actor.username,
+                logon_id="0x900",
+                start_time=datetime(2026, 5, 11, 11, 59, 58, tzinfo=UTC),
+                end_time=None,
+            ),
+        ):
+            engine.state_manager.processes[(system.hostname, process.pid)] = process
         engine.activity_generator = SimpleNamespace(
             _storage_world=world,
             generate_process=generate_process,
@@ -334,7 +358,7 @@ class TestStorylineCommandNetworks:
             time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
             spec=spec,
             client_logon_id="0x900",
-            parent_pid=6868,
+            parent_pid=6999,
         )
 
         assert (pid, image, owned) == (
