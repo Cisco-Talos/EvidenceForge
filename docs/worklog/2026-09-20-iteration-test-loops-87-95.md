@@ -448,3 +448,24 @@ family contracts, implementation/verification handoff facts, and surviving prior
   legitimate relays, explicit self-logging, pre-window agent processes, receiver-only observation,
   source-local drop/delay grouping, process-lifetime bounds, port allocation, checkpoint/retry
   determinism, and realistic health-message diversity.
+
+## Loop 96 Result
+
+- **Implementation:** introduced a stable source-routing plan for every system, restricted routes
+  to explicitly syslog-capable receivers, attached the live Linux or Windows forwarder process to
+  canonical connections, and made every `omfwd` health row own a matching transport occurrence.
+  Event-local RNG isolation prevents this family from perturbing unrelated baseline schedules.
+- **Verification:** 11,709 routine tests passed with 48 skipped; Ruff check/format and all 92
+  packaged config files passed; behavior revision 146 validated at
+  `0a16bb0b1dceac986677d3428590d1d2786c739af2cd57022212d43362fcc0d8`.
+- **Hard probe:** 29 health messages, 271 process-attributed eCAR flows across all 21 senders, and
+  286 Zeek flows used only the two declared receivers, with no self-targets, no missing eCAR
+  process identity, one stable route per sender, and 254 exact eCAR/Zeek tuple matches.
+- **Assessment:** deterministic score 96.8804/PASS across 122,049 records and 22 sources. Initial
+  realism scores 84, 82, 78, and 70 triggered deliberation on verdict disagreement; the chair
+  converged on Synthetic at 87% confidence, 64 synthetic-confidence, and mean recalibrated
+  realism 76.25.
+- **Surviving priority:** canonical process-lifecycle authority permits six eCAR module loads under
+  the exact `runas.exe` process identity 45.3 seconds after its visible termination. A future loop
+  should enforce every dependent endpoint event between create and terminate at the canonical
+  state/timing and source-observation layer.
