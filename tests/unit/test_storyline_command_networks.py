@@ -254,6 +254,40 @@ class TestStorylineCommandNetworks:
         assert captured[0]["actor"] == local_actor
         assert captured[0]["spec"].smb_principal == actor.username
 
+    def test_storyline_type9_process_stays_live_for_following_smb(self):
+        """A NewCredentials client remains available to its authored SMB siblings."""
+
+        system = System(
+            hostname="WS-ALICE-01",
+            ip="10.10.1.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        started_at = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.state_manager.sessions["0x900"] = SimpleNamespace(logon_type=9)
+
+        hold_until = engine._storyline_type9_process_hold_until(
+            system=system,
+            logon_id="0x900",
+            time=started_at,
+            future_specs=(SimpleNamespace(type="smb_activity"),),
+        )
+
+        assert hold_until is not None
+        assert started_at + timedelta(seconds=45) <= hold_until
+        assert hold_until <= started_at + timedelta(seconds=90)
+        assert (
+            engine._storyline_type9_process_hold_until(
+                system=system,
+                logon_id="0x900",
+                time=started_at,
+                future_specs=(SimpleNamespace(type="connection"),),
+            )
+            is None
+        )
+
     def test_storyline_type9_smb_copy_materializes_source_visible_transfer_process(self):
         """Credentialed SMB copies run through a process whose command can create the files."""
         actor = User(username="alice", full_name="Alice", email="alice@example.com")

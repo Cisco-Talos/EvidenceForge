@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 130
+current_revision: 131
 history_start_revision: 1
-behavior_surface_sha256: bd8f481c35f8da47e6f41f06c9e8e7350b6fa5b48fb48e133ae37b4f1c57b5aa
+behavior_surface_sha256: 619b186dc3ece67e34ce667a634c5c924ade4f204f6452d1c455a69eb3cc03ab
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1290,3 +1290,15 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Exclude disconnected RDP desktops from fresh browser and explicit-proxy client process ownership while retaining transport evidence without a stale user PID.
+  - revision: 131
+    id: type9-process-lifetime-through-smb-siblings
+    impact: localized
+    domains:
+      - windows-new-credentials
+      - smb-client-process-ownership
+      - storyline-process-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Preserve an authored NewCredentials client process through its following SMB actions so exact Type 9 process ownership does not depend on unrelated helper telemetry.
