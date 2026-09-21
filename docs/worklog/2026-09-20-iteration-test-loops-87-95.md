@@ -398,3 +398,53 @@ family contracts, implementation/verification handoff facts, and surviving prior
   and GUID, ordinary explicit-credential events that do not create Type 9, short-lived `runas`
   actions, long-lived storyline controllers, process termination/logoff order, disconnected RDP
   admission, SMB channel affinity, source timing, observation grouping, and checkpoint determinism.
+
+## Loop 95 Result
+
+- **Implementation:** moved Type 9 bootstrap into the canonical NewCredentials action family with
+  a live interactive caller, source-visible `runas` and 4648, ordered 4624 admission, valid
+  cross-token ancestry, and a durable child lifecycle independent of the short-lived caller.
+- **Verification:** 11,705 routine tests passed with 48 skipped; Ruff check/format and all 92
+  packaged config files passed; behavior revision 142 validated at
+  `42a680d425650fb17ff18f573b1ce49c7f710e145f8e533dbc888ada22122349`.
+- **Hard probe:** both Type 9 sessions ordered `runas -> 4648 -> 4624 -> child`, retained matching
+  caller/outbound identities across Security, Sysmon, and eCAR, and had no PID-0 or ancestry
+  violation.
+- **Assessment:** deterministic score 96.0293/PASS across 117,976 records. Initial realism scores
+  84, 88, 81, and 76 triggered deliberation on verdict disagreement; the chair converged on
+  Realistic at 79% confidence, 39 synthetic-confidence, and mean recalibrated realism 79.0.
+- **Surviving priority:** syslog `omfwd` diagnostics name an undeclared/self receiver that no
+  outbound eCAR flow uses, while all 321 sender-side syslog flows omit forwarding-process
+  ownership.
+
+## Loop 96 Family Contract
+
+### Canonical syslog transport route and forwarding-process ownership
+
+- **Classification:** `hard_contradiction`, `contract_gap`, and `family_level`; Loop 95 emitted nine
+  `omfwd` diagnostics on six hosts naming `10.10.2.30` even though that address belongs to
+  `APP-INT-01`, including a self-target claim, while all 321 outbound eCAR UDP/514 flows went only
+  to the declared receivers `10.10.2.40` and `10.10.2.21` and carried no process identity.
+- **Owning abstractions:** the source-routing planner resolves the eligible receiver and route once;
+  the canonical network-connection contract owns the sender/receiver transport and live forwarding
+  process context; syslog health vocabulary and all rendered observations consume that retained
+  route truth.
+- **Invariant:** every modeled syslog forwarding action uses one canonical sender, explicitly
+  syslog-capable receiver host/IP, transport/port, and live forwarder process. `omfwd` diagnostics,
+  sender/receiver eCAR FLOW rows, Zeek transport evidence, and queue/health labels agree on that
+  identity. Accidental self-targets and undeclared receiver roles fail closed; observable senders
+  carry actor/PID/principal/image ownership.
+- **Entry paths:** periodic baseline forwarding, rsyslog queue/checkpoint health, sender and receiver
+  flow projection, Linux and Windows forwarding agents, alias-based routes, direct IP routes,
+  observation-loss paths, compatibility network helpers, and collection-boundary carry-in.
+- **Consumers:** RFC 5424 syslog, eCAR FLOW and PROCESS identities, Zeek conn records, environment
+  service roles, source visibility/routing, queue diagnostics, receiver-side telemetry, truth
+  manifests, and evaluator cross-source agreement.
+- **Layer rationale:** emitters cannot independently infer which health-message target, flow tuple,
+  and forwarding process refer to the same route. Source routing plus the network-connection
+  contract is the earliest shared owner with receiver capability, canonical tuple, process
+  lifetime, and every downstream projection.
+- **Sibling risks:** preserve both declared receivers, UDP and TCP/TLS syslog variants, aliases,
+  legitimate relays, explicit self-logging, pre-window agent processes, receiver-only observation,
+  source-local drop/delay grouping, process-lifetime bounds, port allocation, checkpoint/retry
+  determinism, and realistic health-message diversity.
