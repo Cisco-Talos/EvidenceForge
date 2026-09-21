@@ -10850,8 +10850,26 @@ class BaselineMixin:
                     intensity = getattr(p, "browsing_intensity", "normal")
                     break
 
-        session_ua = user_agent_override
-        if session_ua is None:
+        session_ua = ""
+        selected_process = self.state_manager.get_process(system.hostname, persona_pid)
+        if selected_process is not None:
+            from evidenceforge.generation.activity.proxy_user_agents import (
+                stable_browser_user_agent_for_process,
+            )
+
+            process_identity = selected_process.ecar_object_id or (
+                f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
+            )
+            session_ua = stable_browser_user_agent_for_process(
+                system,
+                selected_process.image,
+                process_identity,
+                hostname=hostname,
+                domain_tags=list(domain_tags),
+            )
+        if not session_ua and user_agent_override is not None:
+            session_ua = user_agent_override
+        if not session_ua:
             session_ua = self._source_sticky_browser_user_agent(
                 source_system=system,
                 src_ip=system.ip,
