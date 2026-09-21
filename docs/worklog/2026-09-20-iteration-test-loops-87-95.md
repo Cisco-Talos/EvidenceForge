@@ -469,3 +469,19 @@ family contracts, implementation/verification handoff facts, and surviving prior
   the exact `runas.exe` process identity 45.3 seconds after its visible termination. A future loop
   should enforce every dependent endpoint event between create and terminate at the canonical
   state/timing and source-observation layer.
+
+## Post-Loop 96 Slow-Gate Follow-Up
+
+- **Finding:** the first complete `uv run pytest -m slow --no-cov` run reported one failure in the
+  direct continuous-RNG inventory guard because the new rsyslog health transport used a local
+  `Random.uniform()` duration draw. The remaining 1,793 tests passed and five platform-specific
+  durability tests skipped.
+- **Correction:** moved that duration draw onto the engine-owned, event-keyed timing runtime,
+  retained the independent event-local RNG for byte texture, and recorded generation behavior
+  revision 147 at
+  `cf83458286ce8c6732971e96af3dc8971babcb69b1e831d86f5250615d1fc367`.
+- **Focused verification:** all 96 Phase 5 system-traffic tests, all three temporal-RNG policy tests,
+  all 23 generation-behavior manifest tests, and both fresh-process iteration targets passed.
+- **Final extended gate:** `uv run pytest -m slow --no-cov` passed with 1,794 tests, five expected
+  skips, and 11,988 deselections in 25 minutes 55 seconds. Ruff check and format validation also
+  passed across all 896 files.

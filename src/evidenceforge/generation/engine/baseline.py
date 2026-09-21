@@ -140,6 +140,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     remote_auth_transport_max_duration_seconds,
 )
+from evidenceforge.generation.timing import TimingScope, uniform_distribution
 from evidenceforge.generation.world_model import (
     HostCapability,
     WorldModel,
@@ -2507,7 +2508,17 @@ class BaselineMixin:
         transport_rng = random.Random(
             _stable_seed(f"rsyslog_health_transport:{sender.hostname}:{time.isoformat()}")
         )
-        duration = transport_rng.uniform(0.4, 6.0)
+        duration = self.activity_generator.timing_runtime.sampler.sample_value(
+            uniform_distribution(0.4, 6.0),
+            relationship_key="baseline.syslog.health.transport_duration",
+            scope=TimingScope(
+                stable_id=f"rsyslog-health:{sender.hostname}:{time.isoformat()}",
+                host=sender.hostname,
+                source="syslog",
+                lifecycle_id=f"{route.receiver.hostname}:{route.protocol}",
+            ),
+            sample_key="duration_seconds",
+        )
         close_bound = self._baseline_network_close_bound_seconds(
             src_ip=sender.ip,
             dst_ip=route.receiver.ip,

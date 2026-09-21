@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 146
+current_revision: 147
 history_start_revision: 1
-behavior_surface_sha256: 0a16bb0b1dceac986677d3428590d1d2786c739af2cd57022212d43362fcc0d8
+behavior_surface_sha256: cf83458286ce8c6732971e96af3dc8971babcb69b1e831d86f5250615d1fc367
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1472,3 +1472,14 @@ changes:
       - ecar
       - zeek_conn
     summary: Derive forwarding-health transport texture from a stable event-local seed so the new evidence cannot perturb unrelated baseline families.
+  - revision: 147
+    id: rsyslog-health-transport-timing-runtime
+    impact: localized
+    domains:
+      - deterministic-rng
+      - timing-runtime
+      - network-connection
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Sample forwarding-health transport duration through the keyed engine timing runtime without expanding direct continuous-RNG debt.

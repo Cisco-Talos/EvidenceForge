@@ -60,6 +60,7 @@ from evidenceforge.generation.engine.baseline import (
 )
 from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import System, User
 from evidenceforge.models.exceptions import StateError
 
@@ -373,6 +374,7 @@ def test_rsyslog_health_owns_process_attributed_canonical_transport(linux_system
     engine._baseline_network_close_bound_seconds = Mock(return_value=6.0)
     engine._baseline_pass_admits = Mock(return_value=True)
     current_hour = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    engine.activity_generator.timing_runtime = TimingRuntime(reference_time=current_hour)
     event_time = current_hour + timedelta(minutes=4)
     route = engine._canonical_syslog_routes()[linux_system.hostname]
 
@@ -389,6 +391,7 @@ def test_rsyslog_health_owns_process_attributed_canonical_transport(linux_system
     assert call["dst_ip"] == receiver.ip
     assert call["dst_port"] == 514
     assert call["service"] == "syslog"
+    assert 0.4 <= call["duration"] <= 6.0
     assert call["pid"] == 741
     assert call["process_image"] == "/usr/sbin/rsyslogd"
     engine.state_manager.set_current_time.assert_called_once_with(event_time)
