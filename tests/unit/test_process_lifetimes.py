@@ -12,8 +12,14 @@ import pytest
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
-from evidenceforge.generation.actions.command_effects import ExecutionEffectPlanError
-from evidenceforge.generation.actions.process_execution import ProcessLifetimeMode
+from evidenceforge.generation.actions.command_effects import (
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
+)
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionRequest,
+    ProcessLifetimeMode,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
@@ -705,6 +711,166 @@ def test_windows_one_shot_lifetime_is_frozen_during_process_preflight(
     termination = generator.foreground_process_termination_time(system.hostname, pid)
     assert termination is not None
     assert start < termination < start + timedelta(minutes=4)
+
+
+def test_linux_lifecycle_admission_rejects_exact_journalctl_crash_window() -> None:
+    """The 1.411280-second crash window is unavailable before State mutation."""
+
+    generator, state, system, user, logon_id, shell_pid, _events = _linux_interactive_shell(
+        session_kind="ssh"
+    )
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    deadline = start + timedelta(seconds=1.411280)
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name="/usr/bin/journalctl",
+        command_line="journalctl -u systemd-resolved -n 20",
+        parent_pid=shell_pid,
+        suppress_command_file_effect=True,
+        from_storyline=True,
+    )
+    digest = state.materialization_digest()
+    version = state.materialization_version
+
+    with pytest.raises(ExecutionEffectPlanError) as admission_error:
+        generator._admit_process_lifecycle(request)
+    with pytest.raises(ExecutionEffectPlanError) as required_error:
+        generator.generate_process(
+            user=user,
+            system=system,
+            time=start,
+            logon_id=logon_id,
+            process_name=request.process_name,
+            command_line=request.command_line,
+            parent_pid=shell_pid,
+            suppress_command_file_effect=True,
+            from_storyline=True,
+        )
+
+    assert admission_error.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
+    assert required_error.value.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE
+    assert state.materialization_digest() == digest
+    assert state.materialization_version == version
+
+
+def test_windows_lifecycle_admission_caps_bounded_process_before_rdp_deadline() -> None:
+    """The shared admission contract applies Windows policy under an RDP hard fence."""
+
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    deadline = start + timedelta(seconds=1)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    generator = ActivityGenerator(state, {})
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.1.44",
+        os="Windows 11",
+        type="workstation",
+        assigned_user=user.username,
+    )
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=4),
+        session_kind="rdp",
+    )
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name=r"C:\Windows\System32\runas.exe",
+        command_line="runas.exe /user:EXAMPLE\\admin cmd.exe",
+        from_storyline=True,
+    )
+    digest = state.materialization_digest()
+
+    admission = generator._admit_process_lifecycle(request)
+
+    assert admission.lifetime_plan.mode == ProcessLifetimeMode.BOUNDED
+    assert admission.effective_start == start
+    assert admission.hard_deadline == deadline
+    assert admission.release_margin == timedelta(milliseconds=25)
+    assert admission.termination_time is not None
+    assert start < admission.termination_time < deadline
+    assert state.materialization_digest() == digest
+
+
+@pytest.mark.parametrize("platform", ["linux", "windows"])
+def test_viable_cross_platform_lifecycle_admission_preserves_policy_bounds(
+    platform: str,
+) -> None:
+    """Ordinary Linux and Windows requests retain their platform-specific lifetime policy."""
+
+    start = datetime(2024, 3, 18, 13, 0, 0, tzinfo=UTC)
+    if platform == "linux":
+        generator, _state, system, user, logon_id, parent_pid, _events = _linux_interactive_shell(
+            session_kind="interactive"
+        )
+        image = "/usr/bin/journalctl"
+        command_line = "journalctl -u systemd-resolved -n 20"
+        expected_bounds = _linux_foreground_lifetime(image, command_line)
+    else:
+        state = StateManager()
+        state.set_current_time(start - timedelta(minutes=5))
+        generator = ActivityGenerator(state, {})
+        user = User(
+            username="analyst",
+            full_name="Alicia Analyst",
+            email="analyst@example.local",
+        )
+        system = System(
+            hostname="WS-01",
+            ip="10.10.1.44",
+            os="Windows 11",
+            type="workstation",
+        )
+        logon_id = state.create_session(
+            username=user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=start - timedelta(minutes=4),
+        )
+        parent_pid = 4
+        image = r"C:\Windows\System32\runas.exe"
+        command_line = "runas.exe /user:EXAMPLE\\admin cmd.exe"
+        expected_bounds = _windows_process_lifetime_plan(image, command_line).bounds
+    assert expected_bounds is not None
+    request = ProcessExecutionRequest(
+        user=user,
+        system=system,
+        time=start,
+        logon_id=logon_id,
+        process_name=image,
+        command_line=command_line,
+        parent_pid=parent_pid,
+        suppress_command_file_effect=True,
+        from_storyline=True,
+    )
+
+    admission = generator._admit_process_lifecycle(request)
+
+    assert admission.effective_start == start
+    assert admission.hard_deadline is None
+    assert admission.lifetime_plan.bounds == expected_bounds
+    assert admission.termination_time is not None
+    duration = (admission.termination_time - start).total_seconds()
+    assert expected_bounds[0] <= duration <= expected_bounds[1]
 
 
 def test_windows_continuous_tool_has_no_provisional_termination() -> None:
@@ -1974,6 +2140,112 @@ def test_dependent_hold_extends_registered_foreground_finalizer() -> None:
     assert state.get_process(system.hostname, pid) is not None
     generator.finalize_foreground_process_lifetimes(start + timedelta(minutes=1))
     assert state.get_process(system.hostname, pid) is None
+
+
+def test_dependent_hold_stays_before_action_bundle_session_deadline() -> None:
+    """Dependent transport activity cannot outlive an immutable bundle-owned session."""
+    start = datetime(2024, 3, 18, 17, 45, tzinfo=UTC)
+    deadline = start + timedelta(minutes=15)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.2.30",
+        os="Windows 11",
+        type="workstation",
+    )
+    logon_id = state.create_session(
+        username="analyst",
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=5),
+        session_kind="rdp",
+    )
+    assert state.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    state.set_current_time(start)
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c curl https://example.test/report",
+        username="analyst",
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+
+    generator._remember_process_dependent_hold(
+        system=system,
+        pid=pid,
+        required_until=deadline + timedelta(minutes=45),
+    )
+
+    hold_until = generator._process_connection_hold_until[
+        generator._process_instance_key(system.hostname, pid)
+    ]
+    process = state.get_process(system.hostname, pid)
+    session = state.get_session(logon_id)
+    assert hold_until < deadline
+    assert process is not None and process.last_activity_time == hold_until
+    assert session is not None and session.last_activity_time == hold_until
+
+
+def test_process_termination_stays_before_action_bundle_session_deadline() -> None:
+    """A requested child close after an RDP-style hard deadline is clamped before it."""
+    start = datetime(2024, 3, 18, 17, 45, tzinfo=UTC)
+    deadline = start + timedelta(minutes=15)
+    state = StateManager()
+    state.set_current_time(start - timedelta(minutes=5))
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-RDP-01",
+        ip="10.10.2.30",
+        os="Windows 11",
+        type="workstation",
+    )
+    user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.local")
+    logon_id = state.create_session(
+        username=user.username,
+        system=system.hostname,
+        logon_type=10,
+        source_ip="10.10.1.20",
+        start_time=start - timedelta(minutes=5),
+        session_kind="rdp",
+    )
+    end_plan = SessionEndPlan(canonical_end=deadline, authority="action_bundle")
+    assert state.plan_session_end(logon_id, end_plan)
+    state.set_current_time(start)
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\curl.exe",
+        command_line="curl.exe https://example.test/report",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=logon_id,
+    )
+    process = state.get_process(system.hostname, pid)
+    assert process is not None
+
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=deadline + timedelta(minutes=45),
+        pid=pid,
+        process_name=process.image,
+        logon_id=logon_id,
+    )
+
+    terminated_at = generator._terminated_process_times[
+        generator._process_instance_key(system.hostname, pid, process.start_time)
+    ]
+    assert process.start_time < terminated_at < deadline
 
 
 def test_process_watermark_drops_pid_scoped_state_before_reuse() -> None:

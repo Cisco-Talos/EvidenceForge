@@ -3127,6 +3127,8 @@ class TestWindowsEventEmitter:
         assert len(dc_02_threads) > 38
         assert dc_01_threads != dc_02_threads
         assert all(thread_id % 4 == 0 for thread_id in dc_01_threads | dc_02_threads)
+        assert max(dc_01_threads) - min(dc_01_threads) < 100_000
+        assert max(dc_02_threads) - min(dc_02_threads) < 100_000
 
     def test_timestamp_100ns_precision(self, format_def, temp_output):
         """Test that timestamps have EVTX-like 100ns precision."""

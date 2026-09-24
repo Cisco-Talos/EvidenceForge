@@ -6,6 +6,7 @@
 import random
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -22,6 +23,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.proxy import ProxyTransactionPlan
+from evidenceforge.events.rdp import RdpSessionState
 from evidenceforge.generation.actions import (
     network_transaction_planner as network_planner_module,
 )
@@ -194,6 +196,105 @@ def test_generated_windows_browser_proxy_agents_exclude_legacy_ie():
     assert all(
         "Trident/" not in user_agent and "MSIE " not in user_agent for user_agent in user_agents
     )
+
+
+def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> None:
+    """One process retains browser family and full version across destinations."""
+    from evidenceforge.generation.activity.proxy_user_agents import (
+        stable_browser_user_agent_for_process,
+    )
+
+    workstation = System(
+        hostname="WS-01",
+        ip="10.0.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+
+    first = stable_browser_user_agent_for_process(
+        workstation,
+        image,
+        "process-object-1",
+        hostname="calendar.google.com",
+        domain_tags=["saas"],
+    )
+    second = stable_browser_user_agent_for_process(
+        workstation,
+        image,
+        "process-object-1",
+        hostname="www.reddit.com",
+        domain_tags=["web"],
+    )
+
+    assert first == second
+    assert "Firefox/" in first
+    assert "Edg/" not in first
+
+
+def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> None:
+    """Authoritative-PID rendering projects one stable version from its browser owner."""
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="client-tap",
+                monitoring_segments=["workstations"],
+                direction="outbound",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+    user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+    workstation = generator._ip_to_system["10.0.1.10"]
+    session = generator.state_manager.get_sessions_for_user(user.username)[0]
+    firefox_pid = generator.state_manager.create_process(
+        system=workstation.hostname,
+        parent_pid=explorer_pid,
+        image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+        command_line=r'"C:\Program Files\Mozilla Firefox\firefox.exe"',
+        username=user.username,
+        integrity_level="Medium",
+        logon_id=session.logon_id,
+    )
+
+    for offset, version in enumerate(("120.0", "121.0")):
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip=f"93.184.216.{34 + offset}",
+            time=datetime(2024, 1, 15, 10, 0, offset, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            src_port=55000 + offset,
+            pid=firefox_pid,
+            source_system=workstation,
+            hostname=f"example-{offset}.com",
+            proxy_bypass=True,
+            suppress_source_pid_inference=True,
+            http=HttpContext(
+                method="GET",
+                host=f"example-{offset}.com",
+                uri="/",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; "
+                    f"rv:{version}) Gecko/20100101 Firefox/{version}"
+                ),
+                status_code=200,
+                response_body_len=5000,
+            ),
+        )
+
+    user_agents = {
+        call.args[0].protocol.http.user_agent
+        for call in emitters["zeek_http"].emit.call_args_list
+        if call.args[0].protocol.http is not None
+    }
+    assert len(user_agents) == 1
+    assert "Firefox/" in next(iter(user_agents))
 
 
 def test_explicit_multipart_curl_remains_authoritative_proxy_socket_owner() -> None:
@@ -1011,6 +1112,49 @@ def _seed_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User,
     return user, svchost_pid, explorer_pid
 
 
+def test_disconnected_rdp_session_cannot_own_fresh_proxy_client_process() -> None:
+    """Proxy synthesis must not launch a user process on a disconnected desktop."""
+
+    generator, _emitters = _generator([])
+    user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+    workstation = generator._ip_to_system["10.0.1.10"]
+    session = next(
+        candidate
+        for candidate in generator.state_manager.get_sessions_on_system(workstation.hostname)
+        if candidate.username == user.username
+    )
+    session.session_kind = "rdp"
+    generator.state_manager.get_session_identity = Mock(
+        return_value=SimpleNamespace(object_id="rdp-logical", session_kind="rdp")
+    )
+    generator._rdp_session_lifecycle_frontier = Mock(return_value=session.start_time)
+    generator.advance_rdp_session_lifecycle_watermark = Mock()
+    generator._rdp_session_manager = SimpleNamespace(
+        get=lambda logical_id: SimpleNamespace(state=RdpSessionState.DISCONNECTED)
+    )
+    request_time = session.start_time + timedelta(minutes=30)
+
+    pid, image = generator._ensure_explicit_proxy_client_process(
+        source_system=workstation,
+        time=request_time,
+        proxy_context=ProxyContext(
+            client_ip=workstation.ip,
+            method="GET",
+            url="http://example.org/",
+            host="example.org",
+            status_code=200,
+            user_agent="curl/8.4.0",
+            proxy_fqdn="PROXY-01.example.org",
+        ),
+        proxy_sys=generator._ip_to_system["10.0.3.10"],
+        dst_port=80,
+    )
+
+    assert (pid, image) == (-1, None)
+    assert generator.state_manager.get_process(workstation.hostname, explorer_pid) is not None
+    generator.advance_rdp_session_lifecycle_watermark.assert_called_once_with(request_time)
+
+
 def _seed_linux_proxy_client_user_session(generator: ActivityGenerator) -> tuple[User, System, int]:
     user = User(
         username="alex.morgan",
@@ -1387,6 +1531,60 @@ class TestExplicitProxyVisibility:
         )
         assert client_event.process is None
         assert client_event.network.initiating_pid == -1
+
+    def test_explicit_proxy_uses_process_bound_browser_agent(self) -> None:
+        """Proxy delegation cannot replace one browser process with request-local versions."""
+        generator, emitters = _generator([])
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        explorer = generator.state_manager.get_process(workstation.hostname, explorer_pid)
+        assert explorer is not None
+        browser_image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+        generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=browser_image,
+            command_line=f'"{browser_image}" -osint -url https://example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=explorer.logon_id,
+        )
+
+        for offset, caller_agent in enumerate(("Firefox/119.0", "Firefox/121.0")):
+            generator.generate_connection(
+                src_ip=workstation.ip,
+                dst_ip=f"93.184.216.{34 + offset}",
+                time=datetime(2024, 1, 15, 10, 4, offset, tzinfo=UTC),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                pid=-1,
+                source_system=workstation,
+                hostname=f"example{offset}.com",
+                conn_state="SF",
+                process_image=browser_image,
+                http=HttpContext(
+                    method="GET",
+                    host=f"example{offset}.com",
+                    uri="/",
+                    user_agent=caller_agent,
+                    response_body_len=4000,
+                    status_code=200,
+                    status_msg="OK",
+                ),
+            )
+
+        agents = [
+            call.args[0].protocol.proxy.user_agent
+            for call in emitters["proxy_access"].emit.call_args_list
+        ]
+        assert len(agents) == 2
+        assert agents[0] == agents[1]
+        assert "Firefox/" in agents[0]
+        assert agents[0] not in {"Firefox/119.0", "Firefox/121.0"}
 
     def test_proxy_upstream_follows_planned_request_when_client_process_is_source_delayed(
         self,

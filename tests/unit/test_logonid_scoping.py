@@ -197,6 +197,16 @@ class TestLogonIdSystemScoping:
         assert type9.username == local_user.username
         assert type9.source_ip == "-"
         assert type9.session_id == 0
+        assert type9.logon_guid != "{00000000-0000-0000-0000-000000000000}"
+        controller = state_manager.get_process(system.hostname, type9.process_tree_root or -1)
+        assert controller is not None
+        assert controller.image.endswith(r"\cmd.exe")
+        assert controller.command_line == "cmd.exe /d /q"
+        runas = state_manager.get_process(system.hostname, controller.parent_pid)
+        assert runas is not None
+        assert runas.image.endswith(r"\runas.exe")
+        assert runas.logon_id == caller_logon_id
+        assert controller.logon_id == type9_id
         assert (
             engine._last_storyline_logon_for_actor_system(
                 outbound_user,
@@ -226,6 +236,7 @@ class TestLogonIdSystemScoping:
         type9_event = next(
             event for event in emitted if event.event_type == "logon" and event.auth.logon_type == 9
         )
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
         child = next(
             event
             for event in emitted
@@ -234,9 +245,18 @@ class TestLogonIdSystemScoping:
         assert type9_event.auth.cloned_from_logon_id == caller_logon_id
         assert type9_event.auth.username == local_user.username
         assert type9_event.auth.outbound_username == outbound_user.username
+        assert type9_event.auth.logon_guid == type9.logon_guid
+        assert explicit.auth.process_pid == runas.pid
+        assert explicit.auth.subject_logon_id == caller_logon_id
+        assert explicit.auth.username == outbound_user.username
+        assert explicit.lifecycle is not None
+        assert type9_event.lifecycle is not None
+        assert explicit.lifecycle.group_id == type9_event.lifecycle.group_id
+        assert type9_event.timestamp - explicit.timestamp >= timedelta(milliseconds=250)
         assert child.auth.logon_id == type9_id
         assert child.auth.username == local_user.username
         assert running_child.username == local_user.username
+        assert running_child.parent_pid == controller.pid
 
     def test_storyline_type9_rejects_missing_local_desktop(
         self, state_manager, mock_emitters, system_a, attacker

@@ -140,6 +140,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
     machine_account_authentication_close_bound_seconds,
     remote_auth_transport_max_duration_seconds,
 )
+from evidenceforge.generation.timing import TimingScope, uniform_distribution
 from evidenceforge.generation.world_model import (
     HostCapability,
     WorldModel,
@@ -256,6 +257,16 @@ class _BaselineRdpIntent:
     source_system: System | None
     prepared_bootstrap: _PreparedRdpSessionBootstrap
     session_end_plan: SessionEndPlan | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CanonicalSyslogRoute:
+    """One sender's authoritative syslog forwarding route."""
+
+    sender: System
+    receiver: System
+    protocol: Literal["tcp", "udp"]
+    port: int = 514
 
 
 @dataclass(frozen=True, slots=True)
@@ -934,6 +945,16 @@ def _extra_syslog_effective_limit(
     """
     configured_limit = int(entry.get("max_per_host_window", 0) or 0)
     app = entry.get("app")
+    if app == "systemd-resolved" and configured_limit > 0:
+        budgets = entry.get("episode_pair_budgets") or []
+        valid_budgets = [
+            int(value)
+            for value in budgets
+            if type(value) is int and value > 0 and int(value) * 2 <= configured_limit
+        ]
+        if valid_budgets:
+            budget_seed = _stable_seed(f"resolved_episode_budget:{system.hostname}")
+            return valid_budgets[budget_seed % len(valid_budgets)] * 2
     if configured_limit <= 0 or app not in {"sudo", "rsyslogd", "unattended-upgr"}:
         return configured_limit
 
@@ -2386,6 +2407,7 @@ class BaselineMixin:
         entry: dict[str, Any],
         hostname: str,
         rng: random.Random,
+        route: _CanonicalSyslogRoute,
     ) -> str:
         """Render ambient rsyslog health from durable per-host queue state.
 
@@ -2422,9 +2444,118 @@ class BaselineMixin:
             values={
                 "checkpoint": state["checkpoint"],
                 "pending": state["pending"],
+                "relay_target": route.receiver.ip,
                 "worker_count": state["workers"],
             },
         )
+
+    def _canonical_syslog_routes(self) -> dict[str, _CanonicalSyslogRoute]:
+        """Return stable sender routes to explicitly syslog-capable receivers."""
+
+        existing = getattr(self, "_syslog_transport_routes", None)
+        if existing is not None:
+            return existing
+
+        systems = list(self.scenario.environment.systems)
+        receivers = sorted(
+            (
+                system
+                for system in systems
+                if {str(role).casefold() for role in (system.roles or [])}
+                & {"log_server", "syslog_server"}
+                or {str(service).casefold() for service in (system.services or [])}
+                & {"rsyslog", "rsyslogd", "syslog", "syslog-server"}
+            ),
+            key=lambda system: system.hostname.casefold(),
+        )
+        routes: dict[str, _CanonicalSyslogRoute] = {}
+        for sender in systems:
+            candidates = [receiver for receiver in receivers if receiver.ip != sender.ip]
+            if not candidates:
+                continue
+            seed = _stable_seed(f"canonical_syslog_route:{sender.hostname}")
+            receiver = candidates[seed % len(candidates)]
+            protocol: Literal["tcp", "udp"] = "tcp" if (seed >> 11) % 5 == 0 else "udp"
+            routes[sender.hostname] = _CanonicalSyslogRoute(
+                sender=sender,
+                receiver=receiver,
+                protocol=protocol,
+            )
+        self._syslog_transport_routes = routes
+        return routes
+
+    def _syslog_forwarder_identity(self, sender: System) -> tuple[int, str]:
+        """Return the seeded forwarding process for a canonical syslog sender."""
+
+        system_pids = self._system_pids.get(sender.hostname, {})
+        if _get_os_category(sender.os) == "linux":
+            return system_pids.get("rsyslogd", -1), "/usr/sbin/rsyslogd"
+        return (
+            system_pids.get("svchost_net_svc", system_pids.get("svchost_netsvcs", -1)),
+            r"C:\Windows\System32\svchost.exe",
+        )
+
+    def _emit_rsyslog_health_transport(
+        self,
+        *,
+        current_hour: datetime,
+        sender: System,
+        time: datetime,
+        route: _CanonicalSyslogRoute,
+    ) -> bool:
+        """Emit the canonical transport owned by one rsyslog forwarding-health row."""
+
+        transport_rng = random.Random(
+            _stable_seed(f"rsyslog_health_transport:{sender.hostname}:{time.isoformat()}")
+        )
+        duration = self.activity_generator.timing_runtime.sampler.sample_value(
+            uniform_distribution(0.4, 6.0),
+            relationship_key="baseline.syslog.health.transport_duration",
+            scope=TimingScope(
+                stable_id=f"rsyslog-health:{sender.hostname}:{time.isoformat()}",
+                host=sender.hostname,
+                source="syslog",
+                lifecycle_id=f"{route.receiver.hostname}:{route.protocol}",
+            ),
+            sample_key="duration_seconds",
+        )
+        close_bound = self._baseline_network_close_bound_seconds(
+            src_ip=sender.ip,
+            dst_ip=route.receiver.ip,
+            proto=route.protocol,
+            dst_port=route.port,
+            service="syslog",
+            requested_duration_max=6.0,
+            current_hour=current_hour,
+            start=time,
+            conn_state="",
+            payload_bytes=1,
+        )
+        if not self._baseline_pass_admits(
+            current_hour,
+            start=time,
+            end=time + timedelta(seconds=close_bound),
+        ):
+            return False
+
+        forwarder_pid, forwarder_image = self._syslog_forwarder_identity(sender)
+        self.state_manager.set_current_time(time)
+        self.activity_generator.generate_connection(
+            src_ip=sender.ip,
+            dst_ip=route.receiver.ip,
+            time=time,
+            dst_port=route.port,
+            proto=route.protocol,
+            service="syslog",
+            duration=duration,
+            orig_bytes=transport_rng.randint(180, 3200),
+            resp_bytes=0 if route.protocol == "udp" else transport_rng.randint(40, 180),
+            source_system=sender,
+            pid=forwarder_pid,
+            process_image=forwarder_image,
+            suppress_source_pid_inference=forwarder_pid <= 0,
+        )
+        return True
 
     def _render_systemd_resolved_message(
         self,
@@ -2442,15 +2573,29 @@ class BaselineMixin:
             states = {}
             self._linux_resolved_feature_states = states
         state = states.get(hostname)
-        degraded = state is not None and state[0] == "degraded"
+        if isinstance(state, tuple):
+            # Normalize checkpoints written before resolver episodes tracked their index.
+            state = {
+                "phase": state[0],
+                "dns_server": state[1],
+                "episode_index": 0,
+            }
+        if state is None:
+            state = {"phase": "full", "dns_server": "", "episode_index": 0}
+        degraded = state["phase"] == "degraded"
         if degraded:
             message_index = 1
-            dns_server = state[1]
-            states[hostname] = ("full", dns_server)
+            dns_server = state["dns_server"]
+            state["phase"] = "full"
+            state["episode_index"] += 1
         else:
             message_index = 0
-            dns_server = rng.choice(dns_server_ips)
-            states[hostname] = ("degraded", dns_server)
+            episode_index = state["episode_index"]
+            server_seed = _stable_seed(f"resolved_episode_server:{hostname}:{episode_index}")
+            dns_server = dns_server_ips[server_seed % len(dns_server_ips)]
+            state["phase"] = "degraded"
+            state["dns_server"] = dns_server
+        states[hostname] = state
         messages = entry.get("messages") or []
         selected_entry = {**entry, "messages": [messages[message_index]]}
         return render_extra_syslog_message(
@@ -2460,6 +2605,36 @@ class BaselineMixin:
             system_services=[],
             values={"dns_server": dns_server},
         )
+
+    def _linux_background_host_profile(
+        self,
+        entry: dict[str, Any],
+        hostname: str,
+    ) -> dict[str, Any]:
+        """Return stable data-driven parameters for one host background daemon."""
+
+        profiles = getattr(self, "_linux_background_host_profiles", None)
+        if profiles is None:
+            profiles = {}
+            self._linux_background_host_profiles = profiles
+        app = str(entry.get("app") or "unknown")
+        key = f"{hostname}:{app}"
+        existing = profiles.get(key)
+        if existing is not None:
+            return existing
+
+        seed = _stable_seed(f"linux_background_profile:{key}")
+        values: dict[str, Any] = {}
+        parameter_profiles = entry.get("parameter_profiles") or []
+        if parameter_profiles:
+            selected = parameter_profiles[seed % len(parameter_profiles)]
+            if isinstance(selected, dict):
+                values.update({str(name): value for name, value in selected.items()})
+        for index, (name, candidates) in enumerate((entry.get("params") or {}).items()):
+            if candidates:
+                values[str(name)] = candidates[(seed >> (index * 7 + 8)) % len(candidates)]
+        profiles[key] = values
+        return values
 
     def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
         """Return a plausible monotonic system bus name suffix for one host."""
@@ -3755,8 +3930,12 @@ class BaselineMixin:
                         f"sched_slot:{system.hostname}:{service}:{current_hour.isoformat()}:{fm}"
                     )
                     skip_probability = sched.get("slot_skip_probability")
-                    if skip_probability is not None and not _deterministic_probability_enabled(
-                        slot_key, 1.0 - float(skip_probability)
+                    if (
+                        sched_type != "cron"
+                        and skip_probability is not None
+                        and not _deterministic_probability_enabled(
+                            slot_key, 1.0 - float(skip_probability)
+                        )
                     ):
                         continue
                     configured_jitter = sched.get("slot_jitter_seconds")
@@ -3894,7 +4073,18 @@ class BaselineMixin:
             )
             self.activity_generator.generate_syslog_event(
                 system=system,
-                time=ts + timedelta(milliseconds=rng.randint(10, 120)),
+                time=ts
+                + timedelta(
+                    milliseconds=rng.randint(10, 120),
+                    microseconds=1
+                    + (
+                        _stable_seed(
+                            f"cron_syslog_submillisecond:{system.hostname}:{service}:"
+                            f"{ts.isoformat()}"
+                        )
+                        % 999
+                    ),
+                ),
                 app_name="CRON",
                 message=f"({cron_user}) CMD ({cmd})",
                 pid=shell_pid or cron_parent_pid,
@@ -6323,42 +6513,48 @@ class BaselineMixin:
                 src, dst = rng.sample(linux_sys, 2)
                 _emit_conn(src, dst, 22, "ssh")
 
-        # 25. Centralized syslog relay (TCP 514)
-        if linux_sys and len(linux_sys) > 1:
-            if rng.random() < 0.30:
-                sender = rng.choice(linux_sys)
-                collector = rng.choice([s for s in linux_sys if s != sender] or linux_sys)
-                offset = rng.uniform(0, 3599)
-                ts = current_hour + timedelta(seconds=offset)
-                close_bound = self._baseline_network_close_bound_seconds(
+        # 25. Centralized syslog relay through each sender's canonical route.
+        syslog_routes = tuple(self._canonical_syslog_routes().values())
+        if syslog_routes and rng.random() < 0.30:
+            route = rng.choice(syslog_routes)
+            sender = route.sender
+            collector = route.receiver
+            offset = rng.uniform(0, 3599)
+            ts = current_hour + timedelta(seconds=offset)
+            close_bound = self._baseline_network_close_bound_seconds(
+                src_ip=sender.ip,
+                dst_ip=collector.ip,
+                proto=route.protocol,
+                dst_port=route.port,
+                service="syslog",
+                requested_duration_max=60.0,
+                current_hour=current_hour,
+                start=ts,
+                conn_state="",
+                payload_bytes=1,
+            )
+            if self._baseline_pass_admits(
+                current_hour,
+                start=ts,
+                end=ts + timedelta(seconds=close_bound),
+            ):
+                self.state_manager.set_current_time(ts)
+                forwarder_pid, forwarder_image = self._syslog_forwarder_identity(sender)
+                self.activity_generator.generate_connection(
                     src_ip=sender.ip,
                     dst_ip=collector.ip,
-                    proto="tcp",
-                    dst_port=514,
-                    service=None,
-                    requested_duration_max=60.0,
-                    current_hour=current_hour,
-                    start=ts,
-                    conn_state="",
-                    payload_bytes=1,
+                    time=ts,
+                    dst_port=route.port,
+                    proto=route.protocol,
+                    service="syslog",
+                    duration=rng.uniform(1.0, 60.0),
+                    orig_bytes=rng.randint(500, 10000),
+                    resp_bytes=0 if route.protocol == "udp" else rng.randint(50, 200),
+                    source_system=sender,
+                    pid=forwarder_pid,
+                    process_image=forwarder_image,
+                    suppress_source_pid_inference=forwarder_pid <= 0,
                 )
-                if self._baseline_pass_admits(
-                    current_hour,
-                    start=ts,
-                    end=ts + timedelta(seconds=close_bound),
-                ):
-                    self.state_manager.set_current_time(ts)
-                    self.activity_generator.generate_connection(
-                        src_ip=sender.ip,
-                        dst_ip=collector.ip,
-                        time=ts,
-                        dst_port=514,
-                        proto="tcp",
-                        duration=rng.uniform(1.0, 60.0),
-                        orig_bytes=rng.randint(500, 10000),
-                        resp_bytes=rng.randint(50, 200),
-                        source_system=sender,
-                    )
 
         # 26. LDAP client → directory server (389/636)
         if linux_sys and dcs:
@@ -9309,7 +9505,25 @@ class BaselineMixin:
         for intent in self._plan_baseline_smb_activity(current_hour):
             preparation = None
             canonical_duration = intent.duration
-            if intent.actor is not None and intent.share_ref:
+            client_session_accepts_activity = True
+            if intent.process_pid > 0:
+                process = self.state_manager.get_process(
+                    intent.source_system.hostname,
+                    intent.process_pid,
+                )
+                session = (
+                    self.state_manager.get_session(process.logon_id)
+                    if process is not None and process.logon_id
+                    else None
+                )
+                client_session_accepts_activity = bool(
+                    session is not None
+                    and self.activity_generator._interactive_session_accepts_activity(
+                        session,
+                        intent.time,
+                    )
+                )
+            if intent.actor is not None and intent.share_ref and client_session_accepts_activity:
                 spec = SmbActivityEventSpec(
                     type="smb_activity",
                     operation=intent.operation,
@@ -9962,13 +10176,25 @@ class BaselineMixin:
                 for _ in range(num_inbound):
                     conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
                     is_external_src = conn["role"] == "_external"
-                    src_ip, hostname = self._resolve_role(
-                        conn["role"],
-                        system.ip,
-                        rng,
-                        os_cat,
-                        inbound=True,
-                    )
+                    syslog_route = None
+                    if conn.get("service") == "syslog" and conn.get("port") == 514:
+                        matching_routes = [
+                            route
+                            for route in self._canonical_syslog_routes().values()
+                            if route.receiver.hostname == system.hostname
+                        ]
+                        if not matching_routes:
+                            continue
+                        syslog_route = rng.choice(matching_routes)
+                        src_ip, hostname = syslog_route.sender.ip, syslog_route.sender.hostname
+                    else:
+                        src_ip, hostname = self._resolve_role(
+                            conn["role"],
+                            system.ip,
+                            rng,
+                            os_cat,
+                            inbound=True,
+                        )
                     if not src_ip:
                         continue
 
@@ -10009,7 +10235,11 @@ class BaselineMixin:
 
                     offset = _burst_offset()
                     ts = current_hour + timedelta(seconds=offset)
-                    conn_proto = conn.get("proto", "tcp")
+                    conn_proto = (
+                        syslog_route.protocol
+                        if syslog_route is not None
+                        else conn.get("proto", "tcp")
+                    )
                     conn_service = conn.get("service")
                     planned_conn_state = ""
                     planned_payload_bytes = 1 if conn_service is not None else None
@@ -10123,20 +10353,33 @@ class BaselineMixin:
                             continue
 
                         orig_bytes, resp_bytes = _profile_connection_payload_bytes(conn, rng)
+                        source_pid = -1
+                        source_process_image = None
+                        if syslog_route is not None:
+                            source_pid, source_process_image = self._syslog_forwarder_identity(
+                                syslog_route.sender
+                            )
+                            if syslog_route.protocol == "udp":
+                                resp_bytes = 0
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
                             time=ts,
                             dst_port=conn["port"],
-                            proto=conn.get("proto", "tcp"),
+                            proto=conn_proto,
                             service=conn.get("service"),
                             duration=rng.uniform(0.05, 5.0),
                             orig_bytes=orig_bytes,
                             resp_bytes=resp_bytes,
                             conn_state="SF" if conn.get("service") == "smb" else None,
                             source_system=src_sys,
-                            emit_dns=is_internal_src,
+                            emit_dns=is_internal_src and syslog_route is None,
                             hostname=dst_hostname,
+                            pid=source_pid,
+                            process_image=source_process_image,
+                            suppress_source_pid_inference=(
+                                syslog_route is not None and source_pid <= 0
+                            ),
                             kerberos_audit_username=kerberos_audit_username,
                             kerberos_audit_service_name=kerberos_audit_service_name,
                         )
@@ -10671,27 +10914,23 @@ class BaselineMixin:
                 and exact_browser_process
             ):
                 user_agent_override: str | None = None
-                if conn.get("pack_application"):
-                    from evidenceforge.generation.activity.proxy_user_agents import (
-                        browser_user_agent_for_process,
-                    )
+                from evidenceforge.generation.activity.proxy_user_agents import (
+                    stable_browser_user_agent_for_process,
+                )
 
-                    if selected_process is not None:
-                        ua_rng = random.Random(
-                            _stable_seed(
-                                "pack_application_user_agent:"
-                                f"{system.hostname}:{selected_process.image.lower()}"
-                            )
-                        )
-                        user_agent_override = browser_user_agent_for_process(
-                            ua_rng,
-                            system,
-                            selected_process.image,
-                            hostname=hostname,
-                            domain_tags=list(conn.get("dns_tags") or []),
-                        )
-                    else:
-                        user_agent_override = ""
+                if selected_process is not None:
+                    process_identity = selected_process.ecar_object_id or (
+                        f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
+                    )
+                    user_agent_override = stable_browser_user_agent_for_process(
+                        system,
+                        selected_process.image,
+                        process_identity,
+                        hostname=hostname,
+                        domain_tags=list(conn.get("dns_tags") or []),
+                    )
+                else:
+                    user_agent_override = ""
                 self._emit_browsing_session(
                     system=system,
                     user_obj=user_obj,
@@ -10785,8 +11024,26 @@ class BaselineMixin:
                     intensity = getattr(p, "browsing_intensity", "normal")
                     break
 
-        session_ua = user_agent_override
-        if session_ua is None:
+        session_ua = ""
+        selected_process = self.state_manager.get_process(system.hostname, persona_pid)
+        if selected_process is not None:
+            from evidenceforge.generation.activity.proxy_user_agents import (
+                stable_browser_user_agent_for_process,
+            )
+
+            process_identity = selected_process.ecar_object_id or (
+                f"{selected_process.pid}:{selected_process.start_time.isoformat()}"
+            )
+            session_ua = stable_browser_user_agent_for_process(
+                system,
+                selected_process.image,
+                process_identity,
+                hostname=hostname,
+                domain_tags=list(domain_tags),
+            )
+        if not session_ua and user_agent_override is not None:
+            session_ua = user_agent_override
+        if not session_ua:
             session_ua = self._source_sticky_browser_user_agent(
                 source_system=system,
                 src_ip=system.ip,
@@ -11819,6 +12076,14 @@ class BaselineMixin:
                             dns_ips_by_host[system.hostname],
                             rng,
                         )
+                    elif app == "irqbalance":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=0,
+                            system_services=system.services,
+                            values=self._linux_background_host_profile(entry, system.hostname),
+                        )
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
                         continue
@@ -11831,10 +12096,21 @@ class BaselineMixin:
                             sys_pids=sys_pids,
                         )
                     elif app == "rsyslogd":
+                        route = self._canonical_syslog_routes().get(system.hostname)
+                        if route is None:
+                            continue
+                        if not self._emit_rsyslog_health_transport(
+                            current_hour=current_hour,
+                            sender=system,
+                            time=ts,
+                            route=route,
+                        ):
+                            continue
                         msg = self._render_rsyslog_health_message(
                             entry,
                             system.hostname,
                             rng,
+                            route,
                         )
                     elif app == "sudo":
                         values = {"interface": primary_interface}

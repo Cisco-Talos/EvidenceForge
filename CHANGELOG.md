@@ -6,6 +6,63 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+## v2.1.2 (2026-09-24)
+
+This patch release closes realism defects found in assessment loops 80 and 83–101. It improves
+source-native semantics and cross-source identity, process, session, lifecycle, and timing
+consistency without changing public interfaces or authored scenario schemas.
+
+**Windows sessions, remote administration, and process lifecycles**
+
+- Reconcile authored and baseline RDP sessions, reconnect disconnected owners before dependent
+  work, pair source aliases before publication, preserve transition evidence, and enforce session
+  lifecycle deadlines (`5055e714`, `dab03869`, `b1fa7b56`, `be14d325`, `846547a2`, `23a5e5cc`,
+  `2f97c253`, `7b09825c`, `13eec5b4`, `e2ecb2b3`, `733b96d6`, `fc2b1b38`).
+- Preserve process/session ownership through SMB and other dependent activity; serialize storyline
+  commands, scope lifecycle holds correctly, retain finalized-process identity, and cluster
+  provider thread identities (`fcb2b5fc`, `6d4ca336`, `cb7c756a`, `b8bdf849`, `80e09c66`,
+  `0cca756a`, `c1b965ee`, `5beb3b6f`, `5e28b22b`).
+- Complete RunAs explicit-credential actions and align Type 9 credential use, caller bootstrap,
+  child lifetimes, source evidence, and process ownership (`b3e5eb40`, `542fdc66`, `fc1a32aa`,
+  `bca46018`, `836b8364`, `d1604935`, `1c3d0c0b`, `7b09825c`).
+
+**SMB, proxy, and browser identity**
+
+- Bind credentialed SMB and Samba operations to exact source processes, preserve credential
+  authority and ancestry, reserve source scheduling headroom, and keep target attribution local
+  (`b1c8583c`, `8e32371e`, `8e92d88c`, `7e6c5c83`, `921be6e0`, `b69c835f`, `2cf462d6`,
+  `a6408d25`, `4f78f242`, `c64ae348`, `54f6bc67`).
+- Carry stable browser process identity through explicit-proxy planning and HTTP rendering, and
+  preserve HTTP body/request timing semantics (`a26bb6ca`, `bf4a07f2`, `b8b015c7`, `7fe30e5e`,
+  `edc3d50c`, `46bad9c0`, `d2089f12`, `f8374d39`).
+
+**Linux, network, and source-native evidence**
+
+- Preserve full native Windows file identities in Bash history export plans so SQLite's signed
+  integer limit cannot interrupt journal publication; older integer rows remain readable
+  (`938f7da5`).
+- Keep Linux background and shell activity attached to live host/session state, rebind processes
+  after SSH close, and resolve shell-session timing before process use (`81cdf1e4`, `d86edc8d`,
+  `623451ca`).
+- Unify Syslog forwarding with canonical transport, deterministic transport randomness, and
+  runtime-owned health timing; preserve successful TCP DNS responses and TLS analyzer observations
+  (`382eeaa0`, `663ed056`, `ff1ed56b`, `1253a191`, `40da26c5`, `284e01bc`).
+- Align Nmap discovery with scan effects, preserve ICMP/Exchange and TCP DNS/Sysmon source
+  semantics, enforce Exchange service cardinality, and stabilize PKINIT identity (`5206e4c1`,
+  `e53b794b`, `66f61766`, `3992a09e`, `74f6c264`, `01167d78`).
+- Bound command and process activity by hard session deadlines and preserve unobserved process-root
+  identity in Sysmon; page wide-fleet boot materialization (`122288d3`, `bf9b7885`, `a0f9db26`,
+  `7fc38cea`).
+
+**Assessment records and maintenance**
+
+- Record assessment results and close realism loops 80, 83–101 (`25741387`, `01ae6ac7`,
+  `a0bf1031`, `b6acfe5c`, `141fc9d3`, `56e57e42`, `8b96a6fe`, `48d5039e`,
+  `8d26ab0f`, `4eb1d810`, `28ae6ab1`, `932a203f`, `4ac73cc8`, `f7fb2ccf`, `603d6243`,
+  `5dc388ef`, `a29c789b`, `71e40f9a`, `8d8dc8be`, `bf328206`).
+- Refresh the generation behavior manifest and avoid duplicate development CI runs (`fee83e51`,
+  `6551d116`, `f44cdd02`).
+
 ## v2.1.1 (2026-09-16)
 
 This patch release makes record validation representation-aware, preserves complete Windows Snare

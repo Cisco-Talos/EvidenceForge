@@ -1482,6 +1482,26 @@ class ProcessTerminationService:
         authoritative_latest_allowed: datetime | None = None
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        owned_end_plan = (
+            self.state_manager.process_session_end_plan(system.hostname, pid)
+            if running_proc is not None
+            else None
+        )
+        if (
+            owned_end_plan is not None
+            and owned_end_plan.is_hard_deadline
+            and not owned_end_plan.is_authoritative
+        ):
+            if (
+                authoritative_end_plan is not None
+                and authoritative_end_plan.is_hard_deadline
+                and authoritative_end_plan != owned_end_plan
+            ):
+                raise StateError(
+                    "Process termination session deadline disagrees with its live owner: "
+                    f"{system.hostname} pid={pid}"
+                )
+            authoritative_end_plan = owned_end_plan
         frozen_generic_close = self.frozen_session_close(request, running_proc)
         frozen_generic_close_time = (
             frozen_generic_close.end_time if frozen_generic_close is not None else None
@@ -1501,7 +1521,7 @@ class ProcessTerminationService:
             and running_proc.last_activity_time is not None
             and time <= running_proc.last_activity_time
         ):
-            if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
+            if authoritative_end_plan is not None and authoritative_end_plan.is_hard_deadline:
                 time = ensure_utc(running_proc.last_activity_time) + timedelta(milliseconds=25)
             else:
                 time = running_proc.last_activity_time + timedelta(
@@ -1575,7 +1595,7 @@ class ProcessTerminationService:
                 latest_allowed = running_proc.start_time + timedelta(milliseconds=100)
             if latest_allowed < session_end_time:
                 time = min(time, latest_allowed)
-        if authoritative_end_plan is not None and authoritative_end_plan.is_authoritative:
+        if authoritative_end_plan is not None and authoritative_end_plan.is_hard_deadline:
             deadline = ensure_utc(authoritative_end_plan.canonical_end)
             hold_until = self.foreground._process_connection_hold_until.get(
                 self.queries._process_instance_key(system.hostname, pid)

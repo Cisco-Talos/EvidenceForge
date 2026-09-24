@@ -78,8 +78,7 @@
       "LogonID": "0x1",
       "SessionName": "example",
       "ClientName": "example",
-      "ClientAddress": "example",
-      "ClientPort": 1
+      "ClientAddress": "example"
     }
   },
   {
@@ -99,8 +98,7 @@
       "LogonID": "0x1",
       "SessionName": "example",
       "ClientName": "example",
-      "ClientAddress": "example",
-      "ClientPort": 1
+      "ClientAddress": "example"
     }
   },
   {

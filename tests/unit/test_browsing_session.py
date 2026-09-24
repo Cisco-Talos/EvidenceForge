@@ -239,7 +239,7 @@ class TestBrowserSessionActionBundle:
                 src_ip="10.0.10.50",
                 dst_ip="142.250.80.46",
                 time=base_time,
-                latest_request_time=base_time + timedelta(milliseconds=550),
+                latest_request_time=base_time + timedelta(milliseconds=100),
                 hostname="www.google.com",
                 dst_port=443,
                 service="ssl",

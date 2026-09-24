@@ -267,9 +267,10 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
         return result
 
     literal_sinks = _calls("generate_connection")
-    assert len(literal_sinks) == 27
+    assert len(literal_sinks) == 28
     assert Counter(owner for owner, _call in literal_sinks) == Counter(
         {
+            "_emit_rsyslog_health_transport": 1,
             "_emit_affinity_event": 1,
             "_emit_browsing_session": 1,
             "_emit_conn": 1,
@@ -296,6 +297,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
     # Each tuple classifies literal sinks in source order. A new or moved raw
     # connection must be deliberately assigned an admission owner here.
     reviewed_sink_classes = {
+        "_emit_rsyslog_health_transport": ("direct-rendered-syslog-health",),
         "_emit_affinity_event": ("direct-rendered",),
         "_emit_browsing_session": ("persona-browser-outer",),
         "_emit_conn": ("direct-rendered",),
@@ -345,6 +347,7 @@ def test_terminal_network_admission_census_has_no_unreviewed_canonical_only_owne
             "_baseline_user_activity_close_bound_seconds": 3,
             "_baseline_persona_connection_close_bounds_seconds": 2,
             "_baseline_ids_connection_close_bound_seconds": 1,
+            "_emit_rsyslog_health_transport": 1,
             "_emit_affinity_event": 3,
             "_emit_conn": 1,
             "_emit_web_server_access": 2,
@@ -470,6 +473,47 @@ def test_optional_baseline_smb_omits_first_exact_plan_that_closes_after_window()
     baseline._baseline_network_close_bound_seconds.assert_not_called()
     baseline._baseline_pass_admits.assert_not_called()
     baseline.state_manager.set_current_time.assert_not_called()
+
+
+def test_baseline_smb_drops_process_owner_from_disconnected_rdp_session() -> None:
+    """A disconnected desktop leaves baseline SMB as transport-only evidence."""
+
+    source = System(
+        hostname="CLIENT-01",
+        ip="10.0.0.10",
+        os="Windows 11",
+        type="workstation",
+    )
+    actor = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
+    baseline = BaselineMixin()
+    baseline.end_time = _WINDOW_START + timedelta(hours=1)
+    baseline.activity_generator = Mock()
+    baseline.activity_generator._interactive_session_accepts_activity.return_value = False
+    baseline.state_manager = Mock()
+    baseline.state_manager.get_process.return_value = SimpleNamespace(logon_id="0x900")
+    baseline.state_manager.get_session.return_value = SimpleNamespace(logon_id="0x900")
+    baseline._baseline_network_close_bound_seconds = Mock(return_value=2.0)
+    baseline._baseline_pass_admits = Mock(return_value=True)
+    intent = SimpleNamespace(
+        time=_WINDOW_START + timedelta(minutes=10),
+        duration=2.0,
+        actor=actor,
+        share_ref="FS-01.finance",
+        source_system=source,
+        process_pid=6168,
+        operation="browse",
+        target_ip="10.0.0.20",
+        orig_bytes=2_000,
+        resp_bytes=8_000,
+        emit_dns=True,
+    )
+    baseline._plan_baseline_smb_activity = Mock(return_value=(intent,))
+
+    baseline._generate_baseline_smb_activity(_WINDOW_START)
+
+    baseline.activity_generator.prepare_smb_activity.assert_not_called()
+    baseline.activity_generator.generate_connection.assert_called_once()
+    assert baseline.activity_generator.generate_connection.call_args.kwargs["pid"] == -1
 
 
 def test_terminal_optional_service_bounds_retain_embryonic_transport_branch() -> None:

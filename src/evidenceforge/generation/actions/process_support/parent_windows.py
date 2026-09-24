@@ -73,6 +73,15 @@ class WindowsProcessParents:
             if self.state_manager.get_process(system.hostname, initial_pid) is not None:
                 session.explorer_pid = initial_pid
                 return initial_pid
+            initial_identity = self.state_manager.get_process_identity(
+                system.hostname,
+                initial_pid,
+            )
+            if initial_identity is not None and time < initial_identity.started_at:
+                # A caller can reserve work before a delayed desktop shell becomes
+                # source-visible. Keep the one canonical shell owner; downstream
+                # launch planning will move the child after its parent frontier.
+                return initial_pid
             # Future-dated teardown may have eagerly removed the process from live
             # state. `_get_session_explorer_pid()` still returns the retained identity
             # when it spans this canonical time. A genuinely ended shell may be repaired.
@@ -90,7 +99,7 @@ class WindowsProcessParents:
             return None
 
         original_time = self.state_manager.state.current_time
-        chain_time = max(session.start_time, time - timedelta(seconds=1))
+        chain_time = max(session.start_time, time - timedelta(seconds=12))
         self.state_manager.set_current_time(chain_time)
         try:
             winlogon_pid = session.session_winlogon_pid

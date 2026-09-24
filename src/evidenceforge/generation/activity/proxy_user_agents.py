@@ -338,6 +338,43 @@ def browser_user_agent_for_process(
     )
 
 
+def stable_browser_user_agent_for_process(
+    source_system: "System | None",
+    process_image: str,
+    process_identity: str,
+    *,
+    hostname: str | None = None,
+    domain_tags: list[str] | None = None,
+) -> str:
+    """Return one browser User-Agent for the lifetime of a canonical process.
+
+    Destination and request identity intentionally do not participate in selection. A browser
+    process cannot change family or installed major version merely because it opens a new URL.
+    """
+    source_key = "unmodeled"
+    if source_system is not None:
+        source_key = ":".join(
+            str(part)
+            for part in (
+                getattr(source_system, "hostname", ""),
+                getattr(source_system, "ip", ""),
+                getattr(source_system, "os", ""),
+            )
+        )
+    stable_rng = random.Random(
+        _stable_seed(
+            f"process_browser_user_agent:{source_key}:{process_image.casefold()}:{process_identity}"
+        )
+    )
+    return browser_user_agent_for_process(
+        stable_rng,
+        source_system,
+        process_image,
+        hostname=hostname,
+        domain_tags=domain_tags,
+    )
+
+
 def pick_proxy_domain_user_agent(
     rng: random.Random,
     source_system: "System | None",

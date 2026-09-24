@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.models.scenario import (
@@ -15,6 +16,7 @@ from evidenceforge.models.scenario import (
     SmbActivityEventSpec,
     SpillageEventSpec,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 from .context import TypedEventContext
 
@@ -96,22 +98,73 @@ def handle_smb_activity(
         rng=rng,
     )
     malicious_event["time"] = time
-    smb_actor, smb_spec = self._storyline_smb_actor_and_spec(
+    smb_actor, smb_spec, client_logon_id = self._storyline_smb_actor_and_spec(
         actor,
         system,
         time,
         spec,
     )
+    process_pid, process_image = self._storyline_smb_client_process(
+        system=system,
+        actor=smb_actor,
+        time=time,
+        client_logon_id=client_logon_id,
+    )
+    operation_pid, operation_image, terminate_operation, time, parent_pid = (
+        self._storyline_smb_operation_process(
+            system=system,
+            actor=smb_actor,
+            time=time,
+            spec=smb_spec,
+            client_logon_id=client_logon_id,
+            parent_pid=process_pid,
+        )
+    )
+    malicious_event["time"] = time
+    if terminate_operation:
+        process_pid = operation_pid
+        process_image = operation_image
     result = self.activity_generator.generate_smb_activity(
         spec=smb_spec,
         actor=smb_actor,
         parent_system=system,
         time=time,
+        process_pid=process_pid,
+        process_image=process_image,
+        client_logon_id=client_logon_id,
         client_source_override=self._storyline_smb_source_override(
             system=system,
             spec=smb_spec,
         ),
     )
+    if terminate_operation:
+        completed_at = getattr(result, "completed_at", time)
+        lifetime_tail_ms = 350 + (
+            _stable_seed(
+                f"smb-operation-process-tail:{system.hostname}:{process_pid}:"
+                f"{completed_at.isoformat()}"
+            )
+            % 901
+        )
+        termination_time = completed_at + timedelta(milliseconds=lifetime_tail_ms)
+        self.activity_generator.generate_process_termination(
+            user=smb_actor,
+            system=system,
+            time=termination_time,
+            pid=process_pid,
+            process_name=process_image,
+            logon_id=client_logon_id,
+            from_storyline=True,
+        )
+        self._remember_storyline_type9_smb_completion(
+            system=system,
+            local_actor=smb_actor,
+            outbound_actor=actor,
+            logon_id=client_logon_id,
+            parent_pid=parent_pid,
+            completed_at=termination_time,
+            process_pid=process_pid,
+        )
     malicious_event.update(
         {
             "session_id": result.session_id,

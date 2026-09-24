@@ -53,6 +53,49 @@ class TestProxyContextReferrer:
         assert hasattr(px, "referrer")
         assert px.referrer == ""
 
+    def test_combined_log_separates_no_body_semantics_from_wire_bytes(self, tmp_path):
+        """CONNECT and 304 body fields stay empty while wire accounting remains explicit."""
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.proxy import ProxyEmitter
+
+        emitter = ProxyEmitter(load_format("proxy_access"), tmp_path)
+        rendered_lines: list[str] = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+        for method, status_code, url in (
+            ("CONNECT", 200, "example.com:443"),
+            ("GET", 304, "http://example.com/app.js"),
+        ):
+            emitter.emit(
+                OccurrenceBuilder(
+                    timestamp=datetime(2024, 3, 15, 10, 0, tzinfo=UTC),
+                    event_type="connection",
+                    network=network_plan(
+                        src_ip="10.0.10.50",
+                        src_port=54321,
+                        dst_ip="93.184.216.34",
+                        dst_port=8080,
+                        protocol="tcp",
+                    ),
+                    proxy=ProxyContext(
+                        client_ip="10.0.10.50",
+                        method=method,
+                        url=url,
+                        host="example.com",
+                        status_code=status_code,
+                        sc_bytes=147,
+                        response_body_bytes=0,
+                        proxy_fqdn="PROXY-01",
+                    ),
+                )
+            )
+
+        assert len(rendered_lines) == 2
+        for line in rendered_lines:
+            fields = _parse_proxy_fields(line)
+            assert "sc_bytes" not in fields
+            assert fields["wire_sc_bytes"] == 147
+
     def test_referrer_field_settable(self):
         px = ProxyContext(
             client_ip="10.0.0.1",
@@ -616,7 +659,7 @@ class TestProxyActionSemantics:
         setup_offset_ms = round((tunnel_requested_at - connected_at).total_seconds() * 1000)
         assert setup_offset_ms + connect["tunnel_duration_ms"] <= 1000
         assert connect["cs_bytes"] + connect["tunnel_cs_bytes"] == 5000
-        assert connect["sc_bytes"] + connect["tunnel_sc_bytes"] == 8000
+        assert connect["wire_sc_bytes"] + connect["tunnel_sc_bytes"] == 8000
 
     def test_splunk_target_renders_apache_ta_json_without_w3c_header(self, tmp_path):
         from evidenceforge.formats import load_format
@@ -750,7 +793,7 @@ class TestProxyActionSemantics:
         assert connect_fields["status_code"] == 200
         assert inspected_fields["cs_bytes"] == 700
         assert inspected_fields["sc_bytes"] == 4096
-        assert connect_fields["sc_bytes"] < inspected_fields["sc_bytes"]
+        assert connect_fields["wire_sc_bytes"] < inspected_fields["sc_bytes"]
         assert connect_fields["proxy_action"] == "tunnel-setup"
         assert connect_fields["ssl_bump_action"] == "peek"
         assert connect_fields["byte_scope"] == "connect-control-message"

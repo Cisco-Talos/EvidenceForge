@@ -181,6 +181,7 @@ def _public_pipeline_signature(runtime: TimingRuntime) -> tuple[object, ...]:
         side_effect=lambda **kwargs: kwargs["start_time"] + timedelta(milliseconds=250)
     )
     generator._remember_foreground_shell_available = Mock()
+    generator._admit_process_lifecycle = Mock()
 
     next_pid = iter((201, 202))
 

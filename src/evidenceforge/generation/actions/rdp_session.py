@@ -1438,11 +1438,19 @@ class RdpSessionActionBundle:
         # Keep enough canonical headroom for independently delayed Security and
         # Sysmon process-start observations to remain visible before 4624.
         auth_time = session_start + timedelta(milliseconds=1_250)
-        user_manager_time = auth_time + timedelta(milliseconds=100)
-        explorer_time = user_manager_time + timedelta(milliseconds=150)
+        action_id = self._request.stable_id
+        user_manager_delay, desktop_shell_delay = (
+            self._timing_planner().windows_session_bootstrap_delays(
+                stable_id=action_id,
+                host=self._request.target_system.hostname,
+                lifecycle_id=action_id,
+                remote=True,
+            )
+        )
+        user_manager_time = auth_time + timedelta(seconds=user_manager_delay)
+        explorer_time = user_manager_time + timedelta(seconds=desktop_shell_delay)
         if explorer_time >= transport_close:
             raise StateError("Exact RDP transport closes before desktop bootstrap completes")
-        action_id = self._request.stable_id
         batch_builder = state.begin_materialization_batch()
         session_plan = batch_builder.plan_session(
             username=user.username,

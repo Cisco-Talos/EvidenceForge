@@ -1471,6 +1471,39 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_pkts > 0
         assert event.network.resp_bytes > 0
 
+    def test_tcp_dns_response_owns_tcp_history_and_packet_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Successful TCP DNS must include handshake, data, and close packets."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="tcp",
+            service="dns",
+            dns=DnsContext(
+                query="zone.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["10.0.0.20"],
+                rtt=0.08,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "SF"
+        assert event.network.history.startswith("ShA")
+        assert "D" in event.network.history
+        assert "d" in event.network.history
+        assert event.network.history.endswith(("Ff", "F", "f"))
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
+
     def test_inferred_servfail_dns_row_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
     ):
@@ -1539,7 +1572,12 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.dns.rcode == "SERVFAIL"
         assert event.network.conn_state == "SF"
-        assert event.network.resp_pkts >= 1
+        assert event.network.history.startswith("ShA")
+        assert "D" in event.network.history
+        assert "d" in event.network.history
+        assert event.network.history.endswith(("Ff", "F", "f"))
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
         assert event.network.resp_ip_bytes > event.network.resp_bytes
 
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(

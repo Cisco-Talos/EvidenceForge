@@ -227,8 +227,8 @@ class TestInboundGenerationRegression:
         """UDP syslog deliveries must not inherit generic responder payload."""
 
         class _FakeActivityGenerator:
-            def __init__(self) -> None:
-                self._ip_to_system = {}
+            def __init__(self, sender: System) -> None:
+                self._ip_to_system = {sender.ip: sender}
                 self.calls: list[dict[str, object]] = []
 
             def generate_connection(self, **kwargs: object) -> None:
@@ -263,24 +263,31 @@ class TestInboundGenerationRegression:
             lambda _persona, _os_cat: [],
         )
 
-        engine = object.__new__(_FakeBaseline)
-        engine.activity_generator = _FakeActivityGenerator()
-        engine.state_manager = _FakeStateManager()
-        engine.scenario = SimpleNamespace(
-            environment=SimpleNamespace(users=[], network=None),
+        sender = System(
+            hostname="APP-01",
+            ip="10.10.1.20",
+            os="Ubuntu 22.04",
+            type="server",
         )
-        system = SimpleNamespace(
+        receiver = System(
             hostname="LOG-01",
             ip="10.10.2.40",
-            roles=["log_server"],
+            os="Ubuntu 22.04",
             type="server",
-            public_hostnames=[],
-            assigned_user=None,
+            services=["rsyslog"],
+            roles=["log_server"],
+        )
+        engine = object.__new__(_FakeBaseline)
+        engine.activity_generator = _FakeActivityGenerator(sender)
+        engine.state_manager = _FakeStateManager()
+        engine._system_pids = {sender.hostname: {"rsyslogd": 741}}
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(users=[], network=None, systems=[sender, receiver]),
         )
 
         engine._generate_profile_traffic(
             current_hour=datetime(2026, 4, 13, 13, tzinfo=UTC),
-            system=system,
+            system=receiver,
             rng=Random(7),
             os_cat="linux",
             local_dt=datetime(2026, 4, 13, 13, tzinfo=UTC),
@@ -289,6 +296,14 @@ class TestInboundGenerationRegression:
         assert engine.activity_generator.calls
         assert all(call["orig_bytes"] > 0 for call in engine.activity_generator.calls)
         assert all(call["resp_bytes"] == 0 for call in engine.activity_generator.calls)
+        assert all(call["src_ip"] == sender.ip for call in engine.activity_generator.calls)
+        assert all(call["dst_ip"] == receiver.ip for call in engine.activity_generator.calls)
+        assert all(call["pid"] == 741 for call in engine.activity_generator.calls)
+        assert all(
+            call["process_image"] == "/usr/sbin/rsyslogd"
+            for call in engine.activity_generator.calls
+        )
+        assert all(call["emit_dns"] is False for call in engine.activity_generator.calls)
 
     def test_udp_syslog_payload_override_preserves_rng_scope(self):
         """Protocol overrides must not reshape unrelated deterministic activity."""

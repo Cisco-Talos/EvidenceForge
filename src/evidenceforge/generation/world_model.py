@@ -1227,6 +1227,49 @@ class WorldPlanner:
             return None
         return max(candidates, key=self._session_start_sort_key)
 
+    def _find_single_desktop_rdp_session(
+        self,
+        username: str,
+        target_system: System,
+        source_ip: str | None,
+        at_time: datetime,
+    ) -> ActiveSession | None:
+        """Return a live RDP desktop on a Windows client-class host.
+
+        Windows server and domain-controller targets intentionally retain their
+        existing multi-session behavior. A returned client session may still
+        have a connected transport or may be inside its exact reconnect window;
+        the caller decides whether to reuse it directly or reconnect it through
+        the RDP action bundle.
+        """
+
+        host = self.world_model.hosts.get(target_system.hostname)
+        if (
+            host is None
+            or host.os_category != "windows"
+            or (target_system.type or "workstation").casefold() in {"server", "domain_controller"}
+        ):
+            return None
+
+        canonical_source = (source_ip or "").casefold()
+        cutoff = self._canonical_aware_time(at_time, field_name="at_time")
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user(username)
+            if session.system == target_system.hostname
+            and session.logon_type == 10
+            and session.session_kind == "rdp"
+            and (session.end_plan is None or cutoff < ensure_utc(session.end_plan.canonical_end))
+            and (
+                not canonical_source
+                or canonical_source == "-"
+                or session.source_ip.casefold() == canonical_source
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._session_start_sort_key)
+
     def bootstrap_user_session(
         self,
         user: User,
@@ -1241,6 +1284,7 @@ class WorldPlanner:
         required_until: datetime | None = None,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        rdp_transport_time: datetime | None = None,
         _prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
         if _prepared_rdp_bootstrap is not None:
@@ -1253,6 +1297,46 @@ class WorldPlanner:
                 source_ip_override=source_ip_override,
                 session_kind=session_kind,
             )
+
+        reconnect_logon_id: str | None = None
+        if session_kind == "rdp":
+            if rdp_transport_time is not None:
+                rdp_transport_time = self._canonical_aware_time(
+                    rdp_transport_time,
+                    field_name="rdp_transport_time",
+                )
+            requested_source_ip = (
+                _prepared_rdp_bootstrap.session_plan.source_ip
+                if _prepared_rdp_bootstrap is not None
+                else source_ip_override or (source_system.ip if source_system is not None else None)
+            )
+            effective_user = self.activity_generator._coerce_windows_rdp_user_from_existing_session(
+                user,
+                target_system,
+                requested_source_ip or "",
+            )
+            user = effective_user
+            existing_rdp = self._find_single_desktop_rdp_session(
+                effective_user.username,
+                target_system,
+                requested_source_ip,
+                time,
+            )
+            if existing_rdp is not None:
+                transport_connected = existing_rdp.network_close_time is None or ensure_utc(
+                    time
+                ) < ensure_utc(existing_rdp.network_close_time)
+                if transport_connected:
+                    existing_rdp.last_activity_time = max(
+                        ensure_utc(time),
+                        self._session_start_sort_key(existing_rdp),
+                    )
+                    if session_end_plan is not None:
+                        self.state_manager.plan_session_end(existing_rdp.logon_id, session_end_plan)
+                    if storyline_protected:
+                        existing_rdp.storyline_protected = True
+                    return SessionBootstrapResult(session=existing_rdp, network_uid=None)
+                reconnect_logon_id = existing_rdp.logon_id
 
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -1274,7 +1358,7 @@ class WorldPlanner:
         existing = self._find_user_session(
             user.username, target_system.hostname, session_kind, at_time=time
         )
-        if allow_existing and existing is not None:
+        if allow_existing and existing is not None and session_kind != "rdp":
             # Require exact session_kind match when the caller specifies one.
             # Prevents interactive requests from reusing network/rdp sessions
             # and vice versa — each kind carries different transport evidence.
@@ -1345,7 +1429,9 @@ class WorldPlanner:
             ):
                 logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
             else:
-                logon_time = time - timedelta(seconds=_sample_rdp_bootstrap_lead_seconds(rng))
+                logon_time = rdp_transport_time or (
+                    time - timedelta(seconds=_sample_rdp_bootstrap_lead_seconds(rng))
+                )
             activity_time = time
         self.state_manager.set_current_time(logon_time)
 
@@ -1372,6 +1458,7 @@ class WorldPlanner:
                 rng,
                 session_end_plan=session_end_plan,
                 ids_alerts=ids_alerts,
+                reconnect_logon_id=reconnect_logon_id,
                 prepared_rdp_bootstrap=_prepared_rdp_bootstrap,
             )
             if storyline_protected and result.session:
@@ -2083,6 +2170,7 @@ class WorldPlanner:
         rng: random.Random,
         session_end_plan: SessionEndPlan | None = None,
         ids_alerts: list[IdsAlertPlan] | None = None,
+        reconnect_logon_id: str | None = None,
         prepared_rdp_bootstrap: _PreparedRdpSessionBootstrap | None = None,
     ) -> SessionBootstrapResult:
         source_pid = -1
@@ -2119,6 +2207,7 @@ class WorldPlanner:
             source_pid=source_pid,
             source_process_time=source_process_time,
             source_process_factory=source_process_factory,
+            logon_id=reconnect_logon_id,
             preserve_explicit_source=plan.source_system is None,
             session_end_plan=session_end_plan,
             ids_alerts=ids_alerts,

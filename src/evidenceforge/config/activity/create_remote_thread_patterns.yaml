@@ -11,6 +11,14 @@ baseline_noise:
   probability_per_host_hour: 0.08
   max_events_per_hour: 1
 
+# These APIs create a thread but are not the target thread's entry routine.
+# Overlay-provided start locations using them are ignored.
+forbidden_start_functions:
+  - CreateRemoteThread
+  - CreateRemoteThreadEx
+  - NtCreateThreadEx
+  - RtlCreateUserThread
+
 baseline_pairs:
   - source_pid_key: msmpeng
     source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'
@@ -74,15 +82,12 @@ baseline_pairs:
 
 start_locations:
   msmpeng.exe:
-    - module: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpClient.dll'
-      function: MpCreateRemoteThread
-      weight: 4
-    - module: 'C:\ProgramData\Microsoft\Windows Defender\Platform\MpOav.dll'
-      function: AmsiScanBuffer
-      weight: 3
     - module: 'C:\Windows\System32\ntdll.dll'
       function: TppWorkerThread
-      weight: 2
+      weight: 4
+    - module: 'C:\Windows\System32\ntdll.dll'
+      function: RtlUserThreadStart
+      weight: 3
   csrss.exe:
     - module: 'C:\Windows\System32\winsrv.dll'
       function: SrvCreateSystemThreads
@@ -114,9 +119,9 @@ start_locations:
 target_overrides:
   lsass.exe:
     start_locations:
-      - module: 'C:\Windows\System32\sechost.dll'
-        function: LsaICLookupNamesWithCreds
+      - module: 'C:\Windows\System32\ntdll.dll'
+        function: TppWorkerThread
         weight: 2
       - module: 'C:\Windows\System32\ntdll.dll'
-        function: NtCreateThreadEx
+        function: RtlUserThreadStart
         weight: 3

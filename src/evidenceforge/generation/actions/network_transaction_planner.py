@@ -1832,7 +1832,7 @@ class NetworkTransactionPlanner:
         pid: int,
         stable_id: str,
     ) -> float | None:
-        """Bound process-owned transport lifetime by an authoritative session end."""
+        """Bound process-owned transport lifetime by its owning session hard deadline."""
 
         if source_system is None or pid <= 0:
             return duration
@@ -1840,8 +1840,13 @@ class NetworkTransactionPlanner:
             source_system.hostname,
             pid,
         )
-        if end_plan is None or not end_plan.is_authoritative:
+        if end_plan is None or not end_plan.is_hard_deadline:
             return duration
+        relationship_key = (
+            "network.action_bundle_session_close_gap"
+            if end_plan.authority == "action_bundle"
+            else "network.authoritative_session_close_gap"
+        )
         canonical_start = ensure_utc(start)
         deadline = ensure_utc(end_plan.canonical_end)
         if canonical_start >= deadline:
@@ -1852,17 +1857,17 @@ class NetworkTransactionPlanner:
                 else ""
             )
             raise StateError(
-                "Process-owned network activity cannot begin at or after its authoritative "
-                f"session end: {source_system.hostname} pid={pid} "
+                "Process-owned network activity cannot begin at or after its owning session "
+                f"hard deadline: {source_system.hostname} pid={pid} "
                 f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
                 f"{process_detail}"
             )
         available_us = round((deadline - canonical_start).total_seconds() * 1_000_000)
         if available_us <= 3:
-            self._timing_runtime.audit.record_saturation("network.authoritative_session_close_gap")
+            self._timing_runtime.audit.record_saturation(relationship_key)
             raise StateError(
                 "Process-owned network activity has no microsecond interior before its "
-                f"authoritative session end: {source_system.hostname} pid={pid} "
+                f"owning session hard deadline: {source_system.hostname} pid={pid} "
                 f"start={canonical_start.isoformat()} end={deadline.isoformat()}"
             )
         maximum_gap_us = min(1_500_001, available_us)
@@ -1887,7 +1892,7 @@ class NetworkTransactionPlanner:
                 minimum=float(minimum_gap_us),
                 maximum=float(maximum_gap_us),
             ),
-            relationship_key="network.authoritative_session_close_gap",
+            relationship_key=relationship_key,
             scope=scope,
             sample_key=deadline.isoformat(),
         )
@@ -2650,7 +2655,7 @@ class NetworkTransactionPlanner:
                 )
             )
             is not None
-            and owning_end_plan.is_authoritative
+            and owning_end_plan.is_hard_deadline
             and ensure_utc(time) >= ensure_utc(owning_end_plan.canonical_end)
         ):
             logger.debug(
@@ -3108,6 +3113,44 @@ class NetworkTransactionPlanner:
 
         explicit_proxy = will_route_explicit_proxy
         if explicit_proxy:
+            if http is not None and source_system is not None and not suppress_source_pid_inference:
+                attribution = _NetworkOccurrenceDraft(
+                    timestamp=time,
+                    http=http,
+                    network=NetworkTransactionDraft(
+                        src_ip=src_ip,
+                        src_port=src_port or 0,
+                        dst_ip=dst_ip,
+                        dst_port=dst_port,
+                        protocol=proto,
+                        service=service or "",
+                        duration=duration,
+                        initiating_pid=pid,
+                    ),
+                )
+                if pid > 0:
+                    executor._set_connection_process_context(
+                        attribution,
+                        source_system=source_system,
+                        pid=pid,
+                        image=process_image,
+                    )
+                executor._repair_browser_http_process_attribution(
+                    attribution,
+                    source_system=source_system,
+                    time=time,
+                )
+                if attribution.network.initiating_pid != pid:
+                    pid = attribution.network.initiating_pid
+                    process_image = (
+                        attribution.process.image if attribution.process is not None else None
+                    )
+                self._bind_browser_user_agent_to_process(
+                    event=attribution,
+                    source_system=source_system,
+                    hostname=hostname or http.host,
+                )
+                http = attribution.http
             if command_http_needs_response_size and http is not None:
                 # The delegated proxy transaction, not this never-opened
                 # network root, owns this command-derived response estimate.
@@ -3373,11 +3416,7 @@ class NetworkTransactionPlanner:
                 )
             )
 
-        if (
-            resolved_source_system is not None
-            and http is not None
-            and not suppress_source_pid_inference
-        ):
+        if resolved_source_system is not None and http is not None:
             # Direct HTTP and client-to-proxy listener traffic own a real client
             # process prerequisite (for example curl/wget/browser), independent of
             # whether the later transport root is admitted. Resolve or start that
@@ -3406,15 +3445,21 @@ class NetworkTransactionPlanner:
                     pid=pid,
                     image=process_image,
                 )
-            executor._repair_explicit_proxy_listener_process_attribution(
-                attribution,
+            if not suppress_source_pid_inference:
+                executor._repair_explicit_proxy_listener_process_attribution(
+                    attribution,
+                    source_system=resolved_source_system,
+                    time=time,
+                )
+                executor._repair_browser_http_process_attribution(
+                    attribution,
+                    source_system=resolved_source_system,
+                    time=time,
+                )
+            self._bind_browser_user_agent_to_process(
+                event=attribution,
                 source_system=resolved_source_system,
-                time=time,
-            )
-            executor._repair_browser_http_process_attribution(
-                attribution,
-                source_system=resolved_source_system,
-                time=time,
+                hostname=hostname or http.host,
             )
             if attribution.network.initiating_pid != pid:
                 pid = attribution.network.initiating_pid
@@ -4129,7 +4174,7 @@ class NetworkTransactionPlanner:
         canonical_terminal_duration = duration
 
         dns_has_response = (
-            protocol_evidence.proto == "udp"
+            protocol_evidence.proto in {"udp", "tcp"}
             and service == "dns"
             and protocol_evidence.dns is not None
             and (
@@ -4143,7 +4188,6 @@ class NetworkTransactionPlanner:
         # ICMP is connectionless — always OTH regardless of what the caller passed
         if protocol_evidence.proto == "icmp":
             conn_state = "OTH"
-            history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
             orig_bytes, resp_bytes, duration = self._plan_icmp_payload(
@@ -4154,9 +4198,10 @@ class NetworkTransactionPlanner:
                 stable_id=facts.stable_id,
                 conn_id=conn_id,
             )
+            history = "Dd" if (resp_bytes or 0) > 0 else "D"
         elif dns_has_response:
             conn_state = "SF"
-            history = "Dd"
+            history = _tcp_success_history(rng) if protocol_evidence.proto == "tcp" else "Dd"
             orig_bytes = max(orig_bytes or 0, 28)
             resp_bytes = max(resp_bytes or 0, 40)
             if protocol_evidence.dns.rtt is not None and (
@@ -4434,7 +4479,7 @@ class NetworkTransactionPlanner:
                 )
                 if (
                     final_end_plan is not None
-                    and final_end_plan.is_authoritative
+                    and final_end_plan.is_hard_deadline
                     and ensure_utc(time) >= ensure_utc(final_end_plan.canonical_end)
                 ):
                     logger.debug(
@@ -4782,7 +4827,9 @@ class NetworkTransactionPlanner:
                 committed_suppressed = True
             if not had_response_payload:
                 event.network.conn_state = "SF"
-                event.network.history = "Dd"
+                event.network.history = (
+                    _tcp_success_history(rng) if protocol_evidence.proto == "tcp" else "Dd"
+                )
                 event.network.resp_bytes = rng.randint(80, 220)
                 if protocol_evidence.proto == "udp":
                     event.network.orig_pkts = event.network.history.count("D")
@@ -4798,8 +4845,24 @@ class NetworkTransactionPlanner:
                         event.network.resp_bytes + event.network.resp_pkts * overhead
                     )
                 else:
-                    event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
-                    event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                    event.network.orig_pkts, event.network.resp_pkts = (
+                        _tcp_packet_counts_from_payload_and_history(
+                            event.network.orig_bytes,
+                            event.network.resp_bytes,
+                            event.network.history,
+                            rng,
+                        )
+                    )
+                    event.network.orig_ip_bytes = _tcp_ip_byte_count(
+                        event.network.orig_bytes,
+                        event.network.orig_pkts,
+                        rng,
+                    )
+                    event.network.resp_ip_bytes = _tcp_ip_byte_count(
+                        event.network.resp_bytes,
+                        event.network.resp_pkts,
+                        rng,
+                    )
             event.network.duration = self._dns_transport_duration_seconds(
                 request,
                 synthesized_rtt,
@@ -4877,6 +4940,75 @@ class NetworkTransactionPlanner:
             )
         return proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer
 
+    def _process_browser_user_agent(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        endpoints: ResolvedNetworkEndpoints,
+        hostname: str,
+        domain_tags: list[str],
+    ) -> str:
+        """Return the stable browser identity of the process that owns this flow."""
+        if endpoints.source_system is None or event.network.initiating_pid is None:
+            return ""
+        return self._browser_user_agent_for_pid(
+            source_system=endpoints.source_system,
+            pid=event.network.initiating_pid,
+            hostname=hostname,
+            domain_tags=domain_tags,
+        )
+
+    def _browser_user_agent_for_pid(
+        self,
+        *,
+        source_system: System,
+        pid: int,
+        hostname: str,
+        domain_tags: list[str],
+    ) -> str:
+        """Return the stable browser identity for one canonical process PID."""
+        process = self._executor.state_manager.get_process(
+            source_system.hostname,
+            pid,
+        )
+        if process is None:
+            return ""
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            stable_browser_user_agent_for_process,
+        )
+
+        process_identity = process.ecar_object_id or (
+            f"{process.pid}:{process.start_time.isoformat()}"
+        )
+        return stable_browser_user_agent_for_process(
+            source_system,
+            process.image,
+            process_identity,
+            hostname=hostname,
+            domain_tags=domain_tags,
+        )
+
+    def _bind_browser_user_agent_to_process(
+        self,
+        *,
+        event: _NetworkOccurrenceDraft,
+        source_system: System | None,
+        hostname: str,
+    ) -> None:
+        """Project one browser process identity onto its canonical HTTP request."""
+        if source_system is None or event.http is None or event.network.initiating_pid <= 0:
+            return
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
+
+        process_ua = self._browser_user_agent_for_pid(
+            source_system=source_system,
+            pid=event.network.initiating_pid,
+            hostname=hostname,
+            domain_tags=get_domain_tags(hostname),
+        )
+        if process_ua:
+            event.http = replace(event.http, user_agent=process_ua)
+
     def _prepare_transparent_proxy_evidence(
         self,
         *,
@@ -4917,6 +5049,14 @@ class NetworkTransactionPlanner:
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
 
             domain_tags = get_domain_tags(proxy_hostname)
+            process_ua = self._process_browser_user_agent(
+                event=event,
+                endpoints=endpoints,
+                hostname=proxy_hostname,
+                domain_tags=domain_tags,
+            )
+            if process_ua and event.http is not None:
+                event.http = replace(event.http, user_agent=process_ua)
             proxy_method, url, proxy_content_type, proxy_ua_override, user_agent, proxy_referrer = (
                 self._proxy_request_presentation(
                     event.http,
@@ -4926,6 +5066,9 @@ class NetworkTransactionPlanner:
                     rng=rng,
                 )
             )
+            if process_ua:
+                proxy_ua_override = process_ua
+                user_agent = process_ua
             from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
             apply_domain_user_agent = event.http is None or (
@@ -5092,7 +5235,13 @@ class NetworkTransactionPlanner:
             source_system_type=getattr(endpoints.source_system, "type", None),
             allow_canonical_protocol_templates=False,
         )
-        ua = executor._proxy_user_agent_for_context(
+        process_ua = self._process_browser_user_agent(
+            event=event,
+            endpoints=endpoints,
+            hostname=web_host,
+            domain_tags=web_domain_tags,
+        )
+        ua = process_ua or executor._proxy_user_agent_for_context(
             rng,
             endpoints.source_system,
             hostname=web_host,

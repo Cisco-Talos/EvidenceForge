@@ -29,7 +29,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.contexts import IdsAlertPlan
+from evidenceforge.events.contexts import DnsContext, IdsAlertPlan
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -276,7 +276,47 @@ def test_state_manager_accumulates_persistent_application_transactions() -> None
     assert connection.traffic_ledger.resp.packets == 14
 
 
-def test_process_owned_connection_is_capped_before_authoritative_session_end() -> None:
+def test_tcp_dns_response_owns_successful_transport_state() -> None:
+    """A modeled TCP DNS response cannot coexist with a rejected transport."""
+    state = StateManager()
+    start = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+    state.set_current_time(start)
+    emitter = Mock()
+    emitter.can_handle.return_value = True
+    generator = ActivityGenerator(state, {"zeek_conn": emitter})
+
+    generator.generate_connection(
+        src_ip="10.0.0.10",
+        dst_ip="10.0.0.53",
+        time=start,
+        dst_port=53,
+        proto="tcp",
+        service="dns",
+        dns=DnsContext(
+            query="zone.example.com",
+            answers=["10.0.0.20"],
+            rtt=0.08,
+        ),
+    )
+
+    event = next(call.args[0] for call in emitter.emit.call_args_list)
+    assert event.network is not None
+    assert event.network.conn_state == "SF"
+    assert event.network.history.startswith("ShA")
+    assert "D" in event.network.history
+    assert "d" in event.network.history
+    assert event.network.history.endswith(("Ff", "F", "f"))
+    assert event.dns is not None
+    assert event.dns.rtt == 0.08
+    assert event.network.duration >= event.dns.rtt
+    assert event.network.orig_pkts >= 3
+    assert event.network.resp_pkts >= 3
+
+
+@pytest.mark.parametrize("authority", ["explicit_storyline", "action_bundle"])
+def test_process_owned_connection_is_capped_before_hard_session_deadline(
+    authority: str,
+) -> None:
     """The network planner must shorten a child transport instead of moving logoff."""
     state = StateManager()
     start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -296,7 +336,11 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
         start_time=start,
         session_kind="rdp",
     )
-    plan = SessionEndPlan(deadline, "explicit_storyline", "rdp-close")
+    plan = SessionEndPlan(
+        deadline,
+        authority,
+        "rdp-close" if authority == "explicit_storyline" else "",
+    )
     state.plan_session_end(logon_id, plan)
     pid = state.create_process(
         source.hostname,
@@ -311,7 +355,7 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
     emitter.can_handle.return_value = True
     generator = ActivityGenerator(state, {"zeek_conn": emitter})
     generator._ip_to_system = {source.ip: source}
-    connection_start = deadline - timedelta(minutes=10)
+    connection_start = deadline - timedelta(seconds=1)
 
     generator.generate_connection(
         src_ip=source.ip,
@@ -320,7 +364,7 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
         dst_port=22,
         proto="tcp",
         service="ssh",
-        duration=3600.0,
+        duration=4.0,
         source_system=source,
         pid=pid,
         conn_state="SF",
@@ -332,11 +376,15 @@ def test_process_owned_connection_is_capped_before_authoritative_session_end() -
         if call.args[0].event_type == "connection"
     )
     assert event.network.closed_at is not None
-    assert event.network.closed_at <= deadline - timedelta(milliseconds=100)
-    assert event.network.duration < 600
+    assert event.network.closed_at < deadline
+    assert event.network.duration < 1
+    assert event.network.initiating_pid == pid
     process = state.get_process(source.hostname, pid)
     assert process is not None
     assert process.last_activity_time < deadline
+    session = state.get_session(logon_id)
+    assert session is not None
+    assert session.last_activity_time < deadline
 
 
 def test_inferred_connection_pid_is_omitted_after_owning_session_end() -> None:
@@ -398,8 +446,9 @@ def test_inferred_connection_pid_is_omitted_after_owning_session_end() -> None:
     assert event.network.initiating_pid == -1
 
 
-def test_explicit_connection_pid_is_omitted_after_owning_session_end() -> None:
-    """Late baseline attribution must not violate an authoritative session end."""
+@pytest.mark.parametrize("authority", ["explicit_storyline", "action_bundle"])
+def test_explicit_connection_pid_is_omitted_after_owning_session_end(authority: str) -> None:
+    """Late baseline attribution must not violate a hard session deadline."""
     state = StateManager()
     start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
     deadline = start + timedelta(hours=1)
@@ -420,7 +469,11 @@ def test_explicit_connection_pid_is_omitted_after_owning_session_end() -> None:
     )
     state.plan_session_end(
         logon_id,
-        SessionEndPlan(deadline, "explicit_storyline", "interactive-close"),
+        SessionEndPlan(
+            deadline,
+            authority,
+            "interactive-close" if authority == "explicit_storyline" else "",
+        ),
     )
     pid = state.create_process(
         source.hostname,
@@ -457,7 +510,10 @@ def test_explicit_connection_pid_is_omitted_after_owning_session_end() -> None:
     assert event.network.initiating_pid == -1
 
 
-def test_connection_pid_is_omitted_when_source_timing_crosses_session_end() -> None:
+@pytest.mark.parametrize("authority", ["explicit_storyline", "action_bundle"])
+def test_connection_pid_is_omitted_when_source_timing_crosses_session_end(
+    authority: str,
+) -> None:
     """Observation jitter must not move process-owned traffic beyond fixed logoff."""
     state = StateManager()
     start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -479,7 +535,11 @@ def test_connection_pid_is_omitted_when_source_timing_crosses_session_end() -> N
     )
     state.plan_session_end(
         logon_id,
-        SessionEndPlan(deadline, "explicit_storyline", "interactive-close"),
+        SessionEndPlan(
+            deadline,
+            authority,
+            "interactive-close" if authority == "explicit_storyline" else "",
+        ),
     )
     pid = state.create_process(
         source.hostname,

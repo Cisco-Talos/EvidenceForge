@@ -694,7 +694,7 @@ storyline:
         description: "Ping sweep of server VLAN"
       - type: process
         process_name: "/usr/bin/nmap"
-        command_line: "nmap -sT -p 22,80,443,445,3306 10.10.2.0/24"
+        command_line: "nmap -Pn -sT -p 22,80,443,445,3306 10.10.2.0/24"
         technique: "T1046 - Network Service Discovery"
         description: "TCP port scan of server VLAN"
 

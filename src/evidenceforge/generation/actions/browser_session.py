@@ -27,7 +27,7 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -190,6 +190,8 @@ class BrowserSessionActionBundle:
         request_plan, request_groups = _plan_http_request_groups(
             visible_requests,
             request_body_floor=request.request_body_floor,
+            timing=self.timing,
+            stable_id=request.stable_id,
         )
         planned_requests = sorted(
             enumerate(visible_requests),
@@ -229,6 +231,8 @@ class BrowserSessionActionBundle:
         request_plan, _request_groups = _plan_http_request_groups(
             requests,
             request_body_floor=self.request.request_body_floor,
+            timing=self.timing,
+            stable_id=self.request.stable_id,
         )
         base_time = ensure_utc(self.request.time)
         deadline = ensure_utc(self.request.latest_request_time)
@@ -737,6 +741,8 @@ def _plan_http_request_groups(
     requests: list[browsing_session.BrowsingRequest],
     *,
     request_body_floor: int = 0,
+    timing: BaselineTimingPlanner | None = None,
+    stable_id: str = "",
 ) -> tuple[dict[int, _HttpPlanValue], dict[_HttpGroupKey, dict[str, int]]]:
     """Plan source-native HTTP transaction depth and parent flow accounting."""
 
@@ -744,6 +750,7 @@ def _plan_http_request_groups(
     active_group: dict[str, _HttpGroupKey] = {}
     depths: dict[_HttpGroupKey, int] = {}
     last_emit_offset: dict[_HttpGroupKey, int] = {}
+    previous_request: dict[_HttpGroupKey, browsing_session.BrowsingRequest] = {}
     plan: dict[int, _HttpPlanValue] = {}
     groups: dict[_HttpGroupKey, dict[str, int]] = {}
 
@@ -759,8 +766,24 @@ def _plan_http_request_groups(
         trans_depth = depths[group_key]
         emit_offset_us = (req.time_offset_ms * 1_000) + req.time_offset_remainder_us
         if group_key in last_emit_offset:
-            emit_offset_us = max(emit_offset_us, last_emit_offset[group_key] + 600_000)
+            prior = previous_request[group_key]
+            planner = timing or BaselineTimingPlanner.compatibility(
+                datetime(1970, 1, 1, tzinfo=UTC)
+            )
+            lifecycle_id = stable_id or f"http-group:{group_key[0]}:{group_key[1]}"
+            minimum_gap_us = round(
+                planner.http_persistent_request_gap_seconds(
+                    stable_id=lifecycle_id,
+                    host=group_key[0],
+                    lifecycle_id=lifecycle_id,
+                    ordinal=trans_depth,
+                    response_body_bytes=prior.response_body_len,
+                )
+                * 1_000_000
+            )
+            emit_offset_us = max(emit_offset_us, last_emit_offset[group_key] + minimum_gap_us)
         last_emit_offset[group_key] = emit_offset_us
+        previous_request[group_key] = req
         plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_us)
 
         group = groups.setdefault(

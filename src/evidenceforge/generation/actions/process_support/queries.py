@@ -31,10 +31,13 @@ class ProcessStateQueries:
     def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
+        PID 0 represents an unobserved root and must not be assigned a user-shell image.
         PID 4 is always the Windows System process (ntoskrnl.exe). Unknown
         Linux PIDs have no safe parent image: returning a shell there fabricates
         impossible eCAR parent relationships such as bash with ppid=4.
         """
+        if pid == 0:
+            return "-"
         if pid == 4 and os_category == "windows":
             return r"C:\Windows\System32\ntoskrnl.exe"
         key = (hostname, pid)
@@ -112,7 +115,18 @@ class ProcessStateQueries:
             return True
         if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
             return True
-        return parent_proc.logon_id == logon_id
+        if parent_proc.logon_id == logon_id:
+            return True
+        child_session = self.state_manager.get_session(logon_id)
+        parent_session = self.state_manager.get_session(parent_proc.logon_id)
+        return bool(
+            child_session is not None
+            and child_session.logon_type == 9
+            and child_session.session_kind == "new_credentials"
+            and parent_session is not None
+            and child_session.parent_lifecycle_group_id == parent_session.lifecycle_group_id
+            and child_session.username.casefold() == parent_proc.username.casefold()
+        )
 
     def _process_instance_key(
         self,

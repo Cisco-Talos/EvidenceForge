@@ -89,6 +89,7 @@ from evidenceforge.models.scenario import (
     ConnectionEventSpec,
     EventSpacingConfig,
     SmbClientLocation,
+    SmbShareLocation,
     System,
     User,
 )
@@ -1471,6 +1472,114 @@ class StorylineMixin:
             )
         return caller, caller_session.logon_id
 
+    def _ensure_storyline_new_credentials_controller(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+    ) -> int:
+        """Materialize the long-lived command controller for a typed Type 9 session."""
+
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.username.casefold() != actor.username.casefold()
+            or session.logon_type != 9
+        ):
+            raise StateError(
+                "Storyline NewCredentials controller requires the exact Type 9 session: "
+                f"host={system.hostname} logon_id={logon_id} actor={actor.username}"
+            )
+        existing_pid = session.process_tree_root
+        if existing_pid is not None and self.state_manager.is_process_active_at(
+            system.hostname,
+            existing_pid,
+            time,
+        ):
+            return existing_pid
+
+        controller_time = ensure_utc(time) + timedelta(milliseconds=150)
+        process_name = r"C:\Windows\System32\cmd.exe"
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=controller_time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line="cmd.exe /d /q",
+            parent_pid=parent_pid,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            lifecycle_group_id=session.lifecycle_group_id,
+            require_exact_parent=True,
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline NewCredentials controller could not be materialized: "
+                f"host={system.hostname} logon_id={logon_id}"
+            )
+        session.process_tree_root = pid
+        self.activity_generator._record_user_process(system, actor, pid, process_name)
+        return pid
+
+    @staticmethod
+    def _storyline_new_credentials_explicit_offset() -> timedelta:
+        """Return the canonical lead from 4648 credential use to the Type 9 logon."""
+
+        return timedelta(milliseconds=250)
+
+    def _ensure_storyline_new_credentials_caller_process(
+        self,
+        *,
+        caller: User,
+        system: System,
+        time: datetime,
+        caller_logon_id: str,
+        outbound_username: str,
+    ) -> int:
+        """Materialize the live runas caller that owns one Type 9 bootstrap."""
+
+        caller_session = self.state_manager.get_session_at(caller_logon_id, time)
+        if caller_session is None or caller_session.system != system.hostname:
+            raise StateError(
+                "Storyline NewCredentials caller process requires the exact live session: "
+                f"host={system.hostname} logon_id={caller_logon_id}"
+            )
+        process_name = r"C:\Windows\System32\runas.exe"
+        # Reserve enough source-native headroom for the slowest configured eCAR
+        # CREATE observation (950 ms) and the dependent 4648 gap (650 ms).  The
+        # Type 9 logon must never render before the runas caller or credential use.
+        process_time = ensure_utc(time) - timedelta(seconds=2)
+        command_line = f'runas.exe /netonly /user:{outbound_username} "cmd.exe /d /q"'
+        preferred_parent = caller_session.process_tree_root or caller_session.explorer_pid or 4
+        pid = self.activity_generator.generate_process(
+            user=caller,
+            system=system,
+            time=process_time,
+            logon_id=caller_logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=preferred_parent,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            lifecycle_group_id=caller_session.lifecycle_group_id,
+            require_exact_parent=preferred_parent not in {0, 4},
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline NewCredentials runas caller could not be materialized: "
+                f"host={system.hostname} logon_id={caller_logon_id}"
+            )
+        return pid
+
     def _last_storyline_logon_for_actor_system(
         self,
         actor: User,
@@ -1509,7 +1618,7 @@ class StorylineMixin:
         system: System,
         time: datetime,
         spec: Any,
-    ) -> tuple[User, Any]:
+    ) -> tuple[User, Any, str]:
         """Separate a Type 9 local token from its outbound SMB credential."""
 
         logon_id = self._last_storyline_logon_for_actor_system(actor, system, at_time=time)
@@ -1519,7 +1628,7 @@ class StorylineMixin:
             or session.logon_type != 9
             or session.username.casefold() == actor.username.casefold()
         ):
-            return actor, spec
+            return actor, spec, ""
         users = {
             candidate.username.casefold(): candidate
             for candidate in self.scenario.environment.users
@@ -1532,7 +1641,305 @@ class StorylineMixin:
                 "in environment.users"
             )
         smb_principal = spec.smb_principal or actor.username
-        return local_actor, spec.model_copy(update={"smb_principal": smb_principal})
+        return (
+            local_actor,
+            spec.model_copy(update={"smb_principal": smb_principal}),
+            session.logon_id,
+        )
+
+    def _storyline_smb_client_process(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        client_logon_id: str,
+    ) -> tuple[int, str]:
+        """Return the live process that owns an explicit SMB credential session."""
+        if not client_logon_id:
+            return -1, ""
+        candidates = [
+            process
+            for process in self.state_manager.get_processes_on_system(system.hostname)
+            if process.logon_id == client_logon_id
+            and process.username.casefold() == actor.username.casefold()
+            and ensure_utc(process.start_time) <= ensure_utc(time)
+            and (process.end_time is None or ensure_utc(process.end_time) >= ensure_utc(time))
+        ]
+        if not candidates:
+            raise StateError(
+                "Storyline credentialed SMB requires a live client process under exact "
+                f"Type 9 LogonID {client_logon_id} on {system.hostname}"
+            )
+        process = max(
+            candidates, key=lambda candidate: (ensure_utc(candidate.start_time), candidate.pid)
+        )
+        return process.pid, process.image
+
+    @staticmethod
+    def _quote_powershell_literal(value: str) -> str:
+        """Quote one path for a PowerShell single-quoted literal."""
+
+        return value.replace("'", "''")
+
+    def _storyline_smb_location_path(self, location: Any) -> str:
+        """Resolve one authored share location to its source-visible UNC path."""
+
+        if not isinstance(location, SmbShareLocation):
+            return ""
+        world = getattr(self.activity_generator, "_storage_world", None)
+        if world is None:
+            return ""
+        share = world.share(location.share)
+        if location.file_ref is not None:
+            selected = world.select(
+                location.share,
+                file_ref=location.file_ref,
+                selector=location.selector,
+            )
+            if len(selected) != 1:
+                raise StateError(
+                    "Storyline SMB command requires one exact file for "
+                    f"{location.share!r}, resolved {len(selected)}"
+                )
+            return world.unc_path(share, selected[0].path)
+        if location.path is not None:
+            return world.unc_path(share, location.path)
+        if location.directory is not None:
+            return world.unc_path(share, location.directory)
+        path_glob = getattr(location.selector, "path_glob", "") or ""
+        search_root = path_glob.partition("*")[0].rstrip("\\/")
+        return world.unc_path(share, search_root)
+
+    def _storyline_smb_operation_command(self, spec: Any) -> str:
+        """Render the exact source-visible command for one credentialed SMB operation."""
+
+        source = getattr(spec, "source", None)
+        destination = getattr(spec, "destination", None)
+        target = getattr(spec, "target", None)
+        operation = getattr(spec, "operation", "")
+        if operation in {"browse", "read", "create", "update", "delete"}:
+            target_path = self._storyline_smb_location_path(target)
+            if not target_path:
+                return ""
+            literal = self._quote_powershell_literal(target_path)
+            action = {
+                "browse": f"Get-ChildItem -LiteralPath '{literal}' | Out-Null",
+                "read": (f"$stream=[System.IO.File]::OpenRead('{literal}'); $stream.Dispose()"),
+                "create": f"New-Item -ItemType File -Path '{literal}' -Force | Out-Null",
+                "update": f"Set-Content -LiteralPath '{literal}' -Value ''",
+                "delete": f"Remove-Item -LiteralPath '{literal}' -Force",
+            }[operation]
+            return f'powershell.exe -NoProfile -Command "{action}"'
+        if operation not in {"copy", "move"}:
+            return ""
+        world = getattr(self.activity_generator, "_storage_world", None)
+        if world is None:
+            return ""
+        destination_path = ""
+        if isinstance(destination, SmbClientLocation):
+            destination_path = destination.path or destination.directory or ""
+        elif isinstance(destination, SmbShareLocation):
+            destination_path = self._storyline_smb_location_path(destination)
+        if not destination_path:
+            return ""
+
+        if isinstance(source, SmbClientLocation):
+            source_path = source.path or ""
+            if not source_path:
+                return ""
+            verb = "Move-Item" if operation == "move" else "Copy-Item"
+            return (
+                "powershell.exe -NoProfile -Command "
+                f"\"{verb} -LiteralPath '{self._quote_powershell_literal(source_path)}' "
+                f"-Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
+            )
+        if not isinstance(source, SmbShareLocation):
+            return ""
+        share = world.share(source.share)
+
+        if source.file_ref is not None or source.path is not None:
+            selected = world.select(
+                source.share,
+                file_ref=source.file_ref,
+                path=source.path,
+                selector=source.selector,
+            )
+            if len(selected) != 1:
+                raise StateError(
+                    "Storyline SMB copy command requires one exact source file for "
+                    f"{source.share!r}, resolved {len(selected)}"
+                )
+            source_path = world.unc_path(share, selected[0].path)
+            verb = "Move-Item" if operation == "move" else "Copy-Item"
+            return (
+                "powershell.exe -NoProfile -Command "
+                f"\"{verb} -LiteralPath '{self._quote_powershell_literal(source_path)}' "
+                f"-Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
+            )
+
+        path_glob = getattr(source.selector, "path_glob", "") or ""
+        search_root = path_glob.partition("*")[0].rstrip("\\/")
+        source_path = world.unc_path(share, search_root)
+        command = (
+            "powershell.exe -NoProfile -Command "
+            f"\"Get-ChildItem -Path '{self._quote_powershell_literal(source_path)}' "
+            "-File -Recurse"
+        )
+        extensions = tuple(getattr(source.selector, "extensions", ()) or ())
+        if extensions:
+            patterns = ",".join(f"'*{extension}'" for extension in extensions)
+            command += f" -Include {patterns}"
+        batch = getattr(spec, "batch", None)
+        count = getattr(batch, "count", None)
+        if count is not None:
+            command += f" | Select-Object -First {count}"
+        verb = "Move-Item" if operation == "move" else "Copy-Item"
+        command += (
+            f" | {verb} -Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
+        )
+        return command
+
+    def _storyline_smb_operation_process(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        spec: Any,
+        client_logon_id: str,
+        parent_pid: int,
+    ) -> tuple[int, str, bool, datetime, int]:
+        """Create the exact shell-serialized process for a Type 9 SMB operation."""
+
+        if not client_logon_id or _get_os_category(system.os) != "windows":
+            return parent_pid, "", False, time, parent_pid
+        command_line = self._storyline_smb_operation_command(spec)
+        if not command_line:
+            raise StateError(
+                "Storyline credentialed SMB could not render an exact operation process: "
+                f"host={system.hostname}, LogonID={client_logon_id}, "
+                f"operation={getattr(spec, 'operation', '')}"
+            )
+        process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        state_manager = getattr(self, "state_manager", None)
+        parent_started_at: datetime | None = None
+        session_processes: list[Any] = []
+        if state_manager is not None:
+            session_processes = [
+                process
+                for process in state_manager.get_processes_on_system(system.hostname)
+                if process.logon_id == client_logon_id
+                and process.username.casefold() == actor.username.casefold()
+                and ensure_utc(process.start_time) <= ensure_utc(time)
+                and (process.end_time is None or ensure_utc(process.end_time) >= ensure_utc(time))
+            ]
+            session_pids = {process.pid for process in session_processes}
+            roots = [
+                process for process in session_processes if process.parent_pid not in session_pids
+            ]
+            if roots:
+                parent = max(
+                    roots,
+                    key=lambda process: (ensure_utc(process.start_time), process.pid),
+                )
+                parent_pid = parent.pid
+                parent_started_at = ensure_utc(parent.start_time)
+        lead_ms = 2500 + (
+            _stable_seed(
+                f"storyline_smb_operation_process:{system.hostname}:{client_logon_id}:"
+                f"{time.isoformat()}:{command_line}"
+            )
+            % 701
+        )
+        process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
+        if parent_started_at is not None:
+            process_time = max(process_time, parent_started_at + timedelta(milliseconds=1))
+        shell_ready_at = getattr(self, "_storyline_shell_available_at", {}).get(
+            (system.hostname, actor.username)
+        )
+        finalizer_time = getattr(
+            self.activity_generator,
+            "foreground_process_termination_time",
+            lambda _hostname, _pid: None,
+        )
+        for sibling in session_processes:
+            if sibling.parent_pid != parent_pid:
+                continue
+            sibling_close = finalizer_time(system.hostname, sibling.pid)
+            if sibling_close is None:
+                continue
+            sibling_ready = ensure_utc(sibling_close) + timedelta(
+                milliseconds=(
+                    180
+                    + _stable_seed(
+                        f"storyline_type9_shell_release:{system.hostname}:{client_logon_id}:"
+                        f"{parent_pid}:{sibling.pid}:{sibling_close.isoformat()}"
+                    )
+                    % 721
+                )
+            )
+            shell_ready_at = max(shell_ready_at or sibling_ready, sibling_ready)
+        if shell_ready_at is not None and process_time < shell_ready_at:
+            process_time = shell_ready_at
+            time = process_time + timedelta(milliseconds=lead_ms)
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=process_time,
+            logon_id=client_logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
+            require_exact_parent=True,
+        )
+        if pid <= 0:
+            raise StateError(
+                "Storyline credentialed SMB could not materialize its operation process: "
+                f"host={system.hostname}, LogonID={client_logon_id}, parent_pid={parent_pid}, "
+                f"process_time={process_time.isoformat()}, deadline={ensure_utc(time).isoformat()}"
+            )
+        record_process = getattr(self.activity_generator, "_record_user_process", None)
+        if callable(record_process):
+            record_process(system, actor, pid, process_name)
+        self._record_last_storyline_process(system, pid, process_name, command_line)
+        return pid, process_name, True, time, parent_pid
+
+    def _remember_storyline_type9_smb_completion(
+        self,
+        *,
+        system: System,
+        local_actor: User,
+        outbound_actor: User,
+        logon_id: str,
+        parent_pid: int,
+        completed_at: datetime,
+        process_pid: int,
+    ) -> None:
+        """Advance the exact Type 9 controller after one synchronous SMB command."""
+
+        ready_at = ensure_utc(completed_at) + timedelta(
+            milliseconds=(
+                180
+                + _stable_seed(
+                    f"storyline_type9_smb_ready:{system.hostname}:{logon_id}:"
+                    f"{parent_pid}:{process_pid}:{completed_at.isoformat()}"
+                )
+                % 721
+            )
+        )
+        if not hasattr(self, "_storyline_shell_available_at"):
+            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+        for username in {local_actor.username, outbound_actor.username}:
+            actor_key = (system.hostname, username)
+            self._storyline_shell_available_at[actor_key] = max(
+                ready_at,
+                self._storyline_shell_available_at.get(actor_key, ready_at),
+            )
 
     @staticmethod
     def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:
@@ -1634,9 +2041,14 @@ class StorylineMixin:
         if hasattr(self, "_storyline_start_to_logoff"):
             return
         pending: dict[tuple[str, str], list[str]] = {}
+        client_rdp_starts: dict[str, tuple[str, str]] = {}
         start_to_logoff: dict[str, str] = {}
         logoff_plans: dict[str, SessionEndPlan] = {}
         scenario = getattr(self, "scenario", None)
+        systems = {
+            system.hostname: system
+            for system in getattr(getattr(scenario, "environment", None), "systems", ())
+        }
         for storyline_event in getattr(scenario, "storyline", []):
             if not all(
                 hasattr(storyline_event, field)
@@ -1648,9 +2060,43 @@ class StorylineMixin:
                 spec_id = f"{storyline_event.id}:{spec_index}"
                 if spec.type in {"ssh_session", "rdp_session", "logon"}:
                     pending.setdefault(key, []).append(spec_id)
+                    system = systems.get(storyline_event.system)
+                    source_ip = str(getattr(spec, "source_ip", "") or "").casefold()
+                    is_remote_rdp = spec.type == "rdp_session" or (
+                        spec.type == "logon" and getattr(spec, "logon_type", None) == 10
+                    )
+                    if (
+                        is_remote_rdp
+                        and system is not None
+                        and _get_os_category(system.os) == "windows"
+                        and (system.type or "workstation").casefold()
+                        not in {"server", "domain_controller"}
+                        and source_ip not in {"", "-", system.ip.casefold()}
+                    ):
+                        client_rdp_starts[spec_id] = (
+                            storyline_event.system.casefold(),
+                            source_ip,
+                        )
                 elif spec.type == "logoff" and pending.get(key):
                     start_id = pending[key].pop()
-                    start_to_logoff[start_id] = spec_id
+                    matched_start_ids = [start_id]
+                    client_rdp_key = client_rdp_starts.get(start_id)
+                    if client_rdp_key is not None:
+                        for pending_key, pending_ids in pending.items():
+                            duplicate_ids = [
+                                candidate_id
+                                for candidate_id in pending_ids
+                                if client_rdp_starts.get(candidate_id) == client_rdp_key
+                            ]
+                            if duplicate_ids:
+                                pending[pending_key] = [
+                                    candidate_id
+                                    for candidate_id in pending_ids
+                                    if candidate_id not in duplicate_ids
+                                ]
+                                matched_start_ids.extend(duplicate_ids)
+                    for matched_start_id in matched_start_ids:
+                        start_to_logoff[matched_start_id] = spec_id
                     end_time = self._parse_storyline_time(storyline_event.time)
                     if end_time.tzinfo is None:
                         end_time = end_time.replace(tzinfo=UTC)
@@ -2765,6 +3211,16 @@ class StorylineMixin:
         )
         first_anchor = time - timedelta(seconds=lead_seconds)
         spacing_seconds = lead_seconds / (len(commands) + 1)
+        shell_key = (system.hostname, actor.username)
+        prior_completion = getattr(self, "_storyline_shell_available_at", {}).get(shell_key)
+        if prior_completion is not None:
+            earliest_anchor = ensure_utc(prior_completion) + timedelta(milliseconds=350)
+            if first_anchor < earliest_anchor:
+                first_anchor = earliest_anchor
+                spacing_seconds = rng.uniform(1.6, 4.8)
+            latest_candidate = first_anchor + timedelta(seconds=spacing_seconds * len(commands))
+            if latest_candidate >= ensure_utc(time) - timedelta(seconds=1):
+                return None
         latest_scheduled: datetime | None = None
         for command_index, command in enumerate(commands):
             scheduled = first_anchor + timedelta(seconds=spacing_seconds * (command_index + 1))
@@ -2936,8 +3392,6 @@ class StorylineMixin:
         )
         if host_ready is not None and time < host_ready:
             time = host_ready + timedelta(milliseconds=rng.randint(120, 700))
-        if _get_os_category(system.os) != "linux":
-            return time
         available_at = getattr(self, "_storyline_shell_available_at", {}).get(
             (system.hostname, actor.username)
         )

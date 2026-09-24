@@ -9979,6 +9979,12 @@ class StateManager:
                     )
                 if parent_activity_time < parent_identity.started_at:
                     raise StateError("Process termination parent activity precedes parent start")
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    parent_activity_time,
+                    hostname=parent_identity.hostname,
+                    logon_id=parent_identity.logon_id,
+                    label="Process termination parent activity",
+                )
 
             if (
                 self._process_termination_session_references(
@@ -10107,6 +10113,50 @@ class StateManager:
             if type(target) in {ProcessMaterializationPlan, ProcessTerminationMaterializationPlan}
             else target
         )
+
+    def _validate_activity_before_owning_hard_deadline_locked(
+        self,
+        activity_time: datetime,
+        *,
+        hostname: str,
+        logon_id: str,
+        staged_sessions: tuple[SessionMaterializationPlan, ...] = (),
+        effective_end_plans: dict[str, SessionEndPlan | None] | None = None,
+        label: str,
+    ) -> None:
+        """Reject activity at or after its live or staged session's hard deadline."""
+
+        if not logon_id:
+            return
+        staged = next(
+            (
+                session
+                for session in staged_sessions
+                if session.identity.hostname == hostname and session.identity.logon_id == logon_id
+            ),
+            None,
+        )
+        if staged is not None:
+            session_object_id = staged.identity.object_id
+            end_plan = staged.end_plan
+        else:
+            live = self._active_sessions.get(self._resolve_logon_id(logon_id))
+            if live is None or live.system != hostname:
+                return
+            session_object_id = live.ecar_object_id
+            end_plan = live.end_plan
+        if effective_end_plans is not None and session_object_id in effective_end_plans:
+            end_plan = effective_end_plans[session_object_id]
+        if end_plan is None or not end_plan.is_hard_deadline:
+            return
+        deadline = ensure_utc(end_plan.canonical_end)
+        if ensure_utc(activity_time) >= deadline:
+            raise StateError(
+                f"{label} must be strictly earlier than its owning hard session deadline: "
+                f"host={hostname!r} logon_id={logon_id!r} "
+                f"activity_time={ensure_utc(activity_time).isoformat()} "
+                f"deadline={deadline.isoformat()}"
+            )
 
     def _validate_action_live_session_identity(self, identity: SessionIdentity) -> ActiveSession:
         session = self._active_sessions.get(self._resolve_logon_id(identity.logon_id))
@@ -10589,6 +10639,10 @@ class StateManager:
                 if identity.object_id in metadata_by_session:
                     raise StateError("Action cohort repeats a session metadata target")
                 metadata_by_session[identity.object_id] = patch
+            effective_end_plans = {
+                object_id: patch.after.end_plan for object_id, patch in metadata_by_session.items()
+            }
+            staged_sessions = tuple(plan.sessions)
 
             process_activity: dict[str, ActionCohortProcessActivityPatch] = {}
             for patch in plan._process_activity:
@@ -10602,6 +10656,14 @@ class StateManager:
                     raise StateError("Action cohort repeats a process activity target")
                 if patch.activity_time < identity.started_at:
                     raise StateError("Action cohort process activity precedes process start")
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    patch.activity_time,
+                    hostname=identity.hostname,
+                    logon_id=identity.logon_id,
+                    staged_sessions=staged_sessions,
+                    effective_end_plans=effective_end_plans,
+                    label="Action cohort process activity",
+                )
                 process_activity[identity.object_id] = patch
 
             session_activity: dict[str, ActionCohortSessionActivityPatch] = {}
@@ -10620,6 +10682,14 @@ class StateManager:
                     raise StateError("Action cohort repeats a session activity target")
                 if patch.activity_time < identity.started_at:
                     raise StateError("Action cohort session activity precedes session start")
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    patch.activity_time,
+                    hostname=identity.hostname,
+                    logon_id=identity.logon_id,
+                    staged_sessions=staged_sessions,
+                    effective_end_plans=effective_end_plans,
+                    label="Action cohort session activity",
+                )
                 session_activity[identity.object_id] = patch
 
             termination_by_process: dict[str, tuple[int, ActionCohortProcessTermination]] = {}
@@ -10662,6 +10732,14 @@ class StateManager:
                         or termination.parent_activity.activity_time > termination.end_time
                     ):
                         raise StateError("Action cohort process-close parent activity is invalid")
+                    self._validate_activity_before_owning_hard_deadline_locked(
+                        termination.parent_activity.activity_time,
+                        hostname=parent_identity.hostname,
+                        logon_id=parent_identity.logon_id,
+                        staged_sessions=staged_sessions,
+                        effective_end_plans=effective_end_plans,
+                        label="Action cohort termination parent activity",
+                    )
                 termination_by_process[identity.object_id] = (index, termination)
 
             for object_id, (index, termination) in termination_by_process.items():
@@ -10708,6 +10786,14 @@ class StateManager:
                 )
                 if parent_identity is None:
                     raise StateError("Action cohort process activity parent disappeared")
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    parent_activity_time,
+                    hostname=parent_identity.hostname,
+                    logon_id=parent_identity.logon_id,
+                    staged_sessions=staged_sessions,
+                    effective_end_plans=effective_end_plans,
+                    label="Action cohort staged parent activity",
+                )
                 parent_close = termination_by_process.get(parent_identity.object_id)
                 if parent_close is not None and parent_activity_time > parent_close[1].end_time:
                     raise StateError("Action cohort parent activity follows parent close")
@@ -13083,6 +13169,16 @@ class StateManager:
                     process,
                     staged_parent=planned_parent,
                 )
+                parent_activity_time = process._payload.parent_activity_time
+                parent_identity = process._payload.parent_identity
+                if parent_activity_time is not None and parent_identity is not None:
+                    self._validate_activity_before_owning_hard_deadline_locked(
+                        parent_activity_time,
+                        hostname=parent_identity.hostname,
+                        logon_id=parent_identity.logon_id,
+                        staged_sessions=((session,) if session is not None else ()),
+                        label="Batch staged parent activity",
+                    )
                 if process._payload.require_session and not identity.logon_id:
                     raise StateError("Session-owned process materialization requires a LogonID")
                 if process._payload.require_session and identity.logon_id:
@@ -13218,6 +13314,15 @@ class StateManager:
                     f"Process materialization primary thread is already live: {thread_key!r}"
                 )
             self._validate_process_parent_identity_locked(plan)
+            parent_activity_time = plan._payload.parent_activity_time
+            parent_identity = plan._payload.parent_identity
+            if parent_activity_time is not None and parent_identity is not None:
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    parent_activity_time,
+                    hostname=parent_identity.hostname,
+                    logon_id=parent_identity.logon_id,
+                    label="Process staged parent activity",
+                )
             if plan._payload.require_session and not identity.logon_id:
                 raise StateError("Session-owned process materialization requires a LogonID")
             owning_session = (
@@ -19991,6 +20096,14 @@ class StateManager:
         staged_session = batch.session.identity if batch is not None and batch.session else None
         if staged_session is None and existing_session_patch is not None:
             staged_session = existing_session_patch.after.identity
+        staged_session_plans = (
+            (batch.session,) if batch is not None and batch.session is not None else ()
+        )
+        effective_end_plans = (
+            {existing_session_patch.after.identity.object_id: existing_session_patch.after.end_plan}
+            if existing_session_patch is not None
+            else None
+        )
         for patch in process_activity:
             expected = staged_processes.get(patch.identity.object_id)
             if expected is None:
@@ -20000,6 +20113,14 @@ class StateManager:
                 raise StateError("Process activity patch does not name an exact live owner")
             if ensure_utc(patch.activity_time) < ensure_utc(patch.identity.started_at):
                 raise StateError("Process activity patch precedes process start")
+            self._validate_activity_before_owning_hard_deadline_locked(
+                patch.activity_time,
+                hostname=patch.identity.hostname,
+                logon_id=patch.identity.logon_id,
+                staged_sessions=staged_session_plans,
+                effective_end_plans=effective_end_plans,
+                label="Connection process activity",
+            )
         for patch in session_activity:
             expected = (
                 staged_session
@@ -20020,6 +20141,14 @@ class StateManager:
                 raise StateError("Session activity patch does not name an exact live owner")
             if ensure_utc(patch.activity_time) < ensure_utc(patch.identity.started_at):
                 raise StateError("Session activity patch precedes session start")
+            self._validate_activity_before_owning_hard_deadline_locked(
+                patch.activity_time,
+                hostname=patch.identity.hostname,
+                logon_id=patch.identity.logon_id,
+                staged_sessions=staged_session_plans,
+                effective_end_plans=effective_end_plans,
+                label="Connection session activity",
+            )
 
     def finalize_connection_composite_materialization(
         self,

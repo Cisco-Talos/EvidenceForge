@@ -2787,6 +2787,7 @@ class _LifecyclePartition:
         )
         self._validate_process_parent_membership(
             identity,
+            token,
             membership,
             staged_processes=staged_processes,
             staged_process_memberships=staged_process_memberships,
@@ -2830,7 +2831,13 @@ class _LifecyclePartition:
         if identity.parent_object_id:
             parent = self._processes.get(identity.parent_object_id)
             assert parent is not None
-            if parent.identity.role != "bootstrap_handoff":
+            if parent.identity.role != "bootstrap_handoff" and not (
+                self._is_new_credentials_parent_handoff(
+                    child_token=entry.token,
+                    child_membership=membership,
+                    parent=parent,
+                )
+            ):
                 aggregate = self._children_by_parent.get(identity.parent_object_id)
                 if aggregate is None:
                     aggregate = _DependentClosureAggregate()
@@ -5833,6 +5840,7 @@ class _LifecyclePartition:
     def _validate_process_parent_membership(
         self,
         identity: ProcessLifecycleIdentity,
+        token: ProcessTokenIdentity,
         membership: LifecycleMembership,
         *,
         staged_processes: dict[str, ProcessLifecycleIdentity] | None = None,
@@ -5865,11 +5873,52 @@ class _LifecyclePartition:
 
         parent_session_id = parent_membership.session_object_id
         if parent_session_id and parent_session_id != child_session_id:
+            if parent is not None and self._is_new_credentials_parent_handoff(
+                child_token=token,
+                child_membership=membership,
+                parent=parent,
+            ):
+                return
             raise StateError(
                 "Process lifecycle parent crosses session ownership: "
                 f"parent={parent_object_id} parent_session={parent_session_id} "
                 f"child={identity.object_id} child_session={child_session_id}"
             )
+
+    def _is_new_credentials_parent_handoff(
+        self,
+        *,
+        child_token: ProcessTokenIdentity,
+        child_membership: LifecycleMembership,
+        parent: _ProcessEntry,
+    ) -> bool:
+        """Return whether runas legally handed a child to a cloned Type 9 session.
+
+        Windows preserves the process parent identity across the token/session
+        boundary, but the caller does not own the cloned process lifetime.  This
+        is therefore a validated ancestry edge without a descendant-close hold.
+        """
+
+        child_session_id = child_membership.session_object_id
+        parent_session_id = parent.membership.session_object_id
+        if not child_session_id or not parent_session_id or child_session_id == parent_session_id:
+            return False
+        child_session = self._sessions.get(child_session_id)
+        parent_session = self._sessions.get(parent_session_id)
+        return bool(
+            child_session is not None
+            and parent_session is not None
+            and child_session.identity.session_kind == "new_credentials"
+            and child_token.logon_type == 9
+            and child_token.logon_id == child_session.identity.logon_id
+            and parent.token.logon_id == parent_session.identity.logon_id
+            and child_token.principal.casefold() == parent.token.principal.casefold()
+            and child_session.identity.principal.casefold()
+            == parent_session.identity.principal.casefold()
+            == child_token.principal.casefold()
+            and parent.identity.image.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+            == "runas.exe"
+        )
 
     def _validate_descendants_closed(
         self,

@@ -53,7 +53,13 @@ fields:
   - name: sc_bytes
     type: integer
     required: false
-    description: Server to client transaction bytes; CONNECT rows contain only setup response bytes
+    description: HTTP response entity-body bytes; absent for responses that cannot carry a body
+    constraints:
+      min_value: 0
+  - name: wire_sc_bytes
+    type: integer
+    required: false
+    description: Server to client transaction bytes including HTTP control and framing bytes
     constraints:
       min_value: 0
   - name: cs_bytes

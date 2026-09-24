@@ -276,7 +276,8 @@ def _restore_foreground(generator: ActivityGenerator, rows: object) -> None:
         if (
             type(row) is not list
             or len(row) != 9
-            or any(type(row[index]) is not str or not row[index] for index in range(1, 5))
+            or any(type(row[index]) is not str or not row[index] for index in range(1, 4))
+            or type(row[4]) is not str
             or type(row[6]) is not float
             or not math.isfinite(row[6])
             or type(row[7]) is not int

@@ -49,17 +49,31 @@ def handle_process(
     system = context.system
     time = context.time
     explicit_types = context.explicit_types
-    future_specs = context.future_specs
+    future_specs = tuple(context.future_specs)
     rng = context.rng
     malicious_event = context.malicious_event
     os_category = _get_os_category(system.os)
-    logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
 
     process_actor = self._linux_native_service_user_for_storyline_actor(
         actor,
         system,
         time,
     )
+
+    if os_category == "linux":
+        if not hasattr(self, "_storyline_shell_available_at"):
+            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+        native_shell_key = (system.hostname, process_actor.username)
+        available_times = [
+            ts
+            for key in {native_shell_key, (system.hostname, actor.username)}
+            if (ts := self._storyline_shell_available_at.get(key)) is not None
+        ]
+        available_at = max(available_times) if available_times else None
+        if available_at is not None and time < available_at:
+            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
+
+    logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
     process_actor = self._storyline_local_process_actor_for_logon(
         process_actor,
         system,
@@ -72,18 +86,6 @@ def handle_process(
     )
     command_line = spec.command_line or process_name
     shell_key = (system.hostname, process_actor.username)
-
-    if os_category == "linux":
-        if not hasattr(self, "_storyline_shell_available_at"):
-            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
-        available_times = [
-            ts
-            for key in {shell_key, (system.hostname, actor.username)}
-            if (ts := self._storyline_shell_available_at.get(key)) is not None
-        ]
-        available_at = max(available_times) if available_times else None
-        if available_at is not None and time < available_at:
-            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
     if "<base64_encoded_command>" in command_line:
         command_line = command_line.replace(
@@ -136,8 +138,10 @@ def handle_process(
         malicious_event["command_line"] = command_line
         malicious_event["skipped_reason"] = "no_live_parent_ref"
         return malicious_event
+    requires_interactive_session = False
     if explicit_parent is not None:
         parent_pid, _parent_image = explicit_parent
+        requires_interactive_session = True
     elif service_process_identity is not None:
         process_actor, _service_name, service_lifecycle_group_id = service_process_identity
         process_logon_id = {
@@ -151,11 +155,16 @@ def handle_process(
             0x1F4,
         )
     else:
-        service_context = self._storyline_service_context_for_process(
-            actor=process_actor,
-            system=system,
-            time=time,
-            process_name=process_name,
+        process_session = self.state_manager.get_session(process_logon_id)
+        service_context = (
+            None
+            if process_session is not None and getattr(process_session, "logon_type", None) == 9
+            else self._storyline_service_context_for_process(
+                actor=process_actor,
+                system=system,
+                time=time,
+                process_name=process_name,
+            )
         )
         if service_context is not None:
             (
@@ -165,6 +174,31 @@ def handle_process(
                 service_lifecycle_group_id,
             ) = service_context
         else:
+            parent_pid = None
+            requires_interactive_session = True
+    if requires_interactive_session:
+        ensure_rdp_connected = getattr(
+            type(self.activity_generator),
+            "ensure_storyline_rdp_session_connected",
+            None,
+        )
+        interactive_ready_at = (
+            ensure_rdp_connected(
+                self.activity_generator,
+                logon_id=process_logon_id,
+                target_system=system,
+                activity_time=time,
+            )
+            if callable(ensure_rdp_connected)
+            else time
+        )
+        if interactive_ready_at is None:
+            malicious_event["process_name"] = process_name
+            malicious_event["command_line"] = command_line
+            malicious_event["skipped_reason"] = "rdp_session_not_connected"
+            return malicious_event
+        time = max(time, interactive_ready_at)
+        if parent_pid is None:
             parent_pid = self.activity_generator._resolve_parent(
                 system,
                 process_actor,
@@ -174,21 +208,62 @@ def handle_process(
                 process_command_line,
             )
     if os_category == "linux":
-        reserved_start_time = self.activity_generator.reserve_linux_foreground_process_start(
-            system=system,
-            username=process_actor.username,
-            logon_id=process_logon_id,
-            parent_pid=parent_pid,
-            requested_time=time,
-            process_name=process_name,
-            command_line=process_command_line,
-            authoritative_time=True,
-        )
+        reserved_start_time: datetime | None = None
+        for _attempt in range(2):
+            reserved_start_time = self.activity_generator.reserve_linux_foreground_process_start(
+                system=system,
+                username=process_actor.username,
+                logon_id=process_logon_id,
+                parent_pid=parent_pid,
+                requested_time=time,
+                process_name=process_name,
+                command_line=process_command_line,
+                authoritative_time=True,
+            )
+            if reserved_start_time is None:
+                break
+            session = self.state_manager.get_session(process_logon_id)
+            if (
+                session is None
+                or session.session_kind.casefold() not in {"ssh", "rdp"}
+                or self.state_manager.get_session_at(process_logon_id, reserved_start_time)
+                is not None
+            ):
+                break
+            if explicit_parent is not None:
+                reserved_start_time = None
+                break
+            rebound_logon_id = self._resolve_storyline_process_logon_id(
+                actor,
+                system,
+                reserved_start_time,
+                rng,
+            )
+            if rebound_logon_id == process_logon_id:
+                reserved_start_time = None
+                break
+            process_logon_id = rebound_logon_id
+            process_actor = self._storyline_local_process_actor_for_logon(
+                process_actor,
+                system,
+                process_logon_id,
+            )
+            time = reserved_start_time
+            parent_pid = self.activity_generator._resolve_parent(
+                system,
+                process_actor,
+                time,
+                process_logon_id,
+                process_name,
+                process_command_line,
+            )
         if reserved_start_time is None:
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["skipped_reason"] = "shell_foreground_occupied"
             return malicious_event
+        if isinstance(reserved_start_time, datetime):
+            time = reserved_start_time
         self._emit_linux_storyline_shell_friction(
             actor=process_actor,
             system=system,
@@ -198,8 +273,6 @@ def handle_process(
             output_file=output_file,
             rng=rng,
         )
-        if isinstance(reserved_start_time, datetime):
-            time = reserved_start_time
         prepared_shell_command = self.activity_generator._prepare_bash_history_command(
             system,
             command_line,
@@ -407,6 +480,39 @@ def handle_process(
         term_time = time + timedelta(seconds=term_delay)
         shell_release_time = term_time
         terminate_immediately = False
+        if os_category == "windows":
+            from evidenceforge.generation.activity.generator import (
+                _windows_foreground_lifetime,
+            )
+
+            terminate_immediately = (
+                _windows_foreground_lifetime(process_name, process_command_line) is not None
+                and process_ref is None
+                and bool(future_specs)
+                and getattr(future_specs[0], "type", "") == "smb_activity"
+            )
+            canonical_close_getter = getattr(
+                self.activity_generator,
+                "foreground_process_termination_time",
+                None,
+            )
+            canonical_close = (
+                canonical_close_getter(system.hostname, pid)
+                if callable(canonical_close_getter)
+                else None
+            )
+            if terminate_immediately and canonical_close is not None:
+                term_time = ensure_utc(canonical_close)
+                shell_release_time = term_time + timedelta(
+                    milliseconds=(
+                        180
+                        + _stable_seed(
+                            f"storyline_windows_shell_release:{system.hostname}:"
+                            f"{process_logon_id}:{parent_pid}:{pid}:{term_time.isoformat()}"
+                        )
+                        % 721
+                    )
+                )
         if os_category == "linux":
             from evidenceforge.generation.activity.generator import (
                 _linux_foreground_lifetime,
@@ -464,6 +570,18 @@ def handle_process(
             self._storyline_shell_available_at[shell_key] = shell_release_time
             process_shell_key = (system.hostname, process_actor.username)
             self._storyline_shell_available_at[process_shell_key] = shell_release_time
+        elif os_category == "windows" and terminate_immediately:
+            if not hasattr(self, "_storyline_shell_available_at"):
+                self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+            for username in {actor.username, process_actor.username}:
+                process_shell_key = (system.hostname, username)
+                self._storyline_shell_available_at[process_shell_key] = max(
+                    shell_release_time,
+                    self._storyline_shell_available_at.get(
+                        process_shell_key,
+                        shell_release_time,
+                    ),
+                )
 
     return context.malicious_event
 

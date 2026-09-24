@@ -178,6 +178,9 @@ class BootFleetSpec:
         )
 
 
+_BOOT_MATERIALIZATION_PAGE_HOSTS = 32
+
+
 def _canonical_boot_payload_bytes(value: object) -> bytes:
     """Encode an exact inert boot payload without invoking caller-defined methods."""
 
@@ -1135,6 +1138,8 @@ class EmitterSetupMixin:
     def _boot_materialization_request(
         self,
         fleet_spec: BootFleetSpec,
+        *,
+        transaction_scope: str = "engine-owned-boot-fleet-v2",
     ) -> tuple[str, str, tuple[object, ...]]:
         """Return one retry-stable transaction bound to the exact planned forest."""
 
@@ -1143,10 +1148,98 @@ class EmitterSetupMixin:
         request = fleet_spec.canonical_payload()
         request_digest = hashlib.sha256(_canonical_boot_payload_bytes(request)).hexdigest()
         return (
-            stable_uuid("boot-process-fleet-transaction", "engine-owned-boot-fleet-v2"),
+            stable_uuid("boot-process-fleet-transaction", transaction_scope),
             request_digest,
             request,
         )
+
+    @staticmethod
+    def _boot_materialization_requires_paging(error: StateError) -> bool:
+        """Return whether one whole-fleet transaction exceeded a retained payload bound."""
+
+        message = str(error)
+        return any(
+            marker in message
+            for marker in (
+                "Materialization-batch payload has too many retained members",
+                "Materialization-batch terminal exceeds its retained-byte limit",
+                "Materialization-batch request exceeds its retained-byte limit",
+            )
+        )
+
+    def _seed_paged_boot_fleet(
+        self,
+        *,
+        lifecycle_authority: GeneratorLifecycleAuthority,
+        fleet_spec: BootFleetSpec,
+        existing_system_pids: tuple[tuple[str, tuple[tuple[str, int], ...]], ...],
+    ) -> None:
+        """Materialize a wide fleet in preflighted, bounded host pages."""
+
+        pages = tuple(
+            BootFleetSpec(
+                state_time=fleet_spec.state_time,
+                hosts=fleet_spec.hosts[index : index + _BOOT_MATERIALIZATION_PAGE_HOSTS],
+            )
+            for index in range(0, len(fleet_spec.hosts), _BOOT_MATERIALIZATION_PAGE_HOSTS)
+        )
+        page_requests: list[BootFleetSpec] = []
+
+        # Validate every page before any State or registry mutation. Reservations
+        # are released immediately so arbitrarily wide fleets do not consume the
+        # aggregate retained-transaction budget during preflight.
+        for page_index, page in enumerate(pages):
+            scope = f"engine-owned-boot-fleet-v2:page:{page_index}:{len(pages)}"
+            transaction_id, request_digest, request_payload = self._boot_materialization_request(
+                page,
+                transaction_scope=scope,
+            )
+            anticipated_terminal_payload, _retained_bytes = (
+                self._boot_materialization_terminal_reservation(
+                    page,
+                    transaction_id,
+                    request_digest,
+                    (),
+                )
+            )
+            try:
+                preflight = lifecycle_authority.reserve_materialization_batch_transaction(
+                    transaction_id=transaction_id,
+                    request_digest=request_digest,
+                    request_payload=request_payload,
+                    anticipated_terminal_payload=anticipated_terminal_payload,
+                )
+            except StateError as error:
+                first = page.hosts[0].hostname
+                last = page.hosts[-1].hostname
+                raise StateError(
+                    "Boot-process page cannot be retained for systems "
+                    f"{first} through {last} ({len(page.hosts)} hosts): {error}"
+                ) from error
+            lifecycle_authority.cancel_materialization_batch_transaction(preflight)
+            page_requests.append(page)
+
+        published_machine_ids = dict(getattr(self, "_machine_ids", {}))
+        published_system_pids = {
+            hostname: dict(members) for hostname, members in existing_system_pids
+        }
+        for page in page_requests:
+            builder = self.state_manager.begin_materialization_batch()
+            page_pids: dict[str, dict[str, int]] = {}
+            page_machine_ids: dict[str, str] = {}
+            for host_spec in page.hosts:
+                page_pids[host_spec.hostname] = self._plan_boot_host_spec(builder, host_spec)
+                if host_spec.machine_id:
+                    page_machine_ids[host_spec.hostname] = host_spec.machine_id
+            # The page is already fully preflighted. A direct page commit avoids
+            # retaining one acknowledged terminal per page during initialization,
+            # so fleet width is not capped by transaction-retention capacity.
+            lifecycle_authority.materialize_batch(builder.seal())
+            published_machine_ids.update(page_machine_ids)
+            published_system_pids.update(page_pids)
+
+        self._machine_ids = published_machine_ids
+        self._system_pids = published_system_pids
 
     @staticmethod
     def _boot_materialization_terminal_reservation(
@@ -1368,6 +1461,7 @@ class EmitterSetupMixin:
         boot_planning_capability: LifecycleMaterializationBatchPlanningCapability | None = None
         boot_existing_system_pids: tuple[tuple[str, tuple[tuple[str, int], ...]], ...] = ()
         lost_planning_return: BaseException | None = None
+        paged_boot_completed = False
         if lifecycle_authority is not None:
             pinned_transaction = getattr(self, "_boot_materialization_transaction", None)
             request_state_time = (
@@ -1410,18 +1504,37 @@ class EmitterSetupMixin:
                         current_existing_system_pids,
                     )
                 )
-                boot_transaction = lifecycle_authority.reserve_materialization_batch_transaction(
-                    transaction_id=transaction_id,
-                    request_digest=request_digest,
-                    request_payload=request_payload,
-                    anticipated_terminal_payload=anticipated_terminal_payload,
-                )
-                self._boot_materialization_transaction_identity = boot_transaction
-                self._boot_materialization_transaction = boot_transaction
-                self._boot_materialization_state_time = original_time
-                self._boot_materialization_existing_system_pids = current_existing_system_pids
-                boot_existing_system_pids = current_existing_system_pids
-            if pinned_terminal is not None:
+                try:
+                    boot_transaction = (
+                        lifecycle_authority.reserve_materialization_batch_transaction(
+                            transaction_id=transaction_id,
+                            request_digest=request_digest,
+                            request_payload=request_payload,
+                            anticipated_terminal_payload=anticipated_terminal_payload,
+                        )
+                    )
+                except StateError as error:
+                    if not self._boot_materialization_requires_paging(error):
+                        raise
+                    logger.info(
+                        "Boot fleet exceeds one retained transaction; materializing %s hosts "
+                        "in bounded pages",
+                        len(fleet_spec.hosts),
+                    )
+                    self._seed_paged_boot_fleet(
+                        lifecycle_authority=lifecycle_authority,
+                        fleet_spec=fleet_spec,
+                        existing_system_pids=current_existing_system_pids,
+                    )
+                    paged_boot_completed = True
+                    boot_existing_system_pids = current_existing_system_pids
+                else:
+                    self._boot_materialization_transaction_identity = boot_transaction
+                    self._boot_materialization_transaction = boot_transaction
+                    self._boot_materialization_state_time = original_time
+                    self._boot_materialization_existing_system_pids = current_existing_system_pids
+                    boot_existing_system_pids = current_existing_system_pids
+            if pinned_terminal is not None and not paged_boot_completed:
                 if (
                     type(pinned_terminal) is not LifecycleMaterializationBatchTerminalResult
                     or getattr(self, "_boot_materialization_terminal_identity", None)
@@ -1438,7 +1551,7 @@ class EmitterSetupMixin:
                 )
                 boot_terminal = pinned_terminal
                 self._apply_boot_materialization_external_result(pinned_terminal.external_result)
-            else:
+            elif not paged_boot_completed:
                 boot_terminal = lifecycle_authority.reconcile_materialization_batch_transaction(
                     boot_transaction
                 )
@@ -1485,14 +1598,18 @@ class EmitterSetupMixin:
 
         completed = False
         try:
-            if lifecycle_authority is not None and boot_terminal is None:
+            if (
+                lifecycle_authority is not None
+                and boot_terminal is None
+                and not paged_boot_completed
+            ):
                 assert fleet_spec is not None
                 if original_time != fleet_spec.state_time:
                     raise StateError(
                         "Pending boot materialization cannot cross a State-time change"
                     )
                 batch_builder = self.state_manager.begin_materialization_batch()
-            if boot_terminal is None:
+            if boot_terminal is None and not paged_boot_completed:
                 if lifecycle_authority is None:
                     from evidenceforge.generation.activity import _get_os_category
 

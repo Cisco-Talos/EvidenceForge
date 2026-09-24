@@ -1800,6 +1800,107 @@ def _xml_events(rendered: str, event_id: int) -> tuple[str, ...]:
     )
 
 
+@pytest.mark.parametrize(
+    "outer_trigger",
+    ("next-rdp-bundle", "retention-watermark"),
+)
+def test_explorer_connection_before_rdp_logout_is_capped_for_outer_lifecycle_trigger(
+    outer_trigger: str,
+    tmp_path: Path,
+) -> None:
+    """The two observed outer drains cannot inherit an Explorer frontier past logout."""
+
+    harness = _open_rdp_terminal_harness(
+        tmp_path,
+        session_end_plan=SessionEndPlan(
+            canonical_end=_START + timedelta(hours=2),
+            authority="action_bundle",
+        ),
+    )
+    session = harness.state.get_session(harness.logon_id)
+    assert session is not None
+    assert session.explorer_pid is not None
+    assert session.end_plan is not None and session.end_plan.is_hard_deadline
+    deadline = session.end_plan.canonical_end
+    explorer = harness.state.get_process(harness.target_hostname, session.explorer_pid)
+    assert explorer is not None
+    target = System(
+        hostname=harness.target_hostname,
+        ip="10.20.0.10",
+        os="Windows Server 2022",
+        type="server",
+        services=["rdp"],
+    )
+
+    uid = harness.generator.generate_connection(
+        src_ip=target.ip,
+        dst_ip="203.0.113.80",
+        time=deadline - timedelta(seconds=1),
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=4.0,
+        source_system=target,
+        pid=explorer.pid,
+        conn_state="SF",
+        preserve_dst_ip=True,
+        preserve_start_time=True,
+        suppress_prereq_dns=True,
+    )
+
+    connection = harness.state.get_connection_by_zeek_uid(uid)
+    assert connection is not None and connection.close_time is not None
+    assert connection.close_time < deadline
+    assert connection.initiating_pid == explorer.pid
+    assert explorer.last_activity_time is not None
+    assert explorer.last_activity_time < deadline
+    assert session.last_activity_time is not None
+    assert session.last_activity_time < deadline
+
+    if outer_trigger == "next-rdp-bundle":
+        entry = next(iter(harness.generator._pending_rdp_lifecycle_continuations.values()))
+        prepared = entry.continuation.prepared
+        harness.generator._execute_rdp_session_bundle(
+            user=prepared.user,
+            target_system=prepared.target_system,
+            time=deadline + timedelta(seconds=1),
+            source_ip="198.51.100.26",
+            source_system=None,
+            source_port=50_002,
+            preserve_explicit_source=True,
+        )
+    else:
+        harness.generator.advance_rdp_session_retention_watermark(deadline)
+
+    assert harness.state.get_session(harness.logon_id) is None
+    harness.generator.finalize_rdp_session_lifecycles(_END)
+    harness.generator.assert_rdp_session_lifecycles_drained()
+    _close_rdp_terminal_harness(harness)
+
+    rendered_windows = "\n".join(
+        output.read_text(encoding="utf-8")
+        for output in (harness.output_root / "windows").rglob("*.xml")
+    )
+    disconnects = tuple(
+        event
+        for event in _xml_events(rendered_windows, 4779)
+        if harness.logon_id.casefold() in event.casefold()
+    )
+    logouts = tuple(
+        event
+        for event in _xml_events(rendered_windows, 4634)
+        if harness.logon_id.casefold() in event.casefold()
+    )
+    assert len(disconnects) == len(logouts) == 1
+
+    def event_time(event: str) -> datetime:
+        match = re.search(r'<TimeCreated\s+SystemTime="([^"]+)"', event)
+        assert match is not None
+        return datetime.fromisoformat(match.group(1).replace("Z", "+00:00"))
+
+    assert event_time(disconnects[0]) < event_time(logouts[0])
+
+
 def _windows_security_time(
     rendered: str,
     event_id: int,
@@ -2818,6 +2919,11 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     assert winlogon.parent_pid == pid4.pid
     assert userinit.parent_pid == winlogon.pid
     assert explorer.parent_pid == userinit.pid
+    user_manager_delay = (userinit.started_at - session_identity.started_at).total_seconds()
+    desktop_shell_delay = (explorer.started_at - userinit.started_at).total_seconds()
+    assert 1.43 < user_manager_delay < 3.65
+    assert 0.55 < desktop_shell_delay < 8.5
+    assert desktop_shell_delay != pytest.approx(0.15)
 
     harness.generator.advance_rdp_session_lifecycle_watermark(_START + timedelta(seconds=30))
     assert harness.state.get_process(harness.target_hostname, userinit.pid) is None
@@ -2974,7 +3080,7 @@ def test_initial_rdp_with_sysmon_preserves_preoutput_pid4_parent_chain(
     ]
     assert len(userinit_closes) == 1
     rendered_userinit_lifetime = _event_time(userinit_closes[0]) - rendered_times["userinit.exe"]
-    assert timedelta(milliseconds=650) < rendered_userinit_lifetime < timedelta(seconds=5.5)
+    assert timedelta(milliseconds=650) < rendered_userinit_lifetime < timedelta(seconds=14)
 
 
 def test_initial_rdp_winlogon_uses_live_smss_parent(tmp_path: Path) -> None:
@@ -3161,8 +3267,8 @@ def test_activity_generator_uses_injected_shared_rdp_owner() -> None:
     assert generator.rdp_session_manager.application_registry is registry
 
 
-def test_windows_security_renders_exact_rdp_reconnect_and_disconnect(tmp_path) -> None:
-    """Typed RDP transitions render Security 4778/4779 with one preserved tuple."""
+def test_windows_security_renders_native_rdp_reconnect_and_disconnect(tmp_path) -> None:
+    """Typed RDP transitions omit the transport-only port from Security 4778/4779."""
 
     output = tmp_path / "windows.xml"
     emitter = WindowsEventEmitter(load_format("windows_event_security"), output, buffer_size=1)
@@ -3210,7 +3316,7 @@ def test_windows_security_renders_exact_rdp_reconnect_and_disconnect(tmp_path) -
     assert rendered.count("<EventID>4779</EventID>") == 1
     assert rendered.count('<Data Name="SessionName">RDP-Tcp#7</Data>') == 2
     assert rendered.count('<Data Name="ClientAddress">10.10.0.25</Data>') == 2
-    assert rendered.count('<Data Name="ClientPort">50001</Data>') == 2
+    assert 'Data Name="ClientPort"' not in rendered
 
 
 def test_initial_rdp_session_publishes_one_exact_transport_and_windows_cohort(tmp_path) -> None:
@@ -3831,7 +3937,7 @@ def test_disconnected_rdp_session_reconnects_through_same_exact_owner(
     assert rendered.count("<EventID>4778</EventID>") == 1
     assert rendered.count("<EventID>4779</EventID>") == 2
     assert rendered.count("<EventID>4634</EventID>") == 1
-    assert '<Data Name="ClientPort">50002</Data>' in rendered
+    assert 'Data Name="ClientPort"' not in rendered
 
 
 @pytest.mark.parametrize(

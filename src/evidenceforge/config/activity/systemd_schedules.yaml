@@ -311,7 +311,6 @@ schedules:
     frequency: 30min
     typical_hour: 0
     jitter_minutes: 8
-    slot_skip_probability: 0.08
     distro: debian
     cron_user: sysstat
     cron_commands:

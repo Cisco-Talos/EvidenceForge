@@ -487,6 +487,34 @@ def test_sysmon_production_event_one_requires_frozen_parent_identity(tmp_path: P
         emitter.emit(event)
 
 
+def test_sysmon_parentless_process_uses_null_parent_guid(tmp_path: Path) -> None:
+    """A canonical PID-0 root renders as unobserved without invented parent timing."""
+
+    event = _process_event()
+    event.process.parent_pid = 0
+    event.process.parent_image = "-"
+    event.process.parent_command_line = "-"
+    event.process.parent_start_time = None
+    event.identity_plan = EventIdentityPlan(subject=event.identity_plan.subject)
+    planner = SourceTimingPlanner(
+        timing_runtime=TimingRuntime(reference_time=T0, namespace="sysmon-parentless-root")
+    )
+    _plan(event, planner)
+    assert event.source_timing is not None
+    assert sysmon_parent_process_render_key("WIN-01") not in event.source_timing.finalized_times
+
+    emitter = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        tmp_path / "parentless.xml",
+        threaded=False,
+    )
+    emitter.emit(event)
+
+    row = next(row for row in emitter._event_dicts if row["EventID"] == 1)
+    assert row["ParentProcessGuid"] == "{00000000-0000-0000-0000-000000000000}"
+    assert row["ParentProcessId"] == 0
+
+
 def _direct_process_event(
     *,
     pid: int,

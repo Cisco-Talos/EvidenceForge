@@ -112,11 +112,15 @@ class EndpointArtifactReservations:
 
 
 @dataclass(frozen=True)
-class ProcessLifetimePreview:
-    """Allocation-free lifetime choice and its deadline-validated close time."""
+class ProcessLifetimeAdmission:
+    """Allocation-free, platform-neutral admission for one complete process lifecycle."""
 
-    plan: ProcessLifetimePlan
-    termination: datetime | None
+    lifetime_plan: ProcessLifetimePlan
+    effective_start: datetime
+    termination_time: datetime | None
+    release_margin: timedelta
+    latest_dependent_occurrence: datetime | None
+    hard_deadline: datetime | None
 
 
 @dataclass(frozen=True)
@@ -199,7 +203,9 @@ class ProcessPreflightPlanner:
     def _nmap_command_probe_count(plan: NmapCommandProbePlan) -> int:
         """Return exact canonical connection cardinality for one bounded plan."""
 
-        return len(plan.targets) if plan.discovery else len(plan.targets) * len(plan.ports)
+        if plan.discovery:
+            return len(plan.targets)
+        return len(plan.discovery_targets) + len(plan.service_targets) * len(plan.ports)
 
     def _plan_process_execution_effects(
         self,
@@ -275,7 +281,7 @@ class ProcessPreflightPlanner:
                 if allocation_free_endpoint is not None
                 else None
             )
-            lifetime = self._preview_lifetime(request, selection, endpoint)
+            lifetime = self._admit_lifetime(request, selection, endpoint)
             root_binary_publication = self._reserve_root_binary(
                 request, anchor, selection, endpoint, reservations, newly_reserved
             )
@@ -284,8 +290,8 @@ class ProcessPreflightPlanner:
                 actor=selection.actor,
                 endpoint=endpoint,
                 runtime_image_load=selection.runtime_image_load,
-                lifetime_plan=lifetime.plan,
-                provisional_termination=lifetime.termination,
+                lifetime_plan=lifetime.lifetime_plan,
+                provisional_termination=lifetime.termination_time,
                 root_binary_publication=root_binary_publication,
             )
         except RuntimeContentOwnerError as exc:
@@ -698,27 +704,42 @@ class ProcessPreflightPlanner:
             tuple(planned), effective_architecture, deployment_registry
         )
 
-    def _preview_lifetime(
+    def admit_process_lifecycle(
+        self,
+        request: ProcessExecutionRequest,
+    ) -> ProcessLifetimeAdmission:
+        """Return allocation-free lifecycle admission for an uncommitted process request."""
+
+        anchor = ActionAnchor(
+            family="process_execution",
+            stable_id=request.stable_id,
+            source=request.source,
+        )
+        selection = self._select_endpoint_effects(request)
+        endpoint = self._validate_endpoint_effects(request, anchor, selection)
+        return self._admit_lifetime(request, selection, endpoint)
+
+    def _admit_lifetime(
         self,
         request: ProcessExecutionRequest,
         selection: SelectedProcessEffects,
         endpoint: PreparedProcessEndpointEffectPlan | None,
-    ) -> ProcessLifetimePreview:
-        """Preview termination without advancing timing state, then validate close deadlines."""
+    ) -> ProcessLifetimeAdmission:
+        """Admit a complete process lifetime without advancing timing or canonical state."""
         lifetime_plan = self._plan_process_lifetime(request, selection.actor)
         provisional_termination = self._plan_process_provisional_termination(
             request,
             selection.actor,
             lifetime_plan,
         )
+        latest_dependent_occurrence = (
+            endpoint.latest_admitted_occurrence if endpoint is not None else None
+        )
         endpoint_close_floor: datetime | None = None
-        if (
-            provisional_termination is not None
-            and endpoint is not None
-            and endpoint.latest_admitted_occurrence is not None
-        ):
-            endpoint_close_floor = endpoint.latest_admitted_occurrence + timedelta(milliseconds=25)
+        if provisional_termination is not None and latest_dependent_occurrence is not None:
+            endpoint_close_floor = latest_dependent_occurrence + timedelta(milliseconds=25)
             provisional_termination = max(provisional_termination, endpoint_close_floor)
+        release_margin = timedelta(0)
         if selection.actor.session_deadline is not None and provisional_termination is not None:
             release_margin_ms = (
                 _LINUX_FOREGROUND_SHELL_RELEASE_MAX_MS + 25
@@ -727,26 +748,32 @@ class ProcessPreflightPlanner:
                 is not None
                 else 25
             )
-            close_ceiling = selection.actor.session_deadline - timedelta(
-                milliseconds=release_margin_ms
-            )
+            release_margin = timedelta(milliseconds=release_margin_ms)
+            close_ceiling = selection.actor.session_deadline - release_margin
             if endpoint_close_floor is not None and endpoint_close_floor > close_ceiling:
                 raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
                     "prepared endpoint effects leave no interval for the process lifecycle close",
                 )
             if provisional_termination > close_ceiling:
                 provisional_termination = close_ceiling
             if provisional_termination <= selection.actor.started_at:
                 raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_ACTOR,
+                    ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE,
                     "prepared process actor leaves no interval for its lifecycle close: "
                     f"host={request.system.hostname!r} image={selection.actor.image!r} "
                     f"started_at={selection.actor.started_at.isoformat()} "
                     f"session_deadline={selection.actor.session_deadline.isoformat()} "
                     f"planned_close={provisional_termination.isoformat()}",
                 )
-        return ProcessLifetimePreview(lifetime_plan, provisional_termination)
+        return ProcessLifetimeAdmission(
+            lifetime_plan=lifetime_plan,
+            effective_start=selection.actor.started_at,
+            termination_time=provisional_termination,
+            release_margin=release_margin,
+            latest_dependent_occurrence=latest_dependent_occurrence,
+            hard_deadline=selection.actor.session_deadline,
+        )
 
     def _reserve_root_binary(
         self,

@@ -789,6 +789,81 @@ def test_connection_composite_commits_preallocated_ssh_roles_once() -> None:
     assert result.session.last_activity_time == activity_time
 
 
+@pytest.mark.parametrize("activity_kind", ["process", "session"])
+@pytest.mark.parametrize("deadline_offset", [0, 1])
+def test_connection_composite_rejects_activity_at_or_after_hard_session_deadline(
+    activity_kind: str,
+    deadline_offset: int,
+) -> None:
+    """A forged composite cannot publish process/session activity across a hard fence."""
+
+    manager = StateManager()
+    manager.set_current_time(_START)
+    logon_id = manager.register_session(
+        logon_id="0xhard001",
+        username="analyst",
+        system="WS-01",
+        logon_type=10,
+        source_ip="10.0.0.10",
+        start_time=_START,
+        session_kind="rdp",
+    ).logon_id
+    deadline = _START + timedelta(seconds=10)
+    assert manager.plan_session_end(
+        logon_id,
+        SessionEndPlan(canonical_end=deadline, authority="action_bundle"),
+    )
+    pid = manager.create_process(
+        "WS-01",
+        0,
+        r"C:\Windows\explorer.exe",
+        "explorer.exe",
+        "analyst",
+        "Medium",
+        logon_id=logon_id,
+    )
+    process_identity = manager.get_process_identity("WS-01", pid)
+    session_identity = manager.get_session_identity(logon_id)
+    assert process_identity is not None and session_identity is not None
+    owner = random.Random(9_101)
+    cursor = manager.begin_connection_planning(owner)
+    identity = cursor.reserve_identity()
+    activity_time = deadline + timedelta(seconds=deadline_offset)
+    process_activity = (
+        (ProcessActivityPatch(process_identity, activity_time),)
+        if activity_kind == "process"
+        else ()
+    )
+    session_activity = (
+        (SessionActivityPatch(session_identity, activity_time),)
+        if activity_kind == "session"
+        else ()
+    )
+    digest = manager.materialization_digest()
+    version = manager.materialization_version
+
+    with pytest.raises(StateError, match="strictly earlier"):
+        manager.finalize_connection_composite_materialization(
+            cursor,
+            _transaction(
+                conn_id=identity.conn_id,
+                zeek_uid=identity.zeek_uid,
+                started_at=_START + timedelta(seconds=1),
+                duration=1,
+                initiating_pid=pid,
+            ),
+            initiating_pid=pid,
+            process_activity=process_activity,
+            session_activity=session_activity,
+        )
+
+    assert manager.materialization_digest() == digest
+    assert manager.materialization_version == version
+    assert manager.get_process("WS-01", pid).last_activity_time is None
+    assert manager.get_session(logon_id).last_activity_time is None
+    cursor.cancel()
+
+
 def test_connection_composite_keeps_rdp_source_outside_target_role_patch() -> None:
     manager = StateManager()
     manager.set_current_time(_START)

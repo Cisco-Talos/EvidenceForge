@@ -210,12 +210,13 @@ class TestSslCanHandle:
         emitter = ZeekSslEmitter(fmt, Path("/tmp/test.json"))
         assert emitter.can_handle(self._make_event(ssl=False)) is False
 
-    def test_rejects_partial_handshake_with_ssl_context(self):
+    def test_accepts_partial_handshake_with_ssl_context(self):
         fmt = load_format("zeek_ssl")
         emitter = ZeekSslEmitter(fmt, Path("/tmp/test.json"))
         event = self._make_event()
         event.network = replace(event.network, conn_state="S1")
-        assert emitter.can_handle(event) is False
+        event.ssl = replace(event.ssl, cipher="", established=False, ssl_history="ShAD")
+        assert emitter.can_handle(event) is True
 
     def test_rejects_without_network_context(self):
         fmt = load_format("zeek_ssl")

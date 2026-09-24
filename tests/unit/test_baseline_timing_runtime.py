@@ -144,6 +144,41 @@ def test_baseline_right_skew_has_no_ceiling_flat_bins_or_millisecond_atoms() -> 
     assert audit.total_saturations / max(1, audit.total_samples) < 0.005
 
 
+def test_windows_session_bootstrap_delays_are_stable_bounded_and_varied() -> None:
+    """Interactive session startup must not collapse to one fleet-wide cadence."""
+
+    planner = BaselineTimingPlanner(
+        TimingRuntime(reference_time=T0, namespace="windows-session-bootstrap-shape")
+    )
+    values = [
+        planner.windows_session_bootstrap_delays(
+            stable_id=f"session-{ordinal}",
+            host=f"host-{ordinal % 19}",
+            lifecycle_id=f"logon-{ordinal}",
+            remote=True,
+        )
+        for ordinal in range(512)
+    ]
+
+    assert values == [
+        planner.windows_session_bootstrap_delays(
+            stable_id=f"session-{ordinal}",
+            host=f"host-{ordinal % 19}",
+            lifecycle_id=f"logon-{ordinal}",
+            remote=True,
+        )
+        for ordinal in range(512)
+    ]
+    user_manager_delays = [value[0] for value in values]
+    desktop_shell_delays = [value[1] for value in values]
+    assert all(0.18 < value < 2.4 for value in user_manager_delays)
+    assert all(0.55 < value < 8.5 for value in desktop_shell_delays)
+    assert len({round(value, 3) for value in user_manager_delays}) > 400
+    assert len({round(value, 3) for value in desktop_shell_delays}) > 400
+    assert statistics.pstdev(user_manager_delays) > 0.25
+    assert statistics.pstdev(desktop_shell_delays) > 1.0
+
+
 def test_clustered_network_phases_have_no_bounds_or_millisecond_atoms() -> None:
     """Profile traffic phases should retain clustered, microsecond-granular shape."""
 

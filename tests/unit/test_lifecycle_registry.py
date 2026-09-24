@@ -52,13 +52,15 @@ def _register_session(
     logon_id: str = "0x11111",
     started_at: datetime = _START,
     hostname: str = "WS-01",
+    principal: str = "analyst",
+    session_kind: str = "interactive",
 ) -> SessionLifecycleIdentity:
     identity = SessionLifecycleIdentity(
         hostname=hostname,
         object_id=object_id,
         logon_id=logon_id,
-        principal="analyst",
-        session_kind="interactive",
+        principal=principal,
+        session_kind=session_kind,
         started_at=started_at,
         session_id=2,
     )
@@ -81,13 +83,16 @@ def _register_process(
     token_logon_id: str = "0x3e7",
     hostname: str = "WS-01",
     role: str = "application",
+    image: str | None = None,
+    token_principal: str | None = None,
+    token_logon_type: int | None = None,
 ) -> ProcessLifecycleIdentity:
     identity = ProcessLifecycleIdentity(
         hostname=hostname,
         object_id=object_id,
         pid=pid,
         started_at=started_at,
-        image=rf"C:\Windows\System32\{object_id}.exe",
+        image=image or rf"C:\Windows\System32\{object_id}.exe",
         parent_object_id=parent_object_id,
         role=role,
     )
@@ -106,10 +111,22 @@ def _register_process(
     registry.register_process(
         identity,
         token=ProcessTokenIdentity(
-            principal="SYSTEM" if token_logon_id == "0x3e7" else "analyst",
+            principal=(
+                token_principal
+                if token_principal is not None
+                else "SYSTEM"
+                if token_logon_id == "0x3e7"
+                else "analyst"
+            ),
             logon_id=token_logon_id,
             session_id=0 if token_logon_id == "0x3e7" else 2,
-            logon_type=5 if token_logon_id == "0x3e7" else 2,
+            logon_type=(
+                token_logon_type
+                if token_logon_type is not None
+                else 5
+                if token_logon_id == "0x3e7"
+                else 2
+            ),
         ),
         membership=membership,
         action_id=f"action-{object_id}",
@@ -2369,6 +2386,92 @@ def test_process_parent_rejects_cross_session_ownership_before_registration() ->
         (),
         None,
     )
+
+
+def test_runas_can_parent_same_principal_new_credentials_process() -> None:
+    """A Type 9 token clone keeps its real runas parent across the session boundary."""
+
+    registry = LifecycleRegistry(shard_count=1)
+    caller_session = _register_session(
+        registry,
+        object_id="caller-session",
+        logon_id="0x11111",
+    )
+    new_credentials_session = _register_session(
+        registry,
+        object_id="new-credentials-session",
+        logon_id="0x22222",
+        started_at=_START + timedelta(seconds=1),
+        session_kind="new_credentials",
+    )
+    runas = _register_process(
+        registry,
+        object_id="runas-caller",
+        pid=5_205,
+        session_object_id=caller_session.object_id,
+        token_logon_id=caller_session.logon_id,
+        image=r"C:\Windows\System32\runas.exe",
+    )
+
+    child = _register_process(
+        registry,
+        object_id="new-credentials-command",
+        pid=5_206,
+        started_at=_START + timedelta(seconds=2),
+        session_object_id=new_credentials_session.object_id,
+        parent_object_id=runas.object_id,
+        token_logon_id=new_credentials_session.logon_id,
+        token_logon_type=9,
+    )
+
+    children, cursor = registry.live_child_process_page(runas.object_id, limit=1)
+    assert children == ()
+    assert cursor is None
+    assert _request_and_close(
+        registry,
+        runas,
+        requested_at=_START + timedelta(seconds=3),
+    ) == _START + timedelta(seconds=3)
+    child_snapshot = registry.get_process(child.object_id)
+    assert child_snapshot is not None and child_snapshot.closed_at is None
+
+
+def test_non_runas_parent_cannot_cross_into_new_credentials_session() -> None:
+    """NewCredentials does not weaken cross-session ancestry for arbitrary callers."""
+
+    registry = LifecycleRegistry(shard_count=1)
+    caller_session = _register_session(
+        registry,
+        object_id="caller-session",
+        logon_id="0x11111",
+    )
+    new_credentials_session = _register_session(
+        registry,
+        object_id="new-credentials-session",
+        logon_id="0x22222",
+        started_at=_START + timedelta(seconds=1),
+        session_kind="new_credentials",
+    )
+    arbitrary_parent = _register_process(
+        registry,
+        object_id="arbitrary-caller",
+        pid=5_207,
+        session_object_id=caller_session.object_id,
+        token_logon_id=caller_session.logon_id,
+        image=r"C:\Windows\System32\powershell.exe",
+    )
+
+    with pytest.raises(StateError, match="parent crosses session ownership"):
+        _register_process(
+            registry,
+            object_id="rejected-new-credentials-command",
+            pid=5_208,
+            started_at=_START + timedelta(seconds=2),
+            session_object_id=new_credentials_session.object_id,
+            parent_object_id=arbitrary_parent.object_id,
+            token_logon_id=new_credentials_session.logon_id,
+            token_logon_type=9,
+        )
 
 
 def test_bootstrap_handoff_can_cross_session_without_owning_child_lifetime() -> None:

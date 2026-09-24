@@ -1076,6 +1076,119 @@ class TestObservationProfiles:
             "zeek_x509",
         }
 
+    def test_clean_successful_tls_conn_promotes_ssl_analyzer_companion(self, monkeypatch):
+        """A lossless successful TLS conn row keeps its ssl.log analyzer owner."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {
+                            "zeek_conn": 0.0,
+                            "zeek_ssl": 1.0,
+                        },
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        state_manager = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        ssl = _make_mock_emitter("zeek_ssl", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=state_manager,
+            emitters={"zeek_conn": conn, "zeek_ssl": ssl},
+            observation_policy=ObservationPolicy("zeek_tls_analyzer_companion_test"),
+        )
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=network_plan(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="203.0.113.10",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                conn_state="SF",
+                zeek_uid="Ctlsanalyzer01",
+            ),
+            ssl=SslContext(
+                version="TLSv13",
+                cipher="TLS_AES_128_GCM_SHA256",
+                server_name="www.example.test",
+                established=True,
+            ),
+        )
+
+        dispatcher.dispatch_builder(event)
+
+        conn.emit.assert_called_once()
+        ssl.emit.assert_called_once()
+        assert ssl.emit.call_args.args[0]._observed_formats == {"zeek_conn", "zeek_ssl"}
+
+    def test_partial_tls_analyzer_retains_independent_missingness(self, monkeypatch):
+        """A failed handshake may keep its conn row while its SSL analyzer row drops."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "format_missingness": {
+                            "zeek_conn": 0.0,
+                            "zeek_ssl": 1.0,
+                        },
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        state_manager = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        ssl = _make_mock_emitter("zeek_ssl", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=state_manager,
+            emitters={"zeek_conn": conn, "zeek_ssl": ssl},
+            observation_policy=ObservationPolicy("zeek_tls_partial_missingness_test"),
+        )
+        event = OccurrenceBuilder(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=network_plan(
+                src_ip="10.0.1.10",
+                src_port=51112,
+                dst_ip="203.0.113.10",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                conn_state="S1",
+                zeek_uid="Ctlsanalyzer02",
+            ),
+            ssl=SslContext(
+                version="TLSv12",
+                server_name="www.example.test",
+                established=False,
+                ssl_history="ShAD",
+            ),
+        )
+
+        dispatcher.dispatch_builder(event)
+
+        conn.emit.assert_called_once()
+        ssl.emit.assert_not_called()
+
     def test_zeek_ocsp_transaction_uses_one_source_observation_decision(self, monkeypatch):
         """OCSP HTTP, file, and response rows must survive or drop as one Zeek group."""
         monkeypatch.setattr(

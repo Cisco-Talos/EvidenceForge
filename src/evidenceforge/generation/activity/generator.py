@@ -67,7 +67,10 @@ if TYPE_CHECKING:
         ProcessForegroundLifecycle,
     )
     from evidenceforge.generation.actions.process_support.parents import ProcessParentResolver
-    from evidenceforge.generation.actions.process_support.preflight import ProcessPreflightPlanner
+    from evidenceforge.generation.actions.process_support.preflight import (
+        ProcessLifetimeAdmission,
+        ProcessPreflightPlanner,
+    )
     from evidenceforge.generation.actions.process_support.queries import ProcessStateQueries
     from evidenceforge.generation.actions.process_support.reuse import ProcessReusePolicy
     from evidenceforge.generation.actions.process_support.scheduling import ProcessLaunchScheduler
@@ -167,6 +170,8 @@ from evidenceforge.generation.actions import (
     ExecutionEffectAuditCounter,
     ExecutionEffectAuditSnapshot,
     ExecutionEffectPlan,
+    ExecutionEffectPlanError,
+    ExecutionEffectPlanErrorCode,
     ExecutionEffectReconciliation,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
@@ -3189,7 +3194,7 @@ class _FailedLogonAttemptPreparedCommit:
         self,
         owner: "ActivityGenerator",
         reservation: _FailedLogonAttemptReservation,
-    ) -> None:
+    ) -> datetime | None:
         self._owner = owner
         self._reservation = reservation
         self._active = True
@@ -4387,7 +4392,7 @@ class ActivityGenerator:
             return
         close_time = ensure_utc(required_until)
         end_plan = self.state_manager.process_session_end_plan(system.hostname, pid)
-        if end_plan is not None and end_plan.is_authoritative:
+        if end_plan is not None and end_plan.is_hard_deadline:
             deadline = ensure_utc(end_plan.canonical_end)
             close_gap_ms = 100 + (
                 _stable_seed(
@@ -5050,6 +5055,7 @@ class ActivityGenerator:
         step = available / max(2, len(processes) + 1)
         planned: list[tuple[ProcessIdentity, datetime]] = []
         prior = disconnect_at
+        prior_process: RunningProcess | None = None
         for ordinal, process in enumerate(processes, start=1):
             retained_child_close = (
                 self._lifecycle_authority.process_latest_closed_child_at_for_object(
@@ -5081,10 +5087,15 @@ class ActivityGenerator:
                     f"start={process.start_time.isoformat()}, "
                     f"last_activity={(process.last_activity_time or process.start_time).isoformat()}, "
                     f"disconnect={disconnect_at.isoformat()}, logout={logout_time.isoformat()}, "
-                    f"minimum={minimum.isoformat()}"
+                    f"retained_child_close="
+                    f"{retained_child_close.isoformat() if retained_child_close else '-'}, "
+                    f"prior_pid={prior_process.pid if prior_process else '-'}, "
+                    f"prior_image={prior_process.image if prior_process else '-'}, "
+                    f"prior={prior.isoformat()}, minimum={minimum.isoformat()}"
                 )
             planned.append((process_identity, terminate_at))
             prior = terminate_at + timedelta(microseconds=1)
+            prior_process = process
         return tuple(planned)
 
     def _logout_exact_rdp_entry(
@@ -5269,6 +5280,84 @@ class ActivityGenerator:
             if frontier is not None
         ]
         return max(frontiers) if frontiers else None
+
+    def ensure_storyline_rdp_session_connected(
+        self,
+        *,
+        logon_id: str,
+        target_system: System,
+        activity_time: datetime,
+    ) -> datetime | None:
+        """Reconnect a disconnected RDP owner before fresh interactive activity.
+
+        Returns the earliest canonical time at which a child process may start. A
+        ``None`` result means the exact session can no longer accept new desktop
+        activity because its modeled controller is unavailable or it has logged out.
+        """
+
+        session_identity = self.state_manager.get_session_identity(logon_id)
+        if session_identity is None or session_identity.session_kind != "rdp":
+            return ensure_utc(activity_time)
+
+        canonical_time = max(
+            ensure_utc(activity_time),
+            self._rdp_session_lifecycle_frontier(),
+        )
+
+        self.advance_rdp_session_lifecycle_watermark(canonical_time)
+        snapshot = self._rdp_session_manager.get(session_identity.object_id)
+        if snapshot is None:
+            return None
+
+        from evidenceforge.events.rdp import RdpSessionState
+
+        if snapshot.state is RdpSessionState.CONNECTED:
+            session = self.state_manager.get_session(logon_id)
+            if session is None:
+                return None
+            return max(canonical_time, ensure_utc(session.source_ready_time))
+        if snapshot.state is RdpSessionState.LOGGED_OUT:
+            return None
+
+        with self._rdp_lifecycle_journal_lock:
+            candidates = tuple(
+                entry
+                for entry in self._pending_rdp_lifecycle_continuations.values()
+                if entry.continuation.session.identity.logical_session_id
+                == session_identity.object_id
+                and entry.continuation.session.generation.ordinal == snapshot.generation.ordinal
+            )
+        if len(candidates) != 1:
+            return None
+        prepared = candidates[0].continuation.prepared
+        source_system = prepared.source_system
+        if (
+            source_system is None
+            or self._active_user_interactive_windows_session(
+                prepared.user,
+                source_system,
+                canonical_time,
+            )
+            is None
+        ):
+            return None
+
+        self._execute_rdp_session_bundle(
+            user=prepared.user,
+            target_system=target_system,
+            time=canonical_time,
+            source_ip=snapshot.identity.affinity.source_address,
+            source_system=source_system,
+            logon_id=logon_id,
+            preserve_explicit_source=True,
+        )
+        reconnected = self.state_manager.get_session(logon_id)
+        if reconnected is None:
+            raise StateError("Exact RDP reconnect returned without its live State session")
+        return max(
+            canonical_time,
+            ensure_utc(reconnected.source_ready_time) + timedelta(milliseconds=1),
+        )
 
     def assert_rdp_session_lifecycles_drained(self) -> None:
         """Reject sink shutdown while exact RDP terminal work remains."""
@@ -8235,6 +8324,7 @@ class ActivityGenerator:
         auth_protocol: str = "",
         transfer_direction: Literal["download", "upload", "remote"] | None = None,
         preferred_pid: int = -1,
+        client_logon_id: str = "",
         source_visible_by: datetime | None = None,
     ) -> SmbClientProcessPlan:
         """Resolve source-native SMB actor and transport ownership.
@@ -8271,6 +8361,39 @@ class ActivityGenerator:
                 f"{operation}:{time.isoformat()}"
             ),
         )
+        if client_logon_id and preferred_pid > 0:
+            session = self.state_manager.get_session(client_logon_id)
+            process = self.state_manager.get_process(client_system.hostname, preferred_pid)
+            if (
+                session is None
+                or session.system != client_system.hostname
+                or session.username.casefold() != actor.username.casefold()
+                or ensure_utc(session.start_time) > ensure_utc(time)
+                or process is None
+                or process.username.casefold() != actor.username.casefold()
+                or process.logon_id != client_logon_id
+                or process.start_time is None
+                or ensure_utc(process.start_time) > ensure_utc(time)
+                or (
+                    source_visible_by is not None
+                    and not self._process_source_visible_by(
+                        system=client_system,
+                        pid=preferred_pid,
+                        deadline=source_visible_by,
+                    )
+                )
+            ):
+                raise StateError("SMB client request lost its exact credentialed process")
+            return SmbClientProcessPlan(
+                actor_pid=process.pid,
+                actor_image=process.image,
+                actor_command_line=process.command_line,
+                transport_pid=process.pid,
+                transport_image=process.image,
+                access_mode=profile.access_mode,
+                path_style=profile.path_style,
+                terminate_after_operation=False,
+            )
         process_profile = client_process_for_operation(
             profile,
             operation,
@@ -8896,7 +9019,7 @@ class ActivityGenerator:
         )
         if root_pid is None:
             return None
-        chain_time = max(ensure_utc(session.start_time), shell_time - timedelta(seconds=1))
+        chain_time = max(ensure_utc(session.start_time), shell_time - timedelta(seconds=12))
         winlogon_pid = session.session_winlogon_pid
         if winlogon_pid is not None and self._is_pid_active_at(system, winlogon_pid, shell_time):
             winlogon_source = self._process_source_frontier_or_bound(
@@ -8914,32 +9037,24 @@ class ActivityGenerator:
             )
         if winlogon_source is None:
             return None
-        userinit_time = chain_time + timedelta(
-            milliseconds=80
-            + (
-                _stable_seed(
-                    "windows_session_userinit_start:"
-                    f"{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
-                )
-                % 171
+        bootstrap_id = (
+            f"windows-session:{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
+        )
+        user_manager_delay, desktop_shell_delay = (
+            self._activity_timing_planner.windows_session_bootstrap_delays(
+                stable_id=bootstrap_id,
+                host=system.hostname,
+                lifecycle_id=session.logon_id,
             )
         )
+        userinit_time = chain_time + timedelta(seconds=user_manager_delay)
         userinit_source = self._process_create_source_bound(
             system=system,
             canonical_time=userinit_time,
             parent_source_time=winlogon_source,
             session_source_time=session_source_time,
         )
-        explorer_time = userinit_time + timedelta(
-            milliseconds=150
-            + (
-                _stable_seed(
-                    "windows_session_explorer_start:"
-                    f"{system.hostname}:{session.logon_id}:{chain_time.isoformat()}"
-                )
-                % 251
-            )
-        )
+        explorer_time = userinit_time + timedelta(seconds=desktop_shell_delay)
         explorer_source = self._process_create_source_bound(
             system=system,
             canonical_time=explorer_time,
@@ -10046,6 +10161,7 @@ class ActivityGenerator:
             and session.logon_type in {2, 7, 10, 11}
             and _session_started_by(session, time)
             and _accepts_activity(session)
+            and self._interactive_session_accepts_activity(session, time)
             and not self._workstation_logon_locked_at(
                 source_system,
                 session.username,
@@ -10066,6 +10182,25 @@ class ActivityGenerator:
 
         session = max(sessions, key=lambda candidate: candidate.start_time)
         return known_users[session.username], session
+
+    def _interactive_session_accepts_activity(
+        self,
+        session: ActiveSession,
+        time: datetime,
+    ) -> bool:
+        """Return whether a transport-backed desktop can own fresh user activity."""
+
+        session_identity = self.state_manager.get_session_identity(session.logon_id)
+        if session_identity is None or session_identity.session_kind != "rdp":
+            return True
+        canonical_time = max(ensure_utc(time), self._rdp_session_lifecycle_frontier())
+        self.advance_rdp_session_lifecycle_watermark(canonical_time)
+        snapshot = self._rdp_session_manager.get(session_identity.object_id)
+        if snapshot is None:
+            return False
+        from evidenceforge.events.rdp import RdpSessionState
+
+        return snapshot.state is RdpSessionState.CONNECTED
 
     def _ensure_explicit_proxy_client_process(
         self,
@@ -10447,7 +10582,7 @@ class ActivityGenerator:
 
         image, command_line = hint
         session = self._active_interactive_windows_session(source_system, time)
-        if session is None:
+        if session is None or not self._interactive_session_accepts_activity(session, time):
             return -1, None
         user = self._user_model_for_username(session.username)
 
@@ -11701,6 +11836,29 @@ class ActivityGenerator:
             and source_ip not in (None, "", "-", system.ip)
             and emit_network_evidence
         ):
+            planner = getattr(self, "_world_planner", None)
+            if planner is not None:
+                planned_source_system = source_system or self._ip_to_system.get(source_ip)
+                if planned_source_system is None:
+                    planned_source_system = self._resolve_direct_rdp_source_system(
+                        user,
+                        system,
+                        source_ip,
+                        _get_rng(),
+                    )
+                result = planner.bootstrap_user_session(
+                    user=user,
+                    target_system=system,
+                    time=time,
+                    rng=_get_rng(),
+                    session_kind="rdp",
+                    source_system=planned_source_system,
+                    source_ip_override=source_ip,
+                    allow_existing=True,
+                    session_end_plan=request.session_end_plan,
+                    rdp_transport_time=time,
+                )
+                return result.session.logon_id
             explicit_source_system = source_system
             if explicit_source_system is None and source_ip is not None:
                 explicit_source_system = self._ip_to_system.get(source_ip)
@@ -11816,6 +11974,12 @@ class ActivityGenerator:
                 10: "rdp",
             }.get(logon_type, "interactive")
 
+        resolved_smb_principal = (
+            request.smb_principal or user.username
+            if session_kind == "smb"
+            else request.smb_principal
+        )
+
         if (
             os_cat == "linux"
             and logon_type == 10
@@ -11904,7 +12068,11 @@ class ActivityGenerator:
                 if auth_pkg.get("AuthenticationPackageName", "").casefold() == "ntlm"
                 else "kerberos"
             )
-        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
+        requires_logon_guid = auth_pkg.get(
+            "LogonGuid"
+        ) != "{00000000-0000-0000-0000-000000000000}" or (
+            os_cat == "windows" and logon_type in {2, 7, 9, 10, 11}
+        )
 
         # Phase 1: Allocate or resolve IDs from StateManager
         local_linux_session = (
@@ -11923,7 +12091,7 @@ class ActivityGenerator:
                 logon_guid_required=requires_logon_guid,
                 lifecycle_group_id=lifecycle_group_id,
                 auth_protocol=resolved_auth_protocol,
-                smb_principal=request.smb_principal,
+                smb_principal=resolved_smb_principal,
                 account_scope=request.account_scope,
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
@@ -11945,7 +12113,7 @@ class ActivityGenerator:
                     logon_guid_required=requires_logon_guid,
                     lifecycle_group_id=lifecycle_group_id,
                     auth_protocol=resolved_auth_protocol,
-                    smb_principal=request.smb_principal,
+                    smb_principal=resolved_smb_principal,
                     account_scope=request.account_scope,
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
@@ -11959,7 +12127,7 @@ class ActivityGenerator:
                     source_port=source_port or 0,
                     session_kind=session_kind,
                     auth_protocol=resolved_auth_protocol,
-                    smb_principal=request.smb_principal,
+                    smb_principal=resolved_smb_principal,
                     account_scope=request.account_scope,
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
@@ -12112,7 +12280,7 @@ class ActivityGenerator:
                 process_name=logon_caller_process,
                 session_kind=session_kind,
                 auth_protocol=resolved_auth_protocol,
-                smb_principal=request.smb_principal,
+                smb_principal=resolved_smb_principal,
                 account_scope=request.account_scope,
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
@@ -17085,7 +17253,22 @@ class ActivityGenerator:
                 probe_anchor_plan.timing_delta.publish()
             return len(plan.targets)
 
-        probe_pairs = [(target, port) for target in plan.targets for port in plan.ports]
+        discovery_close = self._emit_nmap_discovery_probes(
+            request=request,
+            targets=plan.discovery_targets,
+            rng=rng,
+            probe_anchor=probe_anchor,
+            window_seconds=(
+                planning_profile.discovery_window_seconds_min,
+                planning_profile.discovery_window_seconds_max,
+            ),
+        )
+        connect_anchor = (
+            discovery_close + timedelta(milliseconds=50)
+            if discovery_close is not None
+            else probe_anchor
+        )
+        probe_pairs = [(target, port) for target in plan.service_targets for port in plan.ports]
         rng.shuffle(probe_pairs)
         offsets = self._nmap_concurrent_probe_offsets(
             count=len(probe_pairs),
@@ -17110,7 +17293,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=system.ip,
                 dst_ip=target.ip,
-                time=probe_anchor + offset,
+                time=connect_anchor + offset,
                 dst_port=port,
                 proto="tcp",
                 service=service,
@@ -17127,7 +17310,7 @@ class ActivityGenerator:
             )
         if probe_anchor_plan.timing_delta is not None and probe_pairs:
             probe_anchor_plan.timing_delta.publish()
-        return len(probe_pairs)
+        return len(plan.discovery_targets) + len(probe_pairs)
 
     def _nmap_probe_anchor_after_visible_process_create(
         self,
@@ -17159,8 +17342,8 @@ class ActivityGenerator:
         rng: random.Random,
         probe_anchor: datetime,
         window_seconds: tuple[float, float],
-    ) -> None:
-        """Emit bounded process-owned ICMP discovery attempts."""
+    ) -> datetime | None:
+        """Emit bounded process-owned ICMP discovery attempts and return their latest close."""
 
         offsets = self._nmap_concurrent_probe_offsets(
             count=len(targets),
@@ -17169,16 +17352,19 @@ class ActivityGenerator:
             rng=rng,
         )
         payload_bytes = rng.choice((56, 64, 84))
+        latest_close: datetime | None = None
         for target, offset in zip(targets, offsets, strict=True):
-            responded = bool(target.modeled)
+            responded = target.modeled or target.explicit
+            start_time = probe_anchor + offset
+            duration = rng.uniform(0.001, 0.08) if responded else rng.uniform(0.8, 2.5)
             self.generate_connection(
                 src_ip=request.system.ip,
                 dst_ip=target.ip,
-                time=probe_anchor + offset,
+                time=start_time,
                 dst_port=0,
                 proto="icmp",
                 service="icmp",
-                duration=(rng.uniform(0.001, 0.08) if responded else rng.uniform(0.8, 2.5)),
+                duration=duration,
                 orig_bytes=payload_bytes,
                 resp_bytes=payload_bytes if responded else 0,
                 emit_dns=False,
@@ -17188,6 +17374,9 @@ class ActivityGenerator:
                 process_image=request.process_name,
                 suppress_application_side_effects=True,
             )
+            close_time = start_time + timedelta(seconds=duration)
+            latest_close = close_time if latest_close is None else max(latest_close, close_time)
+        return latest_close
 
     @staticmethod
     def _nmap_concurrent_probe_offsets(
@@ -19188,6 +19377,7 @@ class ActivityGenerator:
         time: datetime,
         process_pid: int = -1,
         process_image: str = "",
+        client_logon_id: str = "",
         activity_source: Literal["storyline", "baseline"] = "storyline",
         files_override: tuple[Any, ...] = (),
         client_source_override: Any = None,
@@ -19201,6 +19391,7 @@ class ActivityGenerator:
             time=time,
             process_pid=process_pid,
             process_image=process_image,
+            client_logon_id=client_logon_id,
             activity_source=activity_source,
             files_override=files_override,
             client_source_override=client_source_override,
@@ -19216,6 +19407,7 @@ class ActivityGenerator:
         time: datetime,
         process_pid: int = -1,
         process_image: str = "",
+        client_logon_id: str = "",
         activity_source: Literal["storyline", "baseline"] = "storyline",
         files_override: tuple[Any, ...] = (),
     ) -> SmbActivityPreparation:
@@ -19228,6 +19420,7 @@ class ActivityGenerator:
             time=time,
             process_pid=process_pid,
             process_image=process_image,
+            client_logon_id=client_logon_id,
             activity_source=activity_source,
             files_override=files_override,
         )
@@ -25170,6 +25363,10 @@ class ActivityGenerator:
         if parent_pid is None:
             return
 
+        network_close_time = getattr(session, "network_close_time", None)
+        if network_close_time is not None:
+            network_close_time = ensure_utc(network_close_time)
+
         rng = random.Random(
             _stable_seed(
                 f"bash_process_telemetry:{system.hostname}:{user.username}:{time}:{command}"
@@ -25225,18 +25422,13 @@ class ActivityGenerator:
                 # child to an already-closed SSH session (or publishing only a
                 # prefix of one pipeline).
                 continue
-            for (image, process_command_line), process_time in zip(
-                process_group, stage_times, strict=True
+            if network_close_time is not None and any(
+                stage_time >= network_close_time - timedelta(milliseconds=750)
+                for stage_time in stage_times
             ):
-                network_close_time = getattr(session, "network_close_time", None)
-                if network_close_time is not None:
-                    if network_close_time.tzinfo is None:
-                        network_close_time = network_close_time.replace(tzinfo=UTC)
-                    else:
-                        network_close_time = network_close_time.astimezone(UTC)
-                    if process_time >= network_close_time - timedelta(milliseconds=750):
-                        continue
-                pid = self.generate_process(
+                continue
+            requests = tuple(
+                ProcessExecutionRequest(
                     user=user,
                     system=system,
                     time=process_time,
@@ -25247,24 +25439,49 @@ class ActivityGenerator:
                     suppress_command_file_effect=True,
                     concurrency_group_id=concurrency_group_id,
                 )
+                for (image, process_command_line), process_time in zip(
+                    process_group, stage_times, strict=True
+                )
+            )
+            try:
+                for request in requests:
+                    self._admit_process_lifecycle(request)
+            except ExecutionEffectPlanError as exc:
+                if exc.code == ExecutionEffectPlanErrorCode.LIFECYCLE_WINDOW_UNAVAILABLE:
+                    continue
+                raise
+            for request in requests:
+                pid = self.generate_process(
+                    user=request.user,
+                    system=request.system,
+                    time=request.time,
+                    logon_id=request.logon_id,
+                    process_name=request.process_name,
+                    command_line=request.command_line,
+                    parent_pid=request.parent_pid,
+                    suppress_command_file_effect=request.suppress_command_file_effect,
+                    concurrency_group_id=request.concurrency_group_id,
+                )
                 running_proc = self.state_manager.get_process(system.hostname, pid)
                 actual_process_start = (
-                    running_proc.start_time if running_proc is not None else process_time
+                    running_proc.start_time if running_proc is not None else request.time
                 )
-                self._process_parents()._record_user_process(system, user, pid, image)
-                lifetime = _linux_foreground_lifetime(image, process_command_line)
+                self._process_parents()._record_user_process(
+                    system, user, pid, request.process_name
+                )
+                lifetime = _linux_foreground_lifetime(request.process_name, request.command_line)
                 if lifetime is not None:
                     termination_time = self._generate_bounded_foreground_process_termination(
                         user=user,
                         system=system,
                         start_time=actual_process_start,
                         pid=pid,
-                        process_name=image,
+                        process_name=request.process_name,
                         logon_id=session.logon_id,
                         lifetime=lifetime,
                         rng=rng,
                     )
-                    group_release_times.append((termination_time, process_command_line))
+                    group_release_times.append((termination_time, request.command_line))
             for termination_time, process_command_line in group_release_times:
                 self._remember_foreground_shell_available(
                     system=system,
@@ -28389,10 +28606,13 @@ class ActivityGenerator:
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
 
+        target_sid = self._get_sid(username)
         tgt_fields = pick_tgt_success_fields(
             rng,
             domain.lower(),
             allow_no_preauth=self._kerberos_account_allows_no_preauth(username),
+            principal_sid=target_sid,
+            principal_scope="machine" if username.endswith("$") else "user",
         )
         source_port = self._reserve_kerberos_source_port(
             source_ip,
@@ -28417,7 +28637,7 @@ class ActivityGenerator:
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
-                target_sid=self._get_sid(username),
+                target_sid=target_sid,
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
                 ticket_options=tgt_fields["ticket_options"],
@@ -28705,6 +28925,8 @@ class ActivityGenerator:
         process_pid: int | None,
         source_ip: str = "",
         source_port: int = 0,
+        create_new_credentials_session: bool = True,
+        lifecycle_group_id: str = "",
     ) -> None:
         """Generate explicit credentials event (4648) on source system.
 
@@ -28723,9 +28945,11 @@ class ActivityGenerator:
                 process_pid=process_pid,
                 source_ip=source_ip,
                 source_port=source_port,
+                create_new_credentials_session=create_new_credentials_session,
+                lifecycle_group_id=lifecycle_group_id,
             ),
         )
-        bundle.execute()
+        return bundle.execute()
 
     def _emit_new_credentials_logon(
         self,
@@ -28763,8 +28987,9 @@ class ActivityGenerator:
             source_ip="-",
             source_port=0,
             session_kind="new_credentials",
+            logon_guid_required=True,
             lifecycle_group_id=lifecycle_id,
-            parent_lifecycle_group_id=lifecycle_group_id,
+            parent_lifecycle_group_id=caller_session.lifecycle_group_id,
         )
         session = self.state_manager.get_session(logon_id)
         session_id = session.session_id if session is not None else 0
@@ -28786,7 +29011,7 @@ class ActivityGenerator:
                 source_port=0,
                 logon_process="seclogo",
                 lm_package="-",
-                logon_guid="{00000000-0000-0000-0000-000000000000}",
+                logon_guid=session.logon_guid if session is not None else "",
                 subject_sid=subject["sid"],
                 subject_username=subject["username"],
                 subject_domain=subject["domain"],
@@ -31059,6 +31284,7 @@ class ActivityGenerator:
         )
         from evidenceforge.generation.activity.create_remote_thread_patterns import (
             pick_remote_thread_start,
+            resolve_remote_thread_start_address,
         )
 
         start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
@@ -31081,11 +31307,15 @@ class ActivityGenerator:
             )
         else:
             target_image = normalize_defender_platform_path(target_image, system.hostname)
-        module_key = (start_module or target_image).rsplit("\\", 1)[-1].lower()
-        module_base = (
-            0x00007FF600000000 + (_stable_seed(f"module_base:{module_key}") % 0x700000) * 0x1000
+        boot_time = self.state_manager.get_boot_time(system.hostname)
+        start_address = resolve_remote_thread_start_address(
+            hostname=system.hostname,
+            os_build=system.os_build or system.os,
+            architecture=system.architecture or "x64",
+            boot_time=boot_time,
+            start_module=start_module or target_image,
+            start_function=start_function,
         )
-        start_address = module_base + rng.randrange(0x1000, 0x1F000, 0x10)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -35005,16 +35235,17 @@ class ActivityGenerator:
                 event_logon_id="0x3e7",
                 integrity_level="System",
             )
-            userinit_time = logon_time + timedelta(
-                milliseconds=80
-                + (
-                    _stable_seed(
-                        "windows_session_userinit_start:"
-                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
-                    )
-                    % 171
+            bootstrap_id = (
+                f"windows-session:{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
+            )
+            user_manager_delay, desktop_shell_delay = (
+                self._activity_timing_planner.windows_session_bootstrap_delays(
+                    stable_id=bootstrap_id,
+                    host=system.hostname,
+                    lifecycle_id=session.logon_id,
                 )
             )
+            userinit_time = logon_time + timedelta(seconds=user_manager_delay)
             self.state_manager.set_current_time(userinit_time)
             userinit_pid = self.state_manager.create_process(
                 system.hostname,
@@ -35033,16 +35264,7 @@ class ActivityGenerator:
                 event_logon_id=session.logon_id,
                 integrity_level="Medium",
             )
-            explorer_time = userinit_time + timedelta(
-                milliseconds=150
-                + (
-                    _stable_seed(
-                        "windows_session_explorer_start:"
-                        f"{system.hostname}:{session.logon_id}:{logon_time.isoformat()}"
-                    )
-                    % 251
-                )
-            )
+            explorer_time = userinit_time + timedelta(seconds=desktop_shell_delay)
             self.state_manager.set_current_time(explorer_time)
             explorer_pid = self.state_manager.create_process(
                 system.hostname,
@@ -35600,6 +35822,14 @@ class ActivityGenerator:
             bounded_reuse_intent=self._process_execution_service().bounded_reuse_intent,
             plan_scanner=self._plan_nmap_command_probes,
         )
+
+    def _admit_process_lifecycle(
+        self,
+        request: ProcessExecutionRequest,
+    ) -> "ProcessLifetimeAdmission":
+        """Return allocation-free lifecycle admission for an optional projection."""
+
+        return self._process_preflight().admit_process_lifecycle(request)
 
     def _process_actors(self) -> "ProcessActorResolver":
         """Bind current process actors owners for this call only."""

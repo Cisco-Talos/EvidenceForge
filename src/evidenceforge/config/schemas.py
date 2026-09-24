@@ -1134,6 +1134,19 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
     max_per_host_window: int | None = Field(default=None, gt=0)
+    episode_pair_budgets: list[int] | None = None
+
+    @field_validator("episode_pair_budgets")
+    @classmethod
+    def episode_pair_budgets_are_positive_unique(cls, value: list[int] | None) -> list[int] | None:
+        """Require meaningful deterministic resolver-episode choices."""
+        if value is None:
+            return None
+        if not value or any(type(item) is not int or item <= 0 for item in value):
+            raise ValueError("episode_pair_budgets must contain positive integers")
+        if len(value) != len(set(value)):
+            raise ValueError("episode_pair_budgets must not contain duplicates")
+        return value
 
 
 # --- TLS Issuers ---
@@ -1657,6 +1670,9 @@ class KerberosPreAuthTypeEntry(BaseModel, extra="forbid"):
     weight: int
     certificate_required: bool
     certificate_profile: str | None = None
+    principal_scopes: list[Literal["user", "machine"]] = Field(
+        default_factory=lambda: ["user", "machine"], min_length=1
+    )
     description: str = ""
 
     @field_validator("value")
@@ -1671,6 +1687,15 @@ class KerberosPreAuthTypeEntry(BaseModel, extra="forbid"):
     def weight_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("weight must be positive")
+        return v
+
+    @field_validator("principal_scopes")
+    @classmethod
+    def principal_scopes_unique(
+        cls, v: list[Literal["user", "machine"]]
+    ) -> list[Literal["user", "machine"]]:
+        if len(v) != len(set(v)):
+            raise ValueError("principal_scopes entries must be unique")
         return v
 
     @model_validator(mode="after")
@@ -1806,6 +1831,10 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
     issuer_names: list[str]
     serial_hex_bytes: int = 16
     thumbprint_hex_chars: int = 40
+    credential_epoch: str = Field(default="default", min_length=1, max_length=128)
+    principal_scopes: list[Literal["user", "machine"]] = Field(
+        default_factory=lambda: ["user", "machine"], min_length=1
+    )
 
     @field_validator("issuer_names")
     @classmethod
@@ -1828,6 +1857,22 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
     def thumbprint_length_valid(cls, v: int) -> int:
         if v not in {40, 64}:
             raise ValueError("thumbprint_hex_chars must be 40 (SHA-1) or 64 (SHA-256)")
+        return v
+
+    @field_validator("credential_epoch")
+    @classmethod
+    def credential_epoch_valid(cls, v: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", v):
+            raise ValueError("credential_epoch must be a bounded identifier")
+        return v
+
+    @field_validator("principal_scopes")
+    @classmethod
+    def principal_scopes_unique(
+        cls, v: list[Literal["user", "machine"]]
+    ) -> list[Literal["user", "machine"]]:
+        if len(v) != len(set(v)):
+            raise ValueError("principal_scopes entries must be unique")
         return v
 
 
@@ -1876,6 +1921,16 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
         )
         if missing:
             raise ValueError(f"unknown certificate_profile references: {missing}")
+        for entry_name, entry in self.tgt_success.pre_auth_types.items():
+            if not entry.certificate_profile:
+                continue
+            profile = self.certificate_profiles[entry.certificate_profile]
+            disallowed_scopes = sorted(set(entry.principal_scopes) - set(profile.principal_scopes))
+            if disallowed_scopes:
+                raise ValueError(
+                    f"pre-auth profile {entry_name!r} permits scopes not allowed by certificate "
+                    f"profile {entry.certificate_profile!r}: {disallowed_scopes}"
+                )
         if self.transport_profiles and "default" not in self.transport_profiles:
             raise ValueError("transport_profiles must include a default profile")
         return self

@@ -2827,6 +2827,7 @@ class SshSessionActionBundle:
             continuation: _SshCloseContinuation | None = None
             try:
                 state = self._plan_transport(deferred_publication=True)
+                self._fit_transport_to_source_session_end(state, self.request.source_pid)
                 prepared = self._prepare_deferred_open(state)
                 transaction = self._open_deferred_transport(state, prepared)
                 continuation = self._bind_deferred_close_continuation(
@@ -4063,6 +4064,44 @@ class SshSessionActionBundle:
         if request.session_end_plan is not None:
             executor.state_manager.plan_session_end(state.logon_id, request.session_end_plan)
 
+    def _fit_transport_to_source_session_end(
+        self,
+        state: _SshTransportState,
+        source_pid: int,
+    ) -> None:
+        """Keep an SSH client transport inside its source session's terminal fence."""
+
+        source_system = self._source_system()
+        if source_system is None or source_pid <= 0:
+            return
+        source_process = self.executor.state_manager.get_process(
+            source_system.hostname,
+            source_pid,
+        )
+        source_session_end: datetime | None = None
+        if source_process is not None and source_process.logon_id:
+            source_end_plan = self.executor.state_manager.get_session_end_plan(
+                source_process.logon_id
+            )
+            if source_end_plan is not None and source_end_plan.is_hard_deadline:
+                source_session_end = ensure_utc(source_end_plan.canonical_end)
+            else:
+                source_session_end = self.executor.state_manager.get_session_end_time(
+                    source_process.logon_id
+                )
+        if source_session_end is None or state.close_time < source_session_end:
+            return
+        state.close_time = _ssh_transport_close_before_source_session_end(
+            source_hostname=source_system.hostname,
+            source_pid=source_pid,
+            source_port=state.source_port,
+            source_session_end=source_session_end,
+        )
+        state.duration = max(
+            1.0,
+            (state.close_time - ensure_utc(state.open_time or self.request.time)).total_seconds(),
+        )
+
     def _open_transport(self, state: _SshTransportState, responding_pid: int | None) -> None:
         """Delegate SSH TCP transport to the canonical network connection contract."""
 
@@ -4087,30 +4126,7 @@ class SshSessionActionBundle:
             if client is not None:
                 source_pid, source_process_image = client
 
-        if source_system is not None and source_pid > 0:
-            source_process = executor.state_manager.get_process(source_system.hostname, source_pid)
-            source_session_end = None
-            if source_process is not None and source_process.logon_id:
-                source_end_plan = executor.state_manager.get_session_end_plan(
-                    source_process.logon_id
-                )
-                if source_end_plan is not None and source_end_plan.is_authoritative:
-                    source_session_end = ensure_utc(source_end_plan.canonical_end)
-                else:
-                    source_session_end = executor.state_manager.get_session_end_time(
-                        source_process.logon_id
-                    )
-            if source_session_end is not None and state.close_time >= source_session_end:
-                state.close_time = _ssh_transport_close_before_source_session_end(
-                    source_hostname=source_system.hostname,
-                    source_pid=source_pid,
-                    source_port=state.source_port,
-                    source_session_end=source_session_end,
-                )
-                state.duration = max(
-                    1.0,
-                    (state.close_time - ensure_utc(request.time)).total_seconds(),
-                )
+        self._fit_transport_to_source_session_end(state, source_pid)
 
         self._bind_source_process(state, source_pid)
         network_uid = executor.generate_connection(

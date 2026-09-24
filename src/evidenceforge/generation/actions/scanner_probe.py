@@ -159,6 +159,7 @@ class NmapCommandProbeTarget:
 
     ip: str
     modeled: bool
+    explicit: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,8 +167,27 @@ class NmapCommandProbePlan:
     """Canonical bounded plan for one nmap process command."""
 
     discovery: bool
+    host_discovery_bypass: bool
     ports: tuple[int, ...]
     targets: tuple[NmapCommandProbeTarget, ...]
+
+    @property
+    def discovery_targets(self) -> tuple[NmapCommandProbeTarget, ...]:
+        """Return targets that require visible discovery before service probes."""
+
+        if self.discovery or self.host_discovery_bypass:
+            return ()
+        return self.targets
+
+    @property
+    def service_targets(self) -> tuple[NmapCommandProbeTarget, ...]:
+        """Return targets the visible command can classify as service-scan candidates."""
+
+        if self.discovery:
+            return ()
+        if self.host_discovery_bypass:
+            return self.targets
+        return tuple(target for target in self.targets if target.modeled or target.explicit)
 
 
 class NmapCommandProbePlanningProfile(Protocol):
@@ -200,6 +220,7 @@ class NmapCommandProbePlanner:
 
         tokens = self._tokens(request.command_line)
         discovery = any(token.casefold() in {"-sn", "-sp"} for token in tokens)
+        host_discovery_bypass = any(token.casefold() in {"-pn", "-p0"} for token in tokens)
         ports = tuple(self._ports(tokens)[: self._profile.max_ports])
         if not discovery and not ports:
             return None
@@ -242,6 +263,7 @@ class NmapCommandProbePlanner:
                         NmapCommandProbeTarget(
                             ip=literal_ip,
                             modeled=literal_ip in systems_by_ip,
+                            explicit=True,
                         )
                     )
                     seen.add(literal_ip)
@@ -289,6 +311,7 @@ class NmapCommandProbePlanner:
             return None
         return NmapCommandProbePlan(
             discovery=discovery,
+            host_discovery_bypass=host_discovery_bypass,
             ports=() if discovery else ports,
             targets=tuple(targets),
         )
@@ -420,6 +443,7 @@ def estimate_nmap_command_probe_occurrences(
 
     tokens = NmapCommandProbePlanner._tokens(command_line)
     discovery = any(token.casefold() in {"-sn", "-sp"} for token in tokens)
+    host_discovery_bypass = any(token.casefold() in {"-pn", "-p0"} for token in tokens)
     ports = NmapCommandProbePlanner._ports(tokens)[: profile.max_ports]
     if not discovery and not ports:
         return 0
@@ -439,7 +463,12 @@ def estimate_nmap_command_probe_occurrences(
         if targets >= profile.max_expanded_targets:
             targets = profile.max_expanded_targets
             break
-    return targets if discovery else targets * len(ports)
+    if discovery or host_discovery_bypass:
+        return targets if discovery else targets * len(ports)
+    # Default nmap service scans perform host discovery first. Admission cannot know which
+    # authored systems will answer, so reserve the safe upper bound of discovery plus service
+    # probes for every bounded target; the canonical plan later realizes only responsive hosts.
+    return targets + targets * len(ports)
 
 
 class ScannerProbeExecutor(Protocol):

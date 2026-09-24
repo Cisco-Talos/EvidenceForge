@@ -60,6 +60,7 @@ from evidenceforge.generation.engine.baseline import (
 )
 from evidenceforge.generation.network_runtime import NetworkRuntimePointFamily
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.models import System, User
 from evidenceforge.models.exceptions import StateError
 
@@ -84,6 +85,26 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_exchange_system_process_commands_reuse_native_image_paths():
+    """Exchange command templates must not retain YAML-escaped separators."""
+    catalog = load_system_processes()
+    exchange_entries = {
+        entry["id"]: entry
+        for entries in catalog["system_services"].values()
+        for entry in entries
+        if entry.get("id", "").startswith("microsoft-exchange-")
+    }
+
+    assert set(exchange_entries) == {
+        "microsoft-exchange-edge-transport",
+        "microsoft-exchange-imap4",
+    }
+    for entry in exchange_entries.values():
+        command = entry["command_templates"][0]
+        assert command.split('"', 2)[1] == entry["image"]
+        assert r"\\" not in command
 
 
 def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
@@ -251,15 +272,129 @@ def test_rsyslog_ambient_health_uses_durable_queue_state(linux_system):
             "checkpoint {checkpoint}"
         ],
     }
+    receiver = System(
+        hostname="LOG-01",
+        ip="10.0.0.40",
+        os="Ubuntu 22.04",
+        type="server",
+        services=["rsyslog"],
+        roles=["log_server"],
+    )
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[linux_system, receiver]))
+    route = engine._canonical_syslog_routes()[linux_system.hostname]
 
-    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
-    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng)
+    first = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng, route)
+    second = engine._render_rsyslog_health_message(entry, linux_system.hostname, rng, route)
 
     first_checkpoint = int(first.rsplit(" ", 1)[-1])
     second_checkpoint = int(second.rsplit(" ", 1)[-1])
     assert second_checkpoint > first_checkpoint
+    assert "target 10.0.0.40" in first
     assert "reload" not in first.lower()
     assert "reload" not in second.lower()
+
+
+def test_canonical_syslog_routes_use_only_declared_receivers_and_never_self_target():
+    """Syslog diagnostics and flows share a stable, capability-gated receiver plan."""
+    senders = [
+        System(
+            hostname=f"APP-{index}",
+            ip=f"10.0.1.{index}",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        for index in range(1, 9)
+    ]
+    receivers = [
+        System(
+            hostname="FILE-LOG-01",
+            ip="10.0.2.21",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["syslog"],
+        ),
+        System(
+            hostname="LOG-MON-01",
+            ip="10.0.2.40",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["rsyslog"],
+            roles=["log_server"],
+        ),
+    ]
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[*senders, *receivers]))
+
+    first = engine._canonical_syslog_routes()
+    second = engine._canonical_syslog_routes()
+
+    assert first == second
+    assert set(first) == {system.hostname for system in [*senders, *receivers]}
+    assert {route.receiver.ip for route in first.values()} == {"10.0.2.21", "10.0.2.40"}
+    assert all(route.sender.ip != route.receiver.ip for route in first.values())
+    assert {route.protocol for route in first.values()} == {"tcp", "udp"}
+
+
+def test_syslog_forwarder_identity_uses_seeded_platform_daemon(linux_system):
+    """Outbound syslog FLOW attribution uses the live platform forwarding process."""
+    windows_system = System(
+        hostname="WS-01",
+        ip="10.0.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine._system_pids = {
+        linux_system.hostname: {"rsyslogd": 741},
+        windows_system.hostname: {"svchost_net_svc": 912},
+    }
+
+    assert engine._syslog_forwarder_identity(linux_system) == (741, "/usr/sbin/rsyslogd")
+    assert engine._syslog_forwarder_identity(windows_system) == (
+        912,
+        r"C:\Windows\System32\svchost.exe",
+    )
+
+
+def test_rsyslog_health_owns_process_attributed_canonical_transport(linux_system):
+    """An rsyslog forwarding-health row first emits its canonical transport."""
+    receiver = System(
+        hostname="LOG-01",
+        ip="10.0.0.40",
+        os="Ubuntu 22.04",
+        type="server",
+        services=["rsyslog"],
+        roles=["log_server"],
+    )
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[linux_system, receiver]))
+    engine._system_pids = {linux_system.hostname: {"rsyslogd": 741}}
+    engine.activity_generator = Mock()
+    engine.state_manager = Mock()
+    engine._baseline_network_close_bound_seconds = Mock(return_value=6.0)
+    engine._baseline_pass_admits = Mock(return_value=True)
+    current_hour = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+    engine.activity_generator.timing_runtime = TimingRuntime(reference_time=current_hour)
+    event_time = current_hour + timedelta(minutes=4)
+    route = engine._canonical_syslog_routes()[linux_system.hostname]
+
+    emitted = engine._emit_rsyslog_health_transport(
+        current_hour=current_hour,
+        sender=linux_system,
+        time=event_time,
+        route=route,
+    )
+
+    assert emitted is True
+    call = engine.activity_generator.generate_connection.call_args.kwargs
+    assert call["src_ip"] == linux_system.ip
+    assert call["dst_ip"] == receiver.ip
+    assert call["dst_port"] == 514
+    assert call["service"] == "syslog"
+    assert 0.4 <= call["duration"] <= 6.0
+    assert call["pid"] == 741
+    assert call["process_image"] == "/usr/sbin/rsyslogd"
+    engine.state_manager.set_current_time.assert_called_once_with(event_time)
 
 
 def test_journald_housekeeping_is_sparse_over_visible_window(linux_system):
@@ -1110,6 +1245,7 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     assert syslog_call.kwargs["message"] == (
         "(sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)"
     )
+    assert syslog_call.kwargs["time"].microsecond % 1000 != 0
     term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
     assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
     assert {call.kwargs["concurrency_group_id"] for call in term_calls} == {
@@ -1134,6 +1270,7 @@ def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
         "typical_hour": 0,
         "jitter_minutes": 8,
         "slot_jitter_seconds": 45,
+        "slot_skip_probability": 1.0,
         "distro": "debian",
         "cron_user": "sysstat",
         "cron_commands": {"debian": "debian-sa1 1 1"},
@@ -1154,6 +1291,96 @@ def test_cron_schedule_ignores_configured_slot_jitter(linux_system):
     assert len(fire_times) == 2
     assert all(fire_time.second == 0 for fire_time in fire_times)
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
+
+
+def test_systemd_timer_preserves_configured_slot_skipping(linux_system):
+    """Removing cron gaps must not disable modeled skipping for systemd timers."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "php-sessionclean",
+        "type": "systemd_timer",
+        "frequency": "30min",
+        "typical_hour": 0,
+        "jitter_minutes": 5,
+        "slot_skip_probability": 1.0,
+        "distro": "debian",
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [sched]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"systemd": 1},
+            False,
+            False,
+        )
+
+    engine._emit_scheduled_event.assert_not_called()
+
+
+def test_linux_background_profiles_are_host_stable_and_fleet_diverse():
+    """Persistent hardware texture should vary by host, never by message draw."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._linux_background_host_profile = BaselineMixin._linux_background_host_profile.__get__(
+        engine,
+        type(engine),
+    )
+    entry = next(entry for entry in load_extra_syslog_messages() if entry["app"] == "irqbalance")
+
+    first = engine._linux_background_host_profile(entry, "LNX-01")
+    repeated = engine._linux_background_host_profile(entry, "LNX-01")
+    fleet = {
+        tuple(sorted(engine._linux_background_host_profile(entry, f"LNX-{index:02d}").items()))
+        for index in range(1, 9)
+    }
+
+    assert first == repeated
+    assert {"irq", "device", "cpu", "numa_node", "affinity_mask", "moved"} <= first.keys()
+    assert len(fleet) > 1
+
+
+def test_systemd_resolved_host_budget_and_episode_binding(linux_system):
+    """Resolver degradation is budgeted per host and recovery keeps its DNS server."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._render_systemd_resolved_message = (
+        BaselineMixin._render_systemd_resolved_message.__get__(
+            engine,
+            type(engine),
+        )
+    )
+    entry = next(
+        entry for entry in load_extra_syslog_messages() if entry["app"] == "systemd-resolved"
+    )
+    systems = [
+        linux_system.model_copy(update={"hostname": f"LNX-{index:02d}"}) for index in range(8)
+    ]
+    limits = {
+        _extra_syslog_effective_limit(system, entry, datetime(2024, 3, 18, tzinfo=UTC))
+        for system in systems
+    }
+
+    degraded = engine._render_systemd_resolved_message(
+        entry, "LNX-01", ["10.0.0.53", "10.0.0.54"], random.Random(1)
+    )
+    recovered = engine._render_systemd_resolved_message(
+        entry, "LNX-01", ["10.0.0.53", "10.0.0.54"], random.Random(999)
+    )
+    degraded_server = degraded.rsplit(" ", 1)[-1].rstrip(".")
+    recovered_server = recovered.rsplit(" ", 1)[-1].rstrip(".")
+
+    assert len(limits) > 1
+    assert limits <= {2, 4, 6}
+    assert "degraded feature set" in degraded
+    assert "resuming full feature set" in recovered
+    assert degraded_server == recovered_server
 
 
 def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):
@@ -1642,6 +1869,58 @@ class TestGenerateSystemProcess:
             and c[0][0].process.image.endswith("spoolsv.exe")
         ]
         assert len(security_creates) == 1
+
+    def test_reuses_cataloged_exchange_singleton_service_processes(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Exchange SCM services keep one canonical live process per host and service."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        services = (
+            (
+                r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe",
+                r'"C:\Program Files\Microsoft\Exchange Server\V15\Bin\EdgeTransport.exe" -service',
+            ),
+            (
+                r"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe",
+                r'"C:\Program Files\Microsoft\Exchange Server\V15\Bin\Microsoft.Exchange.Imap4.exe"',
+            ),
+        )
+
+        for process_name, command_line in services:
+            first_pid = activity_gen.generate_system_process(
+                system=win_system,
+                time=timestamp,
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+            )
+            reused_pid = activity_gen.generate_system_process(
+                system=win_system,
+                time=timestamp + timedelta(minutes=10),
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                username="SYSTEM",
+            )
+
+            assert reused_pid == first_pid
+
+        exchange_creates = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "system_process_create"
+            and "\\Microsoft\\Exchange Server\\" in call[0][0].process.image
+        ]
+        assert len(exchange_creates) == 2
 
     def test_reuses_named_svchost_service_but_not_other_services(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
