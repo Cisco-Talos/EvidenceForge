@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 153
+current_revision: 154
 history_start_revision: 1
-behavior_surface_sha256: d88b27d5f6236de3ffff07e4ec2d7419e3543be12ef0005121ae4e7d1afa2046
+behavior_surface_sha256: 429907e7b0207b6c11f34ecdf363b60838bb6ecad1cf46bf7d42c22b85397d59
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1550,3 +1550,11 @@ changes:
     formats:
       - windows_event_security
     summary: Remove the transport-only client port from native Security 4778/4779 payloads while retaining it in canonical transport and endpoint evidence.
+  - revision: 154
+    id: full-width-bash-history-journal-file-identity
+    impact: none
+    domains:
+      - host-filesystem
+      - bash-history-journal
+    formats: []
+    summary: Preserve full native file identities in durable Bash history export plans without changing rendered evidence.

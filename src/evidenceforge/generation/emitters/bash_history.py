@@ -1468,6 +1468,32 @@ class _ExportPlan:
     working_bytes: int
 
 
+def _insert_export_plan_row(connection: sqlite3.Connection, plan: _ExportPlan) -> None:
+    """Persist native file identities without SQLite's signed INTEGER limit."""
+
+    # SQLite preserves bytes as BLOBs even in an older journal with INTEGER affinity.
+    connection.execute(
+        """INSERT INTO export_plan
+        (singleton, max_sequence, baseline_exists, baseline_digest,
+        baseline_size, expected_exists, expected_digest, expected_size,
+        temporary_name, temporary_device, temporary_inode, working_bytes)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            plan.max_sequence,
+            int(plan.baseline_exists),
+            plan.baseline_digest,
+            plan.baseline_size,
+            int(plan.expected_exists),
+            plan.expected_digest,
+            plan.expected_size,
+            plan.temporary_name,
+            str(plan.temporary_device).encode("ascii"),
+            str(plan.temporary_inode).encode("ascii"),
+            plan.working_bytes,
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _ExportCompletion:
     """Retry-local ownership of one possibly committed export cleanup transaction."""
@@ -2312,8 +2338,8 @@ class _SingleHistoryWriter:
                     expected_digest TEXT NOT NULL,
                     expected_size INTEGER NOT NULL,
                     temporary_name TEXT NOT NULL,
-                    temporary_device INTEGER NOT NULL,
-                    temporary_inode INTEGER NOT NULL,
+                    temporary_device BLOB NOT NULL,
+                    temporary_inode BLOB NOT NULL,
                     working_bytes INTEGER NOT NULL
                 )"""
             )
@@ -2725,26 +2751,7 @@ class _SingleHistoryWriter:
             self._unreconciled_export_plan = sealed_plan
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    """INSERT INTO export_plan
-                    (singleton, max_sequence, baseline_exists, baseline_digest,
-                    baseline_size, expected_exists, expected_digest, expected_size,
-                    temporary_name, temporary_device, temporary_inode, working_bytes)
-                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        max_sequence,
-                        int(baseline_exists),
-                        baseline_digest,
-                        baseline_size,
-                        int(expected_exists),
-                        expected_digest,
-                        expected_size,
-                        temporary_name,
-                        temporary_identity[0],
-                        temporary_identity[1],
-                        working_bytes,
-                    ),
-                )
+                _insert_export_plan_row(connection, sealed_plan)
                 connection.commit()
                 plan_stored = True
                 self._adopt_export_plan_unlocked(sealed_plan)
