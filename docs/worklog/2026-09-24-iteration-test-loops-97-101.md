@@ -32,3 +32,18 @@ Five family-first realism assessment loops requested on 2026-09-24. The durable 
   source-native Sysmon envelopes, observation loss, collection cutoff behavior, bounded cache
   retention, and checkpoint determinism.
 
+## Loop 97 Result
+
+- Commit `0cca756a` moved process-dependent frontier publication after final source-time constraint
+  resolution and prevented unrelated same-session activity from shifting process-owned dependents.
+- Routine verification passed: 11,710 tests, 48 skipped, 2,030 deselected; Ruff check/format;
+  92 packaged configuration files; behavior revision 148 and digest
+  `89ef920882eb8b1b2b23d5b894f9ef99f39492c98f97708b2efec129b0751d6a`.
+- Generation produced 122,048 records. Deterministic evaluation passed at 96.9729. The hard probe
+  checked 1,804 terminated eCAR processes and found zero dependents outside their lifetime,
+  including both prior `runas.exe` offenders.
+- Initial blind synthetic-confidence scores were 58, 30, 27, and 52 (mean 41.75). Deliberation
+  classified the result mixed/inconclusive at 47.5 and upheld two exact SMB process/share ownership
+  mismatches as the highest-priority defect.
+- Next family: canonical SMB action/process ownership and explicit shell execution semantics for
+  adjacent collection commands.
