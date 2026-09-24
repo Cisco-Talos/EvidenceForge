@@ -166,3 +166,45 @@ Five family-first realism assessment loops requested on 2026-09-24. The durable 
   accounts, qualified-domain and UPN inputs, Linux SMB clients, non-SMB sessions, failed logons,
   preallocated sessions, checkpoint state, logon-guid/session-object identity, and source-native
   field omission rules.
+
+## Loop 100 Result
+
+- Commit `54f6bc67` resolves an omitted SMB-principal refinement to the authenticated user once at
+  canonical session allocation and shares it across state, login, dependents, and logout.
+- Verification passed: 11,715 tests, 48 skipped, 2,030 deselected; Ruff check/format; 92 packaged
+  configuration files; behavior revision 152 and digest
+  `fef2fc8283981549df2f0aceb75f58c5978f96f97772dcaeadc91590bb012843`.
+- Generation produced 129,694 records. The deterministic score remained 96.0836 with the same
+  unrelated pivot-linkability and temporal-integrity guardrail failures. The hard probe checked 346
+  matched Security and 344 matched eCAR Type 3 lifecycles and found zero identity mismatches.
+- Initial blind scores were 72, 54, 35, and 71 (mean 58.0). Deliberation rejected invalid narrative
+  completeness signals and reached an Inconclusive/mixed result leaning synthetic at 59.25. No
+  reviewer reported the repaired blank logout identity.
+- Next family: native Windows RDP transition field contracts.
+
+## Loop 101 Family Contract
+
+### Native Windows RDP transition field contracts
+
+- **Classification:** `schema_or_format`, `source_native_contradiction`, and `family_level`; every
+  rendered Security 4779 row includes `ClientPort`, which is not part of the native Event 4778/4779
+  EventData contract.
+- **Owning abstraction:** the Windows Security format definition owns source-native field presence
+  and the Windows emitter supplies only fields that format exposes. Canonical RDP session and
+  transport contexts continue to own the full source tuple for other consumers.
+- **Invariant:** Windows Security Events 4778 and 4779 render exactly AccountName, AccountDomain,
+  LogonID, SessionName, ClientName, and ClientAddress for their transition payload, with no
+  `ClientPort`. The source port remains available in canonical transport state, eCAR FLOW, Zeek,
+  firewall, and lifecycle correlation where supported.
+- **Entry paths:** baseline and storyline RDP reconnect/disconnect, terminal disconnect ownership,
+  deferred publication and recovery, session finalization, and direct canonical transition tests.
+- **Consumers:** Windows Security XML, bounded record validation, Snare projection, evaluation
+  parsers, external ingestion fixtures, detection rules, and blind source-native review.
+- **Layer rationale:** the canonical AuthContext correctly retains the tuple, but the Security
+  renderer and its shared format schema project an unsupported field. Repair belongs at the
+  source-native format boundary; deleting the canonical source port would corrupt valid sibling
+  evidence.
+- **Sibling risks:** preserve ClientAddress, session name/ID, account identity, reconnect/disconnect
+  symmetry, 4779-before-4634 ordering, deferred commit recovery, eCAR and network source-port
+  visibility, Snare field aliases for unrelated events, fixture parity, and parser compatibility
+  with historical rows that contain extra fields.
