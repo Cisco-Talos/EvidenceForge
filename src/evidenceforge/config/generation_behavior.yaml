@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 152
+current_revision: 153
 history_start_revision: 1
-behavior_surface_sha256: fef2fc8283981549df2f0aceb75f58c5978f96f97772dcaeadc91590bb012843
+behavior_surface_sha256: d88b27d5f6236de3ffff07e4ec2d7419e3543be12ef0005121ae4e7d1afa2046
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1541,3 +1541,12 @@ changes:
       - ecar
       - windows_event_security
     summary: Resolve an omitted SMB principal to the authenticated user once at session allocation so paired login and logout evidence retain one canonical identity.
+  - revision: 153
+    id: native-windows-rdp-transition-fields
+    impact: material
+    domains:
+      - windows-source-contract
+      - rdp-session-lifecycle
+    formats:
+      - windows_event_security
+    summary: Remove the transport-only client port from native Security 4778/4779 payloads while retaining it in canonical transport and endpoint evidence.

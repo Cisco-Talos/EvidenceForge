@@ -32,7 +32,6 @@ events:
   variant: rdp_session_reconnect
   aliases:
     SourceIp: ClientAddress
-    SourcePort: ClientPort
   fallback_aliases:
     Process ID: ExecutionProcessID
 - source: windows_event_security
@@ -40,7 +39,6 @@ events:
   variant: rdp_session_disconnect
   aliases:
     SourceIp: ClientAddress
-    SourcePort: ClientPort
   fallback_aliases:
     Process ID: ExecutionProcessID
 - source: windows_event_security

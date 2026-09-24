@@ -17,7 +17,7 @@ from evidenceforge.utils.yaml_loader import load_yaml_text
 ROOT = Path(__file__).parents[1] / "fixtures/record_validation/legacy"
 
 
-@pytest.mark.parametrize("name", ["windows_event_security", "zeek_conn", "thresholds"])
+@pytest.mark.parametrize("name", ["zeek_conn", "thresholds"])
 def test_known_snapshot_decodes_without_mutating_input(monkeypatch, name: str) -> None:
     group = "evaluation" if name == "thresholds" else "formats"
     path = get_config_directory() / group / f"{name}.yaml"
@@ -38,6 +38,22 @@ def test_known_snapshot_decodes_without_mutating_input(monkeypatch, name: str) -
     monkeypatch.setattr(provider, "current_effective_config", lambda: None)
     assert decode_validation_snapshot(path, legacy) is legacy
     assert decode_validation_snapshot(path, runtime) is runtime
+
+
+def test_legacy_windows_snapshot_refuses_changed_native_rdp_rendering(monkeypatch) -> None:
+    """A pre-4778/4779 contract snapshot cannot silently retain non-native fields."""
+    path = get_config_directory() / "formats/windows_event_security.yaml"
+    legacy = load_yaml_text((ROOT / path.name).read_text())
+    original = deepcopy(legacy)
+    effective = SimpleNamespace(
+        ambient_overlay_compat=False,
+        packaged_defaults={"formats/windows_event_security.yaml": legacy},
+    )
+    monkeypatch.setattr(provider, "current_effective_config", lambda: effective)
+
+    with pytest.raises(ConfigurationError, match="rendering-compatible"):
+        decode_validation_snapshot(path, legacy)
+    assert legacy == original
 
 
 def test_decoder_refuses_changed_rendering(monkeypatch) -> None:

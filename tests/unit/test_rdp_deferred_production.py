@@ -3267,8 +3267,8 @@ def test_activity_generator_uses_injected_shared_rdp_owner() -> None:
     assert generator.rdp_session_manager.application_registry is registry
 
 
-def test_windows_security_renders_exact_rdp_reconnect_and_disconnect(tmp_path) -> None:
-    """Typed RDP transitions render Security 4778/4779 with one preserved tuple."""
+def test_windows_security_renders_native_rdp_reconnect_and_disconnect(tmp_path) -> None:
+    """Typed RDP transitions omit the transport-only port from Security 4778/4779."""
 
     output = tmp_path / "windows.xml"
     emitter = WindowsEventEmitter(load_format("windows_event_security"), output, buffer_size=1)
@@ -3316,7 +3316,7 @@ def test_windows_security_renders_exact_rdp_reconnect_and_disconnect(tmp_path) -
     assert rendered.count("<EventID>4779</EventID>") == 1
     assert rendered.count('<Data Name="SessionName">RDP-Tcp#7</Data>') == 2
     assert rendered.count('<Data Name="ClientAddress">10.10.0.25</Data>') == 2
-    assert rendered.count('<Data Name="ClientPort">50001</Data>') == 2
+    assert 'Data Name="ClientPort"' not in rendered
 
 
 def test_initial_rdp_session_publishes_one_exact_transport_and_windows_cohort(tmp_path) -> None:
@@ -3937,7 +3937,7 @@ def test_disconnected_rdp_session_reconnects_through_same_exact_owner(
     assert rendered.count("<EventID>4778</EventID>") == 1
     assert rendered.count("<EventID>4779</EventID>") == 2
     assert rendered.count("<EventID>4634</EventID>") == 1
-    assert '<Data Name="ClientPort">50002</Data>' in rendered
+    assert 'Data Name="ClientPort"' not in rendered
 
 
 @pytest.mark.parametrize(

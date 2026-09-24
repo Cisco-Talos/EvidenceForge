@@ -1662,7 +1662,6 @@ class WindowsEventEmitter(LogEmitter):
             "SessionName": f"RDP-Tcp#{session_id}",
             "ClientName": auth.workstation_name or "-",
             "ClientAddress": auth.source_ip or "-",
-            "ClientPort": auth.source_port or 0,
         }
         self.emit_event(event_data)
 

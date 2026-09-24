@@ -278,13 +278,6 @@ variants:
         type: string
         required: true
         description: "Remote client address"
-      - name: ClientPort
-        type: integer
-        required: true
-        description: "Remote client source port"
-        constraints:
-          min_value: 0
-          max_value: 65535
 
   - name: rdp_session_disconnect
     event_id: "4779"
@@ -1484,7 +1477,6 @@ output:
         <Data Name="SessionName">{{ SessionName }}</Data>
         <Data Name="ClientName">{{ ClientName }}</Data>
         <Data Name="ClientAddress">{{ ClientAddress }}</Data>
-        <Data Name="ClientPort">{{ ClientPort }}</Data>
         {% elif EventID == 4688 %}
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>
         <Data Name="SubjectUserName">{{ SubjectUserName }}</Data>
