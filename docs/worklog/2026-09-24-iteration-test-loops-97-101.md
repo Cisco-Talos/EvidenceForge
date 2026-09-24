@@ -120,3 +120,49 @@ Five family-first realism assessment loops requested on 2026-09-24. The durable 
   smart-card versus enterprise issuance semantics, user/machine scoping, certificate-format
   validity, cross-process and cross-DC determinism, checkpoint/retry neutrality, bounded cache
   retention, and data-driven CA/profile pools.
+
+## Loop 99 Result
+
+- Commit `01167d78` introduced pure SID/scope/profile/epoch credential identity derivation and
+  scope-aware PKINIT profiles without mutable caches.
+- Verification passed: 11,715 tests, 48 skipped, 2,030 deselected; Ruff check/format; 92 packaged
+  configuration files; behavior revision 151 and digest
+  `59274ba66fad539871a172c7ed69b903918d2554df8fa03f7142e9ba4b2fa4c6`.
+- Generation produced 129,694 records. The deterministic score was 96.0836 but failed pivot
+  linkability (78.67/80) and temporal integrity (83.67/85). The family hard probe passed: 30 PKINIT
+  requests reduced to eight stable credentials, with all six repeated principals and all four
+  cross-DC principals preserving one exact certificate identity.
+- Initial blind synthetic-confidence scores were 68, 66, 47, and 58 (mean 59.75). Deliberation
+  reached a Synthetic consensus at 65.75 and independently confirmed two matched Type 3 sessions
+  that lose their named principal only at logout.
+- Next family: canonical SMB/Type 3 session-principal preservation through paired lifecycle
+  consumers.
+
+## Loop 100 Family Contract
+
+### Canonical SMB session-principal preservation
+
+- **Classification:** `hard_contradiction`, `contract_gap`, and `family_level`; two DC-01 Type 3
+  sessions render a named Security/eCAR login but a blank principal on the matched Security 4634
+  and eCAR logout for the same LogonID.
+- **Owning abstraction:** canonical authentication session allocation owns the effective principal
+  for the entire lifecycle. For SMB sessions, the explicit SMB principal may refine local account
+  identity, but an omitted refinement must resolve to the authenticated user rather than an empty
+  sentinel.
+- **Invariant:** every successful SMB/Type 3 session stores a non-empty canonical principal and
+  preserves username, SID, domain, LogonID, source tuple, authentication protocol, and lifecycle
+  identity across login, dependents, and paired logout. No emitter reconstructs or substitutes the
+  identity.
+- **Entry paths:** baseline SMB sessions, explicit-credential/runas remote access, storyline SMB
+  bundles, Windows remote administration, machine/service authentication, and compatibility calls
+  to generic logon generation with `session_kind="smb"`.
+- **Consumers:** StateManager session state, AuthContext, Security 4624/4634, eCAR LOGIN/LOGOUT,
+  SMB operation attribution, lifecycle validation, evaluator pivots, and blind hunt timelines.
+- **Layer rationale:** the explicit-credential bundle supplies a real user but omits the optional
+  SMB-principal override; generic session allocation persists that empty value, and generic logoff
+  later prefers it over the user. Resolving the fallback once at the canonical logon boundary fixes
+  every consumer without renderer-specific repair.
+- **Sibling risks:** preserve Type 9 local-token versus outbound-principal separation, machine
+  accounts, qualified-domain and UPN inputs, Linux SMB clients, non-SMB sessions, failed logons,
+  preallocated sessions, checkpoint state, logon-guid/session-object identity, and source-native
+  field omission rules.
