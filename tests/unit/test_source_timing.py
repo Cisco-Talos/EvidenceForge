@@ -1953,6 +1953,108 @@ def test_ecar_short_process_termination_follows_complete_startup_module_sequence
     assert terminate_time > module_time
 
 
+def test_ecar_process_dependents_ignore_unrelated_session_frontier() -> None:
+    """An established session frontier cannot move startup work past termination."""
+
+    base = _base_time()
+    host = _host_context()
+    identity = _process_identity(
+        hostname=host.hostname,
+        pid=4242,
+        parent_pid=888,
+        started_at=base,
+        image=r"C:\Windows\System32\runas.exe",
+    )
+    proc = _context_from_identity(identity)
+    unrelated_identity = _process_identity(
+        hostname=host.hostname,
+        pid=5000,
+        parent_pid=888,
+        started_at=base - timedelta(hours=1),
+        image=r"C:\Windows\explorer.exe",
+    )
+    unrelated_proc = _context_from_identity(unrelated_identity)
+    session_group = "interactive-session"
+    create_event = OccurrenceBuilder(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=base,
+            phase="start",
+            parent_group_id=session_group,
+        ),
+    )
+    later_session_event = OccurrenceBuilder(
+        timestamp=base + timedelta(seconds=45),
+        event_type="file_create",
+        src_host=host,
+        process=unrelated_proc,
+        file=FileContext(path=r"C:\Temp\prior.txt", action="create", pid=unrelated_identity.pid),
+        identity_plan=EventIdentityPlan(actor=unrelated_identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=session_group,
+            canonical_start=base,
+            phase="dependent",
+        ),
+    )
+    module_event = OccurrenceBuilder(
+        timestamp=base + timedelta(milliseconds=1),
+        event_type="image_load",
+        src_host=host,
+        process=proc,
+        image_load=ImageLoadContext(
+            image_loaded=r"C:\Windows\System32\ntdll.dll",
+            load_phase="startup",
+            load_order=1,
+        ),
+        identity_plan=EventIdentityPlan(actor=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=session_group,
+            canonical_start=base,
+            phase="dependent",
+        ),
+    )
+    terminate_event = OccurrenceBuilder(
+        timestamp=base + timedelta(seconds=4),
+        event_type="process_terminate",
+        src_host=host,
+        process=proc,
+        identity_plan=EventIdentityPlan(subject=identity),
+        lifecycle=ActionLifecycleContext(
+            group_id=identity.lifecycle_group_id,
+            canonical_start=base,
+            phase="closure",
+            parent_group_id=session_group,
+        ),
+    )
+
+    planner = SourceTimingPlanner()
+    planner.plan_event(create_event, format_name="ecar")
+    planner.record_admitted_source_event(create_event, "ecar")
+    planner.plan_event(later_session_event, format_name="ecar")
+    planner.record_admitted_source_event(later_session_event, "ecar")
+    planner.plan_event(module_event, format_name="ecar")
+    planner.record_admitted_source_event(module_event, "ecar")
+    planner.plan_event(terminate_event, format_name="ecar")
+
+    module_time = module_event.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname)
+    ]
+    later_session_time = later_session_event.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname)
+    ]
+    terminate_time = terminate_event.source_timing.finalized_times[
+        endpoint_event_render_key("ecar", host.hostname, "process_terminate")
+    ]
+
+    assert module_time < later_session_time
+    assert terminate_time > module_time
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

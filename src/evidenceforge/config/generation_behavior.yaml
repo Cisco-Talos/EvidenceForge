@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 147
+current_revision: 148
 history_start_revision: 1
-behavior_surface_sha256: cf83458286ce8c6732971e96af3dc8971babcb69b1e831d86f5250615d1fc367
+behavior_surface_sha256: 89ef920882eb8b1b2b23d5b894f9ef99f39492c98f97708b2efec129b0751d6a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1483,3 +1483,15 @@ changes:
       - ecar
       - zeek_conn
     summary: Sample forwarding-health transport duration through the keyed engine timing runtime without expanding direct continuous-RNG debt.
+  - revision: 148
+    id: finalized-process-dependent-source-timing
+    impact: material
+    domains:
+      - process-lifecycle
+      - source-timing
+      - session-lifecycle
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Keep process-owned endpoint effects independent of unrelated session admission order and floor termination on their fully constrained source-visible timestamps.

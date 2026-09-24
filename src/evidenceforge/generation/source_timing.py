@@ -4316,6 +4316,14 @@ class SourceTimingPlanner:
                             object_id=self._endpoint_event_object_id(event, hostname, phase),
                             lifecycle_id=self._endpoint_event_lifecycle_id(event),
                         )
+                self._record_finalized_process_dependent_time(
+                    event,
+                    family=family,
+                    phase=phase,
+                    source_instance=instance,
+                    hostname=hostname,
+                    timestamp=render_time,
+                )
                 plan = self._ensure_plan(event)
                 plan.finalized_times[endpoint_event_native_key(format_name, hostname, phase)] = (
                     native_time
@@ -4366,32 +4374,18 @@ class SourceTimingPlanner:
             lifecycle_id=lifecycle_id,
             phase=latency_phase,
         )
-        query_process = event.dns.query_process if event.dns is not None else None
-        if (
-            family == "sysmon"
-            and phase == "dns"
-            and query_process is not None
-            and query_process.pid > 0
-        ):
-            query_started_at = query_process.start_time or event.timestamp
-            query_identity = (
-                f"process:{hostname}:{query_process.pid}:{ensure_utc(query_started_at).isoformat()}"
-            )
-            process_scope = (
-                query_identity,
-                query_identity,
-                query_process.pid,
-                query_started_at,
-            )
-        else:
-            process_scope = self._endpoint_process_scope(event, hostname)
+        process_scope = self._runtime_endpoint_process_scope(
+            event,
+            family=family,
+            phase=phase,
+            hostname=hostname,
+        )
         if process_scope is None or event.event_type in (
             _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES
         ):
             return timestamp
         process_object_id, process_lifecycle_id, pid, started_at = process_scope
         if family == "sysmon":
-            process_object_id = self._sysmon_process_object_id(hostname, pid, started_at)
             _create_native, create_time = self._runtime_shared_sysmon_process_create_time(
                 event,
                 hostname=hostname,
@@ -4436,11 +4430,69 @@ class SourceTimingPlanner:
                 ),
                 maximum_us=4_000,
             )
-        dependent_key = (family, source_instance, process_object_id)
-        previous = self._process_dependent_create_times.get(dependent_key)
-        if previous is None or timestamp > previous:
-            self._process_dependent_create_times[dependent_key] = timestamp
         return timestamp
+
+    def _runtime_endpoint_process_scope(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        phase: str,
+        hostname: str,
+    ) -> tuple[str, str, int, datetime] | None:
+        """Return the process identity whose source lifecycle contains one endpoint row."""
+
+        query_process = event.dns.query_process if event.dns is not None else None
+        if (
+            family == "sysmon"
+            and phase == "dns"
+            and query_process is not None
+            and query_process.pid > 0
+        ):
+            started_at = query_process.start_time or event.timestamp
+            object_id = (
+                f"process:{hostname}:{query_process.pid}:{ensure_utc(started_at).isoformat()}"
+            )
+            scope = (object_id, object_id, query_process.pid, started_at)
+        else:
+            scope = self._endpoint_process_scope(event, hostname)
+        if scope is None or family != "sysmon":
+            return scope
+        object_id, lifecycle_id, pid, started_at = scope
+        return (
+            self._sysmon_process_object_id(hostname, pid, started_at),
+            lifecycle_id,
+            pid,
+            started_at,
+        )
+
+    def _record_finalized_process_dependent_time(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        phase: str,
+        source_instance: str,
+        hostname: str,
+        timestamp: datetime,
+    ) -> None:
+        """Publish the final visible dependent frontier after all source constraints."""
+
+        if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
+            return
+        scope = self._runtime_endpoint_process_scope(
+            event,
+            family=family,
+            phase=phase,
+            hostname=hostname,
+        )
+        if scope is None:
+            return
+        process_object_id, _lifecycle_id, _pid, _started_at = scope
+        key = (family, source_instance, process_object_id)
+        previous = self._process_dependent_create_times.get(key)
+        if previous is None or timestamp > previous:
+            self._process_dependent_create_times[key] = timestamp
 
     def _runtime_process_module_time(
         self,
@@ -5218,6 +5270,14 @@ class SourceTimingPlanner:
             # Process lifecycle timing already accounts for the process's own
             # admitted dependents. A session-wide frontier may include unrelated
             # later activity and must not stretch a one-shot process lifetime.
+            return timestamp
+        if self._endpoint_process_scope(event, hostname) is not None:
+            # Process-owned endpoint evidence is ordered by its process lifecycle
+            # and typed transport/action constraints.  A session may contain
+            # unrelated activity admitted later in canonical time, especially
+            # when a credential helper is materialized retroactively.  Treating
+            # that session-wide maximum as a causal predecessor moves startup
+            # modules and other process effects beyond their real lifecycle.
             return timestamp
         previous = self._latest_session_dependent_times.get(key)
         if previous is not None and timestamp <= previous:
