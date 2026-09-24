@@ -38,6 +38,9 @@ consistency without changing public interfaces or authored scenario schemas.
 
 **Linux, network, and source-native evidence**
 
+- Preserve full native Windows file identities in Bash history export plans so SQLite's signed
+  integer limit cannot interrupt journal publication; older integer rows remain readable
+  (`938f7da5`).
 - Keep Linux background and shell activity attached to live host/session state, rebind processes
   after SSH close, and resolve shell-session timing before process use (`81cdf1e4`, `d86edc8d`,
   `623451ca`).
