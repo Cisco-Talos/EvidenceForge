@@ -76,3 +76,47 @@ Five family-first realism assessment loops requested on 2026-09-24. The durable 
   controller identity, authored downstream timing, process-before-transport and
   dependents-before-termination ordering, batch completion, non-Type9/baseline Explorer ownership,
   explicit concurrency, checkpoint state, cutoff behavior, and retry-stable persistent SMB roots.
+
+## Loop 98 Result
+
+- Commits `c64ae348`, `5beb3b6f`, and `c1b965ee` replaced newest-live attribution with exact Type 9
+  SMB operation helpers, serialized the collection children, and narrowed generic Windows closure
+  to the independently owned SMB boundary.
+- Final verification passed: 11,711 tests, 48 skipped, 2,030 deselected; Ruff check/format; 92
+  packaged configuration files; behavior revision 150 and digest
+  `26eacbea6a1a7b53e2e242648b9997a767fee3b7078d2db847be60f55f0bcba6`.
+- Generation produced 122,017 records. Deterministic evaluation passed at 96.3163. The hard probe
+  found zero overlap across seven collection children and exact command/share ownership on all five
+  SMB flows.
+- Initial blind synthetic-confidence scores were 66, 68, 36, and 48 (mean 54.5). Deliberation
+  reached a Synthetic consensus at 61.75 and ranked one-use PKINIT certificate identity as the
+  highest-leverage recurring family.
+- Next family: stable canonical Kerberos credential identity keyed by directory SID and credential
+  epoch.
+
+## Loop 99 Family Contract
+
+### Stable canonical Kerberos credential epochs
+
+- **Classification:** `distribution_texture`, `environment_or_collection_plausibility`, and
+  `family_level`; multiple panels observed that every PKINIT 4768 request uses a fresh certificate
+  identity, including repeated principals and closely spaced cross-DC requests.
+- **Owning abstraction:** canonical Kerberos credential identity resolution owns the long-lived
+  authentication credential for a directory principal. Ticket requests own request-local fields,
+  while emitters only render the resolved credential identity.
+- **Invariant:** repeated PKINIT TGT requests for one canonical SID reuse the same certificate
+  issuer, serial, thumbprint, and public-key identity within a deterministic credential epoch,
+  across domain controllers and independent ticket requests. User and machine eligibility and CA
+  profile selection remain scope-aware.
+- **Entry paths:** baseline and storyline TGT requests, DC prerequisite bundles, domain logons,
+  machine-account authentication, explicit credentials, remote administration, SMB, RDP, and
+  any future PKINIT-capable Kerberos request path.
+- **Consumers:** Windows Security 4768, Kerberos request contexts, DC-side audit evidence, principal
+  state, evaluator distribution checks, and blind authentication hunting.
+- **Layer rationale:** per-request certificate sampling in the Kerberos realism helper creates the
+  churn before Windows rendering. A SID-keyed credential resolver is the first shared layer that
+  can preserve identity across all DCs and request paths without emitter-local reconstruction.
+- **Sibling risks:** preserve ticket-local encryption/pre-auth variation, password-based Kerberos,
+  smart-card versus enterprise issuance semantics, user/machine scoping, certificate-format
+  validity, cross-process and cross-DC determinism, checkpoint/retry neutrality, bounded cache
+  retention, and data-driven CA/profile pools.
