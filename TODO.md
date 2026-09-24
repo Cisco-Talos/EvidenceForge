@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.1.0 release preparation; native Windows support merged to dev
+**Status:** 2.1.2 release preparation; post-v2.1.1 realism fixes merged to dev
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-14
+**Last Roadmap Review:** 2026-09-24
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -73,9 +73,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
   sources separately from their dedicated renderer/parser/validator fixture coverage.
 
-- Prepare the 2.1.0 release from `dev` to `main`, including the version/changelog bump and routine,
+- Prepare the 2.1.2 release from `dev` to `main`, including the version/changelog bump and routine,
   coverage, slow, and checkpoint portability gates. See the
-  [release worklog](docs/worklog/2026-09-14-2.1.0-release.md).
+  [release worklog](docs/worklog/2026-09-24-2.1.2-release.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
   Windows/Linux routine CI and local macOS validation in PR #419. Existing POSIX implementations
   remain in place. See [platform details](docs/design/native-windows-filesystem.md) and the
