@@ -8,6 +8,55 @@ import random
 from evidenceforge.generation.activity import kerberos_realism
 
 
+def _scoped_pkinit_config() -> dict:
+    """Return user/machine PKINIT profiles for credential-identity tests."""
+
+    return {
+        "tgt_success": {
+            "pre_auth_types": {
+                "user_pkinit": {
+                    "value": 15,
+                    "weight": 1,
+                    "certificate_required": True,
+                    "certificate_profile": "enterprise_user",
+                    "principal_scopes": ["user"],
+                },
+                "machine_pkinit": {
+                    "value": 15,
+                    "weight": 1,
+                    "certificate_required": True,
+                    "certificate_profile": "enterprise_machine",
+                    "principal_scopes": ["machine"],
+                },
+            },
+            "ticket_options": {
+                "first": {"value": "0x40810010", "weight": 1},
+                "second": {"value": "0x40810000", "weight": 1},
+            },
+            "encryption_types": {
+                "aes256": {"value": "0x12", "weight": 1},
+                "aes128": {"value": "0x11", "weight": 1},
+            },
+        },
+        "certificate_profiles": {
+            "enterprise_user": {
+                "issuer_names": ["CN=Acme Enterprise Smartcard CA, O=Acme Corp, C=US"],
+                "serial_hex_bytes": 16,
+                "thumbprint_hex_chars": 40,
+                "credential_epoch": "user-v1",
+                "principal_scopes": ["user"],
+            },
+            "enterprise_machine": {
+                "issuer_names": ["CN=Acme Enterprise Device CA, O=Acme Corp, C=US"],
+                "serial_hex_bytes": 16,
+                "thumbprint_hex_chars": 40,
+                "credential_epoch": "machine-v1",
+                "principal_scopes": ["machine"],
+            },
+        },
+    }
+
+
 def test_default_tgt_success_profile_mostly_uses_encrypted_timestamp():
     rng = random.Random(7)
 
@@ -87,6 +136,82 @@ def test_pkinit_profile_adapts_placeholder_issuer_to_ad_domain(monkeypatch):
     )
 
 
+def test_pkinit_credential_identity_is_sid_stable_across_requests_and_dcs(monkeypatch):
+    """One directory principal reuses its certificate independent of request/DC RNG order."""
+
+    monkeypatch.setattr(
+        kerberos_realism,
+        "load_kerberos_realism",
+        _scoped_pkinit_config,
+    )
+    first = kerberos_realism.pick_tgt_success_fields(
+        random.Random(3),
+        "meridianhcs.local",
+        principal_sid="S-1-5-21-101-202-303-1104",
+        principal_scope="user",
+    )
+    second = kerberos_realism.pick_tgt_success_fields(
+        random.Random(987),
+        "MERIDIANHCS.LOCAL",
+        principal_sid="s-1-5-21-101-202-303-1104",
+        principal_scope="user",
+    )
+
+    certificate_fields = ("cert_issuer_name", "cert_serial_number", "cert_thumbprint")
+    assert tuple(first[field] for field in certificate_fields) == tuple(
+        second[field] for field in certificate_fields
+    )
+    assert first["encryption_type"] != second["encryption_type"]
+
+
+def test_pkinit_credentials_are_distinct_by_canonical_sid(monkeypatch):
+    """Different principals retain deterministic credential diversity."""
+
+    monkeypatch.setattr(
+        kerberos_realism,
+        "load_kerberos_realism",
+        _scoped_pkinit_config,
+    )
+    first = kerberos_realism.pick_tgt_success_fields(
+        random.Random(5),
+        principal_sid="S-1-5-21-101-202-303-1104",
+        principal_scope="user",
+    )
+    second = kerberos_realism.pick_tgt_success_fields(
+        random.Random(5),
+        principal_sid="S-1-5-21-101-202-303-1105",
+        principal_scope="user",
+    )
+
+    assert first["cert_thumbprint"] != second["cert_thumbprint"]
+    assert first["cert_serial_number"] != second["cert_serial_number"]
+
+
+def test_pkinit_profile_selection_is_principal_scope_aware(monkeypatch):
+    """User and machine accounts use only certificate profiles eligible for their scope."""
+
+    monkeypatch.setattr(
+        kerberos_realism,
+        "load_kerberos_realism",
+        _scoped_pkinit_config,
+    )
+    user = kerberos_realism.pick_tgt_success_fields(
+        random.Random(8),
+        "meridianhcs.local",
+        principal_sid="S-1-5-21-101-202-303-1104",
+        principal_scope="user",
+    )
+    machine = kerberos_realism.pick_tgt_success_fields(
+        random.Random(8),
+        "meridianhcs.local",
+        principal_sid="S-1-5-21-101-202-303-2104",
+        principal_scope="machine",
+    )
+
+    assert "Smartcard CA" in user["cert_issuer_name"]
+    assert "Device CA" in machine["cert_issuer_name"]
+
+
 def test_non_pkinit_profile_leaves_certificate_fields_empty(monkeypatch):
     def load_encrypted_timestamp_only_config():
         return {
@@ -114,6 +239,39 @@ def test_non_pkinit_profile_leaves_certificate_fields_empty(monkeypatch):
     assert fields["cert_issuer_name"] == ""
     assert fields["cert_serial_number"] == ""
     assert fields["cert_thumbprint"] == ""
+
+
+def test_non_pkinit_request_fields_are_unaffected_by_canonical_principal(monkeypatch):
+    """Adding canonical credential identity must not perturb password-based TGT fields."""
+
+    def load_encrypted_timestamp_only_config():
+        return {
+            "tgt_success": {
+                "pre_auth_types": {
+                    "encrypted_timestamp": {
+                        "value": 2,
+                        "weight": 1,
+                        "certificate_required": False,
+                    }
+                },
+                "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                "encryption_types": {"aes256": {"value": "0x12", "weight": 1}},
+            },
+            "certificate_profiles": {},
+        }
+
+    monkeypatch.setattr(
+        kerberos_realism, "load_kerberos_realism", load_encrypted_timestamp_only_config
+    )
+
+    legacy = kerberos_realism.pick_tgt_success_fields(random.Random(13))
+    canonical = kerberos_realism.pick_tgt_success_fields(
+        random.Random(13),
+        principal_sid="S-1-5-21-101-202-303-1104",
+        principal_scope="user",
+    )
+
+    assert canonical == legacy
 
 
 def test_tgt_success_no_preauth_requires_explicit_account_policy(monkeypatch):

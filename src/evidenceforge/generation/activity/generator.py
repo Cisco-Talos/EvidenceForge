@@ -28600,10 +28600,13 @@ class ActivityGenerator:
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
 
+        target_sid = self._get_sid(username)
         tgt_fields = pick_tgt_success_fields(
             rng,
             domain.lower(),
             allow_no_preauth=self._kerberos_account_allows_no_preauth(username),
+            principal_sid=target_sid,
+            principal_scope="machine" if username.endswith("$") else "user",
         )
         source_port = self._reserve_kerberos_source_port(
             source_ip,
@@ -28628,7 +28631,7 @@ class ActivityGenerator:
             kerberos=KerberosContext(
                 target_username=username,
                 target_domain=domain,
-                target_sid=self._get_sid(username),
+                target_sid=target_sid,
                 service_name="krbtgt",
                 service_sid=self._get_sid("krbtgt"),
                 ticket_options=tgt_fields["ticket_options"],

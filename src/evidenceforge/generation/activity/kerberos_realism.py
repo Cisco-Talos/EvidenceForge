@@ -6,14 +6,26 @@
 from __future__ import annotations
 
 import random
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "kerberos_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
 _MAX_SELECTION_WEIGHT = 1_000_000
+KerberosPrincipalScope = Literal["user", "machine"]
+
+
+@dataclass(frozen=True, slots=True)
+class KerberosCredentialIdentity:
+    """Stable certificate identity owned by one directory principal and credential epoch."""
+
+    issuer_name: str
+    serial_number: str
+    thumbprint: str
 
 
 def _merge_kerberos_realism(default: dict, overlay: dict) -> dict:
@@ -46,11 +58,19 @@ def pick_tgt_success_fields(
     ad_domain: str = "",
     *,
     allow_no_preauth: bool = False,
+    principal_sid: str = "",
+    principal_scope: KerberosPrincipalScope = "user",
 ) -> dict[str, Any]:
     """Pick coherent 4768 success fields from Kerberos realism config."""
     cfg = load_kerberos_realism()
     tgt_success = cfg.get("tgt_success", {})
     pre_auth_profiles = tgt_success.get("pre_auth_types", {})
+    pre_auth_profiles = {
+        name: profile
+        for name, profile in pre_auth_profiles.items()
+        if not isinstance(profile, dict)
+        or _profile_allows_scope(profile, principal_scope, cfg.get("certificate_profiles", {}))
+    }
     if not allow_no_preauth:
         pre_auth_profiles = {
             name: profile
@@ -58,7 +78,13 @@ def pick_tgt_success_fields(
             if not isinstance(profile, dict) or int(profile.get("value", 2)) != 0
         }
     pre_auth = _pick_weighted_profile(pre_auth_profiles, rng)
-    certificate_fields = _certificate_fields(pre_auth, rng, ad_domain)
+    certificate_fields = _certificate_fields(
+        pre_auth,
+        rng,
+        ad_domain,
+        principal_sid=principal_sid,
+        principal_scope=principal_scope,
+    )
     return {
         "ticket_options": _pick_weighted_value(tgt_success.get("ticket_options", {}), rng),
         "encryption_type": _pick_weighted_value(tgt_success.get("encryption_types", {}), rng),
@@ -148,7 +174,12 @@ def _pick_weighted_profile(
 
 
 def _certificate_fields(
-    pre_auth: dict[str, Any], rng: random.Random, ad_domain: str = ""
+    pre_auth: dict[str, Any],
+    rng: random.Random,
+    ad_domain: str = "",
+    *,
+    principal_sid: str = "",
+    principal_scope: KerberosPrincipalScope = "user",
 ) -> dict[str, str]:
     """Return 4768 certificate fields for certificate-based pre-auth."""
     if not pre_auth.get("certificate_required", False):
@@ -161,18 +192,99 @@ def _certificate_fields(
     cfg = load_kerberos_realism()
     profile_name = str(pre_auth.get("certificate_profile", ""))
     profile = cfg.get("certificate_profiles", {}).get(profile_name, {})
-    issuer_names = profile.get("issuer_names", [])
-    issuer_name = rng.choice(issuer_names) if issuer_names else ""
-    issuer_name = _scenario_certificate_issuer(issuer_name, ad_domain)
-    serial_hex_bytes = int(profile.get("serial_hex_bytes", 16))
-    thumbprint_hex_chars = int(profile.get("thumbprint_hex_chars", 40))
-    serial = "".join(f"{rng.randrange(256):02X}" for _ in range(serial_hex_bytes))
-    thumbprint = "".join(rng.choice("0123456789ABCDEF") for _ in range(thumbprint_hex_chars))
+    if principal_sid:
+        identity = resolve_kerberos_credential_identity(
+            principal_sid=principal_sid,
+            principal_scope=principal_scope,
+            profile_name=profile_name,
+            profile=profile,
+            ad_domain=ad_domain,
+        )
+        issuer_name = identity.issuer_name
+        serial = identity.serial_number
+        thumbprint = identity.thumbprint
+    else:
+        # Compatibility for direct callers without a canonical directory identity.
+        issuer_names = profile.get("issuer_names", [])
+        issuer_name = rng.choice(issuer_names) if issuer_names else ""
+        issuer_name = _scenario_certificate_issuer(issuer_name, ad_domain)
+        serial_hex_bytes = int(profile.get("serial_hex_bytes", 16))
+        thumbprint_hex_chars = int(profile.get("thumbprint_hex_chars", 40))
+        serial = "".join(f"{rng.randrange(256):02X}" for _ in range(serial_hex_bytes))
+        thumbprint = "".join(rng.choice("0123456789ABCDEF") for _ in range(thumbprint_hex_chars))
     return {
         "cert_issuer_name": issuer_name,
         "cert_serial_number": serial,
         "cert_thumbprint": thumbprint,
     }
+
+
+def resolve_kerberos_credential_identity(
+    *,
+    principal_sid: str,
+    principal_scope: KerberosPrincipalScope,
+    profile_name: str,
+    profile: dict[str, Any],
+    ad_domain: str = "",
+) -> KerberosCredentialIdentity:
+    """Resolve one retry- and order-stable PKINIT credential identity.
+
+    This is deliberately a pure SID-keyed derivation rather than a mutable cache. It therefore
+    remains stable across domain controllers, checkpoint restores, retries, and generation order
+    without introducing retained per-principal state.
+    """
+
+    scopes = _normalized_principal_scopes(profile)
+    if principal_scope not in scopes:
+        raise ValueError(
+            f"Kerberos certificate profile {profile_name!r} does not allow {principal_scope!r}"
+        )
+    credential_epoch = str(profile.get("credential_epoch", "default"))
+    credential_rng = random.Random(
+        _stable_seed(
+            "kerberos_credential:"
+            f"{principal_sid.strip().upper()}:{principal_scope}:{profile_name}:{credential_epoch}"
+        )
+    )
+    issuer_names = profile.get("issuer_names", [])
+    issuer_name = credential_rng.choice(issuer_names) if issuer_names else ""
+    issuer_name = _scenario_certificate_issuer(issuer_name, ad_domain)
+    serial_hex_bytes = int(profile.get("serial_hex_bytes", 16))
+    thumbprint_hex_chars = int(profile.get("thumbprint_hex_chars", 40))
+    serial = "".join(f"{credential_rng.randrange(256):02X}" for _ in range(serial_hex_bytes))
+    thumbprint = "".join(
+        credential_rng.choice("0123456789ABCDEF") for _ in range(thumbprint_hex_chars)
+    )
+    return KerberosCredentialIdentity(
+        issuer_name=issuer_name,
+        serial_number=serial,
+        thumbprint=thumbprint,
+    )
+
+
+def _profile_allows_scope(
+    pre_auth: dict[str, Any],
+    principal_scope: KerberosPrincipalScope,
+    certificate_profiles: dict[str, Any],
+) -> bool:
+    """Return whether a pre-auth entry and its certificate profile allow this scope."""
+
+    if principal_scope not in _normalized_principal_scopes(pre_auth):
+        return False
+    if not pre_auth.get("certificate_required", False):
+        return True
+    profile_name = str(pre_auth.get("certificate_profile", ""))
+    profile = certificate_profiles.get(profile_name, {})
+    return isinstance(profile, dict) and principal_scope in _normalized_principal_scopes(profile)
+
+
+def _normalized_principal_scopes(profile: dict[str, Any]) -> tuple[str, ...]:
+    """Return configured principal scopes with legacy profiles eligible for both scopes."""
+
+    raw_scopes = profile.get("principal_scopes", ("user", "machine"))
+    if not isinstance(raw_scopes, (list, tuple)):
+        return ()
+    return tuple(str(scope) for scope in raw_scopes)
 
 
 def _scenario_certificate_issuer(issuer_name: str, ad_domain: str) -> str:

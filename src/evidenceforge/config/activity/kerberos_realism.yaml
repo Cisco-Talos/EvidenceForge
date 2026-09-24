@@ -13,12 +13,20 @@ tgt_success:
       weight: 96
       certificate_required: false
       description: "Encrypted timestamp pre-auth; common for password and machine TGT requests."
-    pkinit:
+    pkinit_user:
       value: 15
       weight: 3
       certificate_required: true
       certificate_profile: enterprise_user
-      description: "PKINIT/smart-card or certificate-based pre-auth."
+      principal_scopes: [user]
+      description: "PKINIT/smart-card certificate pre-auth for directory users."
+    pkinit_machine:
+      value: 15
+      weight: 3
+      certificate_required: true
+      certificate_profile: enterprise_machine
+      principal_scopes: [machine]
+      description: "PKINIT certificate pre-auth for domain-joined machine accounts."
     none_or_legacy:
       value: 0
       weight: 1
@@ -79,6 +87,16 @@ certificate_profiles:
       - "CN=Acme Enterprise Smartcard CA, O=Acme Corp, C=US"
     serial_hex_bytes: 16
     thumbprint_hex_chars: 40
+    credential_epoch: "enterprise-user-v1"
+    principal_scopes: [user]
+  enterprise_machine:
+    issuer_names:
+      - "CN=Acme Enterprise Device CA, O=Acme Corp, C=US"
+      - "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    serial_hex_bytes: 16
+    thumbprint_hex_chars: 40
+    credential_epoch: "enterprise-machine-v1"
+    principal_scopes: [machine]
 
 transport_profiles:
   default:
