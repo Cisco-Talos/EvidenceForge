@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 149
+current_revision: 150
 history_start_revision: 1
-behavior_surface_sha256: a2330be6ada7dadf305ed488cc5327f734dda45e076c8c6b044670f698eefcac
+behavior_surface_sha256: 271e425376de4b7e707ce04fbfbd8791af97eef1ad7466221c96f9287c4345cb
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1509,3 +1509,15 @@ changes:
       - zeek_smb_files
       - zeek_smb_mapping
     summary: Give each credentialed storyline SMB operation an exact shell-serialized client process and close it after its own transport and file dependents.
+  - revision: 150
+    id: immediate-windows-storyline-foreground-completion
+    impact: material
+    domains:
+      - process-lifecycle
+      - storyline-ordering
+      - smb-client-attribution
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Close bounded Windows storyline one-shots at canonical completion before unrelated following commands while retaining processes required by later effects.

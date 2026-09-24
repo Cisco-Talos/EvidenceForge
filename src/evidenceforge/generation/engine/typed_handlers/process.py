@@ -49,7 +49,7 @@ def handle_process(
     system = context.system
     time = context.time
     explicit_types = context.explicit_types
-    future_specs = context.future_specs
+    future_specs = tuple(context.future_specs)
     rng = context.rng
     malicious_event = context.malicious_event
     os_category = _get_os_category(system.os)
@@ -60,7 +60,7 @@ def handle_process(
         time,
     )
 
-    if os_category == "linux":
+    if os_category in {"linux", "windows"}:
         if not hasattr(self, "_storyline_shell_available_at"):
             self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
         native_shell_key = (system.hostname, process_actor.username)
@@ -71,7 +71,9 @@ def handle_process(
         ]
         available_at = max(available_times) if available_times else None
         if available_at is not None and time < available_at:
-            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
+            time = available_at
+            if os_category == "linux":
+                time += timedelta(seconds=rng.uniform(0.3, 2.0))
 
     logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
     process_actor = self._storyline_local_process_actor_for_logon(
@@ -480,6 +482,39 @@ def handle_process(
         term_time = time + timedelta(seconds=term_delay)
         shell_release_time = term_time
         terminate_immediately = False
+        if os_category == "windows":
+            from evidenceforge.generation.activity.generator import (
+                _windows_foreground_lifetime,
+            )
+
+            terminate_immediately = (
+                _windows_foreground_lifetime(process_name, process_command_line) is not None
+                and process_ref is None
+                and bool(future_specs)
+                and not self._process_has_following_same_host_effect(system, future_specs)
+            )
+            canonical_close_getter = getattr(
+                self.activity_generator,
+                "foreground_process_termination_time",
+                None,
+            )
+            canonical_close = (
+                canonical_close_getter(system.hostname, pid)
+                if callable(canonical_close_getter)
+                else None
+            )
+            if terminate_immediately and canonical_close is not None:
+                term_time = ensure_utc(canonical_close)
+                shell_release_time = term_time + timedelta(
+                    milliseconds=(
+                        180
+                        + _stable_seed(
+                            f"storyline_windows_shell_release:{system.hostname}:"
+                            f"{process_logon_id}:{parent_pid}:{pid}:{term_time.isoformat()}"
+                        )
+                        % 721
+                    )
+                )
         if os_category == "linux":
             from evidenceforge.generation.activity.generator import (
                 _linux_foreground_lifetime,
@@ -537,6 +572,18 @@ def handle_process(
             self._storyline_shell_available_at[shell_key] = shell_release_time
             process_shell_key = (system.hostname, process_actor.username)
             self._storyline_shell_available_at[process_shell_key] = shell_release_time
+        elif os_category == "windows" and terminate_immediately:
+            if not hasattr(self, "_storyline_shell_available_at"):
+                self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+            for username in {actor.username, process_actor.username}:
+                process_shell_key = (system.hostname, username)
+                self._storyline_shell_available_at[process_shell_key] = max(
+                    shell_release_time,
+                    self._storyline_shell_available_at.get(
+                        process_shell_key,
+                        shell_release_time,
+                    ),
+                )
 
     return context.malicious_event
 
