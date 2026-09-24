@@ -208,3 +208,30 @@ Five family-first realism assessment loops requested on 2026-09-24. The durable 
   symmetry, 4779-before-4634 ordering, deferred commit recovery, eCAR and network source-port
   visibility, Snare field aliases for unrelated events, fixture parity, and parser compatibility
   with historical rows that contain extra fields.
+
+## Loop 101 Result
+
+- Commit `fc2b1b38` removed non-native `ClientPort` from Security 4778/4779 rendering, validation,
+  and projections while retaining canonical tuple truth for eCAR and network consumers. Incompatible
+  immutable Windows validation snapshots now fail closed.
+- Verification passed: 11,709 routine tests, 48 skipped, 2,030 deselected; three targeted slow-tier
+  RDP lifecycle tests; Ruff check/format; 92 packaged configuration files; behavior revision 153
+  and digest `d88b27d5f6236de3ffff07e4ec2d7419e3543be12ef0005121ae4e7d1afa2046`.
+- Generation produced 129,694 records. The deterministic score remained 96.0836 with the same
+  broader pivot-linkability and temporal-integrity guardrail failures. All 11 visible Security 4779
+  rows omitted `ClientPort`, while all 129 sibling eCAR RDP flows retained a non-zero source port.
+- Initial blind scores were 68, 47, 32, and 66 (mean 53.25). Deliberation reached an
+  Inconclusive/mixed result leaning synthetic at 57.5. No P0 hard contradiction survived.
+
+## Five-Loop Closeout
+
+Loops 97–101 repaired finalized process-dependent timing, exact Type 9 SMB operation ownership,
+stable SID-scoped PKINIT credential epochs, canonical Type 3 session principals, and native Windows
+RDP transition fields. The final panel's dominant remaining concern is distributional rather than
+causal: role/cohort-invariant Linux snapd, irqbalance, and sysstat behavior.
+
+The next durable family should compile distro/role/cohort-aware Linux daemon deployment and own
+stateful host-specific episodes. Snapd inventories and change/task lifecycles should reflect each
+host's installed software, irqbalance should normally remain quiet outside bounded startup or
+reconfiguration episodes, and sysstat schedule deployment should vary by scheduler, enablement,
+phase, missed execution, and observation profile.
