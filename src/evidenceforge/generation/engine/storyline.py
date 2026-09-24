@@ -1122,50 +1122,6 @@ class StorylineMixin:
                 return False
         return False
 
-    @classmethod
-    def _process_has_following_same_host_effect(
-        cls,
-        system: System,
-        future_specs: Iterable[Any],
-    ) -> bool:
-        """Return whether later authored work still requires the current process."""
-
-        future_specs = tuple(future_specs)
-        if cls._process_has_following_same_host_connection(system, future_specs):
-            return True
-        dependent_types = {
-            "account_created",
-            "account_deleted",
-            "beacon",
-            "create_remote_thread",
-            "dga_queries",
-            "dns_query",
-            "dns_tunnel",
-            "explicit_credentials",
-            "group_member_added",
-            "log_cleared",
-            "port_scan",
-            "process_access",
-            "scheduled_task_created",
-            "service_installed",
-            "web_scan",
-        }
-        terminal_types = {
-            "logoff",
-            "logon",
-            "process",
-            "rdp_session",
-            "smb_activity",
-            "ssh_session",
-        }
-        for future in future_specs:
-            future_type = getattr(future, "type", "")
-            if future_type in dependent_types:
-                return True
-            if future_type in terminal_types:
-                return False
-        return False
-
     @staticmethod
     def _scheduled_task_lookup_key(system: System, task_name: str) -> tuple[str, str]:
         """Return a normalized host/task key for correlating schtasks with 4698."""

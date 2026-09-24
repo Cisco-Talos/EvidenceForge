@@ -60,7 +60,7 @@ def handle_process(
         time,
     )
 
-    if os_category in {"linux", "windows"}:
+    if os_category == "linux":
         if not hasattr(self, "_storyline_shell_available_at"):
             self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
         native_shell_key = (system.hostname, process_actor.username)
@@ -71,9 +71,7 @@ def handle_process(
         ]
         available_at = max(available_times) if available_times else None
         if available_at is not None and time < available_at:
-            time = available_at
-            if os_category == "linux":
-                time += timedelta(seconds=rng.uniform(0.3, 2.0))
+            time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
     logon_id = self._resolve_storyline_process_logon_id(actor, system, time, rng)
     process_actor = self._storyline_local_process_actor_for_logon(
@@ -491,7 +489,7 @@ def handle_process(
                 _windows_foreground_lifetime(process_name, process_command_line) is not None
                 and process_ref is None
                 and bool(future_specs)
-                and not self._process_has_following_same_host_effect(system, future_specs)
+                and getattr(future_specs[0], "type", "") == "smb_activity"
             )
             canonical_close_getter = getattr(
                 self.activity_generator,

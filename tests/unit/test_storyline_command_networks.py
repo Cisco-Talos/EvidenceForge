@@ -1323,32 +1323,6 @@ class TestStorylineCommandNetworks:
             ),
         )
 
-    def test_windows_foreground_process_retention_stops_at_next_command_boundary(self):
-        """Dependent effects retain a process, while a later SMB command does not."""
-
-        system = System(
-            hostname="WS-01",
-            ip="10.10.1.20",
-            os="Windows 11",
-            type="workstation",
-        )
-
-        assert StorylineMixin._process_has_following_same_host_effect(
-            system,
-            [SimpleNamespace(type="raw"), SimpleNamespace(type="process_access")],
-        )
-        assert not StorylineMixin._process_has_following_same_host_effect(
-            system,
-            [SimpleNamespace(type="smb_activity")],
-        )
-        assert not StorylineMixin._process_has_following_same_host_effect(
-            system,
-            [
-                SimpleNamespace(type="process"),
-                SimpleNamespace(type="process_access"),
-            ],
-        )
-
     def test_apache_raw_syslog_uses_canonical_vip_tuple_and_listener_pid(self):
         ts = datetime(2024, 3, 18, 13, 20, 1, tzinfo=UTC)
         state = StateManager()

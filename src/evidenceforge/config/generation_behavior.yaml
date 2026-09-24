@@ -1,7 +1,7 @@
 schema_version: "1.0"
 current_revision: 150
 history_start_revision: 1
-behavior_surface_sha256: 271e425376de4b7e707ce04fbfbd8791af97eef1ad7466221c96f9287c4345cb
+behavior_surface_sha256: 26eacbea6a1a7b53e2e242648b9997a767fee3b7078d2db847be60f55f0bcba6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1520,4 +1520,4 @@ changes:
       - ecar
       - windows_event_security
       - windows_event_sysmon
-    summary: Close bounded Windows storyline one-shots at canonical completion before unrelated following commands while retaining processes required by later effects.
+    summary: Close a bounded Windows storyline one-shot at canonical completion only when the immediately following authored command is an independently materialized SMB operation.
