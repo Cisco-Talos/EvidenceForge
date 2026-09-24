@@ -1682,24 +1682,81 @@ class StorylineMixin:
 
         return value.replace("'", "''")
 
-    def _storyline_smb_copy_command(self, spec: Any) -> str:
-        """Render a source-visible command capable of the authored SMB copy."""
+    def _storyline_smb_location_path(self, location: Any) -> str:
+        """Resolve one authored share location to its source-visible UNC path."""
 
-        source = getattr(spec, "source", None)
-        destination = getattr(spec, "destination", None)
-        if (
-            getattr(spec, "operation", "") != "copy"
-            or not isinstance(source, SmbShareLocation)
-            or not isinstance(destination, SmbClientLocation)
-        ):
+        if not isinstance(location, SmbShareLocation):
             return ""
         world = getattr(self.activity_generator, "_storage_world", None)
         if world is None:
             return ""
-        share = world.share(source.share)
-        destination_path = destination.path or destination.directory
+        share = world.share(location.share)
+        if location.file_ref is not None:
+            selected = world.select(
+                location.share,
+                file_ref=location.file_ref,
+                selector=location.selector,
+            )
+            if len(selected) != 1:
+                raise StateError(
+                    "Storyline SMB command requires one exact file for "
+                    f"{location.share!r}, resolved {len(selected)}"
+                )
+            return world.unc_path(share, selected[0].path)
+        if location.path is not None:
+            return world.unc_path(share, location.path)
+        if location.directory is not None:
+            return world.unc_path(share, location.directory)
+        path_glob = getattr(location.selector, "path_glob", "") or ""
+        search_root = path_glob.partition("*")[0].rstrip("\\/")
+        return world.unc_path(share, search_root)
+
+    def _storyline_smb_operation_command(self, spec: Any) -> str:
+        """Render the exact source-visible command for one credentialed SMB operation."""
+
+        source = getattr(spec, "source", None)
+        destination = getattr(spec, "destination", None)
+        target = getattr(spec, "target", None)
+        operation = getattr(spec, "operation", "")
+        if operation in {"browse", "read", "create", "update", "delete"}:
+            target_path = self._storyline_smb_location_path(target)
+            if not target_path:
+                return ""
+            literal = self._quote_powershell_literal(target_path)
+            action = {
+                "browse": f"Get-ChildItem -LiteralPath '{literal}' | Out-Null",
+                "read": (f"$stream=[System.IO.File]::OpenRead('{literal}'); $stream.Dispose()"),
+                "create": f"New-Item -ItemType File -Path '{literal}' -Force | Out-Null",
+                "update": f"Set-Content -LiteralPath '{literal}' -Value ''",
+                "delete": f"Remove-Item -LiteralPath '{literal}' -Force",
+            }[operation]
+            return f'powershell.exe -NoProfile -Command "{action}"'
+        if operation not in {"copy", "move"}:
+            return ""
+        world = getattr(self.activity_generator, "_storage_world", None)
+        if world is None:
+            return ""
+        destination_path = ""
+        if isinstance(destination, SmbClientLocation):
+            destination_path = destination.path or destination.directory or ""
+        elif isinstance(destination, SmbShareLocation):
+            destination_path = self._storyline_smb_location_path(destination)
         if not destination_path:
             return ""
+
+        if isinstance(source, SmbClientLocation):
+            source_path = source.path or ""
+            if not source_path:
+                return ""
+            verb = "Move-Item" if operation == "move" else "Copy-Item"
+            return (
+                "powershell.exe -NoProfile -Command "
+                f"\"{verb} -LiteralPath '{self._quote_powershell_literal(source_path)}' "
+                f"-Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
+            )
+        if not isinstance(source, SmbShareLocation):
+            return ""
+        share = world.share(source.share)
 
         if source.file_ref is not None or source.path is not None:
             selected = world.select(
@@ -1714,9 +1771,10 @@ class StorylineMixin:
                     f"{source.share!r}, resolved {len(selected)}"
                 )
             source_path = world.unc_path(share, selected[0].path)
+            verb = "Move-Item" if operation == "move" else "Copy-Item"
             return (
                 "powershell.exe -NoProfile -Command "
-                f"\"Copy-Item -LiteralPath '{self._quote_powershell_literal(source_path)}' "
+                f"\"{verb} -LiteralPath '{self._quote_powershell_literal(source_path)}' "
                 f"-Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
             )
 
@@ -1736,13 +1794,13 @@ class StorylineMixin:
         count = getattr(batch, "count", None)
         if count is not None:
             command += f" | Select-Object -First {count}"
+        verb = "Move-Item" if operation == "move" else "Copy-Item"
         command += (
-            f" | Copy-Item -Destination '{self._quote_powershell_literal(destination_path)}' "
-            '-Force"'
+            f" | {verb} -Destination '{self._quote_powershell_literal(destination_path)}' -Force\""
         )
         return command
 
-    def _storyline_smb_transfer_process(
+    def _storyline_smb_operation_process(
         self,
         *,
         system: System,
@@ -1751,17 +1809,22 @@ class StorylineMixin:
         spec: Any,
         client_logon_id: str,
         parent_pid: int,
-    ) -> tuple[int, str, bool]:
-        """Create a Type 9 process whose command expresses an SMB copy operation."""
+    ) -> tuple[int, str, bool, datetime, int]:
+        """Create the exact shell-serialized process for a Type 9 SMB operation."""
 
         if not client_logon_id or _get_os_category(system.os) != "windows":
-            return parent_pid, "", False
-        command_line = self._storyline_smb_copy_command(spec)
+            return parent_pid, "", False, time, parent_pid
+        command_line = self._storyline_smb_operation_command(spec)
         if not command_line:
-            return parent_pid, "", False
+            raise StateError(
+                "Storyline credentialed SMB could not render an exact operation process: "
+                f"host={system.hostname}, LogonID={client_logon_id}, "
+                f"operation={getattr(spec, 'operation', '')}"
+            )
         process_name = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
         state_manager = getattr(self, "state_manager", None)
         parent_started_at: datetime | None = None
+        session_processes: list[Any] = []
         if state_manager is not None:
             session_processes = [
                 process
@@ -1784,7 +1847,7 @@ class StorylineMixin:
                 parent_started_at = ensure_utc(parent.start_time)
         lead_ms = 2500 + (
             _stable_seed(
-                f"storyline_smb_copy_process:{system.hostname}:{client_logon_id}:"
+                f"storyline_smb_operation_process:{system.hostname}:{client_logon_id}:"
                 f"{time.isoformat()}:{command_line}"
             )
             % 701
@@ -1792,6 +1855,34 @@ class StorylineMixin:
         process_time = ensure_utc(time) - timedelta(milliseconds=lead_ms)
         if parent_started_at is not None:
             process_time = max(process_time, parent_started_at + timedelta(milliseconds=1))
+        shell_ready_at = getattr(self, "_storyline_shell_available_at", {}).get(
+            (system.hostname, actor.username)
+        )
+        finalizer_time = getattr(
+            self.activity_generator,
+            "foreground_process_termination_time",
+            lambda _hostname, _pid: None,
+        )
+        for sibling in session_processes:
+            if sibling.parent_pid != parent_pid:
+                continue
+            sibling_close = finalizer_time(system.hostname, sibling.pid)
+            if sibling_close is None:
+                continue
+            sibling_ready = ensure_utc(sibling_close) + timedelta(
+                milliseconds=(
+                    180
+                    + _stable_seed(
+                        f"storyline_type9_shell_release:{system.hostname}:{client_logon_id}:"
+                        f"{parent_pid}:{sibling.pid}:{sibling_close.isoformat()}"
+                    )
+                    % 721
+                )
+            )
+            shell_ready_at = max(shell_ready_at or sibling_ready, sibling_ready)
+        if shell_ready_at is not None and process_time < shell_ready_at:
+            process_time = shell_ready_at
+            time = process_time + timedelta(milliseconds=lead_ms)
         pid = self.activity_generator.generate_process(
             user=actor,
             system=system,
@@ -1808,7 +1899,7 @@ class StorylineMixin:
         )
         if pid <= 0:
             raise StateError(
-                "Storyline credentialed SMB copy could not materialize its transfer process: "
+                "Storyline credentialed SMB could not materialize its operation process: "
                 f"host={system.hostname}, LogonID={client_logon_id}, parent_pid={parent_pid}, "
                 f"process_time={process_time.isoformat()}, deadline={ensure_utc(time).isoformat()}"
             )
@@ -1816,7 +1907,39 @@ class StorylineMixin:
         if callable(record_process):
             record_process(system, actor, pid, process_name)
         self._record_last_storyline_process(system, pid, process_name, command_line)
-        return pid, process_name, True
+        return pid, process_name, True, time, parent_pid
+
+    def _remember_storyline_type9_smb_completion(
+        self,
+        *,
+        system: System,
+        local_actor: User,
+        outbound_actor: User,
+        logon_id: str,
+        parent_pid: int,
+        completed_at: datetime,
+        process_pid: int,
+    ) -> None:
+        """Advance the exact Type 9 controller after one synchronous SMB command."""
+
+        ready_at = ensure_utc(completed_at) + timedelta(
+            milliseconds=(
+                180
+                + _stable_seed(
+                    f"storyline_type9_smb_ready:{system.hostname}:{logon_id}:"
+                    f"{parent_pid}:{process_pid}:{completed_at.isoformat()}"
+                )
+                % 721
+            )
+        )
+        if not hasattr(self, "_storyline_shell_available_at"):
+            self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+        for username in {local_actor.username, outbound_actor.username}:
+            actor_key = (system.hostname, username)
+            self._storyline_shell_available_at[actor_key] = max(
+                ready_at,
+                self._storyline_shell_available_at.get(actor_key, ready_at),
+            )
 
     @staticmethod
     def _storyline_local_file_key(system: System, path: str) -> tuple[str, str]:
@@ -3269,8 +3392,6 @@ class StorylineMixin:
         )
         if host_ready is not None and time < host_ready:
             time = host_ready + timedelta(milliseconds=rng.randint(120, 700))
-        if _get_os_category(system.os) != "linux":
-            return time
         available_at = getattr(self, "_storyline_shell_available_at", {}).get(
             (system.hostname, actor.username)
         )

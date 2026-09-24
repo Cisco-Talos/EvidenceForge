@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 148
+current_revision: 149
 history_start_revision: 1
-behavior_surface_sha256: 89ef920882eb8b1b2b23d5b894f9ef99f39492c98f97708b2efec129b0751d6a
+behavior_surface_sha256: a2330be6ada7dadf305ed488cc5327f734dda45e076c8c6b044670f698eefcac
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1495,3 +1495,17 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Keep process-owned endpoint effects independent of unrelated session admission order and floor termination on their fully constrained source-visible timestamps.
+  - revision: 149
+    id: exact-type9-smb-operation-processes
+    impact: material
+    domains:
+      - process-lifecycle
+      - smb-client-attribution
+      - storyline-ordering
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - zeek_smb_files
+      - zeek_smb_mapping
+    summary: Give each credentialed storyline SMB operation an exact shell-serialized client process and close it after its own transport and file dependents.

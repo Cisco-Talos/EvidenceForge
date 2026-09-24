@@ -183,8 +183,8 @@ class TestStorylineCommandNetworks:
         assert captured[0].auth.username == local_actor
         assert captured[0].process.username == local_actor
 
-    def test_storyline_type9_smb_uses_exact_credential_process(self):
-        """Type 9 SMB binds its local actor, exact LUID, and live child process."""
+    def test_storyline_type9_smb_browse_uses_exact_operation_process(self):
+        """Type 9 SMB browse cannot inherit an unrelated live PowerShell process."""
         local_actor = User(username="alice", full_name="Alice", email="alice@example.com")
         actor = User(username="admin", full_name="Admin", email="admin@example.com")
         system = System(
@@ -194,6 +194,45 @@ class TestStorylineCommandNetworks:
             type="workstation",
         )
         captured: list[dict[str, Any]] = []
+        created: list[dict[str, Any]] = []
+        terminated: list[dict[str, Any]] = []
+        request_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        unrelated_close = request_time + timedelta(seconds=4)
+
+        world = StorageWorldModel(
+            volumes=(
+                CompiledStorageVolume(
+                    id="data",
+                    system="FILE-SRV-01",
+                    mount="D:\\",
+                    filesystem="ntfs",
+                    label="Finance",
+                ),
+            ),
+            shares=(
+                CompiledStorageShare(
+                    ref="FILE-SRV-01.finance",
+                    system="FILE-SRV-01",
+                    name="Finance",
+                    volume="data",
+                    root="",
+                    preset="collaboration",
+                    population="small",
+                    activity="low",
+                    encryption="required",
+                    smb_native_filesystem="NTFS",
+                    audit="standard",
+                    access=CompiledStorageAccess(
+                        read=frozenset({"Domain Users"}),
+                        modify=frozenset(),
+                        admin=frozenset(),
+                        deny=frozenset(),
+                    ),
+                    files=(),
+                ),
+            ),
+            mappings=(),
+        )
 
         def generate_smb_activity(**kwargs: Any) -> SimpleNamespace:
             captured.append(kwargs)
@@ -202,7 +241,15 @@ class TestStorylineCommandNetworks:
                 tree_ids=("tree-1",),
                 transport_uids=("Csmb",),
                 operations=(),
+                completed_at=kwargs["time"] + timedelta(seconds=2),
             )
+
+        def generate_process(**kwargs: Any) -> int:
+            created.append(kwargs)
+            return 7000 + len(created)
+
+        def generate_process_termination(**kwargs: Any) -> None:
+            terminated.append(kwargs)
 
         engine = object.__new__(StorylineMixin)
         engine.dispatcher = SimpleNamespace(storyline_cluster_id=None)
@@ -216,43 +263,86 @@ class TestStorylineCommandNetworks:
             start_time=datetime(2026, 5, 11, 11, 59, tzinfo=UTC),
             network_close_time=None,
         )
-        credential_process = SimpleNamespace(
+        controller = SimpleNamespace(
             pid=6868,
             parent_pid=6800,
-            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
-            command_line="powershell.exe -NoProfile",
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /d /q",
             username=local_actor.username,
             logon_id="0x900",
             start_time=datetime(2026, 5, 11, 11, 59, 30, tzinfo=UTC),
             end_time=None,
         )
-        engine.state_manager.processes[(system.hostname, credential_process.pid)] = (
-            credential_process
+        unrelated_process = SimpleNamespace(
+            pid=6999,
+            parent_pid=controller.pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                'powershell.exe -NoProfile -Command "New-Item -ItemType Directory '
+                'C:\\ProgramData\\VaultCache"'
+            ),
+            username=local_actor.username,
+            logon_id="0x900",
+            start_time=request_time - timedelta(seconds=3),
+            end_time=None,
         )
+        engine.state_manager.processes[(system.hostname, controller.pid)] = controller
+        engine.state_manager.processes[(system.hostname, unrelated_process.pid)] = unrelated_process
         engine.scenario = SimpleNamespace(environment=SimpleNamespace(users=[local_actor, actor]))
         engine._storyline_logon_registry = {(actor.username, system.hostname): ["0x900"]}
-        engine.activity_generator = SimpleNamespace(generate_smb_activity=generate_smb_activity)
+        engine.activity_generator = SimpleNamespace(
+            _storage_world=world,
+            generate_process=generate_process,
+            generate_process_termination=generate_process_termination,
+            generate_smb_activity=generate_smb_activity,
+            foreground_process_termination_time=lambda _hostname, pid: (
+                unrelated_close if pid == unrelated_process.pid else None
+            ),
+            _record_user_process=lambda *_args: None,
+        )
         engine._last_storyline_process_by_system = {
-            system.hostname: (6868, r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+            system.hostname: (unrelated_process.pid, unrelated_process.image)
         }
 
         engine._execute_typed_event(
             spec=SmbActivityEventSpec(
-                operation="read",
+                operation="browse",
                 target={"type": "share", "share": "FILE-SRV-01.finance"},
             ),
             actor=actor,
             system=system,
-            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
-            activity="Copy files",
+            time=request_time,
+            activity="Browse files",
             explicit_types={"smb_activity"},
         )
 
-        assert captured[0]["process_pid"] == credential_process.pid
-        assert captured[0]["process_image"] == credential_process.image
+        assert captured[0]["process_pid"] == 7001
+        assert captured[0]["process_image"].endswith("powershell.exe")
         assert captured[0]["client_logon_id"] == "0x900"
         assert captured[0]["actor"] == local_actor
         assert captured[0]["spec"].smb_principal == actor.username
+        assert r"\\FILE-SRV-01\Finance" in created[0]["command_line"]
+        assert "New-Item" not in created[0]["command_line"]
+        assert created[0]["parent_pid"] == controller.pid
+        assert created[0]["time"] > unrelated_close
+        assert terminated[0]["pid"] == 7001
+        assert terminated[0]["time"] > captured[0]["time"] + timedelta(seconds=2)
+
+        engine._execute_typed_event(
+            spec=SmbActivityEventSpec(
+                operation="browse",
+                target={"type": "share", "share": "FILE-SRV-01.finance"},
+            ),
+            actor=actor,
+            system=system,
+            time=request_time + timedelta(seconds=1),
+            activity="Browse files again",
+            explicit_types={"smb_activity"},
+        )
+
+        assert captured[1]["process_pid"] == 7002
+        assert created[1]["time"] > terminated[0]["time"]
+        assert terminated[1]["time"] > terminated[0]["time"]
 
     def test_storyline_type9_smb_copy_materializes_source_visible_transfer_process(self):
         """Credentialed SMB copies run through a process whose command can create the files."""
@@ -352,7 +442,7 @@ class TestStorylineCommandNetworks:
             },
         )
 
-        pid, image, owned = engine._storyline_smb_transfer_process(
+        pid, image, owned, effective_time, parent_pid = engine._storyline_smb_operation_process(
             system=system,
             actor=actor,
             time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
@@ -368,6 +458,8 @@ class TestStorylineCommandNetworks:
         )
         assert created[0]["logon_id"] == "0x900"
         assert created[0]["parent_pid"] == 6868
+        assert parent_pid == 6868
+        assert effective_time == datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
         assert created[0]["require_exact_parent"] is True
         assert (
             timedelta(milliseconds=2500)
@@ -434,7 +526,7 @@ class TestStorylineCommandNetworks:
             batch={"count": 3, "duration": "2s"},
         )
 
-        command = engine._storyline_smb_copy_command(spec)
+        command = engine._storyline_smb_operation_command(spec)
 
         assert "Get-ChildItem -Path '\\\\FILE-LNX-01\\ClinicalResearch'" in command
         assert "-Include '*.docx','*.csv'" in command
