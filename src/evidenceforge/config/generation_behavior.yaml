@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 151
+current_revision: 152
 history_start_revision: 1
-behavior_surface_sha256: 59274ba66fad539871a172c7ed69b903918d2554df8fa03f7142e9ba4b2fa4c6
+behavior_surface_sha256: fef2fc8283981549df2f0aceb75f58c5978f96f97772dcaeadc91590bb012843
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1531,3 +1531,13 @@ changes:
     formats:
       - windows_event_security
     summary: Reuse a SID-scoped deterministic certificate identity for PKINIT requests across domain controllers while keeping request fields variable and user/machine CA eligibility data-driven.
+  - revision: 152
+    id: canonical-smb-session-principal-fallback
+    impact: material
+    domains:
+      - authentication-session-lifecycle
+      - smb-principal-identity
+    formats:
+      - ecar
+      - windows_event_security
+    summary: Resolve an omitted SMB principal to the authenticated user once at session allocation so paired login and logout evidence retain one canonical identity.

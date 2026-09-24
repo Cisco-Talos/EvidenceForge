@@ -11394,6 +11394,13 @@ class TestActivityGenerator:
             and event.dst_host.hostname == target_system.hostname
             and event.auth.username == "admin01"
         )
+        target_logoff = next(
+            event
+            for event in emitted
+            if event.event_type == "logoff"
+            and event.auth.logon_id == target_logon.auth.logon_id
+            and event.auth.logon_type == 3
+        )
 
         assert explicit.auth.source_ip == "-"
         assert explicit.lifecycle is not None
@@ -11405,12 +11412,10 @@ class TestActivityGenerator:
         assert child.process.command_line == rf"cmd.exe /c dir \\{target_system.hostname}\ADMIN$"
         assert target_logon.auth.source_ip == test_system.ip
         assert target_logon.auth.source_port > 0
-        assert any(
-            event.event_type == "logoff"
-            and event.auth.logon_id == target_logon.auth.logon_id
-            and event.auth.logon_type == 3
-            for event in emitted
-        )
+        assert target_logon.auth.smb_principal == "admin01"
+        assert target_logoff.auth.username == target_logon.auth.username == "admin01"
+        assert target_logoff.auth.user_sid == target_logon.auth.user_sid
+        assert target_logoff.auth.smb_principal == target_logon.auth.smb_principal == "admin01"
         assert any(
             event.event_type == "process_terminate" and event.process.pid == child.process.pid
             for event in emitted

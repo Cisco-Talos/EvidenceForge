@@ -11974,6 +11974,12 @@ class ActivityGenerator:
                 10: "rdp",
             }.get(logon_type, "interactive")
 
+        resolved_smb_principal = (
+            request.smb_principal or user.username
+            if session_kind == "smb"
+            else request.smb_principal
+        )
+
         if (
             os_cat == "linux"
             and logon_type == 10
@@ -12085,7 +12091,7 @@ class ActivityGenerator:
                 logon_guid_required=requires_logon_guid,
                 lifecycle_group_id=lifecycle_group_id,
                 auth_protocol=resolved_auth_protocol,
-                smb_principal=request.smb_principal,
+                smb_principal=resolved_smb_principal,
                 account_scope=request.account_scope,
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
@@ -12107,7 +12113,7 @@ class ActivityGenerator:
                     logon_guid_required=requires_logon_guid,
                     lifecycle_group_id=lifecycle_group_id,
                     auth_protocol=resolved_auth_protocol,
-                    smb_principal=request.smb_principal,
+                    smb_principal=resolved_smb_principal,
                     account_scope=request.account_scope,
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
@@ -12121,7 +12127,7 @@ class ActivityGenerator:
                     source_port=source_port or 0,
                     session_kind=session_kind,
                     auth_protocol=resolved_auth_protocol,
-                    smb_principal=request.smb_principal,
+                    smb_principal=resolved_smb_principal,
                     account_scope=request.account_scope,
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
@@ -12274,7 +12280,7 @@ class ActivityGenerator:
                 process_name=logon_caller_process,
                 session_kind=session_kind,
                 auth_protocol=resolved_auth_protocol,
-                smb_principal=request.smb_principal,
+                smb_principal=resolved_smb_principal,
                 account_scope=request.account_scope,
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
