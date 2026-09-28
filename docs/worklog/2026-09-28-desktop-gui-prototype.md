@@ -32,3 +32,9 @@ validation summary, and an explicit output destination were added as usability
 repairs. Scenario/data and pack libraries, scorecards, export, and the broader
 navigation design still need a deliberate UI pass. Two design directions were
 prepared for review: a library-first workspace and an authoring-first workspace.
+
+The user prefers the **library-first** direction. Make Scenarios the landing view,
+with a selected scenario's validation, saved evaluation, runs, and generation
+destination visible together. Keep authoring chat as a workspace opened from a
+scenario, with Packs and Runs in persistent navigation. Existing authored files
+and bundle manifests should remain the source of truth for library entries.
