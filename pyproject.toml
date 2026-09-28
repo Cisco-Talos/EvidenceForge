@@ -47,6 +47,7 @@ dependencies = [
 
 [project.scripts]
 eforge = "evidenceforge.__main__:main"
+eforge-desktop = "evidenceforge.desktop.launcher:main"
 
 [project.urls]
 Homepage = "https://github.com/Cisco-Talos/EvidenceForge"
@@ -63,6 +64,9 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "ruff>=0.16.2",
     "pre-commit>=4.6.1",
+]
+desktop = [
+    "pyside6>=6.10,<7",
 ]
 
 [build-system]

@@ -486,7 +486,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   structural validity, passes to zero errors, required-reference loading, warning churn, and
   repair regressions across representative scenario families. Use manual scenario-authoring
   acceptance for the 2.0 release candidates and final release.
-- [ ] Web UI for scenario creation.
+- [ ] Complete the local desktop GUI for scenario and pack libraries, evaluation scorecards,
+  bundle export, and overlay editing. See [desktop prototype notes](docs/desktop-prototype.md).
 - [ ] Streaming output to SIEM/data lakes.
 - [ ] Log format auto-detection from samples.
 - [ ] D3FEND defensive response modeling through scenario defense profiles.

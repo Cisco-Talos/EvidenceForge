@@ -34,6 +34,7 @@ import shutil
 import sys
 import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +64,7 @@ from evidenceforge import __version__
 from evidenceforge.cli.checkpoint_commands import checkpoint_app
 from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.pack_commands import pack_app
+from evidenceforge.cli.progress_jsonl import ProgressJSONLWriter
 from evidenceforge.composition import (
     CompiledScenario,
     compile_scenario,
@@ -1831,6 +1833,11 @@ def generate(
         help="Write an opt-in generation performance profile into the output bundle",
         hidden=True,
     ),
+    progress_jsonl: Path | None = typer.Option(
+        None,
+        "--progress-jsonl",
+        help="Write versioned progress events as JSON lines for an external UI.",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -2152,15 +2159,27 @@ def generate(
 
         # Install cooperative interruption before announcing generation readiness so operators and
         # subprocess callers can act on that message without racing the signal handler.
-        with interrupt_controller.installed(), _generation_progress(console) as progress:
+        progress_context = (
+            ProgressJSONLWriter(progress_jsonl) if progress_jsonl is not None else nullcontext(None)
+        )
+        with (
+            interrupt_controller.installed(),
+            _generation_progress(console) as progress,
+            progress_context as event_writer,
+        ):
             console.print("\n[bold]Starting log generation...[/bold]")
             progress_tracker = _GenerationProgressTracker(progress)
+
+            def report_progress(event_type: str, data: dict[str, Any]) -> None:
+                progress_tracker(event_type, data)
+                if event_writer is not None:
+                    event_writer(event_type, data)
 
             # Generate logs with progress reporting
             engine = GenerationEngine(
                 scenario=scenario,
                 output_dir=gen_data_dir,
-                progress_callback=progress_tracker,
+                progress_callback=report_progress,
                 ground_truth_dir=gen_gt_dir,
                 artifact_dir=gen_artifacts_dir,
                 scenario_root=scenario_dir,
