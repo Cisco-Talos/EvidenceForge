@@ -44,6 +44,7 @@ class DesktopState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace: Path
+    output_directory: Path | None = None
     chats: list[ChatRecord] = Field(default_factory=list)
     jobs: list[GenerationJob] = Field(default_factory=list)
 

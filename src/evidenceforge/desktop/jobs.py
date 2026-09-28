@@ -52,15 +52,17 @@ def start_generation(
     scenario: Path,
     workspace: Path,
     state_directory: Path,
+    output_parent: Path | None = None,
 ) -> GenerationJob:
-    """Start a new output bundle in a unique run directory."""
+    """Start a new output bundle beneath the selected destination."""
     scenario = scenario.resolve()
     workspace = workspace.resolve()
     if not scenario.is_file():
         raise FileNotFoundError(f"Scenario file does not exist: {scenario}")
     job_id = uuid4().hex
     label = datetime.now().strftime("%Y%m%d-%H%M%S")
-    output_root = workspace / "runs" / scenario.stem / f"{label}-{job_id[:8]}"
+    destination = (output_parent or workspace / "runs").expanduser().resolve()
+    output_root = destination / scenario.stem / f"{label}-{job_id[:8]}"
     output_root.mkdir(parents=True, exist_ok=False)
     job_files = state_directory / "jobs"
     job_files.mkdir(parents=True, exist_ok=True)

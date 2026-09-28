@@ -23,3 +23,12 @@ bundle restored its 9/9 hour bar on startup; 87 CLI and desktop tests passed.
 Further acceptance
 should exercise the actual chat authoring flow and a long generation with
 suspend/resume from the visible UI.
+
+## First user review
+
+The initial Qt layout did not meet the desired visual quality and omitted several
+expected workflows. Enter-to-send with modified-Enter newlines, a readable
+validation summary, and an explicit output destination were added as usability
+repairs. Scenario/data and pack libraries, scorecards, export, and the broader
+navigation design still need a deliberate UI pass. Two design directions were
+prepared for review: a library-first workspace and an authoring-first workspace.

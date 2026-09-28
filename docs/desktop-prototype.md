@@ -14,6 +14,11 @@ Generation itself remains deterministic. Windows has not been tested.
 4. Use **Install EvidenceForge skills** if the skill picker is empty. Each authoring tab
    is a separate Codex thread, saved and resumed on the next app launch.
 
+In chat, **Enter** sends the message. **Shift+Enter** or **Option/Alt+Enter** inserts
+a newline. Validation shows a compact result with findings and suggested fixes.
+In the Jobs view, **Save new runs in** selects the parent folder for future bundles;
+the app remembers the last selected folder.
+
 The app needs a local `codex` executable on `PATH`. Set
 `EFORGE_DESKTOP_CODEX_BIN` to its full path if it is installed elsewhere. When
 launching outside the checkout, set `EFORGE_DESKTOP_EFORGE_BIN` to an installed
@@ -24,7 +29,8 @@ environment by default.
 
 **Generate** starts a separate CLI process for each run. The process is detached
 from the window, so closing the app leaves it running. Each run gets a unique
-bundle under `<workspace>/runs/<scenario-name>/`. App metadata, command logs,
+bundle under `<selected-output-folder>/<scenario-name>/` (by default,
+`<workspace>/runs/<scenario-name>/`). App metadata, command logs,
 and progress JSONL files live in the platform's application data directory.
 On restart, the app loads that metadata, checks the saved PID and process start
 time, and replays the progress file to restore the bars. It polls once per second

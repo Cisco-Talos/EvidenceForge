@@ -9,7 +9,7 @@ from typing import Any, override
 from uuid import uuid4
 
 from PySide6.QtCore import QProcess, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeyEvent, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -47,6 +47,7 @@ from evidenceforge.desktop.state import (
     StateStore,
     state_directory,
 )
+from evidenceforge.desktop.validation import format_validation_output
 
 _STYLE = """
 QWidget { background: #10141d; color: #e8edf6; font-size: 13px; }
@@ -81,6 +82,28 @@ def _error_text(message: dict[str, Any]) -> str:
     return str(error or "Unknown Codex error")
 
 
+class ChatComposer(QPlainTextEdit):
+    """Send on Return, leaving modified Return for multiline prompts."""
+
+    submit_requested = Signal()
+
+    @override
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & (
+                Qt.KeyboardModifier.ShiftModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.MetaModifier
+            ):
+                self.insertPlainText("\n")
+            else:
+                self.submit_requested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class ChatPane(QWidget):
     """One authoring conversation with its own selected EvidenceForge skill."""
 
@@ -108,9 +131,12 @@ class ChatPane(QWidget):
         self.transcript.setReadOnly(True)
         self.transcript.setPlaceholderText("Describe the scenario you want to create or revise.")
         layout.addWidget(self.transcript, 1)
-        self.prompt = QPlainTextEdit()
-        self.prompt.setPlaceholderText("Ask EvidenceForge…")
+        self.prompt = ChatComposer()
+        self.prompt.setPlaceholderText(
+            "Ask EvidenceForge…  Enter to send · Shift/Option+Enter for a new line"
+        )
         self.prompt.setFixedHeight(90)
+        self.prompt.submit_requested.connect(self._send)
         layout.addWidget(self.prompt)
         controls = QHBoxLayout()
         self.status = QLabel("Ready")
@@ -138,6 +164,8 @@ class ChatPane(QWidget):
         self.skill.setCurrentIndex(index if index >= 0 else 0)
 
     def _send(self) -> None:
+        if not self.send.isEnabled():
+            return
         text = self.prompt.toPlainText().strip()
         if not text:
             return
@@ -277,11 +305,12 @@ class JobsPane(QWidget):
     """Scenario selection and a scrollable set of generation jobs."""
 
     validate_requested = Signal(str)
-    generate_requested = Signal(str)
+    generate_requested = Signal(str, str)
+    output_changed = Signal(str)
     suspend_requested = Signal(object)
     resume_requested = Signal(object)
 
-    def __init__(self) -> None:
+    def __init__(self, output_directory: Path) -> None:
         super().__init__()
         self.cards: dict[str, JobCard] = {}
         layout = QVBoxLayout(self)
@@ -298,15 +327,29 @@ class JobsPane(QWidget):
         validate = QPushButton("Validate")
         validate.clicked.connect(lambda: self.validate_requested.emit(self.scenario.text()))
         input_row.addWidget(validate)
+        layout.addLayout(input_row)
+        destination_row = QHBoxLayout()
+        destination_row.addWidget(QLabel("Save new runs in"))
+        self.output_directory = QLineEdit(str(output_directory))
+        self.output_directory.setPlaceholderText("Choose a parent folder for generated bundles")
+        self.output_directory.editingFinished.connect(
+            lambda: self.output_changed.emit(self.output_directory.text())
+        )
+        destination_row.addWidget(self.output_directory, 1)
+        browse_output = QPushButton("Browse")
+        browse_output.clicked.connect(self._browse_output)
+        destination_row.addWidget(browse_output)
         generate = QPushButton("Generate")
         generate.setObjectName("primary")
-        generate.clicked.connect(lambda: self.generate_requested.emit(self.scenario.text()))
-        input_row.addWidget(generate)
-        layout.addLayout(input_row)
+        generate.clicked.connect(
+            lambda: self.generate_requested.emit(self.scenario.text(), self.output_directory.text())
+        )
+        destination_row.addWidget(generate)
+        layout.addLayout(destination_row)
         self.validation = QPlainTextEdit()
         self.validation.setReadOnly(True)
         self.validation.setPlaceholderText("Validation results appear here.")
-        self.validation.setFixedHeight(110)
+        self.validation.setFixedHeight(190)
         layout.addWidget(self.validation)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -322,6 +365,14 @@ class JobsPane(QWidget):
         )
         if path:
             self.scenario.setText(path)
+
+    def _browse_output(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self, "Choose output folder", self.output_directory.text()
+        )
+        if selected:
+            self.output_directory.setText(selected)
+            self.output_changed.emit(selected)
 
     def add_job(self, job: GenerationJob) -> None:
         card = JobCard(job)
@@ -385,9 +436,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs, 1)
         for record in self.state.chats:
             self._add_chat_pane(record)
-        self.jobs = JobsPane()
+        self.jobs = JobsPane(self.state.output_directory or self.state.workspace / "runs")
         self.jobs.validate_requested.connect(self._validate)
         self.jobs.generate_requested.connect(self._generate)
+        self.jobs.output_changed.connect(self._remember_output_directory)
         self.jobs.suspend_requested.connect(self._suspend)
         self.jobs.resume_requested.connect(self._resume)
         self.tabs.addTab(self.jobs, "Jobs")
@@ -437,6 +489,8 @@ class MainWindow(QMainWindow):
         self.state.workspace = Path(selected).resolve()
         self.workspace_label.setText(self.state.workspace.name)
         self.workspace_label.setToolTip(str(self.state.workspace))
+        if self.state.output_directory is None:
+            self.jobs.output_directory.setText(str(self.state.workspace / "runs"))
         self._save()
         if self.bridge.initialized:
             self._refresh_skills()
@@ -706,19 +760,38 @@ class MainWindow(QMainWindow):
     def _validation_finished(self, process: QProcess) -> None:
         output = bytes(process.readAllStandardOutput()).decode("utf-8", "replace")
         errors = bytes(process.readAllStandardError()).decode("utf-8", "replace")
-        self.jobs.validation.setPlainText(output or errors or "Validation produced no output")
+        self.jobs.validation.setPlainText(
+            format_validation_output(output, errors, process.exitCode())
+        )
         self.validation_process = None
         process.deleteLater()
 
-    def _generate(self, scenario_text: str) -> None:
+    def _remember_output_directory(self, value: str) -> None:
+        self.state.output_directory = self._output_directory(value)
+        self._save()
+
+    def _output_directory(self, value: str) -> Path | None:
+        if not value.strip():
+            return None
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = self.state.workspace / path
+        return path.resolve()
+
+    def _generate(self, scenario_text: str, destination_text: str) -> None:
+        destination = self._output_directory(destination_text)
         try:
             job = start_generation(
-                Path(scenario_text).expanduser(), self.state.workspace, self.store.directory
+                Path(scenario_text).expanduser(),
+                self.state.workspace,
+                self.store.directory,
+                output_parent=destination,
             )
         except (OSError, RuntimeError, ValueError) as error:
             QMessageBox.warning(self, "Generation could not start", str(error))
             return
         self.state.jobs.append(job)
+        self.state.output_directory = destination
         self.job_progress[job.id] = GenerationProgress()
         self.jobs.add_job(job)
         self._save()

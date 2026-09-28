@@ -9,7 +9,9 @@ import time
 from pathlib import Path
 
 import psutil
+import pytest
 
+from evidenceforge.desktop import jobs
 from evidenceforge.desktop.jobs import process_running, refresh_status
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
 from evidenceforge.desktop.state import StateStore
@@ -69,3 +71,22 @@ def test_detached_generation_can_be_rediscovered_after_launcher_exits(tmp_path: 
         time.sleep(0.05)
     assert refresh_status(job)
     assert job.status == "stopped"
+
+
+def test_generation_uses_selected_output_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scenario = tmp_path / "scenario.yaml"
+    scenario.write_text("version: '1.0'\n", encoding="utf-8")
+    destination = tmp_path / "chosen-output"
+    commands: list[list[str]] = []
+
+    def fake_start_process(command: list[str], *, cwd: Path, log_file: Path) -> tuple[int, float]:
+        commands.append(command)
+        return 12345, 12345.0
+
+    monkeypatch.setattr(jobs, "_start_process", fake_start_process)
+    job = jobs.start_generation(scenario, tmp_path, tmp_path / "app-state", destination)
+
+    assert job.output_root.parent == destination / "scenario"
+    assert commands[0][commands[0].index("--output") + 1] == str(job.output_root)
