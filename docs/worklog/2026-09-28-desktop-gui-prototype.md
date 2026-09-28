@@ -57,3 +57,12 @@ generation/evaluation pairing remain next steps.
 
 New and existing packs route into the corresponding pack authoring skill;
 pack catalog entries also support import, clone, hide, and opening the YAML.
+
+## Scenario organization and search
+
+Scenario folders are virtual, stored per workspace in desktop state, and do not
+move authored files. Users can create, rename, delete, and assign folders from
+the library. The UI filters by folder, scenario version, and latest run status;
+its search covers name, description, and authored YAML text with quoted terms
+and optional field scopes. Folder operations preserve source files, and cloned
+scenarios inherit their source folder.

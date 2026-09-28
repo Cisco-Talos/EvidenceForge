@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
 from evidenceforge.desktop.app_server import CodexBridge
 from evidenceforge.desktop.main import _STYLE, MainWindow
@@ -62,3 +62,65 @@ def test_library_is_landing_page_and_saves_evaluation(
         assert (store.directory / "evaluations" / "job1.json").is_file()
     finally:
         window.close()
+
+
+def test_folder_and_content_filters_work_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    for name, version, host in (
+        ("alpha", "1.0", "WS-MAYA-01"),
+        ("beta", "2.0", "WS-BEN-01"),
+    ):
+        path = workspace / "scenarios" / name / "scenario.yaml"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            f"version: '{version}'\nname: {name}\ndescription: Training case\n"
+            f"environment:\n  users:\n    - username: {name}\n"
+            f"  systems:\n    - hostname: {host}\n",
+            encoding="utf-8",
+        )
+    store = StateStore(tmp_path / "state")
+    window = MainWindow(store, DesktopState(workspace=workspace))
+    try:
+        pane = window.scenario_library
+        assert pane.list.count() == 2
+        pane.search.setText("WS-MAYA-01")
+        assert pane.list.count() == 1
+        assert pane.selected_item() is not None and pane.selected_item().name == "alpha"
+
+        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Project A", True))
+        window._create_scenario_folder()
+        assert pane.folder_filter.currentData() == "Project A"
+        assert pane.list.count() == 1
+        assert store.load(workspace).scenario_folders[str(workspace)].names == ["Project A"]
+
+        pane.search.clear()
+        pane.version_filter.setCurrentIndex(pane.version_filter.findData("2.0"))
+        assert pane.list.count() == 0
+        pane.folder_filter.setCurrentIndex(0)
+        assert pane.list.count() == 1
+        assert pane.selected_item() is not None and pane.selected_item().name == "beta"
+
+        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Casework", True))
+        window._rename_scenario_folder("Project A")
+        assert (
+            window._folder_state().assignments[
+                str(workspace / "scenarios" / "alpha" / "scenario.yaml")
+            ]
+            == "Casework"
+        )
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        )
+        window._delete_scenario_folder("Casework")
+        assert not window._folder_state().assignments
+        assert (workspace / "scenarios" / "alpha" / "scenario.yaml").is_file()
+    finally:
+        window.close()
+        app.processEvents()

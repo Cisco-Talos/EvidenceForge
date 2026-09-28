@@ -24,6 +24,15 @@ CLI findings in Runs. **Generate…** takes you to Runs with that scenario alrea
 selected, where you can choose the output folder before starting the job.
 **Clone** creates a new scenario YAML in the workspace; **Hide** removes an
 entry from the default list without deleting its file.
+Scenario **Folders** are virtual and saved per workspace in local app data.
+Create, rename, and delete them above the scenario list; assign the selected
+scenario using the Folder control in its detail pane. Creating a folder places
+the selected scenario in it, and deleting a folder leaves its files untouched.
+The folder selector includes All folders and Unfiled. Search matches every term
+against the scenario name, description, and full authored YAML text, including
+users and hostnames. Quoted phrases and `name:`, `description:`, or `yaml:`
+scopes are supported. Version and latest-run-status filters can be combined
+with folder selection and search.
 For a completed app-launched run, **Evaluate latest run** starts `eforge eval`
 and saves its JSON report in the local app data directory. Evaluations can run
 in parallel while the app is open; closing the app stops active evaluations.

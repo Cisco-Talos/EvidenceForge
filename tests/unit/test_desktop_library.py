@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evidenceforge.desktop.library import discover_packs, discover_scenarios
+from evidenceforge.desktop.library import discover_packs, discover_scenarios, matches_search
+from evidenceforge.desktop.state import DesktopState, ScenarioFolders, StateStore
 
 
 def test_scenario_library_finds_authored_files_without_generated_bundles(tmp_path: Path) -> None:
@@ -28,6 +29,10 @@ def test_scenario_library_finds_authored_files_without_generated_bundles(tmp_pat
     assert items[0].users == 1
     assert items[0].systems == 1
     assert items[0].events == 1
+    assert matches_search(items[0], "alex ws1")
+    assert matches_search(items[0], 'yaml:"username: alex"')
+    assert matches_search(items[0], "description:example")
+    assert not matches_search(items[0], "missing-host")
 
 
 def test_pack_library_reads_workspace_catalog(tmp_path: Path) -> None:
@@ -43,3 +48,25 @@ def test_pack_library_reads_workspace_catalog(tmp_path: Path) -> None:
     assert any(
         item.path == pack / "pack.yaml" and item.description == "Demo pack" for item in items
     )
+
+
+def test_virtual_folders_persist_per_workspace(tmp_path: Path) -> None:
+    workspace_a = tmp_path / "a"
+    workspace_b = tmp_path / "b"
+    path = workspace_a / "scenarios" / "demo" / "scenario.yaml"
+    state = DesktopState(
+        workspace=workspace_a,
+        scenario_folders={
+            str(workspace_a): ScenarioFolders(
+                names=["Research"], assignments={str(path): "Research"}
+            ),
+            str(workspace_b): ScenarioFolders(names=["Training"]),
+        },
+    )
+    store = StateStore(tmp_path / "state")
+    store.save(state)
+
+    restored = store.load(workspace_a)
+
+    assert restored.scenario_folders[str(workspace_a)].assignments[str(path)] == "Research"
+    assert restored.scenario_folders[str(workspace_b)].names == ["Training"]

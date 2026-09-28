@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LibraryItem(BaseModel):
@@ -22,6 +23,7 @@ class LibraryItem(BaseModel):
     users: int = 0
     systems: int = 0
     events: int = 0
+    search_text: str = Field(default="", repr=False, exclude=True)
 
 
 _yaml_cache: dict[tuple[Path, int, int], dict[str, object] | None] = {}
@@ -56,6 +58,10 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         return None
     if not data or "name" not in data or "version" not in data or "environment" not in data:
         return None
+    try:
+        search_text = path.read_text(encoding="utf-8").casefold()
+    except (OSError, UnicodeError):
+        return None
     environment = data.get("environment")
     environment = environment if isinstance(environment, dict) else {}
     storyline = data.get("storyline")
@@ -71,7 +77,29 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         users=_count(environment.get("users")),
         systems=_count(environment.get("systems")),
         events=_count(events),
+        search_text=search_text,
     )
+
+
+def matches_search(item: LibraryItem, query: str) -> bool:
+    """Match every term against title, description, or authored YAML content."""
+    try:
+        terms = shlex.split(query.casefold())
+    except ValueError:
+        terms = query.casefold().split()
+    fields = {
+        "name": item.name.casefold(),
+        "description": item.description.casefold(),
+        "yaml": item.search_text,
+    }
+    for term in terms:
+        scope, separator, value = term.partition(":")
+        if separator and scope in fields:
+            if value not in fields[scope]:
+                return False
+        elif not any(term in field for field in fields.values()):
+            return False
+    return True
 
 
 def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[LibraryItem]:

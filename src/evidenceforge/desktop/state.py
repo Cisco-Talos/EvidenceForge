@@ -38,6 +38,15 @@ class GenerationJob(BaseModel):
     status: Literal["running", "completed", "stopped"] = "running"
 
 
+class ScenarioFolders(BaseModel):
+    """Virtual folders and scenario assignments for one workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    names: list[str] = Field(default_factory=list)
+    assignments: dict[str, str] = Field(default_factory=dict)
+
+
 class DesktopState(BaseModel):
     """User-owned desktop library metadata; authored files remain authoritative."""
 
@@ -47,6 +56,7 @@ class DesktopState(BaseModel):
     output_directory: Path | None = None
     imported_scenarios: list[Path] = Field(default_factory=list)
     hidden_items: list[Path] = Field(default_factory=list)
+    scenario_folders: dict[str, ScenarioFolders] = Field(default_factory=dict)
     chats: list[ChatRecord] = Field(default_factory=list)
     jobs: list[GenerationJob] = Field(default_factory=list)
 

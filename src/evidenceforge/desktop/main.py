@@ -51,6 +51,7 @@ from evidenceforge.desktop.state import (
     ChatRecord,
     DesktopState,
     GenerationJob,
+    ScenarioFolders,
     StateStore,
     state_directory,
 )
@@ -63,6 +64,7 @@ QLabel { background: transparent; }
 QMainWindow, QTabWidget::pane { background: #0d111a; }
 QFrame#sidebar { background: #111722; border-right: 1px solid #263040; }
 QFrame#panel { background: #151d2a; border: 1px solid #2b3648; border-radius: 14px; }
+QWidget#inlineControls { background: transparent; }
 QLabel#brand { font-size: 19px; font-weight: 800; color: #f5f8fd; }
 QLabel#pageTitle { font-size: 32px; font-weight: 750; color: #f5f8fd; }
 QLabel#detailTitle { font-size: 25px; font-weight: 750; color: #f5f8fd; }
@@ -489,6 +491,10 @@ class MainWindow(QMainWindow):
         self.scenario_library.generate_requested.connect(self._generate_library_item)
         self.scenario_library.evaluate_requested.connect(self._evaluate_latest)
         self.scenario_library.refresh_requested.connect(self._refresh_libraries)
+        self.scenario_library.folder_create_requested.connect(self._create_scenario_folder)
+        self.scenario_library.folder_rename_requested.connect(self._rename_scenario_folder)
+        self.scenario_library.folder_delete_requested.connect(self._delete_scenario_folder)
+        self.scenario_library.folder_assignment_requested.connect(self._assign_scenario_folder)
         self.pages.addWidget(self.scenario_library)
 
         authoring = QWidget()
@@ -551,6 +557,10 @@ class MainWindow(QMainWindow):
         if page in (0, 2, 3):
             self._refresh_libraries()
 
+    def _folder_state(self) -> ScenarioFolders:
+        key = str(self.state.workspace.resolve())
+        return self.state.scenario_folders.setdefault(key, ScenarioFolders())
+
     def _refresh_libraries(self) -> None:
         hidden = {path.resolve() for path in self.state.hidden_items}
         scorecards: dict[str, str] = {}
@@ -582,6 +592,8 @@ class MainWindow(QMainWindow):
             hidden,
             self.state.jobs,
             scorecards,
+            self._folder_state().names,
+            self._folder_state().assignments,
         )
         self.industry_library.set_items(
             discover_packs(self.state.workspace, "industry"), hidden, []
@@ -589,6 +601,99 @@ class MainWindow(QMainWindow):
         self.organization_library.set_items(
             discover_packs(self.state.workspace, "organization"), hidden, []
         )
+
+    def _valid_folder_name(self, proposed: str, *, previous: str | None = None) -> str | None:
+        name = proposed.strip()
+        if not re.fullmatch(r"[^/\\\x00-\x1f]{1,60}", name):
+            QMessageBox.warning(
+                self, "Invalid folder name", "Use 1–60 characters without slashes or controls."
+            )
+            return None
+        if name.casefold() in {"all folders", "unfiled"}:
+            QMessageBox.warning(self, "Reserved folder name", "Choose another folder name.")
+            return None
+        if any(
+            existing.casefold() == name.casefold() and existing != previous
+            for existing in self._folder_state().names
+        ):
+            QMessageBox.warning(self, "Folder exists", "Choose a different folder name.")
+            return None
+        return name
+
+    def _create_scenario_folder(self) -> None:
+        selected = self.scenario_library.selected_item()
+        proposed, accepted = QInputDialog.getText(self, "New folder", "Folder name:")
+        if not accepted:
+            return
+        name = self._valid_folder_name(proposed)
+        if name is None:
+            return
+        folders = self._folder_state()
+        folders.names.append(name)
+        if selected is not None:
+            folders.assignments[str(selected.path)] = name
+        self._save()
+        self._refresh_libraries()
+        self.scenario_library.select_folder(name)
+        if selected is not None:
+            self.scenario_library.select_path(selected.path)
+
+    def _rename_scenario_folder(self, previous: str) -> None:
+        folders = self._folder_state()
+        if previous not in folders.names:
+            return
+        proposed, accepted = QInputDialog.getText(
+            self, "Rename folder", "Folder name:", text=previous
+        )
+        if not accepted:
+            return
+        name = self._valid_folder_name(proposed, previous=previous)
+        if name is None or name == previous:
+            return
+        folders.names[folders.names.index(previous)] = name
+        folders.assignments = {
+            path: name if assigned == previous else assigned
+            for path, assigned in folders.assignments.items()
+        }
+        self._save()
+        self._refresh_libraries()
+        self.scenario_library.select_folder(name)
+
+    def _delete_scenario_folder(self, name: str) -> None:
+        folders = self._folder_state()
+        if name not in folders.names:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete folder",
+            f"Delete virtual folder '{name}'? Its scenarios will become Unfiled."
+            "\nScenario files will stay on disk.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        folders.names.remove(name)
+        folders.assignments = {
+            path: assigned for path, assigned in folders.assignments.items() if assigned != name
+        }
+        self._save()
+        self._refresh_libraries()
+
+    def _assign_scenario_folder(self, item: LibraryItem, name: str) -> None:
+        folders = self._folder_state()
+        if name and name not in folders.names:
+            return
+        current_view = self.scenario_library.folder_filter.currentData()
+        if name:
+            folders.assignments[str(item.path)] = name
+        else:
+            folders.assignments.pop(str(item.path), None)
+        self._save()
+        self._refresh_libraries()
+        if current_view is not None and current_view != name:
+            self.scenario_library.select_folder(name)
+        self.scenario_library.select_path(item.path)
 
     def _toggle_hidden(self, item: LibraryItem) -> None:
         hidden = {path.resolve() for path in self.state.hidden_items}
@@ -612,6 +717,9 @@ class MainWindow(QMainWindow):
             return
         if path not in self.state.imported_scenarios:
             self.state.imported_scenarios.append(path)
+            folder = self.scenario_library.folder_filter.currentData()
+            if isinstance(folder, str) and folder:
+                self._folder_state().assignments[str(path)] = folder
             self._save()
         self._refresh_libraries()
 
@@ -759,7 +867,12 @@ class MainWindow(QMainWindow):
         except (OSError, UnicodeError) as error:
             QMessageBox.warning(self, "Clone failed", str(error))
             return
+        source_folder = self._folder_state().assignments.get(str(item.path))
+        if source_folder:
+            self._folder_state().assignments[str(destination.resolve())] = source_folder
+            self._save()
         self._refresh_libraries()
+        self.scenario_library.select_path(destination.resolve())
         self.statusBar().showMessage(f"Created {destination}", 7000)
 
     def _import_pack(self) -> None:
