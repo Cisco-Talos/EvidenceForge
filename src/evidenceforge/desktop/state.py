@@ -20,6 +20,7 @@ class ChatRecord(BaseModel):
     title: str
     thread_id: str | None = None
     skill_name: str = "eforge-scenario"
+    open: bool = True
 
 
 class GenerationJob(BaseModel):

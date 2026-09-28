@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QTabBar
 
 from evidenceforge.desktop.app_server import CodexBridge
 from evidenceforge.desktop.main import _STYLE, MainWindow
@@ -87,26 +87,41 @@ def test_folder_and_content_filters_work_together(
     window = MainWindow(store, DesktopState(workspace=workspace))
     try:
         pane = window.scenario_library
-        assert pane.list.count() == 2
+        assert len(pane._tree_items) == 2
         pane.search.setText("WS-MAYA-01")
-        assert pane.list.count() == 1
+        assert len(pane._tree_items) == 1
         assert pane.selected_item() is not None and pane.selected_item().name == "alpha"
 
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Project A", True))
         window._create_scenario_folder()
-        assert pane.folder_filter.currentData() == "Project A"
-        assert pane.list.count() == 1
+        assert pane.selected_folder_name() == "Project A"
+        assert len(pane._tree_items) == 1
         assert store.load(workspace).scenario_folders[str(workspace)].names == ["Project A"]
 
         pane.search.clear()
-        pane.version_filter.setCurrentIndex(pane.version_filter.findData("2.0"))
-        assert pane.list.count() == 0
-        pane.folder_filter.setCurrentIndex(0)
-        assert pane.list.count() == 1
+        pane._build_filter_menu()
+        version_menu = next(
+            action.menu() for action in pane.filter_menu.actions() if action.text() == "Version"
+        )
+        assert version_menu is not None
+        next(action for action in version_menu.actions() if action.text() == "2.0").trigger()
+        assert len(pane._tree_items) == 1
+        assert pane.filter_button.text() == "Filters · 1"
         assert pane.selected_item() is not None and pane.selected_item().name == "beta"
+        beta_path = workspace / "scenarios" / "beta" / "scenario.yaml"
+        more = pane.tree.itemWidget(pane._tree_items[beta_path], 1)
+        assert more is not None
+        menu = more.menu()
+        assert menu is not None
+        move_menu = menu.actions()[0].menu()
+        assert move_menu is not None
+        next(action for action in move_menu.actions() if action.text() == "Project A").trigger()
+        assert window._folder_state().assignments[str(beta_path)] == "Project A"
 
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Casework", True))
-        window._rename_scenario_folder("Project A")
+        folder_more = pane.tree.itemWidget(pane._folder_items["Project A"], 1)
+        assert folder_more is not None and folder_more.menu() is not None
+        folder_more.menu().actions()[0].trigger()
         assert (
             window._folder_state().assignments[
                 str(workspace / "scenarios" / "alpha" / "scenario.yaml")
@@ -118,9 +133,55 @@ def test_folder_and_content_filters_work_together(
             "question",
             lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
         )
-        window._delete_scenario_folder("Casework")
+        folder_more = pane.tree.itemWidget(pane._folder_items["Casework"], 1)
+        assert folder_more is not None and folder_more.menu() is not None
+        folder_more.menu().actions()[1].trigger()
         assert not window._folder_state().assignments
         assert (workspace / "scenarios" / "alpha" / "scenario.yaml").is_file()
+        pane.clear_filters()
+        assert len(pane._tree_items) == 2
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_authoring_tab_close_is_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    store = StateStore(tmp_path / "state")
+    window = MainWindow(store, DesktopState(workspace=tmp_path))
+    try:
+        window._new_chat()
+        assert window.tabs.count() == 1
+        pane = window.tabs.widget(0)
+        pane.record.thread_id = "thread-1"
+        pane.set_busy(True)
+        requests: list[tuple[str, object]] = []
+        monkeypatch.setattr(
+            window.bridge, "request", lambda method, params: requests.append((method, params))
+        )
+        close_button = window.tabs.tabBar().tabButton(0, QTabBar.ButtonPosition.RightSide)
+        assert close_button is not None
+        close_button.click()
+        assert window.tabs.count() == 0
+        assert not window.author_empty.isHidden()
+        assert window.tabs.isHidden()
+        closed = store.load(tmp_path).chats
+        assert len(closed) == 1 and not closed[0].open
+        assert window.recent_button.isEnabled()
+        assert requests == [("turn/interrupt", {"threadId": "thread-1"})]
+        window._populate_recent_menu()
+        window.recent_menu.actions()[0].trigger()
+        assert window.tabs.count() == 1
+        assert store.load(tmp_path).chats[0].open
+        window._close_chat_tab(0)
+        restarted = MainWindow(store, store.load(tmp_path))
+        try:
+            assert restarted.tabs.count() == 0
+            assert restarted.recent_button.isEnabled()
+        finally:
+            restarted.close()
     finally:
         window.close()
         app.processEvents()

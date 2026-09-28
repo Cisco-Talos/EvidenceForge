@@ -25,14 +25,16 @@ selected, where you can choose the output folder before starting the job.
 **Clone** creates a new scenario YAML in the workspace; **Hide** removes an
 entry from the default list without deleting its file.
 Scenario **Folders** are virtual and saved per workspace in local app data.
-Create, rename, and delete them above the scenario list; assign the selected
-scenario using the Folder control in its detail pane. Creating a folder places
-the selected scenario in it, and deleting a folder leaves its files untouched.
-The folder selector includes All folders and Unfiled. Search matches every term
+The scenario list is a folder tree. Use the add icon in its header to create a
+folder, and a folder's menu or right-click menu to rename or delete it. Drag a
+scenario onto a folder, or use its row menu (or right-click) and choose
+**Move to folder**.
+Creating a folder places the selected scenario in it; deleting a folder leaves
+its files untouched. Search remains visible and matches every term
 against the scenario name, description, and full authored YAML text, including
 users and hostnames. Quoted phrases and `name:`, `description:`, or `yaml:`
-scopes are supported. Version and latest-run-status filters can be combined
-with folder selection and search.
+scopes are supported. The **Filters** menu holds version, latest run status,
+and hidden-item controls; its label shows the number of active filters.
 For a completed app-launched run, **Evaluate latest run** starts `eforge eval`
 and saves its JSON report in the local app data directory. Evaluations can run
 in parallel while the app is open; closing the app stops active evaluations.
@@ -47,6 +49,8 @@ validate a cloned pack or offer a field-by-field pack editor.
 
 In chat, **Enter** sends the message. **Shift+Enter** or **Option/Alt+Enter** inserts
 a newline. Validation shows a compact result with findings and suggested fixes.
+Close an authoring tab with its **×** icon; a running turn is interrupted. The
+conversation stays in **Recent** and can be reopened from there.
 In the Jobs view, **Save new runs in** selects the parent folder for future bundles;
 the app remembers the last selected folder.
 

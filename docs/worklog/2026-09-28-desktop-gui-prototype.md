@@ -66,3 +66,17 @@ the library. The UI filters by folder, scenario version, and latest run status;
 its search covers name, description, and authored YAML text with quoted terms
 and optional field scopes. Folder operations preserve source files, and cloned
 scenarios inherit their source folder.
+
+## Scenario tree and authoring tab cleanup
+
+The separate folder and filter controls made the library feel crowded. The
+scenario list is now a folder tree with a small add control, folder row menus,
+scenario row menus and context menus, and drag-to-folder assignment. Search stays visible;
+version, latest run status, and hidden-item controls moved into one filter
+menu. Primary actions use icons with text, while secondary actions use icons
+with tooltips. Authoring tabs now have a themed close icon. Closing a tab
+interrupts an active turn, hides the tab, and retains its Codex conversation
+in a Recent menu for reopening.
+Offscreen Qt checks covered the scenario tree, pack list, menu actions, and
+the authoring page. The desktop/CLI regression selection passed 98 tests;
+14 tests were deselected by the project's default tier rules.

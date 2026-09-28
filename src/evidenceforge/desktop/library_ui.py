@@ -3,26 +3,81 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import override
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QPoint, Qt, QUrl, Signal
+from PySide6.QtGui import QActionGroup, QDesktopServices, QDropEvent
 from PySide6.QtWidgets import (
-    QComboBox,
+    QAbstractItemView,
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
+    QMenu,
     QPushButton,
     QSplitter,
+    QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from evidenceforge.desktop.icons import icon
 from evidenceforge.desktop.library import LibraryItem, matches_search
 from evidenceforge.desktop.state import GenerationJob
+
+
+class ScenarioTree(QTreeWidget):
+    """Scenario list with folder drop targets."""
+
+    move_requested = Signal(object, str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setColumnCount(2)
+        self.setHeaderHidden(True)
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.header().setStretchLastSection(False)
+        self.header().resizeSection(1, 38)
+        self.setRootIsDecorated(True)
+        self.setIndentation(18)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+
+    @override
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Move one scenario to a virtual folder without touching its YAML file."""
+        source = self.currentItem()
+        if (
+            event.source() is not self
+            or source is None
+            or source.data(0, Qt.ItemDataRole.UserRole) != "scenario"
+        ):
+            event.ignore()
+            return
+        target = self.itemAt(event.position().toPoint())
+        if target is None:
+            event.ignore()
+            return
+        folder_item = (
+            target if target.data(0, Qt.ItemDataRole.UserRole) == "folder" else target.parent()
+        )
+        if folder_item is None:
+            event.ignore()
+            return
+        path = source.data(0, Qt.ItemDataRole.UserRole + 1)
+        folder = folder_item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if isinstance(path, Path) and isinstance(folder, str):
+            self.move_requested.emit(path, folder)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class LibraryPane(QWidget):
@@ -52,6 +107,11 @@ class LibraryPane(QWidget):
         self.scorecards: dict[str, str] = {}
         self.folder_names: list[str] = []
         self.folder_assignments: dict[str, str] = {}
+        self.run_filter_value = "all"
+        self.version_filter_value: str | None = None
+        self.show_hidden_value = False
+        self._tree_items: dict[Path, QTreeWidgetItem] = {}
+        self._folder_items: dict[str, QTreeWidgetItem] = {}
         outer = QVBoxLayout(self)
         outer.setContentsMargins(25, 24, 25, 24)
         outer.setSpacing(20)
@@ -65,14 +125,23 @@ class LibraryPane(QWidget):
         headings.addWidget(self.title)
         top.addLayout(headings)
         top.addStretch()
-        refresh = QPushButton("Refresh")
+        refresh = QToolButton()
+        refresh.setIcon(icon("refresh"))
+        refresh.setToolTip("Refresh library")
+        refresh.setAccessibleName("Refresh library")
+        refresh.setObjectName("iconAction")
         refresh.clicked.connect(self.refresh_requested.emit)
         top.addWidget(refresh)
-        self.primary = QPushButton("+ New scenario" if scenario_mode else "+ New pack")
+        self.primary = QPushButton("New scenario" if scenario_mode else "New pack")
         self.primary.setObjectName("primary")
+        self.primary.setIcon(icon("add", color="#ffffff"))
         self.primary.clicked.connect(self.create_requested.emit)
         top.addWidget(self.primary)
-        import_button = QPushButton("Import YAML…" if scenario_mode else "Import pack…")
+        import_button = QToolButton()
+        import_button.setIcon(icon("import"))
+        import_button.setToolTip("Import YAML" if scenario_mode else "Import pack")
+        import_button.setAccessibleName(import_button.toolTip())
+        import_button.setObjectName("iconAction")
         import_button.clicked.connect(self.import_requested.emit)
         top.addWidget(import_button)
         outer.addLayout(top)
@@ -94,56 +163,44 @@ class LibraryPane(QWidget):
                 "and yaml: to search one field."
             )
         self.search.textChanged.connect(self._populate)
-        left_layout.addWidget(self.search)
-        folder_row = QHBoxLayout()
-        self.folder_filter = QComboBox()
-        self.folder_filter.currentIndexChanged.connect(self._populate)
-        folder_row.addWidget(self.folder_filter, 1)
-        self.new_folder = QPushButton("+ Folder")
-        self.new_folder.clicked.connect(self.folder_create_requested.emit)
-        folder_row.addWidget(self.new_folder)
-        self.rename_folder = QPushButton("Rename")
-        self.rename_folder.clicked.connect(self._request_rename_folder)
-        folder_row.addWidget(self.rename_folder)
-        self.delete_folder = QPushButton("Delete")
-        self.delete_folder.clicked.connect(self._request_delete_folder)
-        folder_row.addWidget(self.delete_folder)
-        self.folder_controls = QWidget()
-        self.folder_controls.setObjectName("inlineControls")
-        self.folder_controls.setLayout(folder_row)
-        self.folder_controls.setVisible(scenario_mode)
-        left_layout.addWidget(self.folder_controls)
-        filter_row = QHBoxLayout()
-        self.version_filter = QComboBox()
-        self.version_filter.currentIndexChanged.connect(self._populate)
-        filter_row.addWidget(self.version_filter)
-        self.run_filter = QComboBox()
-        for label, value in (
-            ("Any run status", "all"),
-            ("Never run", "never"),
-            ("Running", "running"),
-            ("Completed", "completed"),
-            ("Stopped", "stopped"),
-        ):
-            self.run_filter.addItem(label, value)
-        self.run_filter.currentIndexChanged.connect(self._populate)
-        filter_row.addWidget(self.run_filter)
-        self.filter_controls = QWidget()
-        self.filter_controls.setObjectName("inlineControls")
-        self.filter_controls.setLayout(filter_row)
-        self.filter_controls.setVisible(scenario_mode)
-        left_layout.addWidget(self.filter_controls)
-        self.show_hidden = QPushButton("Show hidden")
-        self.show_hidden.setCheckable(True)
-        self.show_hidden.toggled.connect(self._populate)
-        left_layout.addWidget(self.show_hidden)
+        search_row = QHBoxLayout()
+        search_row.addWidget(self.search, 1)
+        self.filter_button = QToolButton()
+        self.filter_button.setObjectName("filterButton")
+        self.filter_button.setIcon(icon("filter"))
+        self.filter_button.setText("Filters")
+        self.filter_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.filter_button.setToolTip("Filter the library")
+        self.filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.filter_menu = QMenu(self.filter_button)
+        self.filter_menu.aboutToShow.connect(self._build_filter_menu)
+        self.filter_button.setMenu(self.filter_menu)
+        search_row.addWidget(self.filter_button)
+        left_layout.addLayout(search_row)
+        list_header = QHBoxLayout()
+        label = QLabel("SCENARIOS" if scenario_mode else "PACKS")
+        label.setObjectName("eyebrow")
+        list_header.addWidget(label)
+        list_header.addStretch()
         self.result_count = QLabel("0 items")
         self.result_count.setObjectName("muted")
-        left_layout.addWidget(self.result_count)
-        self.list = QListWidget()
-        self.list.setObjectName("libraryList")
-        self.list.currentRowChanged.connect(self._selection_changed)
-        left_layout.addWidget(self.list, 1)
+        list_header.addWidget(self.result_count)
+        self.new_folder = QToolButton()
+        self.new_folder.setIcon(icon("add"))
+        self.new_folder.setObjectName("iconAction")
+        self.new_folder.setToolTip("Create folder")
+        self.new_folder.setAccessibleName("Create folder")
+        self.new_folder.clicked.connect(self.folder_create_requested.emit)
+        self.new_folder.setVisible(scenario_mode)
+        list_header.addWidget(self.new_folder)
+        left_layout.addLayout(list_header)
+        self.tree = ScenarioTree()
+        self.tree.setObjectName("libraryTree")
+        self.tree.currentItemChanged.connect(self._selection_changed)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._open_context_menu)
+        self.tree.move_requested.connect(self._move_path)
+        left_layout.addWidget(self.tree, 1)
         splitter.addWidget(left)
 
         right = QFrame()
@@ -170,10 +227,10 @@ class LibraryPane(QWidget):
         self.assignment_heading.setObjectName("eyebrow")
         self.assignment_heading.setVisible(scenario_mode)
         details.addWidget(self.assignment_heading)
-        self.folder_assignment = QComboBox()
-        self.folder_assignment.currentIndexChanged.connect(self._assignment_changed)
-        self.folder_assignment.setVisible(scenario_mode)
-        details.addWidget(self.folder_assignment)
+        self.folder_value = QLabel("Unfiled")
+        self.folder_value.setObjectName("muted")
+        self.folder_value.setVisible(scenario_mode)
+        details.addWidget(self.folder_value)
         self.run_heading = QLabel("LATEST RUN")
         self.run_heading.setObjectName("eyebrow")
         details.addWidget(self.run_heading)
@@ -186,6 +243,7 @@ class LibraryPane(QWidget):
         self.score.setObjectName("muted")
         details.addWidget(self.score)
         self.evaluate = QPushButton("Evaluate latest run")
+        self.evaluate.setIcon(icon("runs"))
         self.evaluate.clicked.connect(lambda: self._emit_selected(self.evaluate_requested))
         details.addWidget(self.evaluate)
         self.destination_heading = QLabel("OUTPUT DESTINATION")
@@ -199,25 +257,40 @@ class LibraryPane(QWidget):
         action_row = QHBoxLayout()
         self.edit = QPushButton("Continue authoring")
         self.edit.setObjectName("primary")
+        self.edit.setIcon(icon("edit", color="#ffffff"))
         self.edit.clicked.connect(lambda: self._emit_selected(self.edit_requested))
         action_row.addWidget(self.edit)
         self.validate = QPushButton("Validate")
+        self.validate.setIcon(icon("check"))
         self.validate.clicked.connect(lambda: self._emit_selected(self.validate_requested))
         if scenario_mode:
             action_row.addWidget(self.validate)
         self.generate = QPushButton("Generate…")
+        self.generate.setIcon(icon("play"))
         self.generate.clicked.connect(lambda: self._emit_selected(self.generate_requested))
         if scenario_mode:
             action_row.addWidget(self.generate)
         details.addLayout(action_row)
         secondary = QHBoxLayout()
-        self.clone = QPushButton("Clone")
+        self.clone = QToolButton()
+        self.clone.setIcon(icon("copy"))
+        self.clone.setObjectName("iconAction")
+        self.clone.setToolTip("Clone")
+        self.clone.setAccessibleName("Clone")
         self.clone.clicked.connect(lambda: self._emit_selected(self.clone_requested))
         secondary.addWidget(self.clone)
-        self.hide = QPushButton("Hide")
+        self.hide = QToolButton()
+        self.hide.setIcon(icon("hide"))
+        self.hide.setObjectName("iconAction")
+        self.hide.setToolTip("Hide")
+        self.hide.setAccessibleName("Hide")
         self.hide.clicked.connect(lambda: self._emit_selected(self.hide_requested))
         secondary.addWidget(self.hide)
-        self.open_file = QPushButton("Open file")
+        self.open_file = QToolButton()
+        self.open_file.setIcon(icon("external"))
+        self.open_file.setObjectName("iconAction")
+        self.open_file.setToolTip("Open YAML file")
+        self.open_file.setAccessibleName("Open YAML file")
         self.open_file.clicked.connect(self._open_selected)
         secondary.addWidget(self.open_file)
         secondary.addStretch()
@@ -237,140 +310,303 @@ class LibraryPane(QWidget):
         folder_assignments: dict[str, str] | None = None,
     ) -> None:
         """Refresh content while preserving a selected path where possible."""
-        selected = self.selected_item()
         self.items = items
         self.hidden_paths = hidden_paths
         self.jobs = jobs
         self.scorecards = scorecards or {}
         self.folder_names = sorted(folder_names or [], key=str.casefold)
         self.folder_assignments = folder_assignments or {}
-        self._refresh_filters()
         self._populate()
-        if selected is not None:
-            self.select_path(selected.path)
 
     def select_path(self, path: Path) -> None:
         """Select a visible item after a refresh or folder operation."""
-        for row in range(self.list.count()):
-            if self.list.item(row).data(Qt.ItemDataRole.UserRole) == path:
-                self.list.setCurrentRow(row)
-                break
+        target = self._tree_items.get(path)
+        if target is not None:
+            if target.parent() is not None:
+                target.parent().setExpanded(True)
+            self.tree.setCurrentItem(target)
+            self.tree.scrollToItem(target)
 
     def select_folder(self, name: str) -> None:
-        """Show one virtual folder, including the unfiled view."""
-        index = self.folder_filter.findData(name)
-        if index >= 0:
-            self.folder_filter.setCurrentIndex(index)
+        """Select a virtual folder row in the scenario tree."""
+        target = self._folder_items.get(name)
+        if target is not None:
+            target.setExpanded(True)
+            self.tree.setCurrentItem(target)
 
-    def _refresh_filters(self) -> None:
-        folder = self.folder_filter.currentData()
-        version = self.version_filter.currentData()
-        self.folder_filter.blockSignals(True)
-        self.folder_filter.clear()
-        self.folder_filter.addItem("All folders", None)
-        self.folder_filter.addItem("Unfiled", "")
-        for name in self.folder_names:
-            self.folder_filter.addItem(name, name)
-        index = self.folder_filter.findData(folder)
-        self.folder_filter.setCurrentIndex(index if index >= 0 else 0)
-        self.folder_filter.blockSignals(False)
-        self.version_filter.blockSignals(True)
-        self.version_filter.clear()
-        self.version_filter.addItem("All versions", None)
-        for value in sorted({item.version for item in self.items if item.version}):
-            self.version_filter.addItem(f"Version {value}", value)
-        index = self.version_filter.findData(version)
-        self.version_filter.setCurrentIndex(index if index >= 0 else 0)
-        self.version_filter.blockSignals(False)
-        self._update_folder_actions()
+    def selected_folder_name(self) -> str | None:
+        """Return the selected row's folder, or None when nothing is selected."""
+        current = self.tree.currentItem()
+        if current is None or not self.scenario_mode:
+            return None
+        if current.data(0, Qt.ItemDataRole.UserRole) == "folder":
+            return current.data(0, Qt.ItemDataRole.UserRole + 1)
+        parent = current.parent()
+        return parent.data(0, Qt.ItemDataRole.UserRole + 1) if parent is not None else None
 
     def selected_item(self) -> LibraryItem | None:
-        current = self.list.currentItem()
-        if current is None:
+        current = self.tree.currentItem()
+        if current is None or current.data(0, Qt.ItemDataRole.UserRole) != "scenario":
             return None
-        path = current.data(Qt.ItemDataRole.UserRole)
+        path = current.data(0, Qt.ItemDataRole.UserRole + 1)
         return next((item for item in self.items if item.path == path), None)
 
-    def _populate(self) -> None:
-        selected = self.selected_item()
+    def _build_filter_menu(self) -> None:
+        self.filter_menu.clear()
+        if self.scenario_mode:
+            status_menu = self.filter_menu.addMenu("Latest run")
+            group = QActionGroup(status_menu)
+            group.setExclusive(True)
+            for label, value in (
+                ("Any status", "all"),
+                ("Never run", "never"),
+                ("Running", "running"),
+                ("Completed", "completed"),
+                ("Stopped", "stopped"),
+            ):
+                action = status_menu.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(self.run_filter_value == value)
+                group.addAction(action)
+                action.triggered.connect(
+                    lambda _checked=False, selected=value: self._set_run_filter(selected)
+                )
+            self.filter_menu.addSeparator()
+        versions = sorted({item.version for item in self.items if item.version})
+        version_menu = self.filter_menu.addMenu("Version")
+        group = QActionGroup(version_menu)
+        group.setExclusive(True)
+        for label, value in [("All versions", None), *[(v, v) for v in versions]]:
+            action = version_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self.version_filter_value == value)
+            group.addAction(action)
+            action.triggered.connect(
+                lambda _checked=False, selected=value: self._set_version_filter(selected)
+            )
+        self.filter_menu.addSeparator()
+        show_hidden = self.filter_menu.addAction("Show hidden items")
+        show_hidden.setCheckable(True)
+        show_hidden.setChecked(self.show_hidden_value)
+        show_hidden.toggled.connect(self._set_show_hidden)
+        if self._active_filter_count():
+            clear = self.filter_menu.addAction("Clear filters")
+            clear.triggered.connect(self.clear_filters)
+
+    def _active_filter_count(self) -> int:
+        return (
+            int(self.run_filter_value != "all")
+            + int(self.version_filter_value is not None)
+            + int(self.show_hidden_value)
+        )
+
+    def _update_filter_button(self) -> None:
+        count = self._active_filter_count()
+        self.filter_button.setText(f"Filters · {count}" if count else "Filters")
+
+    def _set_run_filter(self, value: str) -> None:
+        self.run_filter_value = value
+        self._populate()
+
+    def _set_version_filter(self, value: str | None) -> None:
+        self.version_filter_value = value
+        self._populate()
+
+    def _set_show_hidden(self, value: bool) -> None:
+        self.show_hidden_value = value
+        self._populate()
+
+    def clear_filters(self) -> None:
+        """Reset filters while retaining the visible search text."""
+        self.run_filter_value = "all"
+        self.version_filter_value = None
+        self.show_hidden_value = False
+        self._populate()
+
+    def _visible_items(self) -> list[LibraryItem]:
         query = self.search.text().strip()
-        folder = self.folder_filter.currentData()
-        version = self.version_filter.currentData()
-        run_filter = self.run_filter.currentData()
-        self.list.clear()
-        visible = 0
-        for item in sorted(
-            self.items,
-            key=lambda entry: (
-                self.folder_assignments.get(str(entry.path), "").casefold(),
-                entry.name.casefold(),
-            ),
-        ):
-            if item.path in self.hidden_paths and not self.show_hidden.isChecked():
+        visible: list[LibraryItem] = []
+        for item in self.items:
+            if item.path in self.hidden_paths and not self.show_hidden_value:
                 continue
             if query and not matches_search(item, query):
                 continue
-            assigned = self.folder_assignments.get(str(item.path), "")
-            if folder is not None and assigned != folder:
+            if self.version_filter_value is not None and item.version != self.version_filter_value:
                 continue
-            if version is not None and item.version != version:
-                continue
-            related = [job for job in self.jobs if job.scenario.resolve() == item.path]
-            latest = max(related, key=lambda job: job.started_at) if related else None
-            if run_filter == "never" and latest is not None:
-                continue
-            if run_filter not in {"all", "never"} and (
-                latest is None or latest.status != run_filter
-            ):
-                continue
-            location = assigned or "Unfiled"
-            label = f"{item.name}\n{location if self.scenario_mode else item.kind.title()}  ·  v{item.version}"
-            if item.path in self.hidden_paths:
-                label += "  ·  Hidden"
-            entry = QListWidgetItem(label)
-            entry.setData(Qt.ItemDataRole.UserRole, item.path)
-            entry.setToolTip(str(item.path))
-            self.list.addItem(entry)
-            visible += 1
-        if selected is not None:
-            for row in range(self.list.count()):
-                if self.list.item(row).data(Qt.ItemDataRole.UserRole) == selected.path:
-                    self.list.setCurrentRow(row)
-                    break
-        if self.list.currentRow() < 0 and self.list.count():
-            self.list.setCurrentRow(0)
-        if not self.list.count():
-            self._selection_changed(-1)
+            if self.scenario_mode:
+                related = [job for job in self.jobs if job.scenario.resolve() == item.path]
+                latest = max(related, key=lambda job: job.started_at) if related else None
+                if self.run_filter_value == "never" and latest is not None:
+                    continue
+                if self.run_filter_value not in {"all", "never"} and (
+                    latest is None or latest.status != self.run_filter_value
+                ):
+                    continue
+            visible.append(item)
+        return visible
+
+    def _populate(self) -> None:
+        selected = self.selected_item()
+        selected_folder = self.selected_folder_name() if selected is None else None
+        expanded = {name for name, row in self._folder_items.items() if row.isExpanded()}
+        first_render = not self._folder_items
+        visible = self._visible_items()
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        self._tree_items.clear()
+        self._folder_items.clear()
+        if self.scenario_mode:
+            groups: dict[str, list[LibraryItem]] = {"": []}
+            groups.update({name: [] for name in self.folder_names})
+            for item in visible:
+                folder = self.folder_assignments.get(str(item.path), "")
+                groups.setdefault(folder if folder in self.folder_names else "", []).append(item)
+            for folder, members in groups.items():
+                if not members and (self.search.text().strip() or self._active_filter_count()):
+                    continue
+                self._add_folder_row(folder, members, first_render or folder in expanded)
+        else:
+            for item in sorted(visible, key=lambda entry: entry.name.casefold()):
+                row = QTreeWidgetItem(self.tree, [item.name, ""])
+                row.setData(0, Qt.ItemDataRole.UserRole, "scenario")
+                row.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
+                row.setIcon(0, icon("file"))
+                row.setToolTip(0, str(item.path))
+                self._tree_items[item.path] = row
+                self._add_row_menu(row, item)
+        target = self._tree_items.get(selected.path) if selected is not None else None
+        if target is None and selected_folder is not None:
+            target = self._folder_items.get(selected_folder)
+        if target is None and self._tree_items:
+            target = next(iter(self._tree_items.values()))
+        if target is None and self._folder_items:
+            target = next(iter(self._folder_items.values()))
+        self.tree.setCurrentItem(target)
+        self.tree.blockSignals(False)
+        self._selection_changed()
         self.result_count.setText(
-            f"{visible} {'scenario' if visible == 1 else 'scenarios'}"
+            f"{len(visible)} {'scenario' if len(visible) == 1 else 'scenarios'}"
             if self.scenario_mode
-            else f"{visible} packs"
+            else f"{len(visible)} packs"
         )
-        self._update_folder_actions()
+        self._update_filter_button()
 
-    def _update_folder_actions(self) -> None:
-        folder = self.folder_filter.currentData()
-        enabled = isinstance(folder, str) and bool(folder)
-        self.rename_folder.setEnabled(enabled)
-        self.delete_folder.setEnabled(enabled)
+    def _add_folder_row(self, folder: str, members: list[LibraryItem], expand: bool) -> None:
+        label = folder or "Unfiled"
+        row = QTreeWidgetItem(self.tree, [f"{label}  ({len(members)})", ""])
+        row.setData(0, Qt.ItemDataRole.UserRole, "folder")
+        row.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
+        row.setIcon(0, icon("folder"))
+        row.setFlags(
+            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDropEnabled
+        )
+        row.setExpanded(expand or bool(self.search.text().strip()))
+        self._folder_items[folder] = row
+        if folder:
+            more = QToolButton(self.tree)
+            more.setIcon(icon("more"))
+            more.setObjectName("treeMenu")
+            more.setToolTip(f"Options for {folder}")
+            more.setAccessibleName(f"Options for {folder}")
+            more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu = QMenu(more)
+            menu.addAction(
+                "Rename folder",
+                lambda _checked=False, name=folder: self.folder_rename_requested.emit(name),
+            )
+            menu.addAction(
+                "Delete folder",
+                lambda _checked=False, name=folder: self.folder_delete_requested.emit(name),
+            )
+            more.setMenu(menu)
+            self.tree.setItemWidget(row, 1, more)
+        for item in sorted(members, key=lambda entry: entry.name.casefold()):
+            name = item.name + ("  ·  Hidden" if item.path in self.hidden_paths else "")
+            child = QTreeWidgetItem(row, [name, ""])
+            child.setData(0, Qt.ItemDataRole.UserRole, "scenario")
+            child.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
+            child.setIcon(0, icon("file"))
+            child.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsDragEnabled
+            )
+            child.setToolTip(0, f"{item.description}\n{item.path}")
+            self._tree_items[item.path] = child
+            self._add_row_menu(child, item)
 
-    def _request_rename_folder(self) -> None:
-        folder = self.folder_filter.currentData()
-        if isinstance(folder, str) and folder:
-            self.folder_rename_requested.emit(folder)
+    def _add_row_menu(self, row: QTreeWidgetItem, item: LibraryItem) -> None:
+        more = QToolButton(self.tree)
+        more.setIcon(icon("more"))
+        more.setObjectName("treeMenu")
+        more.setToolTip(f"Options for {item.name}")
+        more.setAccessibleName(more.toolTip())
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        more.setMenu(self._scenario_menu(item, more))
+        self.tree.setItemWidget(row, 1, more)
 
-    def _request_delete_folder(self) -> None:
-        folder = self.folder_filter.currentData()
-        if isinstance(folder, str) and folder:
-            self.folder_delete_requested.emit(folder)
+    def _folder_menu(self, folder: str) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction("New folder", lambda _checked=False: self.folder_create_requested.emit())
+        if folder:
+            menu.addAction(
+                "Rename folder",
+                lambda _checked=False: self.folder_rename_requested.emit(folder),
+            )
+            menu.addAction(
+                "Delete folder",
+                lambda _checked=False: self.folder_delete_requested.emit(folder),
+            )
+        return menu
 
-    def _assignment_changed(self) -> None:
-        item = self.selected_item()
-        folder = self.folder_assignment.currentData()
-        if item is not None and isinstance(folder, str):
+    def _open_context_menu(self, point: QPoint) -> None:
+        row = self.tree.itemAt(point)
+        if row is None:
+            self._folder_menu("").exec(self.tree.viewport().mapToGlobal(point))
+            return
+        kind = row.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "folder":
+            folder = row.data(0, Qt.ItemDataRole.UserRole + 1)
+            self._folder_menu(folder).exec(self.tree.viewport().mapToGlobal(point))
+            return
+        path = row.data(0, Qt.ItemDataRole.UserRole + 1)
+        item = next((entry for entry in self.items if entry.path == path), None)
+        if item is None:
+            return
+        self._scenario_menu(item, self).exec(self.tree.viewport().mapToGlobal(point))
+
+    def _scenario_menu(self, item: LibraryItem, parent: QWidget) -> QMenu:
+        menu = QMenu(parent)
+        path = item.path
+        if self.scenario_mode:
+            move = menu.addMenu("Move to folder")
+            for label, folder in [("Unfiled", ""), *[(name, name) for name in self.folder_names]]:
+                action = move.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(self.folder_assignments.get(str(path), "") == folder)
+                action.triggered.connect(
+                    lambda _checked=False, target=folder: self.folder_assignment_requested.emit(
+                        item, target
+                    )
+                )
+            menu.addSeparator()
+        menu.addAction("Clone", lambda _checked=False: self.clone_requested.emit(item))
+        menu.addAction(
+            "Unhide" if path in self.hidden_paths else "Hide",
+            lambda _checked=False: self.hide_requested.emit(item),
+        )
+        menu.addAction(
+            "Open file",
+            lambda _checked=False: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
+        )
+        return menu
+
+    def _move_path(self, path: Path, folder: str) -> None:
+        item = next((entry for entry in self.items if entry.path == path), None)
+        if item is not None:
             self.folder_assignment_requested.emit(item, folder)
 
-    def _selection_changed(self, _row: int) -> None:
+    def _selection_changed(self, *_args: object) -> None:
         item = self.selected_item()
         enabled = item is not None
         for button in (
@@ -383,28 +619,23 @@ class LibraryPane(QWidget):
         ):
             button.setEnabled(enabled)
         if item is None:
-            self.name.setText("Choose an item from the library")
+            folder = self.selected_folder_name()
+            self.kind_label.setText("FOLDER" if folder is not None else "SELECT AN ITEM")
+            self.name.setText((folder or "Unfiled") if folder is not None else "Choose an item")
             self.description.setText(
-                "Import a YAML file or start a new scenario."
-                if self.scenario_mode
-                else "Import a pack or author a new one."
+                "Virtual folder · files remain in their original locations."
+                if folder is not None
+                else "Select a scenario to view details and actions."
             )
-            self.metadata.setText("")
+            count = self._folder_items[folder].childCount() if folder in self._folder_items else 0
+            self.metadata.setText(f"{count} scenarios" if folder is not None else "")
             self.run_status.setText("No runs yet")
             self.score.setText("No saved evaluation yet")
             self.evaluate.setEnabled(False)
-            self.folder_assignment.setEnabled(False)
+            self._set_scenario_sections(False)
             return
-        self.folder_assignment.blockSignals(True)
-        self.folder_assignment.clear()
-        self.folder_assignment.addItem("Unfiled", "")
-        for name in self.folder_names:
-            self.folder_assignment.addItem(name, name)
         assigned = self.folder_assignments.get(str(item.path), "")
-        index = self.folder_assignment.findData(assigned)
-        self.folder_assignment.setCurrentIndex(index if index >= 0 else 0)
-        self.folder_assignment.setEnabled(True)
-        self.folder_assignment.blockSignals(False)
+        self.folder_value.setText(assigned or "Unfiled")
         self.kind_label.setText(item.kind.upper())
         self.name.setText(item.name)
         self.description.setText(item.description or "No description provided.")
@@ -431,14 +662,23 @@ class LibraryPane(QWidget):
             )
         )
         self.evaluate.setEnabled(any(job.status == "completed" for job in related))
-        self.hide.setText("Unhide" if item.path in self.hidden_paths else "Hide")
-        self.run_heading.setVisible(self.scenario_mode)
-        self.run_status.setVisible(self.scenario_mode)
-        self.score_heading.setVisible(self.scenario_mode)
-        self.score.setVisible(self.scenario_mode)
-        self.evaluate.setVisible(self.scenario_mode)
-        self.destination_heading.setVisible(self.scenario_mode)
-        self.destination.setVisible(self.scenario_mode)
+        self.hide.setToolTip("Unhide" if item.path in self.hidden_paths else "Hide")
+        self.hide.setAccessibleName(self.hide.toolTip())
+        self._set_scenario_sections(self.scenario_mode)
+
+    def _set_scenario_sections(self, visible: bool) -> None:
+        for widget in (
+            self.assignment_heading,
+            self.folder_value,
+            self.run_heading,
+            self.run_status,
+            self.score_heading,
+            self.score,
+            self.evaluate,
+            self.destination_heading,
+            self.destination,
+        ):
+            widget.setVisible(visible)
 
     def _emit_selected(self, signal: Signal) -> None:
         item = self.selected_item()

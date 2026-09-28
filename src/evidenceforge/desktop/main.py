@@ -23,20 +23,24 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTabBar,
     QTabWidget,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills
 from evidenceforge.desktop.app_server import CodexBridge
+from evidenceforge.desktop.icons import icon
 from evidenceforge.desktop.jobs import (
     process_running,
     refresh_status,
@@ -82,6 +86,18 @@ QPushButton#nav { text-align: left; background: transparent; border: none; color
                   padding: 12px 14px; font-size: 14px; }
 QPushButton#nav:hover { background: #202c3e; color: white; }
 QPushButton#nav:checked { background: #293959; color: white; border-left: 3px solid #77a6ff; }
+QToolButton#iconAction, QToolButton#filterButton { background: #233044; border: 1px solid #39475b;
+    border-radius: 9px; padding: 8px; }
+QToolButton#iconAction:hover, QToolButton#filterButton:hover { background: #344760; }
+QToolButton#treeMenu { background: transparent; border: none; padding: 2px; }
+QToolButton#treeMenu:hover { background: #344760; border-radius: 6px; }
+QToolButton#treeMenu::menu-indicator { image: none; width: 0; }
+QToolButton#tabClose { background: transparent; border: none; padding: 2px; }
+QToolButton#tabClose:hover { background: #40516a; border-radius: 5px; }
+QMenu { background: #1b2534; border: 1px solid #3a4b61; border-radius: 9px; padding: 6px; }
+QMenu::item { padding: 8px 28px 8px 12px; border-radius: 5px; }
+QMenu::item:selected { background: #334462; }
+QMenu::separator { height: 1px; background: #35445b; margin: 5px 8px; }
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {
     background: #101723; border: 1px solid #35445b; border-radius: 9px;
     padding: 9px; selection-background-color: #5369db;
@@ -90,6 +106,10 @@ QListWidget#libraryList { background: transparent; border: none; outline: none; 
 QListWidget#libraryList::item { padding: 14px 12px; margin: 3px 0; border-radius: 9px; }
 QListWidget#libraryList::item:selected { background: #293959; color: #ffffff; }
 QListWidget#libraryList::item:hover { background: #202c3e; }
+QTreeWidget#libraryTree { background: transparent; border: none; outline: none; show-decoration-selected: 1; }
+QTreeWidget#libraryTree::item { padding: 7px 5px; }
+QTreeWidget#libraryTree::item:selected { background: #293959; color: white; }
+QTreeWidget#libraryTree::item:hover { background: #202c3e; }
 QScrollBar:vertical { background: #151d2a; width: 8px; margin: 0; }
 QScrollBar::handle:vertical { background: #40516a; border-radius: 4px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
@@ -146,11 +166,8 @@ class ChatPane(QWidget):
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         header = QHBoxLayout()
-        heading = QLabel(record.title)
-        heading.setObjectName("heading")
-        header.addWidget(heading)
         header.addStretch()
-        header.addWidget(QLabel("Skill"))
+        header.addWidget(QLabel("Authoring skill"))
         self.skill = QComboBox()
         self.skill.setMinimumWidth(190)
         self.skill.addItem(record.skill_name, None)
@@ -173,11 +190,13 @@ class ChatPane(QWidget):
         controls.addWidget(self.status)
         controls.addStretch()
         self.interrupt = QPushButton("Interrupt")
+        self.interrupt.setIcon(icon("close"))
         self.interrupt.setEnabled(False)
         self.interrupt.clicked.connect(lambda: self.interrupt_requested.emit(self))
         controls.addWidget(self.interrupt)
         self.send = QPushButton("Send")
         self.send.setObjectName("primary")
+        self.send.setIcon(icon("play", color="#ffffff"))
         self.send.clicked.connect(self._send)
         controls.addWidget(self.send)
         layout.addLayout(controls)
@@ -286,20 +305,24 @@ class JobCard(QWidget):
         layout.addWidget(self.storyline)
         controls = QHBoxLayout()
         open_output = QPushButton("Open Bundle")
+        open_output.setIcon(icon("folder"))
         open_output.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(job.output_root)))
         )
         controls.addWidget(open_output)
         open_log = QPushButton("Open Log")
+        open_log.setIcon(icon("file"))
         open_log.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(job.log_file)))
         )
         controls.addWidget(open_log)
         controls.addStretch()
         self.suspend = QPushButton("Suspend")
+        self.suspend.setIcon(icon("pause"))
         self.suspend.clicked.connect(lambda: self.suspend_requested.emit(self.job))
         controls.addWidget(self.suspend)
         self.resume = QPushButton("Resume")
+        self.resume.setIcon(icon("play"))
         self.resume.clicked.connect(lambda: self.resume_requested.emit(self.job))
         controls.addWidget(self.resume)
         layout.addLayout(controls)
@@ -351,9 +374,11 @@ class JobsPane(QWidget):
         self.scenario.setPlaceholderText("Choose a scenario YAML file")
         input_row.addWidget(self.scenario, 1)
         browse = QPushButton("Browse")
+        browse.setIcon(icon("folder"))
         browse.clicked.connect(self._browse)
         input_row.addWidget(browse)
         validate = QPushButton("Validate")
+        validate.setIcon(icon("check"))
         validate.clicked.connect(lambda: self.validate_requested.emit(self.scenario.text()))
         input_row.addWidget(validate)
         layout.addLayout(input_row)
@@ -366,10 +391,12 @@ class JobsPane(QWidget):
         )
         destination_row.addWidget(self.output_directory, 1)
         browse_output = QPushButton("Browse")
+        browse_output.setIcon(icon("folder"))
         browse_output.clicked.connect(self._browse_output)
         destination_row.addWidget(browse_output)
         generate = QPushButton("Generate")
         generate.setObjectName("primary")
+        generate.setIcon(icon("play", color="#ffffff"))
         generate.clicked.connect(
             lambda: self.generate_requested.emit(self.scenario.text(), self.output_directory.text())
         )
@@ -456,12 +483,14 @@ class MainWindow(QMainWindow):
         ):
             button = QPushButton(label)
             button.setObjectName("nav")
+            button.setIcon(icon(("file", "chat", "layers", "folder", "runs")[index]))
             button.setCheckable(True)
             button.clicked.connect(lambda _checked=False, page=index: self._navigate(page))
             side.addWidget(button)
             self.nav_buttons.append(button)
         side.addStretch()
         install_skills = QPushButton("Install skills")
+        install_skills.setIcon(icon("add"))
         install_skills.clicked.connect(self._install_skills)
         side.addWidget(install_skills)
         self.workspace_label = QLabel(self.state.workspace.name)
@@ -469,12 +498,14 @@ class MainWindow(QMainWindow):
         self.workspace_label.setObjectName("muted")
         side.addWidget(self.workspace_label)
         workspace_button = QPushButton("Workspace…")
+        workspace_button.setIcon(icon("folder"))
         workspace_button.clicked.connect(self._choose_workspace)
         side.addWidget(workspace_button)
         self.account_label = QLabel("Connecting to Codex…")
         self.account_label.setObjectName("subtle")
         side.addWidget(self.account_label)
         sign_in = QPushButton("Sign in")
+        sign_in.setIcon(icon("external"))
         sign_in.clicked.connect(self._sign_in)
         side.addWidget(sign_in)
         shell.addWidget(sidebar)
@@ -505,16 +536,38 @@ class MainWindow(QMainWindow):
         author_title.setObjectName("pageTitle")
         author_top.addWidget(author_title)
         author_top.addStretch()
+        self.recent_button = QToolButton()
+        self.recent_button.setObjectName("filterButton")
+        self.recent_button.setIcon(icon("chat"))
+        self.recent_button.setText("Recent")
+        self.recent_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.recent_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.recent_menu = QMenu(self.recent_button)
+        self.recent_menu.aboutToShow.connect(self._populate_recent_menu)
+        self.recent_button.setMenu(self.recent_menu)
+        author_top.addWidget(self.recent_button)
         new_chat = QPushButton("New authoring tab")
         new_chat.setObjectName("primary")
+        new_chat.setIcon(icon("add", color="#ffffff"))
         new_chat.clicked.connect(self._new_chat)
         author_top.addWidget(new_chat)
         author_layout.addLayout(author_top)
         self.tabs = QTabWidget()
+        self.tabs.setTabsClosable(True)
+        self.tabs.tabCloseRequested.connect(self._close_chat_tab)
+        self.author_empty = QLabel(
+            "No authoring tabs open. Start a new scenario or open one from the library."
+        )
+        self.author_empty.setObjectName("muted")
+        self.author_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        author_layout.addWidget(self.author_empty, 1)
         author_layout.addWidget(self.tabs, 1)
         self.pages.addWidget(authoring)
         for record in self.state.chats:
-            self._add_chat_pane(record)
+            if record.open:
+                self._add_chat_pane(record)
+        self._update_authoring_empty()
+        self._update_recent_button()
         self.industry_library = LibraryPane("Industry packs", scenario_mode=False)
         self.organization_library = LibraryPane("Organization packs", scenario_mode=False)
         self.industry_library.create_requested.connect(lambda: self._new_pack_chat("industry"))
@@ -684,15 +737,12 @@ class MainWindow(QMainWindow):
         folders = self._folder_state()
         if name and name not in folders.names:
             return
-        current_view = self.scenario_library.folder_filter.currentData()
         if name:
             folders.assignments[str(item.path)] = name
         else:
             folders.assignments.pop(str(item.path), None)
         self._save()
         self._refresh_libraries()
-        if current_view is not None and current_view != name:
-            self.scenario_library.select_folder(name)
         self.scenario_library.select_path(item.path)
 
     def _toggle_hidden(self, item: LibraryItem) -> None:
@@ -717,7 +767,7 @@ class MainWindow(QMainWindow):
             return
         if path not in self.state.imported_scenarios:
             self.state.imported_scenarios.append(path)
-            folder = self.scenario_library.folder_filter.currentData()
+            folder = self.scenario_library.selected_folder_name()
             if isinstance(folder, str) and folder:
                 self._folder_state().assignments[str(path)] = folder
             self._save()
@@ -948,8 +998,66 @@ class MainWindow(QMainWindow):
         pane.send_requested.connect(self._send_chat)
         pane.interrupt_requested.connect(self._interrupt_chat)
         self.chat_panes[record.id] = pane
-        self.tabs.addTab(pane, record.title)
+        index = self.tabs.addTab(pane, record.title)
+        close_tab = QToolButton(self.tabs)
+        close_tab.setObjectName("tabClose")
+        close_tab.setIcon(icon("close"))
+        close_tab.setToolTip(f"Close {record.title}")
+        close_tab.setAccessibleName(close_tab.toolTip())
+        close_tab.clicked.connect(lambda: self._close_chat_tab(self.tabs.indexOf(pane)))
+        self.tabs.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_tab)
+        self._update_authoring_empty()
         return pane
+
+    def _update_authoring_empty(self) -> None:
+        has_tabs = self.tabs.count() > 0
+        self.tabs.setVisible(has_tabs)
+        self.author_empty.setVisible(not has_tabs)
+
+    def _update_recent_button(self) -> None:
+        self.recent_button.setEnabled(any(not record.open for record in self.state.chats))
+
+    def _populate_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        for record in reversed(self.state.chats):
+            if not record.open:
+                self.recent_menu.addAction(
+                    record.title,
+                    lambda _checked=False, record_id=record.id: self._reopen_chat(record_id),
+                )
+
+    def _reopen_chat(self, record_id: str) -> None:
+        record = next((entry for entry in self.state.chats if entry.id == record_id), None)
+        if record is None or record.open:
+            return
+        record.open = True
+        pane = self._add_chat_pane(record)
+        self.tabs.setCurrentWidget(pane)
+        self._navigate(1)
+        if self.bridge.initialized and record.thread_id:
+            self.bridge.request(
+                "thread/resume",
+                {"threadId": record.thread_id},
+                lambda response, current=pane: self._resumed(current, response),
+            )
+        self._update_recent_button()
+        self._save()
+
+    def _close_chat_tab(self, index: int) -> None:
+        pane = self.tabs.widget(index)
+        if not isinstance(pane, ChatPane):
+            return
+        close_button = self.tabs.tabBar().tabButton(index, QTabBar.ButtonPosition.RightSide)
+        if pane.record.thread_id and pane.interrupt.isEnabled():
+            self.bridge.request("turn/interrupt", {"threadId": pane.record.thread_id})
+        self.tabs.removeTab(index)
+        if close_button is not None:
+            close_button.deleteLater()
+        self.chat_panes.pop(pane.record.id, None)
+        pane.record.open = False
+        self._update_authoring_empty()
+        self._update_recent_button()
+        self._save()
 
     def _new_chat(self) -> None:
         number = len(self.state.chats) + 1
