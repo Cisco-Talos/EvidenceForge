@@ -38,3 +38,22 @@ with a selected scenario's validation, saved evaluation, runs, and generation
 destination visible together. Keep authoring chat as a workspace opened from a
 scenario, with Packs and Runs in persistent navigation. Existing authored files
 and bundle manifests should remain the source of truth for library entries.
+
+## Library-first implementation
+
+The desktop now opens on Scenarios with persistent navigation to Authoring,
+Industry packs, Org packs, and Runs. Scenario entries come from authored YAML;
+external files can be imported by reference. Pack entries come from bundled and
+workspace pack catalogs. The selected scenario shows file metadata, app-launched
+run status, a persisted evaluation scorecard, and its output destination. It routes to
+authoring, readable validation, and the existing generation form. Clone and
+hide actions are available for scenarios and packs. Hidden paths and imported
+scenario references are saved in desktop state; authored files remain the source
+of truth. A Refresh action picks up external edits. Completed app-launched runs
+can be evaluated through the GUI with `eforge eval`; JSON reports are saved in
+local app data, and the score persists across restarts. Evaluation processes are
+concurrent while the app is open but stop on close. Archive export and
+generation/evaluation pairing remain next steps.
+
+New and existing packs route into the corresponding pack authoring skill;
+pack catalog entries also support import, clone, hide, and opening the YAML.

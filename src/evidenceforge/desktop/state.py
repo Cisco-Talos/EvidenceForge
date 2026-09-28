@@ -45,6 +45,8 @@ class DesktopState(BaseModel):
 
     workspace: Path
     output_directory: Path | None = None
+    imported_scenarios: list[Path] = Field(default_factory=list)
+    hidden_items: list[Path] = Field(default_factory=list)
     chats: list[ChatRecord] = Field(default_factory=list)
     jobs: list[GenerationJob] = Field(default_factory=list)
 

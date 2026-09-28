@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -39,6 +44,8 @@ from evidenceforge.desktop.jobs import (
     resume_generation,
     start_generation,
 )
+from evidenceforge.desktop.library import LibraryItem, discover_packs, discover_scenarios
+from evidenceforge.desktop.library_ui import LibraryPane
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
 from evidenceforge.desktop.state import (
     ChatRecord,
@@ -48,29 +55,49 @@ from evidenceforge.desktop.state import (
     state_directory,
 )
 from evidenceforge.desktop.validation import format_validation_output
+from evidenceforge.evaluation.models import QualityReport
 
 _STYLE = """
-QWidget { background: #10141d; color: #e8edf6; font-size: 13px; }
-QMainWindow, QTabWidget::pane { background: #10141d; }
+QWidget { background: #0d111a; color: #e9edf5; font-size: 13px; font-family: "Inter", "SF Pro Text", sans-serif; }
+QLabel { background: transparent; }
+QMainWindow, QTabWidget::pane { background: #0d111a; }
+QFrame#sidebar { background: #111722; border-right: 1px solid #263040; }
+QFrame#panel { background: #151d2a; border: 1px solid #2b3648; border-radius: 14px; }
+QLabel#brand { font-size: 19px; font-weight: 800; color: #f5f8fd; }
+QLabel#pageTitle { font-size: 32px; font-weight: 750; color: #f5f8fd; }
+QLabel#detailTitle { font-size: 25px; font-weight: 750; color: #f5f8fd; }
 QLabel#heading { font-size: 20px; font-weight: 700; color: #f3f6fb; }
-QLabel#subtle { color: #93a2b7; }
-QPushButton { background: #273449; border: 1px solid #3b4b62; border-radius: 8px;
-              padding: 8px 12px; font-weight: 600; }
-QPushButton:hover { background: #344760; }
-QPushButton:disabled { color: #778399; background: #1c2635; }
-QPushButton#primary { background: #3477c4; border-color: #448ddd; color: white; }
-QPushButton#primary:hover { background: #4187d8; }
+QLabel#eyebrow { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: #6ed3b7; }
+QLabel#muted, QLabel#subtle { color: #9caabe; }
+QLabel#metadata { color: #b9c7d8; line-height: 1.5; }
+QPushButton { background: #233044; border: 1px solid #39475b; border-radius: 9px;
+              padding: 9px 13px; font-weight: 650; }
+QPushButton:hover { background: #31415a; }
+QPushButton:disabled { color: #69778b; background: #1b2635; }
+QPushButton#primary { background: #5a6ff0; border-color: #7182fc; color: white; }
+QPushButton#primary:hover { background: #7185ff; }
+QPushButton#nav { text-align: left; background: transparent; border: none; color: #b8c4d5;
+                  padding: 12px 14px; font-size: 14px; }
+QPushButton#nav:hover { background: #202c3e; color: white; }
+QPushButton#nav:checked { background: #293959; color: white; border-left: 3px solid #77a6ff; }
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {
-    background: #171f2c; border: 1px solid #35445b; border-radius: 8px;
-    padding: 8px; selection-background-color: #3477c4;
+    background: #101723; border: 1px solid #35445b; border-radius: 9px;
+    padding: 9px; selection-background-color: #5369db;
 }
+QListWidget#libraryList { background: transparent; border: none; outline: none; }
+QListWidget#libraryList::item { padding: 14px 12px; margin: 3px 0; border-radius: 9px; }
+QListWidget#libraryList::item:selected { background: #293959; color: #ffffff; }
+QListWidget#libraryList::item:hover { background: #202c3e; }
+QScrollBar:vertical { background: #151d2a; width: 8px; margin: 0; }
+QScrollBar::handle:vertical { background: #40516a; border-radius: 4px; min-height: 28px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QTabBar::tab { background: #1a2432; border: 1px solid #35445b; border-bottom: none;
                padding: 10px 16px; margin-right: 3px; border-top-left-radius: 8px;
                border-top-right-radius: 8px; }
 QTabBar::tab:selected { background: #283a54; color: #ffffff; }
 QProgressBar { background: #1a2432; border: 1px solid #35445b; border-radius: 6px;
                text-align: center; height: 18px; }
-QProgressBar::chunk { background: #4a9beb; border-radius: 5px; }
+QProgressBar::chunk { background: #5b80f0; border-radius: 5px; }
 QScrollArea { border: none; }
 """
 
@@ -392,6 +419,8 @@ class MainWindow(QMainWindow):
         self.skills: dict[str, str] = {}
         self.chat_panes: dict[str, ChatPane] = {}
         self.job_progress: dict[str, GenerationProgress] = {}
+        self.evaluation_processes: dict[str, QProcess] = {}
+        self._closing = False
         self.progress_offsets: dict[str, int] = {}
         self.progress_partial: dict[str, bytes] = {}
         self.bridge = CodexBridge(self)
@@ -400,54 +429,111 @@ class MainWindow(QMainWindow):
         self.bridge.server_request.connect(self._server_request)
         self.bridge.failed.connect(self._codex_failed)
         self.setWindowTitle("EvidenceForge")
-        self.resize(1120, 820)
+        self.resize(1350, 840)
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 18, 20, 18)
-        top = QHBoxLayout()
+        shell = QHBoxLayout(central)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(220)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 24, 16, 18)
+        side.setSpacing(8)
         brand = QLabel("EvidenceForge")
-        brand.setObjectName("heading")
-        top.addWidget(brand)
-        top.addStretch()
+        brand.setObjectName("brand")
+        side.addWidget(brand)
+        tagline = QLabel("LOCAL STUDIO")
+        tagline.setObjectName("eyebrow")
+        side.addWidget(tagline)
+        side.addSpacing(27)
+        self.nav_buttons: list[QPushButton] = []
+        for index, label in enumerate(
+            ("Scenarios", "Authoring", "Industry packs", "Org packs", "Runs")
+        ):
+            button = QPushButton(label)
+            button.setObjectName("nav")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, page=index: self._navigate(page))
+            side.addWidget(button)
+            self.nav_buttons.append(button)
+        side.addStretch()
+        install_skills = QPushButton("Install skills")
+        install_skills.clicked.connect(self._install_skills)
+        side.addWidget(install_skills)
         self.workspace_label = QLabel(self.state.workspace.name)
         self.workspace_label.setToolTip(str(self.state.workspace))
-        top.addWidget(self.workspace_label)
+        self.workspace_label.setObjectName("muted")
+        side.addWidget(self.workspace_label)
         workspace_button = QPushButton("Workspace…")
         workspace_button.clicked.connect(self._choose_workspace)
-        top.addWidget(workspace_button)
+        side.addWidget(workspace_button)
         self.account_label = QLabel("Connecting to Codex…")
         self.account_label.setObjectName("subtle")
-        top.addWidget(self.account_label)
+        side.addWidget(self.account_label)
         sign_in = QPushButton("Sign in")
         sign_in.clicked.connect(self._sign_in)
-        top.addWidget(sign_in)
-        layout.addLayout(top)
-        controls = QHBoxLayout()
+        side.addWidget(sign_in)
+        shell.addWidget(sidebar)
+        self.pages = QStackedWidget()
+        shell.addWidget(self.pages, 1)
+
+        self.scenario_library = LibraryPane("Scenarios", scenario_mode=True)
+        self.scenario_library.import_requested.connect(self._import_scenario)
+        self.scenario_library.create_requested.connect(self._new_chat)
+        self.scenario_library.edit_requested.connect(self._author_scenario)
+        self.scenario_library.clone_requested.connect(self._clone_scenario)
+        self.scenario_library.hide_requested.connect(self._toggle_hidden)
+        self.scenario_library.validate_requested.connect(self._validate_library_item)
+        self.scenario_library.generate_requested.connect(self._generate_library_item)
+        self.scenario_library.evaluate_requested.connect(self._evaluate_latest)
+        self.scenario_library.refresh_requested.connect(self._refresh_libraries)
+        self.pages.addWidget(self.scenario_library)
+
+        authoring = QWidget()
+        author_layout = QVBoxLayout(authoring)
+        author_layout.setContentsMargins(25, 24, 25, 24)
+        author_top = QHBoxLayout()
+        author_title = QLabel("Authoring")
+        author_title.setObjectName("pageTitle")
+        author_top.addWidget(author_title)
+        author_top.addStretch()
         new_chat = QPushButton("New authoring tab")
+        new_chat.setObjectName("primary")
         new_chat.clicked.connect(self._new_chat)
-        controls.addWidget(new_chat)
-        install_skills = QPushButton("Install EvidenceForge skills")
-        install_skills.clicked.connect(self._install_skills)
-        controls.addWidget(install_skills)
-        controls.addStretch()
-        layout.addLayout(controls)
+        author_top.addWidget(new_chat)
+        author_layout.addLayout(author_top)
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
+        author_layout.addWidget(self.tabs, 1)
+        self.pages.addWidget(authoring)
         for record in self.state.chats:
             self._add_chat_pane(record)
+        self.industry_library = LibraryPane("Industry packs", scenario_mode=False)
+        self.organization_library = LibraryPane("Organization packs", scenario_mode=False)
+        self.industry_library.create_requested.connect(lambda: self._new_pack_chat("industry"))
+        self.organization_library.create_requested.connect(
+            lambda: self._new_pack_chat("organization")
+        )
+        for pane in (self.industry_library, self.organization_library):
+            pane.refresh_requested.connect(self._refresh_libraries)
+            pane.import_requested.connect(self._import_pack)
+            pane.edit_requested.connect(self._author_pack)
+            pane.clone_requested.connect(self._clone_pack)
+            pane.hide_requested.connect(self._toggle_hidden)
+            self.pages.addWidget(pane)
         self.jobs = JobsPane(self.state.output_directory or self.state.workspace / "runs")
         self.jobs.validate_requested.connect(self._validate)
         self.jobs.generate_requested.connect(self._generate)
         self.jobs.output_changed.connect(self._remember_output_directory)
         self.jobs.suspend_requested.connect(self._suspend)
         self.jobs.resume_requested.connect(self._resume)
-        self.tabs.addTab(self.jobs, "Jobs")
+        self.pages.addWidget(self.jobs)
         for job in self.state.jobs:
             self.jobs.add_job(job)
             self.job_progress[job.id] = GenerationProgress()
-        if not self.state.chats:
-            self._new_chat()
+        self._refresh_libraries()
+        self._navigate(0)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_jobs)
         self.timer.start(1000)
@@ -457,6 +543,291 @@ class MainWindow(QMainWindow):
 
     def _save(self) -> None:
         self.store.save(self.state)
+
+    def _navigate(self, page: int) -> None:
+        self.pages.setCurrentIndex(page)
+        for index, button in enumerate(self.nav_buttons):
+            button.setChecked(index == page)
+        if page in (0, 2, 3):
+            self._refresh_libraries()
+
+    def _refresh_libraries(self) -> None:
+        hidden = {path.resolve() for path in self.state.hidden_items}
+        scorecards: dict[str, str] = {}
+        for job in self.state.jobs:
+            path = self.store.directory / "evaluations" / f"{job.id}.json"
+            if not path.is_file():
+                continue
+            try:
+                report = QualityReport.model_validate_json(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError):
+                scorecards[job.id] = "Saved evaluation cannot be read"
+                continue
+            score = f"{report.overall_score:.0f}/100" if report.overall_score is not None else "N/A"
+            verdict = (
+                "PASS"
+                if report.acceptance_passed is True
+                else "FAIL"
+                if report.acceptance_passed is False
+                else "INDETERMINATE"
+            )
+            scorecards[job.id] = f"{score}  ·  {verdict}  ·  {report.total_records:,} records"
+        for job_id in self.evaluation_processes:
+            scorecards[job_id] = "Evaluating…"
+        self.scenario_library.destination.setText(
+            str(self.state.output_directory or self.state.workspace / "runs")
+        )
+        self.scenario_library.set_items(
+            discover_scenarios(self.state.workspace, self.state.imported_scenarios),
+            hidden,
+            self.state.jobs,
+            scorecards,
+        )
+        self.industry_library.set_items(
+            discover_packs(self.state.workspace, "industry"), hidden, []
+        )
+        self.organization_library.set_items(
+            discover_packs(self.state.workspace, "organization"), hidden, []
+        )
+
+    def _toggle_hidden(self, item: LibraryItem) -> None:
+        hidden = {path.resolve() for path in self.state.hidden_items}
+        if item.path in hidden:
+            hidden.remove(item.path)
+        else:
+            hidden.add(item.path)
+        self.state.hidden_items = sorted(hidden)
+        self._save()
+        self._refresh_libraries()
+
+    def _import_scenario(self) -> None:
+        path = self.scenario_library.choose_import()
+        if path is None:
+            return
+        items = discover_scenarios(self.state.workspace, [path])
+        if not any(item.path == path for item in items):
+            QMessageBox.warning(
+                self, "Not a scenario", "Choose an authored EvidenceForge scenario YAML."
+            )
+            return
+        if path not in self.state.imported_scenarios:
+            self.state.imported_scenarios.append(path)
+            self._save()
+        self._refresh_libraries()
+
+    def _author_scenario(self, item: LibraryItem) -> None:
+        record = ChatRecord(
+            id=uuid4().hex,
+            title=item.name,
+            skill_name="eforge-scenario",
+        )
+        self.state.chats.append(record)
+        pane = self._add_chat_pane(record)
+        pane.prompt.setPlainText(f"Help me revise the scenario at {item.path}. ")
+        self.tabs.setCurrentWidget(pane)
+        self._navigate(1)
+        self._save()
+
+    def _validate_library_item(self, item: LibraryItem) -> None:
+        self.jobs.scenario.setText(str(item.path))
+        self._navigate(4)
+        self._validate(str(item.path))
+
+    def _generate_library_item(self, item: LibraryItem) -> None:
+        self.jobs.scenario.setText(str(item.path))
+        self._navigate(4)
+        self.jobs.scenario.setFocus()
+        self.statusBar().showMessage("Choose an output folder, then click Generate", 8000)
+
+    def _evaluate_latest(self, item: LibraryItem) -> None:
+        related = sorted(
+            (
+                job
+                for job in self.state.jobs
+                if job.scenario.resolve() == item.path and job.status == "completed"
+            ),
+            key=lambda job: job.started_at,
+            reverse=True,
+        )
+        if not related:
+            return
+        job = related[0]
+        if job.id in self.evaluation_processes:
+            self.statusBar().showMessage("Evaluation is already running", 5000)
+            return
+        from evidenceforge.desktop.jobs import _eforge_command
+
+        try:
+            command = _eforge_command()
+        except FileNotFoundError as error:
+            QMessageBox.warning(self, "Evaluation could not start", str(error))
+            return
+        process = QProcess(self)
+        process.setWorkingDirectory(str(self.state.workspace))
+        process.setProgram(command[0])
+        process.setArguments([*command[1:], "eval", str(job.output_root), "--format", "json"])
+        process.finished.connect(
+            lambda _code, _status, current=job.id: self._evaluation_finished(current)
+        )
+        process.errorOccurred.connect(
+            lambda _error, current=job.id: self._evaluation_start_error(current)
+        )
+        self.evaluation_processes[job.id] = process
+        process.start()
+        self._refresh_libraries()
+
+    def _evaluation_finished(self, job_id: str) -> None:
+        process = self.evaluation_processes.pop(job_id, None)
+        if process is None:
+            return
+        if self._closing:
+            process.deleteLater()
+            return
+        output = bytes(process.readAllStandardOutput()).decode("utf-8", "replace")
+        errors = bytes(process.readAllStandardError()).decode("utf-8", "replace")
+        if process.exitCode() == 0:
+            try:
+                report = QualityReport.model_validate_json(output)
+                directory = self.store.directory / "evaluations"
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / f"{job_id}.json"
+                temporary = path.with_suffix(".json.tmp")
+                temporary.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+                os.replace(temporary, path)
+                self.statusBar().showMessage("Evaluation scorecard saved", 8000)
+            except (OSError, UnicodeError, ValueError) as error:
+                QMessageBox.warning(self, "Evaluation report could not be saved", str(error))
+        else:
+            QMessageBox.warning(
+                self,
+                "Evaluation failed",
+                errors[-3000:] or output[-3000:] or f"eforge eval exited {process.exitCode()}",
+            )
+        process.deleteLater()
+        self._refresh_libraries()
+
+    def _evaluation_start_error(self, job_id: str) -> None:
+        process = self.evaluation_processes.get(job_id)
+        if process is None or process.error() != QProcess.ProcessError.FailedToStart:
+            return
+        self.evaluation_processes.pop(job_id)
+        QMessageBox.warning(self, "Evaluation could not start", process.errorString())
+        process.deleteLater()
+        self._refresh_libraries()
+
+    def _author_pack(self, item: LibraryItem) -> None:
+        skill = "eforge-industry-pack" if item.kind == "industry" else "eforge-organization-pack"
+        record = ChatRecord(id=uuid4().hex, title=item.name, skill_name=skill)
+        self.state.chats.append(record)
+        pane = self._add_chat_pane(record)
+        pane.prompt.setPlainText(f"Help me revise the {item.kind} pack at {item.path}. ")
+        self.tabs.setCurrentWidget(pane)
+        self._navigate(1)
+        self._save()
+
+    def _new_pack_chat(self, kind: str) -> None:
+        skill = "eforge-industry-pack" if kind == "industry" else "eforge-organization-pack"
+        record = ChatRecord(id=uuid4().hex, title=f"New {kind} pack", skill_name=skill)
+        self.state.chats.append(record)
+        pane = self._add_chat_pane(record)
+        pane.prompt.setPlainText(f"Help me create a new {kind} pack in this workspace. ")
+        self.tabs.setCurrentWidget(pane)
+        self._navigate(1)
+        self._save()
+
+    def _clone_scenario(self, item: LibraryItem) -> None:
+        name, accepted = QInputDialog.getText(
+            self, "Clone scenario", "New scenario name:", text=f"{item.name}-copy"
+        )
+        if not accepted:
+            return
+        slug = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", slug):
+            QMessageBox.warning(
+                self, "Invalid name", "Use letters, digits, hyphens, or underscores."
+            )
+            return
+        destination = self.state.workspace / "scenarios" / slug / "scenario.yaml"
+        if destination.exists():
+            QMessageBox.warning(self, "Already exists", str(destination))
+            return
+        try:
+            source = item.path.read_text(encoding="utf-8")
+            clone = re.sub(r"(?m)^name:\s*[^\n]*$", f"name: {slug}", source, count=1)
+            destination.parent.mkdir(parents=True, exist_ok=False)
+            destination.write_text(clone, encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            QMessageBox.warning(self, "Clone failed", str(error))
+            return
+        self._refresh_libraries()
+        self.statusBar().showMessage(f"Created {destination}", 7000)
+
+    def _import_pack(self) -> None:
+        selected = QFileDialog.getExistingDirectory(self, "Select a pack version folder")
+        if not selected:
+            return
+        source = Path(selected).resolve()
+        pack_file = source / "pack.yaml"
+        if not pack_file.is_file():
+            QMessageBox.warning(
+                self, "Pack missing", "Choose a version folder containing pack.yaml."
+            )
+            return
+        import yaml
+
+        try:
+            data = yaml.safe_load(pack_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or data.get("type") not in {"industry", "organization"}:
+                raise ValueError("pack.yaml must declare an industry or organization pack")
+            publisher = str(data["publisher"])
+            kind = str(data["type"])
+            name = str(data["name"])
+            version = str(data["version"])
+            if not all(
+                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value)
+                for value in (publisher, name, version)
+            ):
+                raise ValueError("Pack identity contains invalid path characters")
+            destination = (
+                self.state.workspace / ".eforge" / "packs" / publisher / kind / name / version
+            )
+            if destination.exists():
+                raise FileExistsError(f"Pack already exists: {destination}")
+            shutil.copytree(source, destination)
+        except (OSError, ValueError, KeyError, yaml.YAMLError) as error:
+            QMessageBox.warning(self, "Import failed", str(error))
+            return
+        self._refresh_libraries()
+
+    def _clone_pack(self, item: LibraryItem) -> None:
+        name, accepted = QInputDialog.getText(
+            self, "Clone pack", "New pack name:", text=f"{item.name}-copy"
+        )
+        if not accepted:
+            return
+        slug = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", slug):
+            QMessageBox.warning(
+                self, "Invalid name", "Use letters, digits, hyphens, dots, or underscores."
+            )
+            return
+        destination = (
+            self.state.workspace / ".eforge" / "packs" / "local" / item.kind / slug / item.version
+        )
+        if destination.exists():
+            QMessageBox.warning(self, "Already exists", str(destination))
+            return
+        try:
+            shutil.copytree(item.path.parent, destination)
+            pack_file = destination / "pack.yaml"
+            source = pack_file.read_text(encoding="utf-8")
+            source = re.sub(r"(?m)^name:\s*[^\n]*$", f"name: {slug}", source, count=1)
+            source = re.sub(r"(?m)^publisher:\s*[^\n]*$", "publisher: local", source, count=1)
+            pack_file.write_text(source, encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            QMessageBox.warning(self, "Clone failed", str(error))
+            return
+        self._refresh_libraries()
 
     def _add_chat_pane(self, record: ChatRecord) -> ChatPane:
         pane = ChatPane(record)
@@ -473,6 +844,7 @@ class MainWindow(QMainWindow):
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
         self.tabs.setCurrentWidget(pane)
+        self._navigate(1)
         self._save()
 
     def _choose_workspace(self) -> None:
@@ -492,6 +864,7 @@ class MainWindow(QMainWindow):
         if self.state.output_directory is None:
             self.jobs.output_directory.setText(str(self.state.workspace / "runs"))
         self._save()
+        self._refresh_libraries()
         if self.bridge.initialized:
             self._refresh_skills()
 
@@ -672,6 +1045,7 @@ class MainWindow(QMainWindow):
                 pane.add_system("Editing scenario files")
         elif method == "turn/completed":
             pane.set_busy(False)
+            self._refresh_libraries()
             turn = params.get("turn", {})
             if turn.get("status") != "completed":
                 pane.add_system(f"Turn {turn.get('status', 'ended')}")
@@ -769,6 +1143,7 @@ class MainWindow(QMainWindow):
     def _remember_output_directory(self, value: str) -> None:
         self.state.output_directory = self._output_directory(value)
         self._save()
+        self._refresh_libraries()
 
     def _output_directory(self, value: str) -> Path | None:
         if not value.strip():
@@ -795,6 +1170,7 @@ class MainWindow(QMainWindow):
         self.job_progress[job.id] = GenerationProgress()
         self.jobs.add_job(job)
         self._save()
+        self._refresh_libraries()
         self._poll_jobs()
 
     def _suspend(self, job: GenerationJob) -> None:
@@ -842,11 +1218,18 @@ class MainWindow(QMainWindow):
                 card.update_display(progress)
         if changed:
             self._save()
+            self._refresh_libraries()
 
     @override
     def closeEvent(self, event: Any) -> None:
-        """Leave detached generation jobs running while closing chat transport."""
+        """Leave generation detached; stop in-window evaluations and chat transport."""
+        self._closing = True
         self._save()
+        for process in list(self.evaluation_processes.values()):
+            process.terminate()
+            if not process.waitForFinished(1000):
+                process.kill()
+                process.waitForFinished(1000)
         self.bridge.close()
         super().closeEvent(event)
 
