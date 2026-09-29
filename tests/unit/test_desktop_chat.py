@@ -174,6 +174,7 @@ def test_model_effort_picker_uses_catalog_and_saves_per_tab(
                             "id": "fast",
                             "displayName": "Fast",
                             "isDefault": True,
+                            "defaultReasoningEffort": "medium",
                             "supportedReasoningEfforts": [
                                 {"reasoningEffort": "low"},
                                 {"reasoningEffort": "medium"},
@@ -197,14 +198,18 @@ def test_model_effort_picker_uses_catalog_and_saves_per_tab(
         assert store.load(workspace).chats[0].reasoning_effort == "medium"
         pane.model.setCurrentIndex(pane.model.findData("deep"))
         assert pane.reasoning.findData("medium") == -1
-        assert pane.record.reasoning_effort is None
+        assert pane.record.reasoning_effort == "high"
+        assert pane.model.currentText() == "Deep"
+        assert pane.reasoning.currentText() == "High"
         pane.reasoning.setCurrentIndex(pane.reasoning.findData("high"))
         window._new_chat()
         second = next(
             current for current in window.chat_panes.values() if current.record.id != pane.record.id
         )
-        assert second.record.model_id is None
-        assert second.record.reasoning_effort is None
+        assert second.record.model_id == "fast"
+        assert second.record.reasoning_effort == "medium"
+        assert second.model.currentText() == "Fast"
+        assert second.reasoning.currentText() == "Medium"
         assert store.load(workspace).chats[0].reasoning_effort == "high"
         parameters: list[dict[str, Any]] = []
         monkeypatch.setattr(
@@ -306,4 +311,188 @@ def test_tool_activity_collapses_into_one_link_and_restores_from_history(
         assert len(pane._activity["turn-1"]) == 2
     finally:
         window.close()
+        app.processEvents()
+
+
+def test_continue_authoring_reuses_open_and_closed_scenario_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    path = workspace / "scenarios" / "case" / "scenario.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    item = LibraryItem(path=path, name="case")
+    try:
+        window._author_scenario(item)
+        first = window.tabs.currentWidget()
+        assert first is not None
+        first.record.thread_id = "existing-thread"
+        window._author_scenario(item)
+        assert len(window.state.chats) == 1
+        assert window.tabs.count() == 1
+        assert window.tabs.currentWidget() is first
+
+        window._close_chat_tab(0)
+        assert window.tabs.count() == 0
+        window._author_scenario(item)
+        assert len(window.state.chats) == 1
+        assert window.tabs.count() == 1
+        assert window.tabs.currentWidget().record.thread_id == "existing-thread"
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_legacy_title_only_chat_is_relinked_when_scenario_name_is_unique(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import ChatRecord, DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    path = workspace / "scenarios" / "case" / "scenario.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    old = ChatRecord(id="old", title="case", thread_id="existing-thread", skill_name="Automatic")
+    store = StateStore(tmp_path / "state")
+    window = MainWindow(store, DesktopState(workspace=workspace, chats=[old]))
+    try:
+        window._author_scenario(LibraryItem(path=path, name="case"))
+        assert len(window.state.chats) == 1
+        assert window.tabs.count() == 1
+        assert old.context_path == path
+        assert old.context_kind == "scenario"
+        assert str(path) in window.tabs.currentWidget().context.text()
+        assert store.load(workspace).chats[0].context_path == path
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_legacy_chat_with_ambiguous_name_is_not_attached_to_wrong_scenario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import ChatRecord, DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    paths = [workspace / "scenarios" / folder / "scenario.yaml" for folder in ("a", "b")]
+    for path in paths:
+        path.parent.mkdir(parents=True)
+        path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    old = ChatRecord(id="old", title="case", skill_name="Automatic")
+    window = MainWindow(
+        StateStore(tmp_path / "state"), DesktopState(workspace=workspace, chats=[old])
+    )
+    try:
+        window._author_scenario(LibraryItem(path=paths[0], name="case"))
+        assert len(window.state.chats) == 2
+        assert old.context_path is None
+        assert window.tabs.currentWidget().record.context_path == paths[0]
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_scenario_conversation_menu_starts_and_switches_chats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    path = workspace / "scenarios" / "case" / "scenario.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    try:
+        window._author_scenario(LibraryItem(path=path, name="case"))
+        first = window.tabs.currentWidget()
+        window._populate_context_conversations(first)
+        first.conversations_menu.actions()[0].trigger()
+        assert len(window.state.chats) == 2
+        assert window.tabs.count() == 2
+        second = window.tabs.currentWidget()
+        assert second is not first
+        assert window.tabs.tabText(window.tabs.indexOf(first)) == "case · 1"
+        assert window.tabs.tabText(window.tabs.indexOf(second)) == "case · 2"
+        window._populate_context_conversations(second)
+        next(
+            action
+            for action in second.conversations_menu.actions()
+            if action.text() == "Conversation 1"
+        ).trigger()
+        assert window.tabs.currentWidget() is first
+        window._author_scenario(LibraryItem(path=path, name="case"))
+        assert len(window.state.chats) == 2
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_user_and_codex_messages_have_distinct_alignment_and_colors() -> None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.main import ChatPane
+    from evidenceforge.desktop.state import ChatRecord
+
+    app = QApplication.instance() or QApplication([])
+    pane = ChatPane(ChatRecord(id="visual", title="Visual"))
+    try:
+        pane.add_user("Please revise this scenario")
+        pane.add_agent_delta("reply-1", "I can revise it")
+        pane.add_agent_delta("reply-1", " and validate it.")
+        document = pane.transcript.document()
+        user_label = document.find("You").block()
+        user_body = document.find("Please revise this scenario").block()
+        agent_label = document.find("Codex").block()
+        agent_body = document.find("I can revise it").block()
+        assert user_label.blockFormat().alignment() == Qt.AlignmentFlag.AlignRight
+        assert user_body.blockFormat().alignment() == Qt.AlignmentFlag.AlignRight
+        assert agent_label.blockFormat().alignment() == Qt.AlignmentFlag.AlignLeft
+        assert agent_body.blockFormat().alignment() == Qt.AlignmentFlag.AlignLeft
+        assert document.find(
+            "Please revise this scenario"
+        ).charFormat().background().color() == QColor("#223454")
+        assert document.find("I can revise it").charFormat().background().color() == QColor(
+            "#19302f"
+        )
+        assert "I can revise it and validate it." in pane.transcript.toPlainText()
+    finally:
+        pane.close()
         app.processEvents()

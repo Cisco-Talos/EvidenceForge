@@ -230,3 +230,20 @@ Focused Qt tests cover context, picker persistence, turn parameters, activity
 grouping, detail access, and history restoration. The 41 desktop tests passed
 on macOS offscreen Qt; Ruff check passed. A 1350×840 dark-theme render of the
 authoring view was inspected.
+
+## Authoring conversation follow-up
+
+Continue authoring now activates an existing open chat for the same scenario or
+pack, or reopens the latest saved one when no tab is open. A per-context
+Conversations menu lists saved chats and provides New conversation; tab labels
+show stable conversation numbers when several exist. Older title-only chats are
+associated with a scenario or pack only when that item name is unique across
+the current libraries, avoiding an arbitrary match when names collide.
+
+The model and reasoning pickers now show only the actual model and effort names
+from the app-server catalog. A new chat selects the advertised default model and
+that model's default effort. User messages align right with a blue accent;
+Codex replies align left with a green accent. The macOS offscreen render of
+multiple scenario conversations and the conversation transcript was reviewed.
+The 46 desktop Qt tests passed, including reuse, reopen, legacy matching,
+conversation switching, model/effort display, and message styling.

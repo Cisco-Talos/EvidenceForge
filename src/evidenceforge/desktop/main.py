@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QResizeEvent,
     QShortcut,
+    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
 )
@@ -225,20 +226,25 @@ class ChatPane(QWidget):
         self.context = QLabel()
         self.context.setObjectName("subtle")
         self.context.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        if record.context_kind:
-            target = str(record.context_path) if record.context_path else "this workspace"
-            self.context.setText(f"{record.context_kind.title()} · {target}")
-            self.context.setToolTip(target)
-        else:
-            self.context.hide()
         layout.addWidget(self.context)
         header = QHBoxLayout()
+        self.conversations = QToolButton(self)
+        self.conversations.setText("Conversations")
+        self.conversations.setIcon(icon("chat"))
+        self.conversations.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.conversations.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.conversations.setAccessibleName("Scenario conversations")
+        self.conversations_menu = QMenu(self.conversations)
+        self.conversations.setMenu(self.conversations_menu)
+        self.conversations.setVisible(record.context_path is not None)
+        header.addWidget(self.conversations)
+        self.refresh_context()
         header.addStretch()
         header.addWidget(QLabel("Model"))
         self.model = QComboBox()
         self.model.setAccessibleName("Codex model")
         self.model.setToolTip("Choose the model for the next message in this chat")
-        self.model.addItem("Default model", None)
+        self.model.addItem("Loading models…", None)
         self.model.setEnabled(False)
         self.model.currentIndexChanged.connect(self._model_changed)
         header.addWidget(self.model)
@@ -246,7 +252,7 @@ class ChatPane(QWidget):
         self.reasoning = QComboBox()
         self.reasoning.setAccessibleName("Reasoning effort")
         self.reasoning.setToolTip("Choose how much reasoning to use for the next message")
-        self.reasoning.addItem("Default", None)
+        self.reasoning.addItem("Loading reasoning…", None)
         self.reasoning.setEnabled(False)
         self.reasoning.currentIndexChanged.connect(self._reasoning_changed)
         header.addWidget(self.reasoning)
@@ -285,6 +291,17 @@ class ChatPane(QWidget):
         controls.addWidget(self.send)
         layout.addLayout(controls)
 
+    def refresh_context(self) -> None:
+        """Update the visible attachment after legacy chat association."""
+        if self.record.context_kind:
+            target = str(self.record.context_path) if self.record.context_path else "this workspace"
+            self.context.setText(f"{self.record.context_kind.title()} · {target}")
+            self.context.setToolTip(target)
+            self.context.show()
+        else:
+            self.context.hide()
+        self.conversations.setVisible(self.record.context_path is not None)
+
     def set_models(self, models: list[CodexModel]) -> None:
         """Show only model and effort combinations advertised by app-server."""
         previous = (self.record.model_id, self.record.reasoning_effort)
@@ -292,15 +309,15 @@ class ChatPane(QWidget):
         default = next((model for model in models if model.is_default), None)
         self.model.blockSignals(True)
         self.model.clear()
-        self.model.addItem(
-            f"Default · {default.display_name}" if default is not None else "Default model", None
-        )
-        for option in models:
-            self.model.addItem(option.display_name, option.id)
-        index = self.model.findData(self.record.model_id)
-        self.model.setCurrentIndex(index if index >= 0 else 0)
         if models:
+            for option in models:
+                self.model.addItem(option.display_name, option.id)
+            fallback = default or models[0]
+            index = self.model.findData(self.record.model_id or fallback.id)
+            self.model.setCurrentIndex(index if index >= 0 else self.model.findData(fallback.id))
             self.record.model_id = self.model.currentData()
+        else:
+            self.model.addItem("Models unavailable", None)
         self.model.blockSignals(False)
         self.model.setEnabled(bool(models))
         self._refresh_efforts()
@@ -314,19 +331,23 @@ class ChatPane(QWidget):
 
     def _refresh_efforts(self) -> None:
         chosen = self._models.get(self.record.model_id or "")
-        if chosen is None:
-            chosen = next((model for model in self._models.values() if model.is_default), None)
         self.reasoning.blockSignals(True)
         self.reasoning.clear()
-        self.reasoning.addItem("Default", None)
         if chosen is not None:
             for effort in chosen.efforts:
                 self.reasoning.addItem(effort.value.title(), effort.value)
                 self.reasoning.setItemData(
                     self.reasoning.count() - 1, effort.description, Qt.ItemDataRole.ToolTipRole
                 )
-        index = self.reasoning.findData(self.record.reasoning_effort)
-        self.reasoning.setCurrentIndex(index if index >= 0 else 0)
+            if chosen.efforts:
+                fallback_effort = chosen.default_effort or chosen.efforts[0].value
+                index = self.reasoning.findData(self.record.reasoning_effort or fallback_effort)
+                fallback_index = self.reasoning.findData(fallback_effort)
+                self.reasoning.setCurrentIndex(index if index >= 0 else max(fallback_index, 0))
+            else:
+                self.reasoning.addItem("Unavailable", None)
+        else:
+            self.reasoning.addItem("Reasoning unavailable", None)
         if self._models:
             self.record.reasoning_effort = self.reasoning.currentData()
         self.reasoning.blockSignals(False)
@@ -355,42 +376,70 @@ class ChatPane(QWidget):
         self.prompt.clear()
         self.send_requested.emit(self, text)
 
-    def _append(self, label: str, text: str, color: str) -> None:
+    def _message_cursor(
+        self, label: str, label_color: str, alignment: Qt.AlignmentFlag
+    ) -> QTextCursor:
         cursor = self.transcript.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.transcript.document().isEmpty():
+            cursor.insertBlock()
+        label_block = QTextBlockFormat()
+        label_block.setAlignment(alignment)
+        label_block.setTopMargin(14)
+        label_block.setLeftMargin(14)
+        label_block.setRightMargin(14)
+        cursor.setBlockFormat(label_block)
         label_format = QTextCharFormat()
-        label_format.setForeground(QColor(color))
+        label_format.setForeground(QColor(label_color))
         label_format.setFontWeight(QFont.Weight.Bold)
-        cursor.insertText(f"\n{label}\n", label_format)
+        cursor.insertText(label, label_format)
+        body_block = QTextBlockFormat()
+        body_block.setAlignment(alignment)
+        body_block.setLeftMargin(14)
+        body_block.setRightMargin(14)
+        body_block.setTopMargin(7)
+        body_block.setBottomMargin(10)
+        cursor.insertBlock(body_block)
+        return cursor
+
+    def _append(
+        self,
+        label: str,
+        text: str,
+        label_color: str,
+        alignment: Qt.AlignmentFlag,
+        background: str,
+    ) -> None:
+        cursor = self._message_cursor(label, label_color, alignment)
         body_format = QTextCharFormat()
         body_format.setForeground(QColor("#e8edf6"))
-        cursor.insertText(text + "\n", body_format)
+        body_format.setBackground(QColor(background))
+        cursor.insertText(text, body_format)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
 
     def add_user(self, text: str) -> None:
         self._stream_item = None
-        self._append("You", text, "#8bbcf6")
+        self._append("You", text, "#a9caff", Qt.AlignmentFlag.AlignRight, "#223454")
 
     def add_system(self, text: str) -> None:
         self._stream_item = None
-        self._append("Activity", text, "#aab7c9")
+        self._append("Notice", text, "#f2c783", Qt.AlignmentFlag.AlignLeft, "#30291e")
 
     def add_agent_text(self, text: str) -> None:
         self._stream_item = None
-        self._append("Codex", text, "#83d5bd")
+        self._append("Codex", text, "#83d5bd", Qt.AlignmentFlag.AlignLeft, "#19302f")
 
     def add_agent_delta(self, item_id: str, delta: str) -> None:
-        cursor = self.transcript.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
         if self._stream_item != item_id:
-            label_format = QTextCharFormat()
-            label_format.setForeground(QColor("#83d5bd"))
-            label_format.setFontWeight(QFont.Weight.Bold)
-            cursor.insertText("\nCodex\n", label_format)
+            cursor = self._message_cursor("Codex", "#83d5bd", Qt.AlignmentFlag.AlignLeft)
             self._stream_item = item_id
+        else:
+            cursor = self.transcript.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
         body_format = QTextCharFormat()
         body_format.setForeground(QColor("#e8edf6"))
+        body_format.setBackground(QColor("#19302f"))
         cursor.insertText(delta, body_format)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
@@ -410,12 +459,19 @@ class ChatPane(QWidget):
         self._stream_item = None
         cursor = self.transcript.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.transcript.document().isEmpty():
+            cursor.insertBlock()
+        activity_block = QTextBlockFormat()
+        activity_block.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        activity_block.setLeftMargin(14)
+        activity_block.setTopMargin(10)
+        cursor.setBlockFormat(activity_block)
         link_format = QTextCharFormat()
         link_format.setForeground(QColor("#9caabe"))
         link_format.setAnchor(True)
         link_format.setAnchorHref(f"activity:{turn_id}")
         link_format.setFontUnderline(True)
-        cursor.insertText("\nView activity\n", link_format)
+        cursor.insertText("View activity", link_format)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
 
@@ -833,6 +889,7 @@ class MainWindow(QMainWindow):
         for record in self.state.chats:
             if record.open:
                 self._add_chat_pane(record)
+        self._refresh_chat_tab_titles()
         self._update_authoring_empty()
         self._update_recent_button()
         self.industry_library = LibraryPane("Industry packs", scenario_mode=False)
@@ -1194,19 +1251,89 @@ class MainWindow(QMainWindow):
         self._refresh_libraries()
 
     def _author_scenario(self, item: LibraryItem) -> None:
+        self._adopt_legacy_chat(item, "scenario", "eforge-scenario")
+        if self._open_existing_context_chat(item.path, "scenario"):
+            return
+        self._create_context_chat(item.name, item.path, "scenario", "eforge-scenario")
+
+    def _adopt_legacy_chat(self, item: LibraryItem, kind: str, skill: str) -> None:
+        """Associate older title-only tabs when the item name is unambiguous."""
+        matching_items = sum(
+            entry.name == item.name
+            for library in (
+                self.scenario_library,
+                self.industry_library,
+                self.organization_library,
+            )
+            for entry in library.items
+        )
+        if matching_items != 1:
+            return
+        changed = False
+        for record in self.state.chats:
+            if (
+                record.context_path is None
+                and record.context_kind is None
+                and record.title == item.name
+                and record.skill_name in {skill, "Automatic"}
+            ):
+                record.context_path = item.path
+                record.context_kind = kind
+                pane = self.chat_panes.get(record.id)
+                if pane is not None:
+                    pane.refresh_context()
+                changed = True
+        if changed:
+            self._save()
+
+    def _context_chats(self, path: Path, kind: str) -> list[ChatRecord]:
+        return [
+            record
+            for record in self.state.chats
+            if record.context_path == path and record.context_kind == kind
+        ]
+
+    def _open_existing_context_chat(self, path: Path, kind: str) -> bool:
+        related = self._context_chats(path, kind)
+        if not related:
+            return False
+        open_records = [record for record in related if record.id in self.chat_panes]
+        self._activate_chat(open_records[-1] if open_records else related[-1])
+        return True
+
+    def _create_context_chat(self, title: str, path: Path, kind: str, skill: str) -> ChatPane:
         record = ChatRecord(
             id=uuid4().hex,
-            title=item.name,
-            skill_name="eforge-scenario",
-            context_path=item.path,
-            context_kind="scenario",
+            title=title,
+            skill_name=skill,
+            context_path=path,
+            context_kind=kind,
         )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
-        pane.prompt.setPlaceholderText("What would you like to change in this scenario?")
+        pane.prompt.setPlaceholderText(f"What would you like to change in this {kind}?")
         self.tabs.setCurrentWidget(pane)
         self._navigate(1)
+        self._refresh_chat_tab_titles()
         self._save()
+        return pane
+
+    def _refresh_chat_tab_titles(self) -> None:
+        for pane in self.chat_panes.values():
+            record = pane.record
+            index = self.tabs.indexOf(pane)
+            if index < 0:
+                continue
+            if record.context_path and record.context_kind:
+                related = self._context_chats(record.context_path, record.context_kind)
+                position = next(
+                    (number for number, other in enumerate(related, 1) if other.id == record.id),
+                    1,
+                )
+                title = f"{record.title} · {position}" if len(related) > 1 else record.title
+            else:
+                title = record.title
+            self.tabs.setTabText(index, title)
 
     def _validate_library_item(self, item: LibraryItem) -> None:
         self.jobs.scenario.setText(str(item.path))
@@ -1251,19 +1378,11 @@ class MainWindow(QMainWindow):
 
     def _author_pack(self, item: LibraryItem) -> None:
         skill = "eforge-industry-pack" if item.kind == "industry" else "eforge-organization-pack"
-        record = ChatRecord(
-            id=uuid4().hex,
-            title=item.name,
-            skill_name=skill,
-            context_path=item.path,
-            context_kind="industry pack" if item.kind == "industry" else "organization pack",
-        )
-        self.state.chats.append(record)
-        pane = self._add_chat_pane(record)
-        pane.prompt.setPlaceholderText(f"What would you like to change in this {item.kind} pack?")
-        self.tabs.setCurrentWidget(pane)
-        self._navigate(1)
-        self._save()
+        kind = "industry pack" if item.kind == "industry" else "organization pack"
+        self._adopt_legacy_chat(item, kind, skill)
+        if self._open_existing_context_chat(item.path, kind):
+            return
+        self._create_context_chat(item.name, item.path, kind, skill)
 
     def _new_pack_chat(self, kind: str) -> None:
         skill = "eforge-industry-pack" if kind == "industry" else "eforge-organization-pack"
@@ -1382,10 +1501,14 @@ class MainWindow(QMainWindow):
     def _add_chat_pane(self, record: ChatRecord) -> ChatPane:
         pane = ChatPane(record)
         pane.set_skills(self.skills)
-        pane.set_models(self.models)
+        if self.models:
+            pane.set_models(self.models)
         pane.send_requested.connect(self._send_chat)
         pane.interrupt_requested.connect(self._interrupt_chat)
         pane.configuration_changed.connect(self._save)
+        pane.conversations_menu.aboutToShow.connect(
+            lambda current=pane: self._populate_context_conversations(current)
+        )
         self.chat_panes[record.id] = pane
         index = self.tabs.addTab(pane, record.title)
         close_tab = QToolButton(self.tabs)
@@ -1397,6 +1520,33 @@ class MainWindow(QMainWindow):
         self.tabs.tabBar().setTabButton(index, QTabBar.ButtonPosition.RightSide, close_tab)
         self._update_authoring_empty()
         return pane
+
+    def _populate_context_conversations(self, pane: ChatPane) -> None:
+        menu = pane.conversations_menu
+        menu.clear()
+        record = pane.record
+        if record.context_path is None or record.context_kind is None:
+            return
+        kind = record.context_kind
+        path = record.context_path
+        skill = {
+            "scenario": "eforge-scenario",
+            "industry pack": "eforge-industry-pack",
+            "organization pack": "eforge-organization-pack",
+        }[kind]
+        menu.addAction(
+            "New conversation",
+            lambda _checked=False: self._create_context_chat(record.title, path, kind, skill),
+        )
+        menu.addSeparator()
+        for number, related in reversed(list(enumerate(self._context_chats(path, kind), 1))):
+            action = menu.addAction(
+                f"Conversation {number}",
+                lambda _checked=False, chosen=related: self._activate_chat(chosen),
+            )
+            action.setCheckable(True)
+            action.setChecked(related.id == record.id)
+            action.setToolTip("Closed tab" if not related.open else related.title)
 
     def _update_authoring_empty(self) -> None:
         has_tabs = self.tabs.count() > 0
@@ -1417,18 +1567,24 @@ class MainWindow(QMainWindow):
 
     def _reopen_chat(self, record_id: str) -> None:
         record = next((entry for entry in self.state.chats if entry.id == record_id), None)
-        if record is None or record.open:
+        if record is None:
             return
-        record.open = True
-        pane = self._add_chat_pane(record)
+        self._activate_chat(record)
+
+    def _activate_chat(self, record: ChatRecord) -> None:
+        pane = self.chat_panes.get(record.id)
+        if pane is None:
+            record.open = True
+            pane = self._add_chat_pane(record)
+            if self.bridge.initialized and record.thread_id:
+                self.bridge.request(
+                    "thread/resume",
+                    {"threadId": record.thread_id},
+                    lambda response, current=pane: self._resumed(current, response),
+                )
         self.tabs.setCurrentWidget(pane)
         self._navigate(1)
-        if self.bridge.initialized and record.thread_id:
-            self.bridge.request(
-                "thread/resume",
-                {"threadId": record.thread_id},
-                lambda response, current=pane: self._resumed(current, response),
-            )
+        self._refresh_chat_tab_titles()
         self._update_recent_button()
         self._save()
 
@@ -1444,6 +1600,7 @@ class MainWindow(QMainWindow):
             close_button.deleteLater()
         self.chat_panes.pop(pane.record.id, None)
         pane.record.open = False
+        self._refresh_chat_tab_titles()
         self._update_authoring_empty()
         self._update_recent_button()
         self._save()
@@ -1502,6 +1659,8 @@ class MainWindow(QMainWindow):
 
     def _models_response(self, response: dict[str, Any]) -> None:
         if "error" in response:
+            for pane in self.chat_panes.values():
+                pane.set_models([])
             self.statusBar().showMessage(f"Models unavailable: {_error_text(response)}", 8000)
             return
         result = response.get("result", {})
