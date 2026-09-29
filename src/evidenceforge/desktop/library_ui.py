@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QDropEvent,
+    QFontDatabase,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QToolButton,
@@ -140,6 +142,7 @@ class LibraryPane(QWidget):
         self._expanded_before_search: set[str] | None = None
         self._recent_paths: tuple[Path, ...] = ()
         self._programmatic_highlight: QTreeWidgetItem | None = None
+        self._preview_key: tuple[Path, float] | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(25, 24, 25, 24)
         outer.setSpacing(20)
@@ -247,6 +250,7 @@ class LibraryPane(QWidget):
         right = QFrame()
         right.setObjectName("panel")
         details = QVBoxLayout(right)
+        self._detail_layout = details
         details.setContentsMargins(26, 24, 26, 24)
         details.setSpacing(14)
         self.kind_label = QLabel("SELECT AN ITEM")
@@ -308,7 +312,16 @@ class LibraryPane(QWidget):
         self.destination.setObjectName("muted")
         self.destination.setWordWrap(True)
         details.addWidget(self.destination)
-        details.addStretch()
+        self.source_heading = QLabel("YAML PREVIEW")
+        self.source_heading.setObjectName("eyebrow")
+        details.addWidget(self.source_heading)
+        self.source_preview = QPlainTextEdit()
+        self.source_preview.setReadOnly(True)
+        self.source_preview.setAccessibleName("YAML source preview")
+        self.source_preview.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        details.addWidget(self.source_preview, 1)
+        self._detail_filler_index = details.count()
+        details.addStretch(1)
         self.action_controls = QWidget()
         self.action_controls.setObjectName("inlineControls")
         action_row = QHBoxLayout(self.action_controls)
@@ -978,6 +991,9 @@ class LibraryPane(QWidget):
         self.action_controls.setVisible(enabled)
         self.secondary_controls.setVisible(enabled)
         if item is None:
+            self.source_heading.hide()
+            self.source_preview.hide()
+            self._detail_layout.setStretch(self._detail_filler_index, 1)
             folder = self.selected_folder_name()
             self.kind_label.setText("FOLDER" if folder is not None else "SELECT AN ITEM")
             self.name.setText((folder or "Unfiled") if folder is not None else "Choose an item")
@@ -1087,7 +1103,38 @@ class LibraryPane(QWidget):
         self.evaluate.setEnabled(any(job.status == "completed" for job in related))
         self.hide.setToolTip("Unhide" if item.path in self.hidden_paths else "Hide")
         self.hide.setAccessibleName(self.hide.toolTip())
+        preview_key = (item.path, item.modified_at)
+        if preview_key != self._preview_key:
+            self.source_preview.setPlainText(self._source_excerpt(item))
+            self.source_preview.setToolTip(str(item.path))
+            self._preview_key = preview_key
+        self.source_heading.show()
+        self.source_preview.show()
+        self._detail_layout.setStretch(self._detail_filler_index, 0)
         self._set_scenario_sections(self.scenario_mode)
+
+    @staticmethod
+    def _source_excerpt(item: LibraryItem) -> str:
+        try:
+            if item.search_text:
+                source = item.search_text[:120_001]
+                truncated = len(item.search_text) > 120_000
+            else:
+                with item.path.open(encoding="utf-8") as stream:
+                    source = stream.read(120_001)
+                truncated = len(source) > 120_000
+        except (OSError, UnicodeError) as error:
+            return f"Could not preview {item.path.name}: {error}"
+        lines = source[:120_000].splitlines()
+        if len(lines) > 300:
+            lines = lines[:300]
+            truncated = True
+        preview = "\n".join(lines)
+        return (
+            f"{preview}\n\n… Preview limited to 300 lines or 120 KB. Open the file for the full YAML."
+            if truncated
+            else preview
+        )
 
     def _clear_programmatic_highlight(self) -> None:
         if self._programmatic_highlight is None or not self.tree.selectedItems():

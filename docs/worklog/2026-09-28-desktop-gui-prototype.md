@@ -201,3 +201,15 @@ history area has a count and empty state. A disposable Qt layout test covers
 wide and narrow windows and visibility changes; existing multi-job progress
 tests remain in the desktop Settings suite. A dark-theme render was reviewed
 at 1600×1000.
+
+## Other pane space audit
+
+Reviewed Scenarios, Industry packs, Org packs, Authoring, and all three Settings
+categories at 1900×1200. Scenario and pack detail panes had large empty regions
+between their metadata and bottom actions. They now show a bounded, read-only
+YAML preview; its scroll position survives routine refreshes. Settings category
+surfaces now fit their content and cap at 1100 pixels wide. The authoring
+transcript already uses the available space for conversation. Offscreen renders
+of the scenario, industry pack, and Workspace Settings views were inspected;
+library and settings interaction tests cover preview visibility and compact
+panel geometry. A richer pack contents inspector remains part of Stage 2.

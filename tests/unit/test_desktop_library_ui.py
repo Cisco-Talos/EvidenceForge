@@ -55,6 +55,8 @@ def test_library_is_landing_page_and_saves_evaluation(
         assert window.pages.currentIndex() == 0
         item = window.scenario_library.selected_item()
         assert item is not None and item.name == "demo"
+        assert "name: demo" in window.scenario_library.source_preview.toPlainText()
+        assert not window.scenario_library.source_preview.isHidden()
         window._evaluate_latest(item)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -110,6 +112,8 @@ def test_folder_and_content_filters_work_together(
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Project A", True))
         window._create_scenario_folder()
         assert pane.selected_folder_name() == "Project A"
+        pane.select_folder("Project A")
+        assert pane.source_preview.isHidden()
         assert len(pane._tree_items) == 1
         assert store.load(workspace).scenario_folders[str(workspace)].names == ["Project A"]
 

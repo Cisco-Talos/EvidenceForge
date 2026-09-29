@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
+from PySide6.QtWidgets import QApplication, QFrame, QMessageBox, QToolButton
 
 from evidenceforge.desktop import controller
 from evidenceforge.desktop.app_server import CodexBridge
@@ -95,6 +95,12 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     assert pane.pages.currentIndex() == 1
     assert pane.category_buttons[1].isChecked()
     pane.show()
+    pane.resize(1600, 900)
+    QApplication.processEvents()
+    workspace_surface = pane.pages.widget(0).widget().findChild(QFrame, "settingsSurface")
+    assert workspace_surface is not None
+    assert workspace_surface.width() <= 1100
+    assert workspace_surface.height() < 450
     pane.category_buttons[2].setFocus()
     QTest.keyClick(pane.category_buttons[2], Qt.Key.Key_Space)
     assert pane.pages.currentIndex() == 2

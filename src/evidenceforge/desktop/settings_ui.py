@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QStyle,
     QStyleOptionButton,
@@ -202,7 +203,6 @@ class SettingsPane(QWidget):
                 self.remember_library_view,
             )
         )
-        workspace_layout.addStretch()
         self.pages.addWidget(workspace_page)
 
         jobs_page, jobs_layout = self._page(
@@ -318,7 +318,6 @@ class SettingsPane(QWidget):
             )
         )
         jobs_layout.addWidget(self.kill_group)
-        jobs_layout.addStretch()
         self.pages.addWidget(jobs_page)
 
         tools_page, tools_layout = self._page(
@@ -417,7 +416,6 @@ class SettingsPane(QWidget):
             "Optional path to eforge. Leave blank to use this Python environment's CLI.",
             settings.eforge_path,
         )
-        tools_layout.addStretch()
         self.pages.addWidget(tools_page)
 
         self._set_choice(self.close_action, settings.close_action)
@@ -456,6 +454,8 @@ class SettingsPane(QWidget):
         content_layout.setContentsMargins(0, 0, 0, 0)
         surface = QFrame()
         surface.setObjectName("settingsSurface")
+        surface.setMaximumWidth(1100)
+        surface.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(surface)
         layout.setContentsMargins(22, 20, 22, 20)
         layout.setSpacing(4)
