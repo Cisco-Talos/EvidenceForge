@@ -19,6 +19,7 @@ from PySide6.QtGui import (
     QFontDatabase,
     QKeyEvent,
     QKeySequence,
+    QResizeEvent,
     QShortcut,
     QTextCharFormat,
     QTextCursor,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QStackedWidget,
     QTabBar,
     QTabWidget,
@@ -90,6 +92,8 @@ QLabel { background: transparent; }
 QMainWindow, QTabWidget::pane { background: #0d111a; }
 QFrame#sidebar { background: #111722; border-right: 1px solid #263040; }
 QFrame#panel { background: #151d2a; border: 1px solid #2b3648; border-radius: 14px; }
+QFrame#jobCard { background: #151d2a; border: 1px solid #35445b; border-radius: 12px; }
+QScrollArea#jobsScroll { background: transparent; border: none; }
 QWidget#inlineControls { background: transparent; }
 QLabel#brand { font-size: 19px; font-weight: 800; color: #f5f8fd; }
 QLabel#pageTitle { font-size: 32px; font-weight: 750; color: #f5f8fd; }
@@ -312,7 +316,7 @@ class ChatPane(QWidget):
         self.status.setText("Codex is working…" if busy else "Ready")
 
 
-class JobCard(QWidget):
+class JobCard(QFrame):
     """Live progress and controls for one detached generation."""
 
     suspend_requested = Signal(object)
@@ -321,10 +325,10 @@ class JobCard(QWidget):
     def __init__(self, job: GenerationJob) -> None:
         super().__init__()
         self.job = job
-        self.setStyleSheet(
-            "JobCard { background: #192334; border: 1px solid #35445b; border-radius: 12px; }"
-        )
+        self.setObjectName("jobCard")
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(8)
         top = QHBoxLayout()
         title = QLabel(job.scenario.stem)
         title.setObjectName("heading")
@@ -417,6 +421,7 @@ class JobsPane(QWidget):
         super().__init__()
         self.cards: dict[str, JobCard] = {}
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
         title = QLabel("Generation jobs")
         title.setObjectName("heading")
         header = QHBoxLayout()
@@ -460,18 +465,69 @@ class JobsPane(QWidget):
         )
         destination_row.addWidget(generate)
         layout.addLayout(destination_row)
+        self.work_area = QSplitter(Qt.Orientation.Horizontal)
+        self.work_area.setChildrenCollapsible(False)
+        validation_panel = QWidget()
+        validation_layout = QVBoxLayout(validation_panel)
+        validation_layout.setContentsMargins(0, 0, 8, 0)
+        validation_layout.setSpacing(8)
+        validation_heading = QLabel("VALIDATION FINDINGS")
+        validation_heading.setObjectName("eyebrow")
+        validation_layout.addWidget(validation_heading)
         self.validation = QPlainTextEdit()
         self.validation.setReadOnly(True)
         self.validation.setPlaceholderText("Validation results appear here.")
-        self.validation.setFixedHeight(190)
-        layout.addWidget(self.validation)
+        self.validation.setAccessibleName("Validation findings")
+        self.validation.textChanged.connect(self._update_validation_visibility)
+        validation_layout.addWidget(self.validation, 1)
+        self.validation_panel = validation_panel
+        self.work_area.addWidget(validation_panel)
+        jobs_panel = QWidget()
+        jobs_layout = QVBoxLayout(jobs_panel)
+        jobs_layout.setContentsMargins(8, 0, 0, 0)
+        jobs_layout.setSpacing(8)
+        jobs_heading = QHBoxLayout()
+        jobs_label = QLabel("RUN HISTORY")
+        jobs_label.setObjectName("eyebrow")
+        jobs_heading.addWidget(jobs_label)
+        jobs_heading.addStretch()
+        self.job_count = QLabel("0 runs")
+        self.job_count.setObjectName("subtle")
+        jobs_heading.addWidget(self.job_count)
+        jobs_layout.addLayout(jobs_heading)
         scroll = QScrollArea()
+        scroll.setObjectName("jobsScroll")
         scroll.setWidgetResizable(True)
         container = QWidget()
         self.card_layout = QVBoxLayout(container)
+        self.card_layout.setContentsMargins(0, 0, 8, 0)
+        self.card_layout.setSpacing(12)
         self.card_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.empty_jobs = QLabel("No generation jobs yet. Choose a scenario and generate a run.")
+        self.empty_jobs.setObjectName("subtle")
+        self.card_layout.addWidget(self.empty_jobs)
         scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
+        jobs_layout.addWidget(scroll, 1)
+        self.work_area.addWidget(jobs_panel)
+        self.work_area.setStretchFactor(0, 3)
+        self.work_area.setStretchFactor(1, 2)
+        self.work_area.setSizes([900, 600])
+        layout.addWidget(self.work_area, 1)
+        self._update_validation_visibility()
+
+    def _update_validation_visibility(self) -> None:
+        self.validation_panel.setVisible(bool(self.validation.toPlainText().strip()))
+
+    @override
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """Keep both work areas usable when the desktop window is narrow."""
+        orientation = Qt.Orientation.Horizontal if self.width() >= 980 else Qt.Orientation.Vertical
+        if self.work_area.orientation() != orientation:
+            self.work_area.setOrientation(orientation)
+            self.work_area.setSizes(
+                [900, 600] if orientation == Qt.Orientation.Horizontal else [350, 550]
+            )
+        super().resizeEvent(event)
 
     def _browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -494,6 +550,9 @@ class JobsPane(QWidget):
         card.resume_requested.connect(self.resume_requested.emit)
         self.cards[job.id] = card
         self.card_layout.insertWidget(0, card)
+        self.empty_jobs.hide()
+        count = len(self.cards)
+        self.job_count.setText(f"{count} {'run' if count == 1 else 'runs'}")
 
 
 class MainWindow(QMainWindow):

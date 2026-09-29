@@ -188,3 +188,16 @@ deselected), followed by focused Stage 1 tests after the final UI refinements.
 Ruff check and format passed; the library, folder overview, search results, and
 command menu were reviewed in dark-theme renders. Linux and macOS desktop
 interaction CI already covers the updated tests.
+
+## Runs page space use
+
+The original Runs view placed validation in a fixed 190-pixel-high text box above
+full-width job cards, leaving most of a tall window empty with one run. The
+validation findings and run history now share a resizable split area beneath
+the run controls. Findings use the full available height, jobs remain scrollable,
+and the split stacks vertically in narrow windows. When validation is empty,
+the jobs area takes the full width. Job cards have a distinct surface and the
+history area has a count and empty state. A disposable Qt layout test covers
+wide and narrow windows and visibility changes; existing multi-job progress
+tests remain in the desktop Settings suite. A dark-theme render was reviewed
+at 1600×1000.
