@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import override
 
-from PySide6.QtCore import QPoint, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QDesktopServices, QDropEvent
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import (
+    QAccessible,
+    QActionGroup,
+    QColor,
+    QDesktopServices,
+    QDropEvent,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -127,6 +134,12 @@ class LibraryPane(QWidget):
         self._last_selected_folder: str | None = None
         self._tree_items: dict[Path, QTreeWidgetItem] = {}
         self._folder_items: dict[str, QTreeWidgetItem] = {}
+        self._all_tree_items: dict[Path, QTreeWidgetItem] = {}
+        self._all_folder_items: dict[str, QTreeWidgetItem] = {}
+        self._tree_signature: tuple[object, ...] | None = None
+        self._expanded_before_search: set[str] | None = None
+        self._recent_paths: tuple[Path, ...] = ()
+        self._programmatic_highlight: QTreeWidgetItem | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(25, 24, 25, 24)
         outer.setSpacing(20)
@@ -224,6 +237,7 @@ class LibraryPane(QWidget):
         self.tree = ScenarioTree()
         self.tree.setObjectName("libraryTree")
         self.tree.currentItemChanged.connect(self._selection_changed)
+        self.tree.itemSelectionChanged.connect(self._clear_programmatic_highlight)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._open_context_menu)
         self.tree.move_requested.connect(self._move_path)
@@ -509,7 +523,7 @@ class LibraryPane(QWidget):
         if target is not None:
             if target.parent() is not None:
                 target.parent().setExpanded(True)
-            self.tree.setCurrentItem(target)
+            self._set_current_item(target)
             self.tree.scrollToItem(target)
 
     def select_folder(self, name: str) -> None:
@@ -517,7 +531,7 @@ class LibraryPane(QWidget):
         target = self._folder_items.get(name)
         if target is not None:
             target.setExpanded(True)
-            self.tree.setCurrentItem(target)
+            self._set_current_item(target)
 
     def selected_folder_name(self) -> str | None:
         """Return the selected row's folder, or None when nothing is selected."""
@@ -669,32 +683,87 @@ class LibraryPane(QWidget):
         self._populating = True
         selected = self.selected_item()
         selected_folder = self.selected_folder_name() if selected is None else None
-        expanded = {name for name, row in self._folder_items.items() if row.isExpanded()}
-        first_render = not self._folder_items
         visible = self._visible_items()
+        searching = bool(self.search.text().strip())
+        if searching and self._expanded_before_search is None:
+            self._expanded_before_search = {
+                name for name, row in self._all_folder_items.items() if row.isExpanded()
+            }
+        restore_expansion = self._expanded_before_search if not searching else None
         self.tree.blockSignals(True)
-        self.tree.clear()
+        signature: tuple[object, ...] = (
+            tuple(self.folder_names),
+            tuple(
+                (
+                    item.path,
+                    item.name,
+                    item.description,
+                    item.version,
+                    item.modified_at,
+                    self.folder_assignments.get(str(item.path), ""),
+                    item.path in self.hidden_paths,
+                )
+                for item in self.items
+            ),
+        )
+        if signature != self._tree_signature:
+            expanded = {name for name, row in self._all_folder_items.items() if row.isExpanded()}
+            first_render = self._tree_signature is None
+            self._programmatic_highlight = None
+            self.tree.clear()
+            self._all_tree_items.clear()
+            self._all_folder_items.clear()
+            if self.scenario_mode:
+                groups: dict[str, list[LibraryItem]] = {"": []}
+                groups.update({name: [] for name in self.folder_names})
+                for item in self.items:
+                    folder = self.folder_assignments.get(str(item.path), "")
+                    groups.setdefault(folder if folder in self.folder_names else "", []).append(
+                        item
+                    )
+                for folder, members in groups.items():
+                    self._add_folder_row(folder, members, first_render or folder in expanded)
+            else:
+                for item in sorted(self.items, key=lambda entry: entry.name.casefold()):
+                    row = QTreeWidgetItem(self.tree, [self._row_text(item), ""])
+                    row.setData(0, Qt.ItemDataRole.UserRole, "scenario")
+                    row.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
+                    row.setIcon(0, icon("file"))
+                    row.setToolTip(0, f"{item.description}\n{item.path}")
+                    self._all_tree_items[item.path] = row
+                    self._add_row_menu(row, item)
+            self._tree_signature = signature
         self._tree_items.clear()
         self._folder_items.clear()
+        visible_paths = {item.path for item in visible}
+        for item in self.items:
+            row = self._all_tree_items[item.path]
+            is_visible = item.path in visible_paths
+            row.setHidden(not is_visible)
+            if is_visible:
+                row.setText(0, self._row_text(item))
+                row.setSizeHint(0, QSize(0, 48) if self.search.text().strip() else QSize())
+                self._tree_items[item.path] = row
         if self.scenario_mode:
-            groups: dict[str, list[LibraryItem]] = {"": []}
-            groups.update({name: [] for name in self.folder_names})
+            groups: dict[str, list[LibraryItem]] = {name: [] for name in self._all_folder_items}
             for item in visible:
                 folder = self.folder_assignments.get(str(item.path), "")
                 groups.setdefault(folder if folder in self.folder_names else "", []).append(item)
             for folder, members in groups.items():
-                if not members and (self.search.text().strip() or self._active_filter_count()):
-                    continue
-                self._add_folder_row(folder, members, first_render or folder in expanded)
-        else:
-            for item in sorted(visible, key=lambda entry: entry.name.casefold()):
-                row = QTreeWidgetItem(self.tree, [self._row_text(item), ""])
-                row.setData(0, Qt.ItemDataRole.UserRole, "scenario")
-                row.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
-                row.setIcon(0, icon("file"))
-                row.setToolTip(0, f"{item.description}\n{item.path}")
-                self._tree_items[item.path] = row
-                self._add_row_menu(row, item)
+                row = self._all_folder_items[folder]
+                is_visible = bool(members) or not (
+                    self.search.text().strip() or self._active_filter_count()
+                )
+                row.setHidden(not is_visible)
+                if is_visible:
+                    row.setText(0, self._folder_label(folder, members))
+                    self._folder_items[folder] = row
+                    if searching:
+                        row.setExpanded(True)
+                if restore_expansion is not None:
+                    row.setExpanded(folder in restore_expansion)
+            if restore_expansion is not None:
+                self._expanded_before_search = None
         target = self._tree_items.get(selected.path) if selected is not None else None
         if target is None and selected_folder is not None and not self.search.text().strip():
             target = self._folder_items.get(selected_folder)
@@ -702,7 +771,8 @@ class LibraryPane(QWidget):
             target = next(iter(self._tree_items.values()))
         if target is None and self._folder_items:
             target = next(iter(self._folder_items.values()))
-        self.tree.setCurrentItem(target)
+        if self.tree.currentItem() is not target:
+            self._set_current_item(target)
         self.tree.blockSignals(False)
         self._selection_changed()
         self.result_count.setText(
@@ -719,22 +789,27 @@ class LibraryPane(QWidget):
         )
         self._populating = False
 
+    def _set_current_item(self, target: QTreeWidgetItem | None) -> None:
+        if self._programmatic_highlight is not None:
+            self._programmatic_highlight.setData(0, Qt.ItemDataRole.BackgroundRole, None)
+            self._programmatic_highlight.setData(0, Qt.ItemDataRole.ForegroundRole, None)
+            self._programmatic_highlight = None
+        if sys.platform != "darwin" or not QAccessible.isActive():
+            self.tree.setCurrentItem(target)
+            return
+        # Cocoa's accessibility cache can still report zero rows here. A selection
+        # event then produces a misleading out-of-bounds warning for a valid row.
+        selection = self.tree.selectionModel()
+        selection.clearSelection()
+        index = self.tree.indexFromItem(target) if target is not None else QModelIndex()
+        selection.setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
+        if target is not None:
+            target.setBackground(0, QColor("#293959"))
+            target.setForeground(0, QColor("#ffffff"))
+            self._programmatic_highlight = target
+
     def _add_folder_row(self, folder: str, members: list[LibraryItem], expand: bool) -> None:
-        label = folder or "Unfiled"
-        active = sum(
-            self._latest_job(item) is not None
-            and self._latest_job(item).status in {"queued", "running", "paused"}
-            for item in members
-        )
-        attention = sum(
-            self._latest_job(item) is not None
-            and self._latest_job(item).status in {"failed", "stopped", "cancelled"}
-            for item in members
-        )
-        suffix = f" · {active} active" if active else ""
-        if attention:
-            suffix += f" · {attention} need attention"
-        row = QTreeWidgetItem(self.tree, [f"{label}  ({len(members)}){suffix}", ""])
+        row = QTreeWidgetItem(self.tree, [self._folder_label(folder, members), ""])
         row.setData(0, Qt.ItemDataRole.UserRole, "folder")
         row.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
         row.setIcon(0, icon("folder"))
@@ -742,7 +817,7 @@ class LibraryPane(QWidget):
             Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDropEnabled
         )
         row.setExpanded(expand or bool(self.search.text().strip()))
-        self._folder_items[folder] = row
+        self._all_folder_items[folder] = row
         if folder:
             more = QToolButton(self.tree)
             more.setIcon(icon("more"))
@@ -762,8 +837,7 @@ class LibraryPane(QWidget):
             more.setMenu(menu)
             self.tree.setItemWidget(row, 1, more)
         for item in sorted(members, key=lambda entry: entry.name.casefold()):
-            name = self._row_text(item)
-            child = QTreeWidgetItem(row, [name, ""])
+            child = QTreeWidgetItem(row, [self._row_text(item), ""])
             child.setData(0, Qt.ItemDataRole.UserRole, "scenario")
             child.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
             child.setIcon(0, icon("file"))
@@ -773,10 +847,25 @@ class LibraryPane(QWidget):
                 | Qt.ItemFlag.ItemIsDragEnabled
             )
             child.setToolTip(0, f"{item.description}\n{item.path}")
-            if self.search.text().strip():
-                child.setSizeHint(0, QSize(0, 48))
-            self._tree_items[item.path] = child
+            self._all_tree_items[item.path] = child
             self._add_row_menu(child, item)
+
+    def _folder_label(self, folder: str, members: list[LibraryItem]) -> str:
+        label = folder or "Unfiled"
+        active = sum(
+            self._latest_job(item) is not None
+            and self._latest_job(item).status in {"queued", "running", "paused"}
+            for item in members
+        )
+        attention = sum(
+            self._latest_job(item) is not None
+            and self._latest_job(item).status in {"failed", "stopped", "cancelled"}
+            for item in members
+        )
+        suffix = f" · {active} active" if active else ""
+        if attention:
+            suffix += f" · {attention} need attention"
+        return f"{label}  ({len(members)}){suffix}"
 
     def _row_text(self, item: LibraryItem) -> str:
         hidden = " · Hidden" if item.path in self.hidden_paths else ""
@@ -864,6 +953,7 @@ class LibraryPane(QWidget):
             self.select_path(path)
 
     def _selection_changed(self, *_args: object) -> None:
+        self._clear_programmatic_highlight()
         item = self.selected_item()
         current = self.tree.currentItem()
         selected_folder = (
@@ -937,13 +1027,20 @@ class LibraryPane(QWidget):
             if attention:
                 overview += f" · {attention} need attention"
             self.metadata.setText(overview if folder is not None else "")
-            self.folder_recent.clear()
             recent = sorted(members, key=lambda candidate: candidate.modified_at, reverse=True)[:6]
-            for entry in recent:
-                row = QListWidgetItem(f"{entry.name}  ·  {self._status_summary(entry)}")
-                row.setData(Qt.ItemDataRole.UserRole, entry.path)
-                row.setToolTip(str(entry.path))
-                self.folder_recent.addItem(row)
+            recent_paths = tuple(entry.path for entry in recent)
+            if recent_paths != self._recent_paths:
+                self.folder_recent.clear()
+                for entry in recent:
+                    row = QListWidgetItem()
+                    row.setData(Qt.ItemDataRole.UserRole, entry.path)
+                    row.setToolTip(str(entry.path))
+                    self.folder_recent.addItem(row)
+                self._recent_paths = recent_paths
+            for index, entry in enumerate(recent):
+                self.folder_recent.item(index).setText(
+                    f"{entry.name}  ·  {self._status_summary(entry)}"
+                )
             self.folder_recent.setFixedHeight(min(250, 12 + 45 * len(recent)))
             self.folder_recent_heading.setVisible(bool(members))
             self.folder_recent.setVisible(bool(members))
@@ -991,6 +1088,13 @@ class LibraryPane(QWidget):
         self.hide.setToolTip("Unhide" if item.path in self.hidden_paths else "Hide")
         self.hide.setAccessibleName(self.hide.toolTip())
         self._set_scenario_sections(self.scenario_mode)
+
+    def _clear_programmatic_highlight(self) -> None:
+        if self._programmatic_highlight is None or not self.tree.selectedItems():
+            return
+        self._programmatic_highlight.setData(0, Qt.ItemDataRole.BackgroundRole, None)
+        self._programmatic_highlight.setData(0, Qt.ItemDataRole.ForegroundRole, None)
+        self._programmatic_highlight = None
 
     def _set_scenario_sections(self, visible: bool) -> None:
         for widget in (

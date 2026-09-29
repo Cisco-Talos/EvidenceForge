@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
+from PySide6.QtGui import QAccessible, QColor
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox, QTabBar
 
 from evidenceforge.desktop.app_server import CodexBridge
@@ -93,9 +94,18 @@ def test_folder_and_content_filters_work_together(
     try:
         pane = window.scenario_library
         assert len(pane._tree_items) == 2
+        alpha_path = workspace / "scenarios" / "alpha" / "scenario.yaml"
+        alpha_row = pane._tree_items[alpha_path]
+        rows_removed = QSignalSpy(pane.tree.model().rowsRemoved)
         pane.search.setText("WS-MAYA-01")
         assert len(pane._tree_items) == 1
         assert pane.selected_item() is not None and pane.selected_item().name == "alpha"
+        assert pane._tree_items[alpha_path] is alpha_row
+        pane.search.setText("no matching scenario")
+        assert not pane._tree_items
+        pane.search.setText("WS-MAYA-01")
+        assert pane._tree_items[alpha_path] is alpha_row
+        assert rows_removed.count() == 0
 
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Project A", True))
         window._create_scenario_folder()
@@ -147,6 +157,43 @@ def test_folder_and_content_filters_work_together(
         assert len(pane._tree_items) == 2
     finally:
         window.close()
+        app.processEvents()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Cocoa accessibility workaround")
+def test_accessible_library_selection_keeps_visible_highlight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    for name in ("alpha", "beta"):
+        scenario = workspace / "scenarios" / name / "scenario.yaml"
+        scenario.parent.mkdir(parents=True)
+        scenario.write_text(f"version: '1.0'\nname: {name}\nenvironment: {{}}\n")
+    accessibility_was_active = QAccessible.isActive()
+    QAccessible.setActive(True)
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    try:
+        window.show()
+        app.processEvents()
+        pane = window.scenario_library
+        first = pane.tree.currentItem()
+        assert first is not None
+        assert first.background(0).color() == QColor("#293959")
+        beta = workspace / "scenarios" / "beta" / "scenario.yaml"
+        pane.select_path(beta)
+        assert pane.tree.currentItem() is pane._tree_items[beta]
+        assert pane._tree_items[beta].background(0).color() == QColor("#293959")
+        assert first.background(0).color() != QColor("#293959")
+        rectangle = pane.tree.visualItemRect(first)
+        QTest.mouseClick(pane.tree.viewport(), Qt.MouseButton.LeftButton, pos=rectangle.center())
+        assert pane.tree.selectedItems() == [first]
+        assert pane._programmatic_highlight is None
+    finally:
+        window.close()
+        QAccessible.setActive(accessibility_was_active)
         app.processEvents()
 
 
@@ -236,6 +283,11 @@ def test_stage_one_status_snippets_folder_overview_and_saved_views(
         pane.select_folder("Research")
         assert "1 active" in pane.metadata.text()
         assert "alpha" in pane.folder_recent.item(0).text()
+        recent_row = pane.folder_recent.item(0)
+        scenario_row = pane._tree_items[scenario]
+        window._refresh_libraries()
+        assert pane.folder_recent.item(0) is recent_row
+        assert pane._tree_items[scenario] is scenario_row
         pane.folder_recent.itemClicked.emit(pane.folder_recent.item(0))
         assert pane.selected_item().path == scenario
         pane.select_folder("Research")
