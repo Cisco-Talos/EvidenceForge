@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, override
 from uuid import uuid4
 
+from pydantic import ValidationError
 from PySide6.QtCore import QProcess, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
@@ -27,6 +29,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -45,7 +48,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTabBar,
     QTabWidget,
-    QTextEdit,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -56,7 +59,7 @@ from evidenceforge.cli.install_skills import (
     install_chatgpt_skills,
     install_skills,
 )
-from evidenceforge.desktop.app_server import CodexBridge
+from evidenceforge.desktop.app_server import CodexBridge, CodexModel
 from evidenceforge.desktop.command_palette import Command, CommandPalette
 from evidenceforge.desktop.controller import ensure_controller
 from evidenceforge.desktop.icons import icon
@@ -204,27 +207,58 @@ class ChatComposer(QPlainTextEdit):
 
 
 class ChatPane(QWidget):
-    """One authoring conversation with its own selected EvidenceForge skill."""
+    """One conversation with its own context, model choices, and skill override."""
 
     send_requested = Signal(object, str)
     interrupt_requested = Signal(object)
+    configuration_changed = Signal()
 
     def __init__(self, record: ChatRecord) -> None:
         super().__init__()
         self.record = record
         self._stream_item: str | None = None
+        self._models: dict[str, CodexModel] = {}
+        self._activity: dict[str, list[dict[str, Any]]] = {}
+        self._activity_items: dict[tuple[str, str], int] = {}
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+        self.context = QLabel()
+        self.context.setObjectName("subtle")
+        self.context.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if record.context_kind:
+            target = str(record.context_path) if record.context_path else "this workspace"
+            self.context.setText(f"{record.context_kind.title()} · {target}")
+            self.context.setToolTip(target)
+        else:
+            self.context.hide()
+        layout.addWidget(self.context)
         header = QHBoxLayout()
         header.addStretch()
+        header.addWidget(QLabel("Model"))
+        self.model = QComboBox()
+        self.model.setAccessibleName("Codex model")
+        self.model.setToolTip("Choose the model for the next message in this chat")
+        self.model.addItem("Default model", None)
+        self.model.setEnabled(False)
+        self.model.currentIndexChanged.connect(self._model_changed)
+        header.addWidget(self.model)
+        header.addWidget(QLabel("Reasoning"))
+        self.reasoning = QComboBox()
+        self.reasoning.setAccessibleName("Reasoning effort")
+        self.reasoning.setToolTip("Choose how much reasoning to use for the next message")
+        self.reasoning.addItem("Default", None)
+        self.reasoning.setEnabled(False)
+        self.reasoning.currentIndexChanged.connect(self._reasoning_changed)
+        header.addWidget(self.reasoning)
         header.addWidget(QLabel("Skill for this message"))
         self.skill = QComboBox()
         self.skill.setMinimumWidth(190)
         self.skill.addItem(record.skill_name, None)
         header.addWidget(self.skill)
         layout.addLayout(header)
-        self.transcript = QTextEdit()
-        self.transcript.setReadOnly(True)
+        self.transcript = QTextBrowser()
+        self.transcript.setOpenLinks(False)
+        self.transcript.anchorClicked.connect(self._show_activity)
         self.transcript.setPlaceholderText("Describe the scenario you want to create or revise.")
         layout.addWidget(self.transcript, 1)
         self.prompt = ChatComposer()
@@ -250,6 +284,57 @@ class ChatPane(QWidget):
         self.send.clicked.connect(self._send)
         controls.addWidget(self.send)
         layout.addLayout(controls)
+
+    def set_models(self, models: list[CodexModel]) -> None:
+        """Show only model and effort combinations advertised by app-server."""
+        previous = (self.record.model_id, self.record.reasoning_effort)
+        self._models = {model.id: model for model in models}
+        default = next((model for model in models if model.is_default), None)
+        self.model.blockSignals(True)
+        self.model.clear()
+        self.model.addItem(
+            f"Default · {default.display_name}" if default is not None else "Default model", None
+        )
+        for option in models:
+            self.model.addItem(option.display_name, option.id)
+        index = self.model.findData(self.record.model_id)
+        self.model.setCurrentIndex(index if index >= 0 else 0)
+        if models:
+            self.record.model_id = self.model.currentData()
+        self.model.blockSignals(False)
+        self.model.setEnabled(bool(models))
+        self._refresh_efforts()
+        if previous != (self.record.model_id, self.record.reasoning_effort):
+            self.configuration_changed.emit()
+
+    def _model_changed(self) -> None:
+        self.record.model_id = self.model.currentData()
+        self._refresh_efforts()
+        self.configuration_changed.emit()
+
+    def _refresh_efforts(self) -> None:
+        chosen = self._models.get(self.record.model_id or "")
+        if chosen is None:
+            chosen = next((model for model in self._models.values() if model.is_default), None)
+        self.reasoning.blockSignals(True)
+        self.reasoning.clear()
+        self.reasoning.addItem("Default", None)
+        if chosen is not None:
+            for effort in chosen.efforts:
+                self.reasoning.addItem(effort.value.title(), effort.value)
+                self.reasoning.setItemData(
+                    self.reasoning.count() - 1, effort.description, Qt.ItemDataRole.ToolTipRole
+                )
+        index = self.reasoning.findData(self.record.reasoning_effort)
+        self.reasoning.setCurrentIndex(index if index >= 0 else 0)
+        if self._models:
+            self.record.reasoning_effort = self.reasoning.currentData()
+        self.reasoning.blockSignals(False)
+        self.reasoning.setEnabled(chosen is not None and bool(chosen.efforts))
+
+    def _reasoning_changed(self) -> None:
+        self.record.reasoning_effort = self.reasoning.currentData()
+        self.configuration_changed.emit()
 
     def set_skills(self, skills: dict[str, str]) -> None:
         """Refresh skill choices while retaining this tab's selection."""
@@ -309,6 +394,69 @@ class ChatPane(QWidget):
         cursor.insertText(delta, body_format)
         self.transcript.setTextCursor(cursor)
         self.transcript.ensureCursorVisible()
+
+    def add_activity(self, turn_id: str, item: dict[str, Any]) -> None:
+        """Keep tool and reasoning details behind one link per turn."""
+        item_id = str(item.get("id") or len(self._activity.get(turn_id, [])))
+        entries = self._activity.setdefault(turn_id, [])
+        key = (turn_id, item_id)
+        if key in self._activity_items:
+            entries[self._activity_items[key]] = item
+            return
+        self._activity_items[key] = len(entries)
+        entries.append(item)
+        if len(entries) != 1:
+            return
+        self._stream_item = None
+        cursor = self.transcript.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        link_format = QTextCharFormat()
+        link_format.setForeground(QColor("#9caabe"))
+        link_format.setAnchor(True)
+        link_format.setAnchorHref(f"activity:{turn_id}")
+        link_format.setFontUnderline(True)
+        cursor.insertText("\nView activity\n", link_format)
+        self.transcript.setTextCursor(cursor)
+        self.transcript.ensureCursorVisible()
+
+    def _show_activity(self, url: QUrl) -> None:
+        turn_id = url.toString().removeprefix("activity:")
+        entries = self._activity.get(turn_id, [])
+        if not entries:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Codex activity")
+        dialog.resize(760, 500)
+        layout = QVBoxLayout(dialog)
+        detail = QPlainTextEdit(dialog)
+        detail.setReadOnly(True)
+        detail.setPlainText("\n\n".join(self._activity_text(entry) for entry in entries))
+        layout.addWidget(detail)
+        close = QPushButton("Close", dialog)
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+
+    @staticmethod
+    def _activity_text(item: dict[str, Any]) -> str:
+        kind = str(item.get("type", "Activity"))
+        if kind == "commandExecution":
+            lines = [f"Command · {item.get('command', 'Unknown command')}"]
+            if item.get("cwd"):
+                lines.append(f"Directory: {item['cwd']}")
+            if item.get("exitCode") is not None:
+                lines.append(f"Exit code: {item['exitCode']}")
+            output = item.get("aggregatedOutput") or item.get("output")
+            if output:
+                lines.extend(("", str(output)))
+            return "\n".join(lines)
+        if kind == "fileChange":
+            changes = item.get("changes")
+            return "File changes\n" + json.dumps(changes, indent=2, ensure_ascii=False)
+        if kind == "reasoning":
+            summary = item.get("summary") or item.get("text")
+            return "Reasoning summary\n" + (str(summary) if summary else "No summary was provided.")
+        return f"{kind}\n" + json.dumps(item, indent=2, ensure_ascii=False)
 
     def set_busy(self, busy: bool) -> None:
         self.send.setEnabled(not busy)
@@ -566,6 +714,7 @@ class MainWindow(QMainWindow):
         self.job_store.migrate_generations(state.jobs)
         self.state.jobs = self.job_store.load_generations()
         self.skills: dict[str, str] = {}
+        self.models: list[CodexModel] = []
         self.chat_panes: dict[str, ChatPane] = {}
         self.job_progress: dict[str, GenerationProgress] = {}
         self.evaluation_jobs: dict[str, EvaluationJob] = {
@@ -1049,10 +1198,12 @@ class MainWindow(QMainWindow):
             id=uuid4().hex,
             title=item.name,
             skill_name="eforge-scenario",
+            context_path=item.path,
+            context_kind="scenario",
         )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
-        pane.prompt.setPlainText(f"Help me revise the scenario at {item.path}. ")
+        pane.prompt.setPlaceholderText("What would you like to change in this scenario?")
         self.tabs.setCurrentWidget(pane)
         self._navigate(1)
         self._save()
@@ -1100,20 +1251,31 @@ class MainWindow(QMainWindow):
 
     def _author_pack(self, item: LibraryItem) -> None:
         skill = "eforge-industry-pack" if item.kind == "industry" else "eforge-organization-pack"
-        record = ChatRecord(id=uuid4().hex, title=item.name, skill_name=skill)
+        record = ChatRecord(
+            id=uuid4().hex,
+            title=item.name,
+            skill_name=skill,
+            context_path=item.path,
+            context_kind="industry pack" if item.kind == "industry" else "organization pack",
+        )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
-        pane.prompt.setPlainText(f"Help me revise the {item.kind} pack at {item.path}. ")
+        pane.prompt.setPlaceholderText(f"What would you like to change in this {item.kind} pack?")
         self.tabs.setCurrentWidget(pane)
         self._navigate(1)
         self._save()
 
     def _new_pack_chat(self, kind: str) -> None:
         skill = "eforge-industry-pack" if kind == "industry" else "eforge-organization-pack"
-        record = ChatRecord(id=uuid4().hex, title=f"New {kind} pack", skill_name=skill)
+        record = ChatRecord(
+            id=uuid4().hex,
+            title=f"New {kind} pack",
+            skill_name=skill,
+            context_kind="industry pack" if kind == "industry" else "organization pack",
+        )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
-        pane.prompt.setPlainText(f"Help me create a new {kind} pack in this workspace. ")
+        pane.prompt.setPlaceholderText(f"Describe the {kind} pack you want to create…")
         self.tabs.setCurrentWidget(pane)
         self._navigate(1)
         self._save()
@@ -1220,8 +1382,10 @@ class MainWindow(QMainWindow):
     def _add_chat_pane(self, record: ChatRecord) -> ChatPane:
         pane = ChatPane(record)
         pane.set_skills(self.skills)
+        pane.set_models(self.models)
         pane.send_requested.connect(self._send_chat)
         pane.interrupt_requested.connect(self._interrupt_chat)
+        pane.configuration_changed.connect(self._save)
         self.chat_panes[record.id] = pane
         index = self.tabs.addTab(pane, record.title)
         close_tab = QToolButton(self.tabs)
@@ -1323,6 +1487,7 @@ class MainWindow(QMainWindow):
         self.account_label.setText("Checking sign-in…")
         self.bridge.request("account/read", {"refreshToken": False}, self._account_response)
         self._refresh_skills()
+        self._refresh_models()
         for pane in self.chat_panes.values():
             if pane.record.thread_id:
                 self.bridge.request(
@@ -1330,6 +1495,33 @@ class MainWindow(QMainWindow):
                     {"threadId": pane.record.thread_id},
                     lambda response, p=pane: self._resumed(p, response),
                 )
+
+    def _refresh_models(self) -> None:
+        self.models = []
+        self.bridge.request("model/list", {"limit": 100}, self._models_response)
+
+    def _models_response(self, response: dict[str, Any]) -> None:
+        if "error" in response:
+            self.statusBar().showMessage(f"Models unavailable: {_error_text(response)}", 8000)
+            return
+        result = response.get("result", {})
+        if not isinstance(result, dict):
+            return
+        for entry in result.get("data", []):
+            try:
+                model = CodexModel.model_validate(entry)
+            except ValidationError:
+                continue
+            if model.id not in {known.id for known in self.models}:
+                self.models.append(model)
+        cursor = result.get("nextCursor")
+        if cursor:
+            self.bridge.request(
+                "model/list", {"limit": 100, "cursor": cursor}, self._models_response
+            )
+            return
+        for pane in self.chat_panes.values():
+            pane.set_models(self.models)
 
     def _account_response(self, response: dict[str, Any]) -> None:
         if "error" in response:
@@ -1452,6 +1644,7 @@ class MainWindow(QMainWindow):
             return
         thread = response.get("result", {}).get("thread", {})
         for turn in thread.get("turns", []):
+            turn_id = str(turn.get("id", "history"))
             for item in turn.get("items", []):
                 if item.get("type") == "userMessage":
                     text = "\n".join(
@@ -1463,6 +1656,8 @@ class MainWindow(QMainWindow):
                         pane.add_user(text)
                 elif item.get("type") == "agentMessage" and item.get("text"):
                     pane.add_agent_text(str(item["text"]))
+                elif item.get("type") not in {"userMessage", "agentMessage"}:
+                    pane.add_activity(turn_id, item)
 
     def _send_chat(self, pane: ChatPane, text: str) -> None:
         if not self.bridge.initialized:
@@ -1473,9 +1668,26 @@ class MainWindow(QMainWindow):
         pane.record.skill_name = pane.skill.currentText()
         self._save()
         if pane.record.thread_id is None:
+            parameters: dict[str, Any] = {
+                "cwd": str(self.state.workspace),
+                "sandbox": "workspace-write",
+            }
+            if pane.record.context_kind:
+                target = (
+                    f" at {json.dumps(str(pane.record.context_path))}"
+                    if pane.record.context_path
+                    else ""
+                )
+                parameters["developerInstructions"] = (
+                    f"This conversation was opened for the EvidenceForge {pane.record.context_kind}"
+                    f"{target}. This is context for the user's later requests, not a request to "
+                    "edit anything. Wait for the user's message before taking action."
+                )
+            if pane.record.model_id:
+                parameters["model"] = pane.record.model_id
             self.bridge.request(
                 "thread/start",
-                {"cwd": str(self.state.workspace), "sandbox": "workspace-write"},
+                parameters,
                 lambda response, p=pane, t=text: self._thread_started(p, t, response),
             )
         else:
@@ -1496,9 +1708,14 @@ class MainWindow(QMainWindow):
         inputs: list[dict[str, str]] = [{"type": "text", "text": text}]
         if skill_path:
             inputs.append({"type": "skill", "name": skill_name, "path": skill_path})
+        parameters: dict[str, Any] = {"threadId": pane.record.thread_id, "input": inputs}
+        if pane.record.model_id:
+            parameters["model"] = pane.record.model_id
+        if pane.record.reasoning_effort:
+            parameters["effort"] = pane.record.reasoning_effort
         self.bridge.request(
             "turn/start",
-            {"threadId": pane.record.thread_id, "input": inputs},
+            parameters,
             lambda response, p=pane: self._turn_started(p, response),
         )
 
@@ -1530,6 +1747,7 @@ class MainWindow(QMainWindow):
             return
         if method in {"account/updated", "account/login/completed"}:
             self.bridge.request("account/read", {"refreshToken": False}, self._account_response)
+            self._refresh_models()
             return
         if method == "skills/changed":
             self._refresh_skills()
@@ -1539,12 +1757,22 @@ class MainWindow(QMainWindow):
             return
         if method == "item/agentMessage/delta":
             pane.add_agent_delta(str(params.get("itemId", "message")), str(params.get("delta", "")))
-        elif method == "item/started":
+        elif method in {"item/started", "item/completed"}:
             item = params.get("item", {})
-            if item.get("type") == "commandExecution":
-                pane.add_system(f"Running: {item.get('command', 'command')}")
-            elif item.get("type") == "fileChange":
-                pane.add_system("Editing scenario files")
+            if isinstance(item, dict) and item.get("type") not in {
+                "userMessage",
+                "agentMessage",
+            }:
+                pane.add_activity(str(params.get("turnId") or "active"), item)
+                if method == "item/started":
+                    activity = {
+                        "commandExecution": "Running a command…",
+                        "fileChange": "Editing files…",
+                        "reasoning": "Reasoning…",
+                    }
+                    pane.status.setText(activity.get(str(item.get("type")), "Using a tool…"))
+                elif pane.send.isEnabled() is False:
+                    pane.status.setText("Codex is working…")
         elif method == "turn/completed":
             pane.set_busy(False)
             self._refresh_libraries()

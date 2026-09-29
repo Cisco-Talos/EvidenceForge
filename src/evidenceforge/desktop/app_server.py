@@ -9,9 +9,31 @@ from codecs import getincrementaldecoder
 from collections.abc import Callable
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
 from PySide6.QtCore import QObject, QProcess, Signal
 
 from evidenceforge.desktop.state import AppSettings
+
+
+class CodexEffort(BaseModel):
+    """One reasoning level advertised for a Codex model."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    value: str = Field(alias="reasoningEffort")
+    description: str = ""
+
+
+class CodexModel(BaseModel):
+    """A model and its available effort levels from app-server model/list."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    id: str
+    display_name: str = Field(alias="displayName")
+    default_effort: str | None = Field(default=None, alias="defaultReasoningEffort")
+    efforts: list[CodexEffort] = Field(default_factory=list, alias="supportedReasoningEfforts")
+    is_default: bool = Field(default=False, alias="isDefault")
 
 
 class CodexBridge(QObject):

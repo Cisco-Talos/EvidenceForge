@@ -20,6 +20,10 @@ class ChatRecord(BaseModel):
     title: str
     thread_id: str | None = None
     skill_name: str = "eforge-scenario"
+    context_path: Path | None = None
+    context_kind: Literal["scenario", "industry pack", "organization pack"] | None = None
+    model_id: str | None = None
+    reasoning_effort: str | None = None
     open: bool = True
 
 

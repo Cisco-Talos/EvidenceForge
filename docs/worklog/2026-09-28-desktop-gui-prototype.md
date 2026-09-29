@@ -213,3 +213,20 @@ transcript already uses the available space for conversation. Offscreen renders
 of the scenario, industry pack, and Workspace Settings views were inspected;
 library and settings interaction tests cover preview visibility and compact
 panel geometry. A richer pack contents inspector remains part of Stage 2.
+
+## Authoring chat interaction review
+
+Opening an existing scenario or pack now stores its path and kind on the chat
+record, displays that context above the conversation, and leaves the composer
+empty. The context is passed as thread-level Codex developer instructions when
+the first user request starts the thread, so the first user message contains
+only what the user typed. New pack chats likewise carry their pack kind as
+context. Model and reasoning pickers are populated from app-server `model/list`,
+saved per chat, and applied to future turns; effort options follow the selected
+model. Tool, file-change, and reasoning items now appear as a single expandable
+activity link per turn, with transient work status while a step runs. The
+activity detail is rebuilt from stored thread history after reopening a chat.
+Focused Qt tests cover context, picker persistence, turn parameters, activity
+grouping, detail access, and history restoration. The 41 desktop tests passed
+on macOS offscreen Qt; Ruff check passed. A 1350×840 dark-theme render of the
+authoring view was inspected.
