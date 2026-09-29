@@ -21,8 +21,10 @@ Generation itself remains deterministic. Windows has not been tested.
 The app opens on **Scenarios**. This library reads authored YAML under the
 workspace's `scenarios/` directory. **Import YAML…** adds a file elsewhere by
 reference; **Refresh** picks up edits made outside the app. Select a scenario
-to see its description, environment counts, latest app-launched run, saved
-scorecard, and current output parent folder. **Continue authoring** opens a new Codex chat
+to see its description, environment counts, edit time, latest app-launched run,
+saved scorecard, and current output parent folder. List rows show run state and
+scores when available, and mark scenarios changed since their latest run.
+**Continue authoring** opens a new Codex chat
 with the scenario path prepared in the composer. **Validate** opens readable
 CLI findings in Runs. **Generate…** takes you to Runs with that scenario already
 selected, where you can choose the output folder before starting the job.
@@ -33,12 +35,22 @@ The scenario list is a folder tree. Use the add icon in its header to create a
 folder, and a folder's menu or right-click menu to rename or delete it. Drag a
 scenario onto a folder, or use its row menu (or right-click) and choose
 **Move to folder**.
+Selecting a folder shows its scenario counts, active and completed work, items
+needing attention, and a clickable list of recently edited scenarios.
 Creating a folder places the selected scenario in it; deleting a folder leaves
 its files untouched. Search remains visible and matches every term
 against the scenario name, description, and full authored YAML text, including
 users and hostnames. Quoted phrases and `name:`, `description:`, or `yaml:`
 scopes are supported. The **Filters** menu holds version, latest run status,
 and hidden-item controls; its label shows the number of active filters.
+Search results include a source-labeled excerpt from the matching name,
+description, or YAML line. **Views** has quick views for work in progress,
+items needing attention, and scenarios never run. It also saves the current
+search and filters as a named view you can reopen, rename, or delete. The last view is remembered
+separately for each workspace by default; turn this off under **Settings →
+Workspace → Remember scenario view**. Named views remain saved when it is off.
+Press **Cmd/Ctrl+K** to search commands, scenarios, folders, and recent chats
+from anywhere in the app. Use arrow keys and Enter to run the selected action.
 For a completed app-launched run, **Evaluate latest run** starts `eforge eval`
 and saves its JSON report in the local app data directory. Evaluations can run
 in parallel and follow the configured quit policy. The latest saved score is

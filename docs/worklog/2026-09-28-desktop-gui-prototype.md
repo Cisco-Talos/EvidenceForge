@@ -166,3 +166,25 @@ global Codex copies in the status bar.
 The macOS desktop, CLI, and skill-installer selection passed 170 tests (14 slow
 deselected); Ruff check and format passed. The default global/both-agent layout
 was reviewed in an offscreen dark-theme render.
+
+## Stage 1: Find and resume work
+
+Scenario rows now show latest run state, saved score when available, and whether
+the authored YAML changed after that run. The detail pane shows the YAML edit
+time. Folder selection opens a project overview with active, completed, never
+run, hidden, and attention counts plus clickable recently edited scenarios.
+Search results show a source-labeled name, description, or YAML-line excerpt;
+scenario text is cached by file identity to keep repeated searches responsive.
+
+The library has built-in In progress, Needs attention, and Never run views and
+supports named saved searches/filters with rename and delete. Saved views and
+the last used view are workspace-scoped. Settings can disable last-view restore
+while preserving named views; restore is enabled by default. Cmd/Ctrl+K opens a
+searchable command menu for navigation, scenarios, folders, and recent chats.
+Mac offscreen interaction tests cover status, snippets, folder navigation,
+saved-view persistence and workspace isolation, and the actual keyboard
+shortcut. The desktop/CLI/installer selection passed 173 tests (14 slow tests
+deselected), followed by focused Stage 1 tests after the final UI refinements.
+Ruff check and format passed; the library, folder overview, search results, and
+command menu were reviewed in dark-theme renders. Linux and macOS desktop
+interaction CI already covers the updated tests.

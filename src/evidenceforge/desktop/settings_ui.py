@@ -191,6 +191,17 @@ class SettingsPane(QWidget):
                 output_control,
             )
         )
+        workspace_layout.addWidget(_divider())
+        self.remember_library_view = VisibleCheckBox()
+        self.remember_library_view.setChecked(settings.remember_library_view)
+        workspace_layout.addWidget(
+            _control_row(
+                "Remember scenario view",
+                "Restore the last search, filters, and selected saved view separately for "
+                "each workspace. Named saved views remain available when this is off.",
+                self.remember_library_view,
+            )
+        )
         workspace_layout.addStretch()
         self.pages.addWidget(workspace_page)
 
@@ -426,6 +437,7 @@ class SettingsPane(QWidget):
             combo.currentIndexChanged.connect(self._settings_changed)
         self.codex_path.editingFinished.connect(self._settings_changed)
         self.eforge_path.editingFinished.connect(self._settings_changed)
+        self.remember_library_view.toggled.connect(self._settings_changed)
         self._set_choice(self.skill_scope, settings.skill_install_scope)
         self._set_choice(self.skill_agent, settings.skill_install_agent)
         self.skill_scope.currentIndexChanged.connect(self._skill_selection_changed)
@@ -618,6 +630,7 @@ class SettingsPane(QWidget):
         self.settings.kill_incomplete_bundles = self.kill_files.currentData()
         self.settings.skill_install_scope = self.skill_scope.currentData()
         self.settings.skill_install_agent = self.skill_agent.currentData()
+        self.settings.remember_library_view = self.remember_library_view.isChecked()
         self.settings.codex_path = self._path(self.codex_path)
         self.settings.eforge_path = self._path(self.eforge_path)
         self._show_close_options()

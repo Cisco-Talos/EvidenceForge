@@ -89,6 +89,7 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     assert loaded.settings == AppSettings()
     assert loaded.settings.skill_install_scope == "global"
     assert loaded.settings.skill_install_agent == "all"
+    assert loaded.settings.remember_library_view
     pane = SettingsPane(loaded.settings, workspace, tmp_path / "old-output")
     pane.select_category(1)
     assert pane.pages.currentIndex() == 1
@@ -111,11 +112,13 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     pane.kill_files.setCurrentIndex(pane.kill_files.findData("delete"))
     pane.close_action.setCurrentIndex(pane.close_action.findData("continue"))
     pane.continue_queued.setChecked(False)
+    pane.remember_library_view.setChecked(False)
     pane.continue_evaluations.setCurrentIndex(pane.continue_evaluations.findData("hold"))
     store.save(loaded)
     restored = store.load(workspace)
     assert restored.settings.close_action == "continue"
     assert not restored.settings.continue_queued_generations
+    assert not restored.settings.remember_library_view
     assert restored.settings.continue_evaluations == "hold"
     assert restored.settings.pause_close_timing == "wait"
     assert restored.settings.pause_evaluations == "restart"

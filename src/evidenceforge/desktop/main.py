@@ -55,6 +55,7 @@ from evidenceforge.cli.install_skills import (
     install_skills,
 )
 from evidenceforge.desktop.app_server import CodexBridge
+from evidenceforge.desktop.command_palette import Command, CommandPalette
 from evidenceforge.desktop.controller import ensure_controller
 from evidenceforge.desktop.icons import icon
 from evidenceforge.desktop.job_store import ControlIntent, JobStore
@@ -74,8 +75,10 @@ from evidenceforge.desktop.state import (
     DesktopState,
     EvaluationJob,
     GenerationJob,
+    LibraryView,
     ScenarioFolders,
     StateStore,
+    WorkspaceLibraryViews,
     state_directory,
 )
 from evidenceforge.desktop.validation import format_validation_output
@@ -142,6 +145,13 @@ QListWidget#libraryList { background: transparent; border: none; outline: none; 
 QListWidget#libraryList::item { padding: 14px 12px; margin: 3px 0; border-radius: 9px; }
 QListWidget#libraryList::item:selected { background: #293959; color: #ffffff; }
 QListWidget#libraryList::item:hover { background: #202c3e; }
+QListWidget#folderRecent { background: #111722; border: 1px solid #35445b; border-radius: 9px; }
+QListWidget#folderRecent::item { padding: 9px; margin: 2px; border-radius: 6px; }
+QListWidget#folderRecent::item:hover { background: #293959; }
+QDialog#commandPalette { background: #151d2a; color: #e9edf5; }
+QListWidget#commandResults { background: #111722; border: 1px solid #35445b; border-radius: 9px; }
+QListWidget#commandResults::item { padding: 5px 10px; margin: 2px; border-radius: 6px; }
+QListWidget#commandResults::item:selected { background: #293959; color: white; }
 QTreeWidget#libraryTree { background: transparent; border: none; outline: none; show-decoration-selected: 1; }
 QTreeWidget#libraryTree::item { padding: 7px 5px; }
 QTreeWidget#libraryTree::item:selected { background: #293959; color: white; }
@@ -571,6 +581,10 @@ class MainWindow(QMainWindow):
         self.scenario_library.folder_rename_requested.connect(self._rename_scenario_folder)
         self.scenario_library.folder_delete_requested.connect(self._delete_scenario_folder)
         self.scenario_library.folder_assignment_requested.connect(self._assign_scenario_folder)
+        self.scenario_library.view_changed.connect(self._remember_library_view)
+        self.scenario_library.view_save_requested.connect(self._save_library_view)
+        self.scenario_library.view_rename_requested.connect(self._rename_library_view)
+        self.scenario_library.view_delete_requested.connect(self._delete_library_view)
         self.pages.addWidget(self.scenario_library)
 
         authoring = QWidget()
@@ -647,10 +661,14 @@ class MainWindow(QMainWindow):
         self.account_label = self.settings_page.account_status
         self.settings_shortcut = QShortcut(QKeySequence("Ctrl+,"), self)
         self.settings_shortcut.activated.connect(lambda: self._navigate(5))
+        self.command_palette = CommandPalette(self)
+        self.command_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self.command_shortcut.activated.connect(self._open_command_palette)
         for job in self.state.jobs:
             self.jobs.add_job(job)
             self.job_progress[job.id] = GenerationProgress()
         self._refresh_libraries()
+        self._restore_library_view()
         self._navigate(0)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll_jobs)
@@ -685,9 +703,125 @@ class MainWindow(QMainWindow):
         if page in (0, 2, 3):
             self._refresh_libraries()
 
+    def _open_command_palette(self) -> None:
+        """Offer workspace navigation and scenario actions from the keyboard."""
+        commands: list[Command] = [
+            ("New scenario", "Start a new authoring chat", self._new_chat),
+            ("Scenarios", "Open the scenario library", lambda: self._navigate(0)),
+            ("Authoring", "Open chat tabs", lambda: self._navigate(1)),
+            ("Industry packs", "Open reusable industry packs", lambda: self._navigate(2)),
+            ("Organization packs", "Open reusable organization packs", lambda: self._navigate(3)),
+            ("Runs", "Open generation and evaluation jobs", lambda: self._navigate(4)),
+            ("Settings", "Open app preferences", lambda: self._navigate(5)),
+            ("Refresh library", "Rescan scenario and pack files", self._refresh_libraries),
+        ]
+        for folder in self._folder_state().names:
+            commands.append(
+                (
+                    f"Open folder: {folder}",
+                    "Show the project folder overview",
+                    lambda name=folder: self._open_folder_from_command(name),
+                )
+            )
+        for item in self.scenario_library.items:
+            detail = item.description or f"Scenario {item.version}"
+            commands.extend(
+                [
+                    (
+                        f"Open scenario: {item.name}",
+                        detail,
+                        lambda entry=item: self._open_scenario_from_command(entry),
+                    ),
+                    (
+                        f"Continue authoring: {item.name}",
+                        detail,
+                        lambda entry=item: self._author_scenario(entry),
+                    ),
+                    (
+                        f"Validate: {item.name}",
+                        detail,
+                        lambda entry=item: self._validate_library_item(entry),
+                    ),
+                    (
+                        f"Generate: {item.name}",
+                        detail,
+                        lambda entry=item: self._generate_library_item(entry),
+                    ),
+                ]
+            )
+        for record in self.state.chats:
+            if not record.open:
+                commands.append(
+                    (
+                        f"Resume chat: {record.title}",
+                        "Reopen a recent authoring tab",
+                        lambda record_id=record.id: self._reopen_chat(record_id),
+                    )
+                )
+        self.command_palette.show_commands(commands)
+
+    def _open_scenario_from_command(self, item: LibraryItem) -> None:
+        self._navigate(0)
+        if item.path not in self.scenario_library._tree_items:
+            hidden = item.path in {path.resolve() for path in self.state.hidden_items}
+            self.scenario_library.apply_view(LibraryView(show_hidden=hidden))
+        self.scenario_library.select_path(item.path)
+
+    def _open_folder_from_command(self, folder: str) -> None:
+        self._navigate(0)
+        if folder not in self.scenario_library._folder_items:
+            self.scenario_library.apply_view(LibraryView())
+        self.scenario_library.select_folder(folder)
+
     def _folder_state(self) -> ScenarioFolders:
         key = str(self.state.workspace.resolve())
         return self.state.scenario_folders.setdefault(key, ScenarioFolders())
+
+    def _library_view_state(self) -> WorkspaceLibraryViews:
+        key = str(self.state.workspace.resolve())
+        return self.state.library_views.setdefault(key, WorkspaceLibraryViews())
+
+    def _restore_library_view(self) -> None:
+        views = self._library_view_state()
+        self.scenario_library.set_saved_views(views.saved)
+        current = views.last if self.state.settings.remember_library_view else LibraryView()
+        self.scenario_library.apply_view(current, notify=False)
+
+    def _remember_library_view(self, view: LibraryView) -> None:
+        if self.state.settings.remember_library_view:
+            self._library_view_state().last = view.model_copy(deep=True)
+            self._save()
+
+    def _save_library_view(self, view: LibraryView) -> None:
+        views = self._library_view_state()
+        views.saved.append(view.model_copy(deep=True))
+        self.scenario_library.set_saved_views(views.saved)
+        self._save()
+
+    def _rename_library_view(self, old: str, new: str) -> None:
+        views = self._library_view_state()
+        for view in views.saved:
+            if view.name == old:
+                view.name = new
+                break
+        if views.last.name == old:
+            views.last.name = new
+        if self.scenario_library.active_view_name == old:
+            self.scenario_library.active_view_name = new
+            self.scenario_library._update_views_button()
+        self.scenario_library.set_saved_views(views.saved)
+        self._save()
+
+    def _delete_library_view(self, name: str) -> None:
+        views = self._library_view_state()
+        views.saved = [view for view in views.saved if view.name != name]
+        if views.last.name == name:
+            views.last.name = ""
+        if self.scenario_library.active_view_name == name:
+            self.scenario_library.active_view_name = ""
+            self.scenario_library._update_views_button()
+        self.scenario_library.set_saved_views(views.saved)
+        self._save()
 
     def _refresh_libraries(self) -> None:
         hidden = {path.resolve() for path in self.state.hidden_items}
@@ -1122,6 +1256,7 @@ class MainWindow(QMainWindow):
         self.settings_page.set_workspace(self.state.workspace, self._default_output_directory())
         self._save()
         self._refresh_libraries()
+        self._restore_library_view()
         if self.bridge.initialized:
             self._refresh_skills()
 

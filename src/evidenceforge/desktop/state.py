@@ -78,6 +78,7 @@ class AppSettings(BaseModel):
     kill_incomplete_bundles: Literal["preserve", "delete"] = "preserve"
     skill_install_scope: Literal["global", "workspace"] = "global"
     skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
+    remember_library_view: bool = True
     codex_path: Path | None = None
     eforge_path: Path | None = None
 
@@ -99,6 +100,28 @@ class ScenarioFolders(BaseModel):
     assignments: dict[str, str] = Field(default_factory=dict)
 
 
+class LibraryView(BaseModel):
+    """One reusable scenario search and filter combination."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = ""
+    search: str = ""
+    run_filter: str = "all"
+    version_filter: str | None = None
+    show_hidden: bool = False
+    selected_folder: str | None = None
+
+
+class WorkspaceLibraryViews(BaseModel):
+    """Saved and last-used scenario views for one workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    saved: list[LibraryView] = Field(default_factory=list)
+    last: LibraryView = Field(default_factory=LibraryView)
+
+
 class DesktopState(BaseModel):
     """User-owned desktop library metadata; authored files remain authoritative."""
 
@@ -111,6 +134,7 @@ class DesktopState(BaseModel):
     imported_scenarios: list[Path] = Field(default_factory=list)
     hidden_items: list[Path] = Field(default_factory=list)
     scenario_folders: dict[str, ScenarioFolders] = Field(default_factory=dict)
+    library_views: dict[str, WorkspaceLibraryViews] = Field(default_factory=dict)
     chats: list[ChatRecord] = Field(default_factory=list)
     jobs: list[GenerationJob] = Field(default_factory=list)
 

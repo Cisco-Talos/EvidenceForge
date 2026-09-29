@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import override
 
-from PySide6.QtCore import QPoint, Qt, QUrl, Signal
+from PySide6.QtCore import QPoint, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QActionGroup, QDesktopServices, QDropEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -13,9 +14,13 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QToolButton,
@@ -26,8 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from evidenceforge.desktop.icons import icon
-from evidenceforge.desktop.library import LibraryItem, matches_search
-from evidenceforge.desktop.state import GenerationJob
+from evidenceforge.desktop.library import LibraryItem, matches_search, search_snippet
+from evidenceforge.desktop.state import GenerationJob, LibraryView
 
 
 class ScenarioTree(QTreeWidget):
@@ -97,12 +102,17 @@ class LibraryPane(QWidget):
     folder_rename_requested = Signal(str)
     folder_delete_requested = Signal(str)
     folder_assignment_requested = Signal(object, str)
+    view_changed = Signal(object)
+    view_save_requested = Signal(object)
+    view_rename_requested = Signal(str, str)
+    view_delete_requested = Signal(str)
 
     def __init__(self, title: str, *, scenario_mode: bool) -> None:
         super().__init__()
         self.scenario_mode = scenario_mode
         self.items: list[LibraryItem] = []
         self.jobs: list[GenerationJob] = []
+        self._latest_jobs: dict[Path, GenerationJob] = {}
         self.hidden_paths: set[Path] = set()
         self.scorecards: dict[str, str] = {}
         self.folder_names: list[str] = []
@@ -110,6 +120,11 @@ class LibraryPane(QWidget):
         self.run_filter_value = "all"
         self.version_filter_value: str | None = None
         self.show_hidden_value = False
+        self.saved_views: list[LibraryView] = []
+        self.active_view_name = ""
+        self._populating = False
+        self._applying_view = False
+        self._last_selected_folder: str | None = None
         self._tree_items: dict[Path, QTreeWidgetItem] = {}
         self._folder_items: dict[str, QTreeWidgetItem] = {}
         outer = QVBoxLayout(self)
@@ -162,9 +177,19 @@ class LibraryPane(QWidget):
                 "All words must match. Use quotes for a phrase, or name:, description:, "
                 "and yaml: to search one field."
             )
-        self.search.textChanged.connect(self._populate)
+        self.search.textChanged.connect(self._search_changed)
         search_row = QHBoxLayout()
         search_row.addWidget(self.search, 1)
+        self.views_button = QToolButton()
+        self.views_button.setObjectName("filterButton")
+        self.views_button.setText("Views")
+        self.views_button.setToolTip("Open or save a scenario view")
+        self.views_button.setAccessibleName("Scenario views")
+        self.views_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.views_menu = QMenu(self.views_button)
+        self.views_menu.aboutToShow.connect(self._build_views_menu)
+        self.views_button.setMenu(self.views_menu)
+        self.views_button.setVisible(scenario_mode)
         self.filter_button = QToolButton()
         self.filter_button.setObjectName("filterButton")
         self.filter_button.setIcon(icon("filter"))
@@ -182,6 +207,8 @@ class LibraryPane(QWidget):
         label.setObjectName("eyebrow")
         list_header.addWidget(label)
         list_header.addStretch()
+        if scenario_mode:
+            list_header.addWidget(self.views_button)
         self.result_count = QLabel("0 items")
         self.result_count.setObjectName("muted")
         list_header.addWidget(self.result_count)
@@ -219,10 +246,24 @@ class LibraryPane(QWidget):
         self.description.setObjectName("muted")
         self.description.setWordWrap(True)
         details.addWidget(self.description)
+        self.search_match = QLabel("")
+        self.search_match.setObjectName("settingsHint")
+        self.search_match.setWordWrap(True)
+        details.addWidget(self.search_match)
         self.metadata = QLabel("")
         self.metadata.setObjectName("metadata")
         self.metadata.setWordWrap(True)
         details.addWidget(self.metadata)
+        self.folder_recent_heading = QLabel("RECENT SCENARIOS")
+        self.folder_recent_heading.setObjectName("eyebrow")
+        self.folder_recent_heading.setVisible(False)
+        details.addWidget(self.folder_recent_heading)
+        self.folder_recent = QListWidget()
+        self.folder_recent.setObjectName("folderRecent")
+        self.folder_recent.setMaximumHeight(210)
+        self.folder_recent.setVisible(False)
+        self.folder_recent.itemClicked.connect(self._open_folder_recent)
+        details.addWidget(self.folder_recent)
         self.assignment_heading = QLabel("FOLDER")
         self.assignment_heading.setObjectName("eyebrow")
         self.assignment_heading.setVisible(scenario_mode)
@@ -254,7 +295,10 @@ class LibraryPane(QWidget):
         self.destination.setWordWrap(True)
         details.addWidget(self.destination)
         details.addStretch()
-        action_row = QHBoxLayout()
+        self.action_controls = QWidget()
+        self.action_controls.setObjectName("inlineControls")
+        action_row = QHBoxLayout(self.action_controls)
+        action_row.setContentsMargins(0, 0, 0, 0)
         self.edit = QPushButton("Continue authoring")
         self.edit.setObjectName("primary")
         self.edit.setIcon(icon("edit", color="#ffffff"))
@@ -270,8 +314,11 @@ class LibraryPane(QWidget):
         self.generate.clicked.connect(lambda: self._emit_selected(self.generate_requested))
         if scenario_mode:
             action_row.addWidget(self.generate)
-        details.addLayout(action_row)
-        secondary = QHBoxLayout()
+        details.addWidget(self.action_controls)
+        self.secondary_controls = QWidget()
+        self.secondary_controls.setObjectName("inlineControls")
+        secondary = QHBoxLayout(self.secondary_controls)
+        secondary.setContentsMargins(0, 0, 0, 0)
         self.clone = QToolButton()
         self.clone.setIcon(icon("copy"))
         self.clone.setObjectName("iconAction")
@@ -294,7 +341,7 @@ class LibraryPane(QWidget):
         self.open_file.clicked.connect(self._open_selected)
         secondary.addWidget(self.open_file)
         secondary.addStretch()
-        details.addLayout(secondary)
+        details.addWidget(self.secondary_controls)
         splitter.addWidget(right)
         splitter.setSizes([420, 660])
         outer.addWidget(splitter, 1)
@@ -313,10 +360,148 @@ class LibraryPane(QWidget):
         self.items = items
         self.hidden_paths = hidden_paths
         self.jobs = jobs
+        self._latest_jobs.clear()
+        for job in jobs:
+            path = job.scenario.resolve()
+            current = self._latest_jobs.get(path)
+            if current is None or job.started_at > current.started_at:
+                self._latest_jobs[path] = job
         self.scorecards = scorecards or {}
         self.folder_names = sorted(folder_names or [], key=str.casefold)
-        self.folder_assignments = folder_assignments or {}
+        self.folder_assignments = {
+            str(Path(path).expanduser().resolve()): folder
+            for path, folder in (folder_assignments or {}).items()
+        }
         self._populate()
+
+    def set_saved_views(self, views: list[LibraryView]) -> None:
+        """Replace the workspace's named views without changing the current query."""
+        self.saved_views = [view.model_copy(deep=True) for view in views]
+
+    def current_view(self) -> LibraryView:
+        """Capture the current search, filters, and folder selection."""
+        current = self.tree.currentItem()
+        folder = (
+            self.selected_folder_name()
+            if current is not None and current.data(0, Qt.ItemDataRole.UserRole) == "folder"
+            else None
+        )
+        return LibraryView(
+            name=self.active_view_name,
+            search=self.search.text(),
+            run_filter=self.run_filter_value,
+            version_filter=self.version_filter_value,
+            show_hidden=self.show_hidden_value,
+            selected_folder=folder,
+        )
+
+    def apply_view(self, view: LibraryView, *, notify: bool = True) -> None:
+        """Apply a saved query and select its folder overview when available."""
+        self._applying_view = True
+        self.search.blockSignals(True)
+        self.search.setText(view.search)
+        self.search.blockSignals(False)
+        self.run_filter_value = view.run_filter
+        self.version_filter_value = view.version_filter
+        self.show_hidden_value = view.show_hidden
+        self.active_view_name = view.name
+        self._populate()
+        if view.selected_folder is not None:
+            self.select_folder(view.selected_folder)
+        self._applying_view = False
+        self._update_views_button()
+        if notify:
+            self.view_changed.emit(self.current_view())
+
+    def _update_views_button(self) -> None:
+        name = self.active_view_name
+        if len(name) > 18:
+            name = name[:17] + "…"
+        self.views_button.setText(f"Views · {name}" if self.active_view_name else "Views")
+        self.views_button.setToolTip(
+            f"Current view: {self.active_view_name}"
+            if self.active_view_name
+            else "Open or save a scenario view"
+        )
+
+    def _build_views_menu(self) -> None:
+        self.views_menu.clear()
+        self.views_menu.addAction("All scenarios", lambda: self.apply_view(LibraryView()))
+        self.views_menu.addAction(
+            "In progress",
+            lambda: self.apply_view(LibraryView(name="In progress", run_filter="active")),
+        )
+        self.views_menu.addAction(
+            "Needs attention",
+            lambda: self.apply_view(
+                LibraryView(name="Needs attention", run_filter="needs_attention")
+            ),
+        )
+        self.views_menu.addAction(
+            "Never run",
+            lambda: self.apply_view(LibraryView(name="Never run", run_filter="never")),
+        )
+        if self.saved_views:
+            self.views_menu.addSeparator()
+        for view in self.saved_views:
+            action = self.views_menu.addAction(view.name)
+            action.setCheckable(True)
+            action.setChecked(self.active_view_name == view.name)
+            action.triggered.connect(
+                lambda _checked=False, selected=view: self.apply_view(selected)
+            )
+        self.views_menu.addSeparator()
+        self.views_menu.addAction("Save current view…", self._save_current_view)
+        if self.saved_views:
+            manage = self.views_menu.addMenu("Manage saved views")
+            for view in self.saved_views:
+                submenu = manage.addMenu(view.name)
+                submenu.addAction(
+                    "Rename…", lambda _checked=False, old=view.name: self._rename_view(old)
+                )
+                submenu.addAction(
+                    "Delete",
+                    lambda _checked=False, name=view.name: self.view_delete_requested.emit(name),
+                )
+
+    def _save_current_view(self) -> None:
+        name, accepted = QInputDialog.getText(self, "Save scenario view", "View name:")
+        name = name.strip()
+        if not accepted or not name:
+            return
+        if self._view_name_taken(name):
+            QMessageBox.warning(self, "View already exists", "Choose another view name.")
+            return
+        view = self.current_view()
+        view.name = name
+        self.view_save_requested.emit(view)
+        self.apply_view(view)
+
+    def _rename_view(self, old: str) -> None:
+        name, accepted = QInputDialog.getText(self, "Rename scenario view", "View name:", text=old)
+        name = name.strip()
+        if not accepted or not name or name == old:
+            return
+        if self._view_name_taken(name):
+            QMessageBox.warning(self, "View already exists", "Choose another view name.")
+            return
+        self.view_rename_requested.emit(old, name)
+
+    def _view_name_taken(self, name: str) -> bool:
+        reserved = {"in progress", "needs attention", "never run", "all scenarios"}
+        return name.casefold() in reserved or any(
+            view.name.casefold() == name.casefold() for view in self.saved_views
+        )
+
+    def _search_changed(self, _text: str) -> None:
+        self._populate()
+        self._view_modified()
+
+    def _view_modified(self) -> None:
+        if self.scenario_mode:
+            self.active_view_name = ""
+            self._update_views_button()
+            self.view_changed.emit(self.current_view())
 
     def select_path(self, path: Path) -> None:
         """Select a visible item after a refresh or folder operation."""
@@ -360,9 +545,15 @@ class LibraryPane(QWidget):
             for label, value in (
                 ("Any status", "all"),
                 ("Never run", "never"),
+                ("In progress", "active"),
+                ("Needs attention", "needs_attention"),
+                ("Queued", "queued"),
                 ("Running", "running"),
+                ("Paused", "paused"),
                 ("Completed", "completed"),
+                ("Failed", "failed"),
                 ("Stopped", "stopped"),
+                ("Cancelled", "cancelled"),
             ):
                 action = status_menu.addAction(label)
                 action.setCheckable(True)
@@ -407,14 +598,17 @@ class LibraryPane(QWidget):
     def _set_run_filter(self, value: str) -> None:
         self.run_filter_value = value
         self._populate()
+        self._view_modified()
 
     def _set_version_filter(self, value: str | None) -> None:
         self.version_filter_value = value
         self._populate()
+        self._view_modified()
 
     def _set_show_hidden(self, value: bool) -> None:
         self.show_hidden_value = value
         self._populate()
+        self._view_modified()
 
     def clear_filters(self) -> None:
         """Reset filters while retaining the visible search text."""
@@ -422,6 +616,7 @@ class LibraryPane(QWidget):
         self.version_filter_value = None
         self.show_hidden_value = False
         self._populate()
+        self._view_modified()
 
     def _visible_items(self) -> list[LibraryItem]:
         query = self.search.text().strip()
@@ -434,18 +629,44 @@ class LibraryPane(QWidget):
             if self.version_filter_value is not None and item.version != self.version_filter_value:
                 continue
             if self.scenario_mode:
-                related = [job for job in self.jobs if job.scenario.resolve() == item.path]
-                latest = max(related, key=lambda job: job.started_at) if related else None
+                latest = self._latest_job(item)
                 if self.run_filter_value == "never" and latest is not None:
                     continue
-                if self.run_filter_value not in {"all", "never"} and (
-                    latest is None or latest.status != self.run_filter_value
+                if self.run_filter_value == "active" and (
+                    latest is None or latest.status not in {"queued", "running", "paused"}
                 ):
                     continue
+                if self.run_filter_value == "needs_attention" and (
+                    latest is None or latest.status not in {"failed", "stopped", "cancelled"}
+                ):
+                    continue
+                if self.run_filter_value not in {"all", "never", "active", "needs_attention"}:
+                    if latest is None or latest.status != self.run_filter_value:
+                        continue
             visible.append(item)
         return visible
 
+    def _latest_job(self, item: LibraryItem) -> GenerationJob | None:
+        return self._latest_jobs.get(item.path)
+
+    def _status_summary(self, item: LibraryItem) -> str:
+        latest = self._latest_job(item)
+        if latest is None:
+            return "Never run"
+        if latest.status in {"queued", "running", "paused"}:
+            return latest.status.title()
+        if latest.status == "completed":
+            score = self.scorecards.get(latest.id, "")
+            short_score = score.split("  ·  ", 1)[0]
+            result = f"Complete · {short_score}" if score else "Complete"
+        else:
+            result = latest.status.title()
+        if item.modified_at > latest.started_at + 1:
+            return f"Changed · {result}"
+        return result
+
     def _populate(self) -> None:
+        self._populating = True
         selected = self.selected_item()
         selected_folder = self.selected_folder_name() if selected is None else None
         expanded = {name for name, row in self._folder_items.items() if row.isExpanded()}
@@ -467,15 +688,15 @@ class LibraryPane(QWidget):
                 self._add_folder_row(folder, members, first_render or folder in expanded)
         else:
             for item in sorted(visible, key=lambda entry: entry.name.casefold()):
-                row = QTreeWidgetItem(self.tree, [item.name, ""])
+                row = QTreeWidgetItem(self.tree, [self._row_text(item), ""])
                 row.setData(0, Qt.ItemDataRole.UserRole, "scenario")
                 row.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
                 row.setIcon(0, icon("file"))
-                row.setToolTip(0, str(item.path))
+                row.setToolTip(0, f"{item.description}\n{item.path}")
                 self._tree_items[item.path] = row
                 self._add_row_menu(row, item)
         target = self._tree_items.get(selected.path) if selected is not None else None
-        if target is None and selected_folder is not None:
+        if target is None and selected_folder is not None and not self.search.text().strip():
             target = self._folder_items.get(selected_folder)
         if target is None and self._tree_items:
             target = next(iter(self._tree_items.values()))
@@ -490,10 +711,30 @@ class LibraryPane(QWidget):
             else f"{len(visible)} packs"
         )
         self._update_filter_button()
+        current = self.tree.currentItem()
+        self._last_selected_folder = (
+            self.selected_folder_name()
+            if current is not None and current.data(0, Qt.ItemDataRole.UserRole) == "folder"
+            else None
+        )
+        self._populating = False
 
     def _add_folder_row(self, folder: str, members: list[LibraryItem], expand: bool) -> None:
         label = folder or "Unfiled"
-        row = QTreeWidgetItem(self.tree, [f"{label}  ({len(members)})", ""])
+        active = sum(
+            self._latest_job(item) is not None
+            and self._latest_job(item).status in {"queued", "running", "paused"}
+            for item in members
+        )
+        attention = sum(
+            self._latest_job(item) is not None
+            and self._latest_job(item).status in {"failed", "stopped", "cancelled"}
+            for item in members
+        )
+        suffix = f" · {active} active" if active else ""
+        if attention:
+            suffix += f" · {attention} need attention"
+        row = QTreeWidgetItem(self.tree, [f"{label}  ({len(members)}){suffix}", ""])
         row.setData(0, Qt.ItemDataRole.UserRole, "folder")
         row.setData(0, Qt.ItemDataRole.UserRole + 1, folder)
         row.setIcon(0, icon("folder"))
@@ -521,7 +762,7 @@ class LibraryPane(QWidget):
             more.setMenu(menu)
             self.tree.setItemWidget(row, 1, more)
         for item in sorted(members, key=lambda entry: entry.name.casefold()):
-            name = item.name + ("  ·  Hidden" if item.path in self.hidden_paths else "")
+            name = self._row_text(item)
             child = QTreeWidgetItem(row, [name, ""])
             child.setData(0, Qt.ItemDataRole.UserRole, "scenario")
             child.setData(0, Qt.ItemDataRole.UserRole + 1, item.path)
@@ -532,8 +773,17 @@ class LibraryPane(QWidget):
                 | Qt.ItemFlag.ItemIsDragEnabled
             )
             child.setToolTip(0, f"{item.description}\n{item.path}")
+            if self.search.text().strip():
+                child.setSizeHint(0, QSize(0, 48))
             self._tree_items[item.path] = child
             self._add_row_menu(child, item)
+
+    def _row_text(self, item: LibraryItem) -> str:
+        hidden = " · Hidden" if item.path in self.hidden_paths else ""
+        status = f" · {self._status_summary(item)}" if self.scenario_mode else ""
+        first = f"{item.name}{hidden}{status}"
+        snippet = search_snippet(item, self.search.text()) if self.scenario_mode else ""
+        return f"{first}\n{snippet}" if snippet else first
 
     def _add_row_menu(self, row: QTreeWidgetItem, item: LibraryItem) -> None:
         more = QToolButton(self.tree)
@@ -606,8 +856,25 @@ class LibraryPane(QWidget):
         if item is not None:
             self.folder_assignment_requested.emit(item, folder)
 
+    def _open_folder_recent(self, row: QListWidgetItem) -> None:
+        path = row.data(Qt.ItemDataRole.UserRole)
+        if isinstance(path, Path):
+            if path not in self._tree_items:
+                self.apply_view(LibraryView(show_hidden=path in self.hidden_paths))
+            self.select_path(path)
+
     def _selection_changed(self, *_args: object) -> None:
         item = self.selected_item()
+        current = self.tree.currentItem()
+        selected_folder = (
+            self.selected_folder_name()
+            if current is not None and current.data(0, Qt.ItemDataRole.UserRole) == "folder"
+            else None
+        )
+        if not self._populating and not self._applying_view:
+            if selected_folder != self._last_selected_folder:
+                self._last_selected_folder = selected_folder
+                self._view_modified()
         enabled = item is not None
         for button in (
             self.edit,
@@ -618,30 +885,87 @@ class LibraryPane(QWidget):
             self.open_file,
         ):
             button.setEnabled(enabled)
+        self.action_controls.setVisible(enabled)
+        self.secondary_controls.setVisible(enabled)
         if item is None:
             folder = self.selected_folder_name()
             self.kind_label.setText("FOLDER" if folder is not None else "SELECT AN ITEM")
             self.name.setText((folder or "Unfiled") if folder is not None else "Choose an item")
             self.description.setText(
-                "Virtual folder · files remain in their original locations."
+                "Project overview · virtual folder; scenario files stay in their original locations."
                 if folder is not None
                 else "Select a scenario to view details and actions."
             )
-            count = self._folder_items[folder].childCount() if folder in self._folder_items else 0
-            self.metadata.setText(f"{count} scenarios" if folder is not None else "")
+            self.search_match.setVisible(False)
+            members = (
+                [
+                    entry
+                    for entry in self.items
+                    if self.folder_assignments.get(str(entry.path), "") == folder
+                    or (
+                        folder == ""
+                        and self.folder_assignments.get(str(entry.path), "")
+                        not in self.folder_names
+                    )
+                ]
+                if folder is not None
+                else []
+            )
+            active = sum(
+                self._latest_job(entry) is not None
+                and self._latest_job(entry).status in {"queued", "running", "paused"}
+                for entry in members
+            )
+            completed = sum(
+                self._latest_job(entry) is not None
+                and self._latest_job(entry).status == "completed"
+                for entry in members
+            )
+            attention = sum(
+                self._latest_job(entry) is not None
+                and self._latest_job(entry).status in {"failed", "stopped", "cancelled"}
+                for entry in members
+            )
+            never_run = sum(self._latest_job(entry) is None for entry in members)
+            hidden = sum(entry.path in self.hidden_paths for entry in members)
+            overview = (
+                f"{len(members)} scenarios · {active} active · {completed} completed "
+                f"· {never_run} never run"
+            )
+            if hidden:
+                overview += f" · {hidden} hidden"
+            if attention:
+                overview += f" · {attention} need attention"
+            self.metadata.setText(overview if folder is not None else "")
+            self.folder_recent.clear()
+            recent = sorted(members, key=lambda candidate: candidate.modified_at, reverse=True)[:6]
+            for entry in recent:
+                row = QListWidgetItem(f"{entry.name}  ·  {self._status_summary(entry)}")
+                row.setData(Qt.ItemDataRole.UserRole, entry.path)
+                row.setToolTip(str(entry.path))
+                self.folder_recent.addItem(row)
+            self.folder_recent.setFixedHeight(min(250, 12 + 45 * len(recent)))
+            self.folder_recent_heading.setVisible(bool(members))
+            self.folder_recent.setVisible(bool(members))
             self.run_status.setText("No runs yet")
             self.score.setText("No saved evaluation yet")
             self.evaluate.setEnabled(False)
             self._set_scenario_sections(False)
             return
         assigned = self.folder_assignments.get(str(item.path), "")
+        self.folder_recent_heading.setVisible(False)
+        self.folder_recent.setVisible(False)
         self.folder_value.setText(assigned or "Unfiled")
         self.kind_label.setText(item.kind.upper())
         self.name.setText(item.name)
         self.description.setText(item.description or "No description provided.")
+        snippet = search_snippet(item, self.search.text())
+        self.search_match.setText(f"Search match: {snippet}")
+        self.search_match.setVisible(bool(snippet))
+        edited = datetime.fromtimestamp(item.modified_at).strftime("%b %d, %Y %I:%M %p")
         self.metadata.setText(
             f"Version {item.version}  ·  {item.users} users  ·  {item.systems} systems  ·  "
-            f"{item.events} storyline events\n{item.path}"
+            f"{item.events} storyline events\nUpdated {edited}  ·  {item.path}"
             if self.scenario_mode
             else f"Version {item.version}\n{item.path}"
         )
@@ -651,7 +975,9 @@ class LibraryPane(QWidget):
             reverse=True,
         )
         self.run_status.setText(
-            f"{related[0].status.title()}  ·  {related[0].output_root}"
+            f"{self._status_summary(item)}  ·  "
+            f"{datetime.fromtimestamp(related[0].started_at).strftime('%b %d, %Y %I:%M %p')}\n"
+            f"{related[0].output_root}"
             if related
             else "No runs yet"
         )

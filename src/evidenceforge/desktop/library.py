@@ -23,10 +23,13 @@ class LibraryItem(BaseModel):
     users: int = 0
     systems: int = 0
     events: int = 0
+    modified_at: float = 0.0
     search_text: str = Field(default="", repr=False, exclude=True)
+    search_folded: str = Field(default="", repr=False, exclude=True)
 
 
 _yaml_cache: dict[tuple[Path, int, int], dict[str, object] | None] = {}
+_text_cache: dict[tuple[Path, int, int], str] = {}
 
 
 def _read_yaml_file(path: Path, size: int) -> dict[str, object] | None:
@@ -51,6 +54,16 @@ def _count(value: object) -> int:
     return len(value) if isinstance(value, list) else 0
 
 
+def _scenario_text(path: Path) -> tuple[str, float]:
+    stat = path.stat()
+    key = (path, stat.st_mtime_ns, stat.st_size)
+    if key not in _text_cache:
+        if len(_text_cache) >= 128:
+            _text_cache.clear()
+        _text_cache[key] = path.read_text(encoding="utf-8")
+    return _text_cache[key], stat.st_mtime
+
+
 def _scenario_item(path: Path) -> LibraryItem | None:
     try:
         data = _read_yaml(path)
@@ -59,7 +72,7 @@ def _scenario_item(path: Path) -> LibraryItem | None:
     if not data or "name" not in data or "version" not in data or "environment" not in data:
         return None
     try:
-        search_text = path.read_text(encoding="utf-8").casefold()
+        search_text, modified_at = _scenario_text(path)
     except (OSError, UnicodeError):
         return None
     environment = data.get("environment")
@@ -77,20 +90,26 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         users=_count(environment.get("users")),
         systems=_count(environment.get("systems")),
         events=_count(events),
+        modified_at=modified_at,
         search_text=search_text,
+        search_folded=search_text.casefold(),
     )
+
+
+def _search_terms(query: str) -> list[str]:
+    try:
+        return shlex.split(query.casefold())
+    except ValueError:
+        return query.casefold().split()
 
 
 def matches_search(item: LibraryItem, query: str) -> bool:
     """Match every term against title, description, or authored YAML content."""
-    try:
-        terms = shlex.split(query.casefold())
-    except ValueError:
-        terms = query.casefold().split()
+    terms = _search_terms(query)
     fields = {
         "name": item.name.casefold(),
         "description": item.description.casefold(),
-        "yaml": item.search_text,
+        "yaml": item.search_folded or item.search_text.casefold(),
     }
     for term in terms:
         scope, separator, value = term.partition(":")
@@ -100,6 +119,60 @@ def matches_search(item: LibraryItem, query: str) -> bool:
         elif not any(term in field for field in fields.values()):
             return False
     return True
+
+
+def search_snippet(item: LibraryItem, query: str) -> str:
+    """Return one short, source-labeled excerpt explaining a search match."""
+    if not query.strip():
+        return ""
+    fallback = ""
+    for term in _search_terms(query):
+        scope, separator, value = term.partition(":")
+        wanted = value if separator and scope in {"name", "description", "yaml"} else term
+        fields = (
+            [
+                (
+                    scope,
+                    {"name": item.name, "description": item.description, "yaml": item.search_text}[
+                        scope
+                    ],
+                )
+            ]
+            if separator and scope in {"name", "description", "yaml"}
+            else [
+                ("name", item.name),
+                ("description", item.description),
+                ("yaml", item.search_text),
+            ]
+        )
+        if not wanted:
+            continue
+        for field, text in fields:
+            if wanted not in text.casefold():
+                continue
+            if field == "yaml":
+                for number, line in enumerate(text.splitlines(), start=1):
+                    if wanted in line.casefold():
+                        return f"YAML line {number} · {_short_excerpt(line.strip(), wanted)}"
+            snippet = f"{field.title()} · {_short_excerpt(text, wanted)}"
+            if separator and scope in {"name", "description", "yaml"}:
+                return snippet
+            if not fallback:
+                fallback = snippet
+            break
+    return fallback
+
+
+def _short_excerpt(text: str, term: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= 90:
+        return normalized
+    position = normalized.casefold().find(term)
+    start = max(0, position - 28)
+    end = min(len(normalized), start + 90)
+    prefix = "…" if start else ""
+    suffix = "…" if end < len(normalized) else ""
+    return f"{prefix}{normalized[start:end]}{suffix}"
 
 
 def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[LibraryItem]:
@@ -144,6 +217,7 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
                     description=str(data.get("description") or "").strip(),
                     kind=kind,
                     version=str(data.get("version", "")),
+                    modified_at=path.stat().st_mtime,
                 )
             )
     return sorted(items, key=lambda item: (item.name.casefold(), item.version))

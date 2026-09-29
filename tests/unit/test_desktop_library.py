@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evidenceforge.desktop.library import discover_packs, discover_scenarios, matches_search
+from evidenceforge.desktop.library import (
+    discover_packs,
+    discover_scenarios,
+    matches_search,
+    search_snippet,
+)
 from evidenceforge.desktop.state import DesktopState, ScenarioFolders, StateStore
 
 
@@ -33,6 +38,10 @@ def test_scenario_library_finds_authored_files_without_generated_bundles(tmp_pat
     assert matches_search(items[0], 'yaml:"username: alex"')
     assert matches_search(items[0], "description:example")
     assert not matches_search(items[0], "missing-host")
+    assert "YAML line" in search_snippet(items[0], "WS1")
+    assert "ws1" in search_snippet(items[0], "WS1")
+    assert "YAML line" in search_snippet(items[0], "example WS1")
+    assert search_snippet(items[0], "description:Example").startswith("Description ·")
 
 
 def test_pack_library_reads_workspace_catalog(tmp_path: Path) -> None:
