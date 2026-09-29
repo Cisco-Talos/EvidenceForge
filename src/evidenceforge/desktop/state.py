@@ -33,10 +33,52 @@ class GenerationJob(BaseModel):
     output_root: Path
     progress_file: Path
     log_file: Path
-    pid: int
-    process_created_at: float
+    pid: int = 0
+    process_created_at: float = 0.0
     started_at: float
-    status: Literal["running", "completed", "stopped"] = "running"
+    status: Literal[
+        "queued", "running", "completed", "stopped", "paused", "failed", "cancelled"
+    ] = "running"
+    workspace: Path | None = None
+    command: list[str] = Field(default_factory=list)
+    checkpoint_hours: int = 24
+    owned_output: bool = False
+    status_message: str = ""
+
+
+class EvaluationJob(BaseModel):
+    """One durable evaluation of a generated bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    generation_id: str
+    workspace: Path
+    output_root: Path
+    result_file: Path
+    log_file: Path
+    command: list[str]
+    created_at: float
+    pid: int = 0
+    process_created_at: float = 0.0
+    status: Literal["queued", "running", "completed", "paused", "failed", "cancelled"] = "queued"
+    status_message: str = ""
+
+
+class AppSettings(BaseModel):
+    """Persistent desktop preferences with safe defaults for existing state."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    close_action: Literal["continue", "pause", "kill"] = "continue"
+    continue_queued_generations: bool = True
+    continue_evaluations: Literal["continue", "hold", "manual"] = "continue"
+    pause_close_timing: Literal["handoff", "wait"] = "handoff"
+    pause_evaluations: Literal["finish", "restart"] = "finish"
+    kill_incomplete_bundles: Literal["preserve", "delete"] = "preserve"
+    default_authoring_skill: str = "eforge-scenario"
+    codex_path: Path | None = None
+    eforge_path: Path | None = None
 
 
 class ScenarioFolders(BaseModel):
@@ -55,6 +97,8 @@ class DesktopState(BaseModel):
 
     workspace: Path
     output_directory: Path | None = None
+    output_directories: dict[str, Path] = Field(default_factory=dict)
+    settings: AppSettings = Field(default_factory=AppSettings)
     imported_scenarios: list[Path] = Field(default_factory=list)
     hidden_items: list[Path] = Field(default_factory=list)
     scenario_folders: dict[str, ScenarioFolders] = Field(default_factory=dict)
@@ -86,7 +130,10 @@ class StateStore:
         if not self.path.exists():
             return DesktopState(workspace=default_workspace.resolve())
         data = json.loads(self.path.read_text(encoding="utf-8"))
-        return DesktopState.model_validate(data)
+        state = DesktopState.model_validate(data)
+        if state.output_directory is not None:
+            state.output_directories.setdefault(str(state.workspace), state.output_directory)
+        return state
 
     def save(self, state: DesktopState) -> None:
         """Replace saved state without exposing a partial JSON document."""

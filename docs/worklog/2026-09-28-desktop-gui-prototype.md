@@ -80,3 +80,32 @@ in a Recent menu for reopening.
 Offscreen Qt checks covered the scenario tree, pack list, menu actions, and
 the authoring page. The desktop/CLI regression selection passed 98 tests;
 14 tests were deselected by the project's default tier rules.
+
+## Stage 0: Settings and job lifecycle
+
+Added a sidebar Settings page and Cmd/Ctrl+Comma shortcut. Workspace and output
+defaults, Codex account and skill actions, detected/configured tool paths, and a
+default skill for new chats now live there. All agreed quit choices persist;
+the user's Continue/full-pipeline answers are defaults. Existing desktop state
+migrates without dropping chats, folders, run history, or scorecards.
+
+Generation and evaluation records now live in atomic per-job files. A detached
+local controller can start queued work, reconcile completion, and apply Continue,
+Checkpoint and pause, or Kill after the window closes. Pause requests use the
+CLI checkpoint/suspend contract. A wait-at-close mode shows a cancelable dialog;
+request failures remain visible on job cards. Reopening a paused workspace does
+not resume it until the user selects Resume paused jobs. Kill verifies recorded
+PID creation time and, for app-created process groups, signals the group. Bundle
+deletion requires an exact app-created marker and rejects completed or imported
+bundles. The controller does not inspect or control terminal-launched jobs.
+
+Offscreen macOS interaction and process tests cover preference persistence,
+legacy migration, multiple independent run bars after restart, continued
+generation and evaluation, pause and resume, checkpoint-disabled runs, each
+evaluation quit policy, process identity, and deletion boundaries. The desktop
+and CLI selection passed 113 tests (14 slow tests deselected), followed by a
+passing real-CLI contract test for the app-created bundle marker and flags.
+Added a dedicated
+macOS/Linux desktop GUI CI matrix. Visual review used an offscreen 1350×840
+render of Settings. Further review should include interactive keyboard and
+visual checks on a visible macOS desktop.

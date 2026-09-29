@@ -54,10 +54,13 @@ def test_library_is_landing_page_and_saves_evaluation(
         assert item is not None and item.name == "demo"
         window._evaluate_latest(item)
         deadline = time.monotonic() + 5
-        while window.evaluation_processes and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
             app.processEvents()
+            window._poll_jobs()
+            if any(job.status == "completed" for job in window.evaluation_jobs.values()):
+                break
             time.sleep(0.01)
-        assert not window.evaluation_processes
+        assert any(job.status == "completed" for job in window.evaluation_jobs.values())
         assert "84/100" in window.scenario_library.score.text()
         assert (store.directory / "evaluations" / "job1.json").is_file()
     finally:

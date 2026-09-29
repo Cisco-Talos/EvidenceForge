@@ -11,6 +11,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QProcess, Signal
 
+from evidenceforge.desktop.state import AppSettings
+
 
 class CodexBridge(QObject):
     """Exchange newline-delimited JSON-RPC with one local Codex process."""
@@ -20,8 +22,9 @@ class CodexBridge(QObject):
     server_request = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, settings: AppSettings | None = None) -> None:
         super().__init__(parent)
+        self.settings = settings or AppSettings()
         self.process = QProcess(self)
         self.process.started.connect(self._initialize)
         self.process.readyReadStandardOutput.connect(self._read_stdout)
@@ -38,7 +41,11 @@ class CodexBridge(QObject):
 
     def start(self) -> None:
         """Start the installed CLI through private standard streams."""
-        binary = os.environ.get("EFORGE_DESKTOP_CODEX_BIN") or shutil.which("codex")
+        binary = (
+            os.environ.get("EFORGE_DESKTOP_CODEX_BIN")
+            or (str(self.settings.codex_path) if self.settings.codex_path else None)
+            or shutil.which("codex")
+        )
         if not binary:
             self.failed.emit("Codex CLI was not found; set EFORGE_DESKTOP_CODEX_BIN")
             return

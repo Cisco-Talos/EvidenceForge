@@ -7,11 +7,11 @@ Generation itself remains deterministic. Windows has not been tested.
 ## Run it
 
 1. Install the [Codex CLI](https://developers.openai.com/codex/cli/) and sign in with
-   `codex login` if needed. The app also offers a **Sign in** button.
+   `codex login` if needed. The app also offers **Sign in** in Settings.
 2. From the EvidenceForge checkout, run `uv sync --extra desktop --extra dev`.
 3. Run `uv run --extra desktop eforge-desktop` from the checkout. The first launch uses
    the current directory as its EvidenceForge workspace. Use **Workspace…** to change it.
-4. Use **Install skills** if the skill picker is empty. Each authoring tab
+4. Use **Settings → Install skills** if the skill picker is empty. Each authoring tab
    is a separate Codex thread, saved and resumed on the next app launch.
 
 The app opens on **Scenarios**. This library reads authored YAML under the
@@ -37,8 +37,8 @@ scopes are supported. The **Filters** menu holds version, latest run status,
 and hidden-item controls; its label shows the number of active filters.
 For a completed app-launched run, **Evaluate latest run** starts `eforge eval`
 and saves its JSON report in the local app data directory. Evaluations can run
-in parallel while the app is open; closing the app stops active evaluations.
-The latest saved score is shown when the scenario is reopened.
+in parallel and follow the configured quit policy. The latest saved score is
+shown when the scenario is reopened.
 
 **Industry packs** and **Org packs** list bundled packs and packs under the
 workspace's `.eforge/packs/`. New packs can be authored through the corresponding
@@ -52,23 +52,51 @@ a newline. Validation shows a compact result with findings and suggested fixes.
 Close an authoring tab with its **×** icon; a running turn is interrupted. The
 conversation stays in **Recent** and can be reopened from there.
 In the Jobs view, **Save new runs in** selects the parent folder for future bundles;
-the app remembers the last selected folder.
+the app remembers the last selected folder per workspace.
 
-The app needs a local `codex` executable on `PATH`. Set
-`EFORGE_DESKTOP_CODEX_BIN` to its full path if it is installed elsewhere. When
-launching outside the checkout, set `EFORGE_DESKTOP_EFORGE_BIN` to an installed
-`eforge` executable. An installed development checkout uses its current Python
+## Settings and quitting
+
+Open Settings from the sidebar or with Cmd/Ctrl+Comma. Workspace holds the current
+workspace and its default output parent. Authoring & tools holds Codex account
+status, sign-in, skill installation, the default skill for new chats, and optional
+Codex/`eforge` executable paths. Existing chats keep their selected skills.
+Environment variables `EFORGE_DESKTOP_CODEX_BIN` and
+`EFORGE_DESKTOP_EFORGE_BIN` override configured executable paths.
+
+**Jobs → When I quit** offers three actions. **Continue background jobs** is the
+default: queued generations keep starting and evaluations continue. You can instead
+hold queued generations, hold evaluations for automatic restart on reopen, or stop
+evaluations for manual restart. **Checkpoint and pause** freezes queued work and
+requests a checkpoint from each active generation. By default the window closes
+after the controller durably receives that request; an optional wait keeps it open
+until the active generations have stopped, with **Cancel close** available.
+Active evaluations can finish or stop for rerun when work resumes. Reopening a
+paused workspace leaves its jobs paused until **Resume paused jobs** is selected
+in Runs. Runs started while this quit mode is selected require checkpointing.
+For a previously started run with checkpointing disabled, the close dialog offers
+continue, stop while preserving files, or cancel close.
+
+**Kill app-owned jobs** cancels queued work and stops active GUI-launched process
+groups. It preserves incomplete bundles by default. Optional deletion requires
+confirmation at close and applies only to incomplete bundles marked as created by
+this app; completed and imported bundles are retained. Quit preferences are saved
+locally and apply on the next quit. Pause request failures appear on the affected
+run card after reopening.
+
+The app needs a local `codex` executable on `PATH` or configured in Settings.
+When launching outside the checkout, configure an installed `eforge` executable
+in Settings. An installed development checkout uses its current Python
 environment by default.
 
 ## Long running generation
 
-**Generate** starts a separate CLI process for each run. The process is detached
-from the window, so closing the app leaves it running. Each run gets a unique
+**Generate** queues a separate CLI process for each run with the detached local
+controller. Each run gets a unique
 bundle under `<selected-output-folder>/<scenario-name>/` (by default,
 `<workspace>/runs/<scenario-name>/`). App metadata, command logs,
 and progress JSONL files live in the platform's application data directory.
-On restart, the app loads that metadata, checks the saved PID and process start
-time, and replays the progress file to restore the bars. It polls once per second
+On restart, the app loads durable per-job records, checks the saved PID and process start
+time, and replays each progress file to restore all run bars. It polls once per second
 while open. The CLI emits one flushed JSON object per engine progress event through
 the new `--progress-jsonl` option; the existing Rich terminal display still works.
 The app reconnects only to jobs it launched and recorded. It does not discover
@@ -81,16 +109,16 @@ ground-truth writing. **Suspend** asks the CLI to checkpoint at the end of the
 current simulated hour; **Resume** uses a retained checkpoint.
 
 Closing the app ends its Codex app-server connection and any active authoring
-turns. Saved authoring threads can be reopened. A CLI generation run continues
-independently, including while no GUI is open. Closing the app does not itself
-create a checkpoint; use **Suspend** when a safe stopping point is needed.
+turns. Saved authoring threads can be reopened. The detached controller applies
+the chosen quit policy to GUI-owned generation and evaluation jobs. **Suspend**
+still allows a manual checkpoint request from an open Runs view.
 
 ## Prototype boundaries
 
 The current app includes scenario and pack libraries, multiple authoring tabs,
 skill selection, scenario validation, concurrent generation jobs, progress
-bars, log/bundle opening, evaluation scorecards, and generation restart
+bars, log/bundle opening, evaluation scorecards, and generation/evaluation restart
 reconnection. Archive export, overlay editing, automatic generation/evaluation
-pairing, evaluation progress and restart reconnection, and a distributable
+pairing, detailed evaluation progress, and a distributable
 macOS `.app` package remain to be built. App data is local to the user; Codex
 authoring uses the user's configured Codex account and permissions.

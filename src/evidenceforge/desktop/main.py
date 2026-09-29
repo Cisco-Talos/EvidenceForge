@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, override
 from uuid import uuid4
 
 from PySide6.QtCore import QProcess, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeyEvent, QTextCharFormat, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFont,
+    QKeyEvent,
+    QKeySequence,
+    QShortcut,
+    QTextCharFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -27,6 +36,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -40,20 +50,23 @@ from PySide6.QtWidgets import (
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills
 from evidenceforge.desktop.app_server import CodexBridge
+from evidenceforge.desktop.controller import ensure_controller
 from evidenceforge.desktop.icons import icon
+from evidenceforge.desktop.job_store import ControlIntent, JobStore
 from evidenceforge.desktop.jobs import (
-    process_running,
+    queue_evaluation,
+    queue_generation,
     refresh_status,
     request_suspension,
-    resume_generation,
-    start_generation,
 )
 from evidenceforge.desktop.library import LibraryItem, discover_packs, discover_scenarios
 from evidenceforge.desktop.library_ui import LibraryPane
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
+from evidenceforge.desktop.settings_ui import SettingsPane
 from evidenceforge.desktop.state import (
     ChatRecord,
     DesktopState,
+    EvaluationJob,
     GenerationJob,
     ScenarioFolders,
     StateStore,
@@ -102,6 +115,7 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {
     background: #101723; border: 1px solid #35445b; border-radius: 9px;
     padding: 9px; selection-background-color: #5369db;
 }
+QCheckBox { background: transparent; spacing: 8px; }
 QListWidget#libraryList { background: transparent; border: none; outline: none; }
 QListWidget#libraryList::item { padding: 14px 12px; margin: 3px 0; border-radius: 9px; }
 QListWidget#libraryList::item:selected { background: #293959; color: #ffffff; }
@@ -331,13 +345,16 @@ class JobCard(QWidget):
     def update_display(self, progress: GenerationProgress) -> None:
         """Render the current hour and storyline bars."""
         self.status.setText(self.job.status.title())
-        self.detail.setText(progress.detail)
+        self.detail.setText(self.job.status_message or progress.detail)
         if progress.total_hours:
             self.hours.setRange(0, progress.total_hours)
             self.hours.setValue(progress.completed_hours)
             self.hours.setFormat("%v of %m simulated hours · %p%")
         elif self.job.status == "running":
             self.hours.setRange(0, 0)
+        elif self.job.status == "queued":
+            self.hours.setRange(0, 1)
+            self.hours.setValue(0)
         else:
             self.hours.setRange(0, 1)
             self.hours.setValue(1 if self.job.status == "completed" else 0)
@@ -349,7 +366,8 @@ class JobCard(QWidget):
             self.storyline.setFormat("%v of %m events · %p%")
         self.suspend.setEnabled(self.job.status == "running")
         self.resume.setEnabled(
-            self.job.status == "stopped" and (self.job.output_root / ".eforge-generation").exists()
+            self.job.status in {"paused", "stopped"}
+            and (self.job.output_root / ".eforge-generation").exists()
         )
 
 
@@ -361,6 +379,7 @@ class JobsPane(QWidget):
     output_changed = Signal(str)
     suspend_requested = Signal(object)
     resume_requested = Signal(object)
+    resume_all_requested = Signal()
 
     def __init__(self, output_directory: Path) -> None:
         super().__init__()
@@ -368,7 +387,14 @@ class JobsPane(QWidget):
         layout = QVBoxLayout(self)
         title = QLabel("Generation jobs")
         title.setObjectName("heading")
-        layout.addWidget(title)
+        header = QHBoxLayout()
+        header.addWidget(title)
+        header.addStretch()
+        resume_all = QPushButton("Resume paused jobs")
+        resume_all.setIcon(icon("play"))
+        resume_all.clicked.connect(self.resume_all_requested.emit)
+        header.addWidget(resume_all)
+        layout.addLayout(header)
         input_row = QHBoxLayout()
         self.scenario = QLineEdit()
         self.scenario.setPlaceholderText("Choose a scenario YAML file")
@@ -445,14 +471,19 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.store = store
         self.state = state
+        self.job_store = JobStore(store.directory)
+        self.job_store.migrate_generations(state.jobs)
+        self.state.jobs = self.job_store.load_generations()
         self.skills: dict[str, str] = {}
         self.chat_panes: dict[str, ChatPane] = {}
         self.job_progress: dict[str, GenerationProgress] = {}
-        self.evaluation_processes: dict[str, QProcess] = {}
+        self.evaluation_jobs: dict[str, EvaluationJob] = {
+            job.id: job for job in self.job_store.load_evaluations()
+        }
         self._closing = False
         self.progress_offsets: dict[str, int] = {}
         self.progress_partial: dict[str, bytes] = {}
-        self.bridge = CodexBridge(self)
+        self.bridge = CodexBridge(self, self.state.settings)
         self.bridge.ready.connect(self._codex_ready)
         self.bridge.event.connect(self._codex_event)
         self.bridge.server_request.connect(self._server_request)
@@ -489,10 +520,6 @@ class MainWindow(QMainWindow):
             side.addWidget(button)
             self.nav_buttons.append(button)
         side.addStretch()
-        install_skills = QPushButton("Install skills")
-        install_skills.setIcon(icon("add"))
-        install_skills.clicked.connect(self._install_skills)
-        side.addWidget(install_skills)
         self.workspace_label = QLabel(self.state.workspace.name)
         self.workspace_label.setToolTip(str(self.state.workspace))
         self.workspace_label.setObjectName("muted")
@@ -501,13 +528,12 @@ class MainWindow(QMainWindow):
         workspace_button.setIcon(icon("folder"))
         workspace_button.clicked.connect(self._choose_workspace)
         side.addWidget(workspace_button)
-        self.account_label = QLabel("Connecting to Codex…")
-        self.account_label.setObjectName("subtle")
-        side.addWidget(self.account_label)
-        sign_in = QPushButton("Sign in")
-        sign_in.setIcon(icon("external"))
-        sign_in.clicked.connect(self._sign_in)
-        side.addWidget(sign_in)
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.setObjectName("nav")
+        self.settings_button.setIcon(icon("settings"))
+        self.settings_button.setCheckable(True)
+        self.settings_button.clicked.connect(lambda: self._navigate(5))
+        side.addWidget(self.settings_button)
         shell.addWidget(sidebar)
         self.pages = QStackedWidget()
         shell.addWidget(self.pages, 1)
@@ -581,13 +607,26 @@ class MainWindow(QMainWindow):
             pane.clone_requested.connect(self._clone_pack)
             pane.hide_requested.connect(self._toggle_hidden)
             self.pages.addWidget(pane)
-        self.jobs = JobsPane(self.state.output_directory or self.state.workspace / "runs")
+        self.jobs = JobsPane(self._default_output_directory())
         self.jobs.validate_requested.connect(self._validate)
         self.jobs.generate_requested.connect(self._generate)
         self.jobs.output_changed.connect(self._remember_output_directory)
         self.jobs.suspend_requested.connect(self._suspend)
         self.jobs.resume_requested.connect(self._resume)
+        self.jobs.resume_all_requested.connect(self._resume_all)
         self.pages.addWidget(self.jobs)
+        self.settings_page = SettingsPane(
+            self.state.settings, self.state.workspace, self._default_output_directory()
+        )
+        self.settings_page.changed.connect(self._save)
+        self.settings_page.workspace_requested.connect(self._choose_workspace)
+        self.settings_page.output_requested.connect(self._remember_output_directory)
+        self.settings_page.sign_in_requested.connect(self._sign_in)
+        self.settings_page.install_skills_requested.connect(self._install_skills)
+        self.pages.addWidget(self.settings_page)
+        self.account_label = self.settings_page.account_status
+        self.settings_shortcut = QShortcut(QKeySequence("Ctrl+,"), self)
+        self.settings_shortcut.activated.connect(lambda: self._navigate(5))
         for job in self.state.jobs:
             self.jobs.add_job(job)
             self.job_progress[job.id] = GenerationProgress()
@@ -598,15 +637,31 @@ class MainWindow(QMainWindow):
         self.timer.start(1000)
         self._poll_jobs()
         self.validation_process: QProcess | None = None
+        control = self.job_store.read_control()
+        if control.action != "pause":
+            self.job_store.write_control(ControlIntent(action="open", settings=self.state.settings))
+        if any(job.status in {"running", "queued"} for job in self.state.jobs) or any(
+            job.status in {"running", "queued"} for job in self.evaluation_jobs.values()
+        ):
+            ensure_controller(self.store.directory)
         self.bridge.start()
 
     def _save(self) -> None:
         self.store.save(self.state)
 
+    def _default_output_directory(self) -> Path:
+        key = str(self.state.workspace.resolve())
+        if key in self.state.output_directories:
+            return self.state.output_directories[key]
+        if not self.state.output_directories and self.state.output_directory is not None:
+            return self.state.output_directory
+        return self.state.workspace / "runs"
+
     def _navigate(self, page: int) -> None:
         self.pages.setCurrentIndex(page)
         for index, button in enumerate(self.nav_buttons):
             button.setChecked(index == page)
+        self.settings_button.setChecked(page == 5)
         if page in (0, 2, 3):
             self._refresh_libraries()
 
@@ -635,11 +690,14 @@ class MainWindow(QMainWindow):
                 else "INDETERMINATE"
             )
             scorecards[job.id] = f"{score}  ·  {verdict}  ·  {report.total_records:,} records"
-        for job_id in self.evaluation_processes:
-            scorecards[job_id] = "Evaluating…"
-        self.scenario_library.destination.setText(
-            str(self.state.output_directory or self.state.workspace / "runs")
-        )
+        for evaluation in self.evaluation_jobs.values():
+            if evaluation.status in {"running", "queued", "paused"}:
+                scorecards[evaluation.generation_id] = (
+                    "Evaluating…"
+                    if evaluation.status == "running"
+                    else f"Evaluation {evaluation.status}"
+                )
+        self.scenario_library.destination.setText(str(self._default_output_directory()))
         self.scenario_library.set_items(
             discover_scenarios(self.state.workspace, self.state.imported_scenarios),
             hidden,
@@ -810,67 +868,21 @@ class MainWindow(QMainWindow):
         if not related:
             return
         job = related[0]
-        if job.id in self.evaluation_processes:
+        if any(
+            evaluation.generation_id == job.id
+            and evaluation.status in {"queued", "running", "paused"}
+            for evaluation in self.evaluation_jobs.values()
+        ):
             self.statusBar().showMessage("Evaluation is already running", 5000)
             return
-        from evidenceforge.desktop.jobs import _eforge_command
-
         try:
-            command = _eforge_command()
-        except FileNotFoundError as error:
+            evaluation = queue_evaluation(job, self.store.directory, settings=self.state.settings)
+        except (FileNotFoundError, OSError) as error:
             QMessageBox.warning(self, "Evaluation could not start", str(error))
             return
-        process = QProcess(self)
-        process.setWorkingDirectory(str(self.state.workspace))
-        process.setProgram(command[0])
-        process.setArguments([*command[1:], "eval", str(job.output_root), "--format", "json"])
-        process.finished.connect(
-            lambda _code, _status, current=job.id: self._evaluation_finished(current)
-        )
-        process.errorOccurred.connect(
-            lambda _error, current=job.id: self._evaluation_start_error(current)
-        )
-        self.evaluation_processes[job.id] = process
-        process.start()
-        self._refresh_libraries()
-
-    def _evaluation_finished(self, job_id: str) -> None:
-        process = self.evaluation_processes.pop(job_id, None)
-        if process is None:
-            return
-        if self._closing:
-            process.deleteLater()
-            return
-        output = bytes(process.readAllStandardOutput()).decode("utf-8", "replace")
-        errors = bytes(process.readAllStandardError()).decode("utf-8", "replace")
-        if process.exitCode() == 0:
-            try:
-                report = QualityReport.model_validate_json(output)
-                directory = self.store.directory / "evaluations"
-                directory.mkdir(parents=True, exist_ok=True)
-                path = directory / f"{job_id}.json"
-                temporary = path.with_suffix(".json.tmp")
-                temporary.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-                os.replace(temporary, path)
-                self.statusBar().showMessage("Evaluation scorecard saved", 8000)
-            except (OSError, UnicodeError, ValueError) as error:
-                QMessageBox.warning(self, "Evaluation report could not be saved", str(error))
-        else:
-            QMessageBox.warning(
-                self,
-                "Evaluation failed",
-                errors[-3000:] or output[-3000:] or f"eforge eval exited {process.exitCode()}",
-            )
-        process.deleteLater()
-        self._refresh_libraries()
-
-    def _evaluation_start_error(self, job_id: str) -> None:
-        process = self.evaluation_processes.get(job_id)
-        if process is None or process.error() != QProcess.ProcessError.FailedToStart:
-            return
-        self.evaluation_processes.pop(job_id)
-        QMessageBox.warning(self, "Evaluation could not start", process.errorString())
-        process.deleteLater()
+        self.job_store.save_evaluation(evaluation)
+        self.evaluation_jobs[evaluation.id] = evaluation
+        ensure_controller(self.store.directory)
         self._refresh_libraries()
 
     def _author_pack(self, item: LibraryItem) -> None:
@@ -1061,7 +1073,11 @@ class MainWindow(QMainWindow):
 
     def _new_chat(self) -> None:
         number = len(self.state.chats) + 1
-        record = ChatRecord(id=uuid4().hex, title=f"Authoring {number}")
+        record = ChatRecord(
+            id=uuid4().hex,
+            title=f"Authoring {number}",
+            skill_name=self.state.settings.default_authoring_skill,
+        )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
         self.tabs.setCurrentWidget(pane)
@@ -1074,7 +1090,7 @@ class MainWindow(QMainWindow):
         )
         if not selected:
             return
-        if any(process_running(job) for job in self.state.jobs):
+        if any(job.status in {"running", "queued"} for job in self.state.jobs):
             QMessageBox.warning(
                 self, "Jobs running", "Wait for active jobs before changing workspace."
             )
@@ -1082,8 +1098,8 @@ class MainWindow(QMainWindow):
         self.state.workspace = Path(selected).resolve()
         self.workspace_label.setText(self.state.workspace.name)
         self.workspace_label.setToolTip(str(self.state.workspace))
-        if self.state.output_directory is None:
-            self.jobs.output_directory.setText(str(self.state.workspace / "runs"))
+        self.jobs.output_directory.setText(str(self._default_output_directory()))
+        self.settings_page.set_workspace(self.state.workspace, self._default_output_directory())
         self._save()
         self._refresh_libraries()
         if self.bridge.initialized:
@@ -1146,6 +1162,7 @@ class MainWindow(QMainWindow):
                 if name.startswith("eforge-") and path and skill.get("enabled", True):
                     skills[name] = str(path)
         self.skills = skills
+        self.settings_page.set_skills(list(skills))
         for pane in self.chat_panes.values():
             pane.set_skills(skills)
         self.statusBar().showMessage(f"{len(skills)} EvidenceForge skills available", 5000)
@@ -1362,7 +1379,12 @@ class MainWindow(QMainWindow):
         process.deleteLater()
 
     def _remember_output_directory(self, value: str) -> None:
-        self.state.output_directory = self._output_directory(value)
+        destination = self._output_directory(value)
+        self.state.output_directory = destination
+        if destination is not None:
+            self.state.output_directories[str(self.state.workspace.resolve())] = destination
+        self.jobs.output_directory.setText(str(destination or self.state.workspace / "runs"))
+        self.settings_page.output_value.setText(self.jobs.output_directory.text())
         self._save()
         self._refresh_libraries()
 
@@ -1377,20 +1399,25 @@ class MainWindow(QMainWindow):
     def _generate(self, scenario_text: str, destination_text: str) -> None:
         destination = self._output_directory(destination_text)
         try:
-            job = start_generation(
+            job = queue_generation(
                 Path(scenario_text).expanduser(),
                 self.state.workspace,
                 self.store.directory,
                 output_parent=destination,
+                settings=self.state.settings,
             )
         except (OSError, RuntimeError, ValueError) as error:
             QMessageBox.warning(self, "Generation could not start", str(error))
             return
         self.state.jobs.append(job)
+        self.job_store.save_generation(job)
         self.state.output_directory = destination
+        if destination is not None:
+            self.state.output_directories[str(self.state.workspace.resolve())] = destination
         self.job_progress[job.id] = GenerationProgress()
         self.jobs.add_job(job)
         self._save()
+        ensure_controller(self.store.directory)
         self._refresh_libraries()
         self._poll_jobs()
 
@@ -1406,21 +1433,32 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Suspension requested; the current hour will finish", 8000)
 
     def _resume(self, job: GenerationJob) -> None:
-        try:
-            resume_generation(job, self.state.workspace, self.store.directory)
-        except (OSError, RuntimeError, ValueError) as error:
-            QMessageBox.warning(self, "Resume failed", str(error))
-            return
-        self.job_progress[job.id] = GenerationProgress()
-        self.progress_offsets[job.id] = 0
-        self.progress_partial[job.id] = b""
-        self._save()
-        self._poll_jobs()
+        self.job_store.write_control(
+            ControlIntent(
+                action="resume",
+                settings=self.state.settings,
+                resume_generation_id=job.id,
+            )
+        )
+        ensure_controller(self.store.directory)
+        self.statusBar().showMessage(f"Resuming {job.scenario.stem}", 6000)
+
+    def _resume_all(self) -> None:
+        self.job_store.write_control(ControlIntent(action="resume", settings=self.state.settings))
+        ensure_controller(self.store.directory)
+        self.statusBar().showMessage("Resuming paused jobs", 6000)
 
     def _poll_jobs(self) -> None:
         changed = False
+        records = {job.id: job for job in self.job_store.load_generations()}
         for job in self.state.jobs:
-            changed |= refresh_status(job)
+            current = records.get(job.id)
+            if current is not None:
+                changed |= job.model_dump() != current.model_dump()
+                for field in type(job).model_fields:
+                    setattr(job, field, getattr(current, field))
+            elif refresh_status(job):
+                changed = True
             progress = self.job_progress.setdefault(job.id, GenerationProgress())
             if job.progress_file.is_file():
                 with job.progress_file.open("rb") as stream:
@@ -1437,20 +1475,132 @@ class MainWindow(QMainWindow):
             card = self.jobs.cards.get(job.id)
             if card:
                 card.update_display(progress)
+        evaluations = {job.id: job for job in self.job_store.load_evaluations()}
+        if evaluations != self.evaluation_jobs:
+            self.evaluation_jobs = evaluations
+            changed = True
         if changed:
             self._save()
             self._refresh_libraries()
 
+    def _close_exceptions(self) -> dict[str, str] | None:
+        exceptions: dict[str, str] = {}
+        if self.state.settings.close_action != "pause":
+            return exceptions
+        for job in self.job_store.load_generations():
+            if job.status != "running" or job.checkpoint_hours != 0:
+                continue
+            answer = QMessageBox.question(
+                self,
+                "This job cannot checkpoint",
+                f"{job.scenario.name} was started with checkpointing disabled.\n\n"
+                "Yes: let this job continue. No: stop it and preserve its files. "
+                "Cancel: keep the app open.",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer == QMessageBox.StandardButton.Cancel:
+                return None
+            exceptions[job.id] = "continue" if answer == QMessageBox.StandardButton.Yes else "stop"
+        return exceptions
+
+    def _wait_for_handoff(self, intent: ControlIntent) -> bool:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.job_store.acknowledged(intent.id):
+                return True
+            QApplication.processEvents()
+            time.sleep(0.05)
+        return False
+
+    def _wait_for_checkpoints(self, exceptions: dict[str, str]) -> bool:
+        dialog = QProgressDialog(
+            "Waiting for active generations to checkpoint and stop…", "Cancel close", 0, 0, self
+        )
+        dialog.setWindowTitle("Pausing jobs")
+        dialog.setMinimumDuration(0)
+        dialog.show()
+        try:
+            while True:
+                running = [
+                    job
+                    for job in self.job_store.load_generations()
+                    if job.status == "running" and exceptions.get(job.id) != "continue"
+                ]
+                if not running:
+                    return True
+                failures = [
+                    f"{job.scenario.name}: {job.status_message}"
+                    for job in running
+                    if job.status_message.startswith("Pause request failed")
+                ]
+                if failures:
+                    QMessageBox.warning(self, "Could not pause jobs", "\n".join(failures))
+                    return False
+                if dialog.wasCanceled():
+                    return False
+                QApplication.processEvents()
+                time.sleep(0.2)
+        finally:
+            dialog.close()
+
     @override
     def closeEvent(self, event: Any) -> None:
-        """Leave generation detached; stop in-window evaluations and chat transport."""
+        """Hand the selected close policy to the durable local controller."""
+        settings = self.state.settings
+        exceptions = self._close_exceptions()
+        if exceptions is None:
+            event.ignore()
+            return
+        if settings.close_action == "kill" and settings.kill_incomplete_bundles == "delete":
+            answer = QMessageBox.question(
+                self,
+                "Delete incomplete bundles?",
+                "This will delete incomplete bundles created by this app after their jobs stop. "
+                "Completed and imported bundles are preserved.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        pending = any(
+            job.status in {"queued", "running", "paused"}
+            for job in self.job_store.load_generations()
+        ) or any(
+            job.status in {"queued", "running", "paused"}
+            for job in self.job_store.load_evaluations()
+        )
+        if settings.close_action == "kill" and settings.kill_incomplete_bundles == "delete":
+            pending = True
+        if pending:
+            intent = ControlIntent(
+                action=settings.close_action,
+                settings=settings.model_copy(deep=True),
+                generation_exceptions=exceptions,
+            )
+            self.job_store.write_control(intent)
+            ensure_controller(self.store.directory)
+            if not self._wait_for_handoff(intent):
+                self.job_store.write_control(
+                    ControlIntent(action="open", settings=self.state.settings)
+                )
+                QMessageBox.warning(
+                    self, "Could not close safely", "The local job controller did not respond."
+                )
+                event.ignore()
+                return
+            if settings.close_action == "pause" and settings.pause_close_timing == "wait":
+                if not self._wait_for_checkpoints(exceptions):
+                    event.ignore()
+                    return
         self._closing = True
         self._save()
-        for process in list(self.evaluation_processes.values()):
-            process.terminate()
-            if not process.waitForFinished(1000):
-                process.kill()
-                process.waitForFinished(1000)
+        if self.validation_process is not None:
+            self.validation_process.terminate()
+            self.validation_process.waitForFinished(1000)
         self.bridge.close()
         super().closeEvent(event)
 

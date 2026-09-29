@@ -25,6 +25,7 @@ _PATHS = {
     "chat": '<path d="M4 5h16v12H8l-4 3z"/>',
     "layers": '<path d="m12 3 9 5-9 5-9-5zM3 12l9 5 9-5M3 16l9 5 9-5"/>',
     "runs": '<path d="M4 4v16h16M7 15l4-4 3 2 5-6"/>',
+    "settings": '<path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/>',
 }
 _icon_cache: dict[tuple[str, str], QIcon] = {}
 
