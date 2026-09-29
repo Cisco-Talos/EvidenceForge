@@ -140,3 +140,29 @@ explains that the local Codex CLI credentials may be shared with other clients.
 The macOS desktop/CLI regression selection passed 117 tests (14 slow tests
 deselected), and Ruff check and format passed. The checkbox and account row were
 reviewed in offscreen dark-theme renders with a simulated ChatGPT identity.
+
+## Stage 0 account and skill setup refinement
+
+Combined the Codex identity and Sign in/Sign out control on one Settings row.
+The separate EvidenceForge chat skills row now says whether this workspace has
+copies, offers Install or Update as appropriate, and explains that it copies
+bundled chat instructions into `.agents/skills` without installing the CLI.
+The count refreshes on workspace change and after installation. A disposable
+workspace interaction test verifies the copy and button transition. The
+desktop/CLI regression selection passed 118 tests (14 slow deselected), Ruff
+check and format passed, and an offscreen dark-theme render was reviewed.
+
+## Stage 0 installer options follow-up
+
+The initial chat-skills button only copied Codex skills into the current
+workspace. Settings now persists the install location (user-wide or this
+workspace) and agent target (both, Codex, or Claude Code), defaulting to the
+user's requested user-wide installation for both agents. The destination paths
+and selected-target status appear before the action. The GUI uses the same
+installer functions and destination layout as `eforge install-skills`, continues
+other selected targets if one fails, and reports partial failure. It refreshes
+Codex's skill list when Codex skills are installed and flags preserved legacy
+global Codex copies in the status bar.
+The macOS desktop, CLI, and skill-installer selection passed 170 tests (14 slow
+deselected); Ruff check and format passed. The default global/both-agent layout
+was reviewed in an offscreen dark-theme render.

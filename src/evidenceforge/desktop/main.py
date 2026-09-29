@@ -48,7 +48,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from evidenceforge.cli.install_skills import install_chatgpt_skills
+from evidenceforge.cli.install_skills import (
+    find_evidenceforge_chatgpt_skills,
+    install_chatgpt_skills,
+    install_skills,
+)
 from evidenceforge.desktop.app_server import CodexBridge
 from evidenceforge.desktop.controller import ensure_controller
 from evidenceforge.desktop.icons import icon
@@ -63,6 +67,7 @@ from evidenceforge.desktop.library import LibraryItem, discover_packs, discover_
 from evidenceforge.desktop.library_ui import LibraryPane
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
 from evidenceforge.desktop.settings_ui import SettingsPane
+from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import (
     ChatRecord,
     DesktopState,
@@ -1197,16 +1202,45 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{len(skills)} EvidenceForge skills available", 5000)
 
     def _install_skills(self) -> None:
-        try:
-            installed, _removed = install_chatgpt_skills(
-                self.state.workspace / ".agents" / "skills"
-            )
-        except (OSError, PermissionError, ValueError) as error:
-            QMessageBox.warning(self, "Skill installation failed", str(error))
-            return
-        self.statusBar().showMessage(f"Installed {len(installed)} skill files", 6000)
-        if self.bridge.initialized:
+        targets = skill_targets(
+            self.state.settings.skill_install_scope,
+            self.state.settings.skill_install_agent,
+            self.state.workspace,
+        )
+        installed_files = 0
+        successful_agents: set[str] = set()
+        failures: list[str] = []
+        for agent, target in targets:
+            try:
+                installed, _removed = (
+                    install_skills(target) if agent == "claude" else install_chatgpt_skills(target)
+                )
+            except (OSError, PermissionError, ValueError) as error:
+                failures.append(f"{agent}: {error}")
+                continue
+            installed_files += len(installed)
+            successful_agents.add(agent)
+        self.settings_page.refresh_skill_installation()
+        if self.bridge.initialized and "chatgpt" in successful_agents:
             self._refresh_skills()
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Skill installation incomplete",
+                "Some selected targets could not be installed:\n" + "\n".join(failures),
+            )
+        if self.state.settings.skill_install_scope == "global" and "chatgpt" in successful_agents:
+            legacy = Path.home() / ".codex" / "skills"
+            if find_evidenceforge_chatgpt_skills(legacy):
+                self.statusBar().showMessage(
+                    f"Installed {installed_files} files. Legacy copies also exist in {legacy}.",
+                    10000,
+                )
+                return
+        if successful_agents:
+            self.statusBar().showMessage(
+                f"Installed {installed_files} EvidenceForge skill files", 6000
+            )
 
     def _resumed(self, pane: ChatPane, response: dict[str, Any]) -> None:
         if "error" in response:

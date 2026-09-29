@@ -87,6 +87,8 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     loaded = store.load(workspace)
     assert loaded.output_directories[str(workspace)] == tmp_path / "old-output"
     assert loaded.settings == AppSettings()
+    assert loaded.settings.skill_install_scope == "global"
+    assert loaded.settings.skill_install_agent == "all"
     pane = SettingsPane(loaded.settings, workspace, tmp_path / "old-output")
     pane.select_category(1)
     assert pane.pages.currentIndex() == 1
@@ -137,6 +139,7 @@ def test_account_identity_and_signout_use_app_server_protocol(
         pane = window.settings_page
         assert pane.account_status.text() == "author@example.test"
         assert pane.account_action.text() == "Sign out"
+        assert pane.account_status.parent() == pane.account_action.parent()
         sent: list[tuple[str, dict[str, object] | None, Callable[[dict[str, object]], None]]] = []
         monkeypatch.setattr(
             window.bridge,
@@ -156,6 +159,71 @@ def test_account_identity_and_signout_use_app_server_protocol(
         assert "identity unavailable" in pane.account_status.text()
         pane.set_account_unavailable()
         assert not pane.account_action.isEnabled()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_skill_installation_shows_workspace_scope_and_update_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _application(monkeypatch)
+    workspace = tmp_path / "workspace"
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    try:
+        pane = window.settings_page
+        assert pane.skill_scope.currentData() == "global"
+        assert pane.skill_agent.currentData() == "all"
+        assert pane.skills_status.text() == "0 of 2 installed"
+        assert pane.install_skills.text() == "Install…"
+        assert str(tmp_path / "home" / ".agents" / "skills") in pane.skills_destination.text()
+        window._install_skills()
+        assert (tmp_path / "home" / ".agents" / "skills" / "eforge-scenario" / "SKILL.md").is_file()
+        assert (tmp_path / "home" / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
+        assert not (workspace / ".agents").exists()
+        assert pane.skills_status.text() == "2 of 2 installed"
+        assert pane.install_skills.text() == "Update…"
+        pane.skill_scope.setCurrentIndex(pane.skill_scope.findData("workspace"))
+        pane.skill_agent.setCurrentIndex(pane.skill_agent.findData("chatgpt"))
+        assert window.state.settings.skill_install_scope == "workspace"
+        assert window.state.settings.skill_install_agent == "chatgpt"
+        persisted = StateStore(tmp_path / "state").load(workspace)
+        assert persisted.settings.skill_install_scope == "workspace"
+        assert persisted.settings.skill_install_agent == "chatgpt"
+        assert pane.skills_status.text() == "0 of 1 installed"
+        window._install_skills()
+        assert (workspace / ".agents" / "skills" / "eforge-scenario" / "SKILL.md").is_file()
+        assert not (workspace / ".claude").exists()
+        assert pane.skills_status.text() == "1 of 1 installed"
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_skill_installation_continues_after_one_target_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _application(monkeypatch)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+
+    def fail_claude(_target: Path) -> tuple[list[str], list[str]]:
+        raise PermissionError("Claude destination denied")
+
+    monkeypatch.setattr("evidenceforge.desktop.main.install_skills", fail_claude)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+    workspace = tmp_path / "workspace"
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    try:
+        window._install_skills()
+        assert (tmp_path / "home" / ".agents" / "skills" / "eforge-scenario" / "SKILL.md").is_file()
+        assert window.settings_page.skills_status.text() == "1 of 2 installed"
+        assert warnings and "Claude destination denied" in warnings[0]
     finally:
         window.close()
         app.processEvents()

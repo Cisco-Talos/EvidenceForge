@@ -76,6 +76,8 @@ class AppSettings(BaseModel):
     pause_close_timing: Literal["handoff", "wait"] = "handoff"
     pause_evaluations: Literal["finish", "restart"] = "finish"
     kill_incomplete_bundles: Literal["preserve", "delete"] = "preserve"
+    skill_install_scope: Literal["global", "workspace"] = "global"
+    skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
     codex_path: Path | None = None
     eforge_path: Path | None = None
 

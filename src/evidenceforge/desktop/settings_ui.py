@@ -28,7 +28,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from evidenceforge.cli.install_skills import find_evidenceforge_chatgpt_skills
 from evidenceforge.desktop.icons import icon
+from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import AppSettings
 
 
@@ -309,43 +311,87 @@ class SettingsPane(QWidget):
         self.pages.addWidget(jobs_page)
 
         tools_page, tools_layout = self._page(
-            "Authoring & tools", "Codex account and local executables used by this app."
+            "Authoring & tools", "Codex account, chat skills, and local executables."
         )
+        account_control = QWidget()
+        account_control.setObjectName("inlineControls")
+        account_row = QHBoxLayout(account_control)
+        account_row.setContentsMargins(0, 0, 0, 0)
+        account_row.setSpacing(12)
         self.account_status = QLabel("Connecting to Codex…")
         self.account_status.setObjectName("muted")
         self.account_status.setTextFormat(Qt.TextFormat.PlainText)
         self.account_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        tools_layout.addWidget(
-            _control_row(
-                "Codex account",
-                "The local Codex CLI account used for chat. ChatGPT sign-in can show its email; "
-                "API key and Bedrock authentication may not expose a personal identity.",
-                self.account_status,
-            )
-        )
-        tools_layout.addWidget(_divider())
-        account_actions = QWidget()
-        account_actions.setObjectName("inlineControls")
-        action_row = QHBoxLayout(account_actions)
-        action_row.setContentsMargins(0, 0, 0, 0)
+        account_row.addWidget(self.account_status)
         self.account_action = QPushButton("Sign in")
         self.account_action.setIcon(icon("external"))
         self.account_action.setEnabled(False)
         self.account_action.clicked.connect(self._request_account_action)
-        action_row.addWidget(self.account_action)
+        account_row.addWidget(self.account_action)
         self._signed_in = False
-        install = QPushButton("Install skills")
-        install.setIcon(icon("add"))
-        install.clicked.connect(self.install_skills_requested.emit)
-        action_row.addWidget(install)
         tools_layout.addWidget(
             _control_row(
-                "Account actions",
-                "Sign in or out of the local Codex CLI account, which may also be used "
-                "by other Codex clients on this computer. Install EvidenceForge chat skills here.",
-                account_actions,
+                "Codex account",
+                "The local Codex CLI account used for chat. ChatGPT sign-in can show its email; "
+                "API key and Bedrock authentication may not expose a personal identity. "
+                "Signing out may affect other Codex clients on this computer.",
+                account_control,
             )
         )
+        tools_layout.addWidget(_divider())
+        tools_layout.addWidget(_section_label("SKILL INSTALLATION"))
+        self.skill_scope = _choice(
+            [("All my projects (global)", "global"), ("This workspace only", "workspace")]
+        )
+        tools_layout.addWidget(
+            _control_row(
+                "Install location",
+                "Global copies skills into your user directories for use across projects. "
+                "Workspace copies them into the current EvidenceForge workspace only.",
+                self.skill_scope,
+            )
+        )
+        tools_layout.addWidget(_divider())
+        self.skill_agent = _choice(
+            [
+                ("All agents (Codex + Claude Code)", "all"),
+                ("Codex", "chatgpt"),
+                ("Claude Code", "claude"),
+            ]
+        )
+        tools_layout.addWidget(
+            _control_row(
+                "Install for",
+                "All agents creates both Codex-compatible skills and Claude Code commands. "
+                "You can install for either agent alone.",
+                self.skill_agent,
+            )
+        )
+        tools_layout.addWidget(_divider())
+        skills_control = QWidget()
+        skills_control.setObjectName("inlineControls")
+        skills_row = QHBoxLayout(skills_control)
+        skills_row.setContentsMargins(0, 0, 0, 0)
+        skills_row.setSpacing(12)
+        self.skills_status = QLabel("Checking targets…")
+        self.skills_status.setObjectName("muted")
+        skills_row.addWidget(self.skills_status)
+        self.install_skills = QPushButton("Install…")
+        self.install_skills.setIcon(icon("add"))
+        self.install_skills.clicked.connect(self.install_skills_requested.emit)
+        skills_row.addWidget(self.install_skills)
+        tools_layout.addWidget(
+            _control_row(
+                "EvidenceForge skills",
+                "Installs or updates the bundled EvidenceForge agent instructions in the "
+                "selected location for the selected agents. This does not install the eforge CLI.",
+                skills_control,
+            )
+        )
+        self.skills_destination = QLabel()
+        self.skills_destination.setObjectName("settingsHint")
+        self.skills_destination.setWordWrap(True)
+        tools_layout.addWidget(self.skills_destination)
         tools_layout.addWidget(_divider())
         self.codex_path = self._tool_picker(
             tools_layout,
@@ -380,6 +426,12 @@ class SettingsPane(QWidget):
             combo.currentIndexChanged.connect(self._settings_changed)
         self.codex_path.editingFinished.connect(self._settings_changed)
         self.eforge_path.editingFinished.connect(self._settings_changed)
+        self._set_choice(self.skill_scope, settings.skill_install_scope)
+        self._set_choice(self.skill_agent, settings.skill_install_agent)
+        self.skill_scope.currentIndexChanged.connect(self._skill_selection_changed)
+        self.skill_agent.currentIndexChanged.connect(self._skill_selection_changed)
+        self._workspace = workspace
+        self.refresh_skill_installation()
         self._show_close_options()
         self.select_category(0)
 
@@ -482,6 +534,35 @@ class SettingsPane(QWidget):
         """Refresh workspace-scoped controls after a workspace switch."""
         self.workspace_value.setText(str(workspace))
         self.output_value.setText(str(output))
+        self._workspace = workspace
+        self.refresh_skill_installation()
+
+    def refresh_skill_installation(self) -> None:
+        """Show the selected destinations and whether each contains this bundle."""
+        targets = skill_targets(
+            self.settings.skill_install_scope, self.settings.skill_install_agent, self._workspace
+        )
+        details: list[str] = []
+        installed = 0
+        for agent, target in targets:
+            name = "Claude Code" if agent == "claude" else "Codex"
+            try:
+                present = (
+                    (target / "eforge" / "scenario.md").is_file()
+                    if agent == "claude"
+                    else bool(find_evidenceforge_chatgpt_skills(target))
+                )
+            except OSError:
+                present = False
+            installed += present
+            details.append(f"{name}: {target}")
+        self.skills_status.setText(f"{installed} of {len(targets)} installed")
+        self.install_skills.setText("Update…" if installed == len(targets) else "Install…")
+        self.skills_destination.setText("Targets: " + "  ·  ".join(details))
+
+    def _skill_selection_changed(self, *_args: object) -> None:
+        self._settings_changed()
+        self.refresh_skill_installation()
 
     def set_account(self, account: dict[str, object] | None) -> None:
         """Show the identity supplied by Codex without exposing credentials."""
@@ -535,6 +616,8 @@ class SettingsPane(QWidget):
         self.settings.pause_close_timing = self.pause_timing.currentData()
         self.settings.pause_evaluations = self.pause_evaluations.currentData()
         self.settings.kill_incomplete_bundles = self.kill_files.currentData()
+        self.settings.skill_install_scope = self.skill_scope.currentData()
+        self.settings.skill_install_agent = self.skill_agent.currentData()
         self.settings.codex_path = self._path(self.codex_path)
         self.settings.eforge_path = self._path(self.eforge_path)
         self._show_close_options()
