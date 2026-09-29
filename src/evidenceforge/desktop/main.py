@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFont,
+    QFontDatabase,
     QKeyEvent,
     QKeySequence,
     QShortcut,
@@ -81,7 +82,7 @@ from evidenceforge.desktop.validation import format_validation_output
 from evidenceforge.evaluation.models import QualityReport
 
 _STYLE = """
-QWidget { background: #0d111a; color: #e9edf5; font-size: 13px; font-family: "Inter", "SF Pro Text", sans-serif; }
+QWidget { background: #0d111a; color: #e9edf5; font-size: 13px; }
 QLabel { background: transparent; }
 QMainWindow, QTabWidget::pane { background: #0d111a; }
 QFrame#sidebar { background: #111722; border-right: 1px solid #263040; }
@@ -1674,11 +1675,29 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
+def _configure_font(application: QApplication) -> None:
+    """Use an installed UI font instead of a missing family or Qt alias."""
+    available = set(QFontDatabase.families())
+    system_family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+    if sys.platform == "darwin":
+        preferred = [system_family, ".AppleSystemUIFont", "Helvetica Neue", "Arial"]
+    elif sys.platform == "win32":
+        preferred = [system_family, "Segoe UI", "Arial"]
+    else:
+        preferred = [system_family, "Noto Sans", "DejaVu Sans", "Liberation Sans", "Arial"]
+    family = next((candidate for candidate in preferred if candidate in available), None)
+    if family is None and available:
+        family = sorted(available)[0]
+    if family is not None:
+        application.setFont(QFont(family))
+
+
 def main() -> None:
     """Start the local desktop prototype."""
     application = QApplication(sys.argv)
     application.setApplicationName("EvidenceForge")
     application.setStyle("Fusion")
+    _configure_font(application)
     application.setStyleSheet(_STYLE)
     store = StateStore(state_directory())
     default_workspace = Path.cwd()
