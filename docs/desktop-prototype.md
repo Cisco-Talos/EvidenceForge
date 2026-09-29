@@ -60,7 +60,8 @@ the app remembers the last selected folder per workspace.
 Open Settings from the sidebar or with Cmd/Ctrl+Comma. Its category list separates
 Workspace, Jobs, and Authoring & tools; each compact setting has a hover help icon.
 Workspace holds the current workspace and its default output parent. Authoring &
-tools holds Codex account status, sign-in, skill installation, and optional
+tools shows the Codex account email when available, switches its action between
+Sign in and Sign out, and holds skill installation plus optional
 Codex/`eforge` executable paths. The sidebar shows the current workspace but
 switching happens in Settings. New scenario chats start with the scenario skill;
 the skill picker applies only to the next message and then returns to Automatic.

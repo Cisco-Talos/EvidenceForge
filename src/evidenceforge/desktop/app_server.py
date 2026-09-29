@@ -75,7 +75,7 @@ class CodexBridge(QObject):
     def request(
         self,
         method: str,
-        params: dict[str, Any],
+        params: dict[str, Any] | None,
         callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> int:
         """Send one client request and optionally route its response."""
@@ -83,7 +83,10 @@ class CodexBridge(QObject):
         self._next_id += 1
         if callback is not None:
             self._pending[request_id] = callback
-        self._write({"method": method, "id": request_id, "params": params})
+        message: dict[str, Any] = {"method": method, "id": request_id}
+        if params is not None:
+            message["params"] = params
+        self._write(message)
         return request_id
 
     def respond(self, request_id: int | str, result: dict[str, Any]) -> None:

@@ -635,6 +635,7 @@ class MainWindow(QMainWindow):
         self.settings_page.workspace_requested.connect(self._choose_workspace)
         self.settings_page.output_requested.connect(self._remember_output_directory)
         self.settings_page.sign_in_requested.connect(self._sign_in)
+        self.settings_page.sign_out_requested.connect(self._sign_out)
         self.settings_page.install_skills_requested.connect(self._install_skills)
         self.pages.addWidget(self.settings_page)
         self.account_label = self.settings_page.account_status
@@ -1132,10 +1133,11 @@ class MainWindow(QMainWindow):
 
     def _account_response(self, response: dict[str, Any]) -> None:
         if "error" in response:
-            self.account_label.setText("Codex sign-in unavailable")
+            self.settings_page.set_account_unavailable()
             return
-        account = response.get("result", {}).get("account")
-        self.account_label.setText("Codex signed in" if account else "Codex signed out")
+        result = response.get("result")
+        account = result.get("account") if isinstance(result, dict) else None
+        self.settings_page.set_account(account if isinstance(account, dict) else None)
 
     def _sign_in(self) -> None:
         if not self.bridge.initialized:
@@ -1155,6 +1157,21 @@ class MainWindow(QMainWindow):
         if url:
             QDesktopServices.openUrl(QUrl(str(url)))
             self.account_label.setText("Complete sign-in in your browser")
+            self.settings_page.account_action.setEnabled(False)
+
+    def _sign_out(self) -> None:
+        if not self.bridge.initialized:
+            QMessageBox.warning(self, "Codex unavailable", "The Codex app-server is not ready.")
+            return
+        self.settings_page.account_action.setEnabled(False)
+        self.bridge.request("account/logout", None, self._logout_finished)
+
+    def _logout_finished(self, response: dict[str, Any]) -> None:
+        if "error" in response:
+            self.settings_page.account_action.setEnabled(True)
+            QMessageBox.warning(self, "Sign-out failed", _error_text(response))
+            return
+        self.bridge.request("account/read", {"refreshToken": False}, self._account_response)
 
     def _refresh_skills(self) -> None:
         self.bridge.request(
@@ -1355,7 +1372,7 @@ class MainWindow(QMainWindow):
             self.bridge.respond(request_id, {})
 
     def _codex_failed(self, message: str) -> None:
-        self.account_label.setText("Codex disconnected")
+        self.settings_page.set_account_unavailable()
         self.statusBar().showMessage(message, 12000)
 
     def _validate(self, scenario_text: str) -> None:

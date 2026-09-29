@@ -125,3 +125,18 @@ The existing pack entry points still choose their corresponding pack skills.
 The updated desktop/CLI selection passed 115 tests on macOS, with 14 slow tests
 deselected; Ruff check and format passed. The category layout, checked and
 unchecked controls, and tools page were reviewed in offscreen dark-theme renders.
+
+## Stage 0 account and checkbox follow-up
+
+The screenshot from user review showed the check glyph shifted right inside its
+box. The custom painter now obtains Qt's checkbox indicator rectangle and centers
+the glyph there, rather than centering it in the wider widget. The Codex account
+row now shows the ChatGPT email returned by app-server `account/read` when
+available. API key and Bedrock modes identify their authentication method and
+state that a personal identity is unavailable through this protocol. The account
+button changes between Sign in and Sign out. Sign out uses app-server
+`account/logout` without params, then refreshes account state; the help text
+explains that the local Codex CLI credentials may be shared with other clients.
+The macOS desktop/CLI regression selection passed 117 tests (14 slow tests
+deselected), and Ruff check and format passed. The checkbox and account row were
+reviewed in offscreen dark-theme renders with a simulated ChatGPT identity.

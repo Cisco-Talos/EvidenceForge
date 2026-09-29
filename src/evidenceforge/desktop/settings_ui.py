@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QStyle,
+    QStyleOptionButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -79,7 +81,12 @@ class VisibleCheckBox(QCheckBox):
         super().paintEvent(event)
         if not self.isChecked():
             return
-        center = self.rect().center()
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        indicator = self.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator, option, self
+        )
+        center = indicator.center()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(QColor("#ffffff"), 2.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
@@ -99,6 +106,7 @@ class SettingsPane(QWidget):
     workspace_requested = Signal()
     output_requested = Signal(str)
     sign_in_requested = Signal()
+    sign_out_requested = Signal()
     install_skills_requested = Signal()
 
     def __init__(self, settings: AppSettings, workspace: Path, output: Path) -> None:
@@ -305,10 +313,13 @@ class SettingsPane(QWidget):
         )
         self.account_status = QLabel("Connecting to Codex…")
         self.account_status.setObjectName("muted")
+        self.account_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.account_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         tools_layout.addWidget(
             _control_row(
                 "Codex account",
-                "The local Codex CLI account used for interactive chats and installed skills.",
+                "The local Codex CLI account used for chat. ChatGPT sign-in can show its email; "
+                "API key and Bedrock authentication may not expose a personal identity.",
                 self.account_status,
             )
         )
@@ -317,10 +328,12 @@ class SettingsPane(QWidget):
         account_actions.setObjectName("inlineControls")
         action_row = QHBoxLayout(account_actions)
         action_row.setContentsMargins(0, 0, 0, 0)
-        sign_in = QPushButton("Sign in")
-        sign_in.setIcon(icon("external"))
-        sign_in.clicked.connect(self.sign_in_requested.emit)
-        action_row.addWidget(sign_in)
+        self.account_action = QPushButton("Sign in")
+        self.account_action.setIcon(icon("external"))
+        self.account_action.setEnabled(False)
+        self.account_action.clicked.connect(self._request_account_action)
+        action_row.addWidget(self.account_action)
+        self._signed_in = False
         install = QPushButton("Install skills")
         install.setIcon(icon("add"))
         install.clicked.connect(self.install_skills_requested.emit)
@@ -328,7 +341,8 @@ class SettingsPane(QWidget):
         tools_layout.addWidget(
             _control_row(
                 "Account actions",
-                "Sign in to Codex or install the EvidenceForge skills for chat workflows.",
+                "Sign in or out of the local Codex CLI account, which may also be used "
+                "by other Codex clients on this computer. Install EvidenceForge chat skills here.",
                 account_actions,
             )
         )
@@ -468,6 +482,38 @@ class SettingsPane(QWidget):
         """Refresh workspace-scoped controls after a workspace switch."""
         self.workspace_value.setText(str(workspace))
         self.output_value.setText(str(output))
+
+    def set_account(self, account: dict[str, object] | None) -> None:
+        """Show the identity supplied by Codex without exposing credentials."""
+        self._signed_in = account is not None
+        if account is None:
+            identity = "Signed out"
+        elif account.get("type") == "chatgpt":
+            email = account.get("email")
+            identity = (
+                email.strip() if isinstance(email, str) and email.strip() else "ChatGPT account"
+            )
+        elif account.get("type") == "apiKey":
+            identity = "API key authentication · identity unavailable"
+        elif account.get("type") == "amazonBedrock":
+            identity = "Amazon Bedrock · identity unavailable"
+        else:
+            identity = "Signed in · identity unavailable"
+        self.account_status.setText(identity)
+        self.account_status.setToolTip(identity)
+        self.account_action.setText("Sign out" if self._signed_in else "Sign in")
+        self.account_action.setEnabled(True)
+
+    def set_account_unavailable(self) -> None:
+        """Avoid offering account actions while the app-server is disconnected."""
+        self.account_status.setText("Codex account unavailable")
+        self.account_action.setEnabled(False)
+
+    def _request_account_action(self) -> None:
+        if self._signed_in:
+            self.sign_out_requested.emit()
+        else:
+            self.sign_in_requested.emit()
 
     def _show_close_options(self) -> None:
         action = self.close_action.currentData()

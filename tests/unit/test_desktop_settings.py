@@ -123,6 +123,55 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     pane.close()
 
 
+def test_account_identity_and_signout_use_app_server_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = _application(monkeypatch)
+    store = StateStore(tmp_path / "state")
+    workspace = tmp_path / "workspace"
+    window = MainWindow(store, DesktopState(workspace=workspace))
+    try:
+        window._account_response(
+            {"result": {"account": {"type": "chatgpt", "email": "author@example.test"}}}
+        )
+        pane = window.settings_page
+        assert pane.account_status.text() == "author@example.test"
+        assert pane.account_action.text() == "Sign out"
+        sent: list[tuple[str, dict[str, object] | None, Callable[[dict[str, object]], None]]] = []
+        monkeypatch.setattr(
+            window.bridge,
+            "request",
+            lambda method, params, callback: sent.append((method, params, callback)),
+        )
+        window.bridge.initialized = True
+        pane.account_action.click()
+        assert sent[0][:2] == ("account/logout", None)
+        sent[0][2]({"result": {}})
+        assert sent[1][0] == "account/read"
+        sent[1][2]({"result": {"account": None}})
+        assert pane.account_status.text() == "Signed out"
+        assert pane.account_action.text() == "Sign in"
+
+        pane.set_account({"type": "apiKey"})
+        assert "identity unavailable" in pane.account_status.text()
+        pane.set_account_unavailable()
+        assert not pane.account_action.isEnabled()
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_account_logout_request_omits_unit_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _application(monkeypatch)
+    bridge = CodexBridge()
+    sent: list[dict[str, object]] = []
+    monkeypatch.setattr(bridge, "_write", lambda message: sent.append(message))
+    bridge.request("account/logout", None)
+    assert sent == [{"method": "account/logout", "id": 1}]
+
+
 def test_two_generation_cards_restore_independent_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
