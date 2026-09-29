@@ -116,6 +116,22 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox {
     padding: 9px; selection-background-color: #5369db;
 }
 QCheckBox { background: transparent; spacing: 8px; }
+QCheckBox::indicator { width: 18px; height: 18px; border: 2px solid #97a9c3;
+                       border-radius: 5px; background: #101723; }
+QCheckBox::indicator:hover { border-color: #c7d8f5; }
+QCheckBox::indicator:checked { background: #6386f3; border-color: #a9bcff; }
+QFrame#settingsRail { background: #131e2c; border: 1px solid #33445b; border-radius: 11px; }
+QFrame#settingsSurface { background: #151d2a; border: 1px solid #29384e; border-radius: 11px; }
+QWidget#settingsRow { background: transparent; }
+QFrame#settingsDivider { color: #334157; background: #334157; max-height: 1px; }
+QLabel#settingsHint { color: #9caabe; padding: 0 0 8px 0; }
+QPushButton#settingsCategory { text-align: left; background: transparent; border: none;
+    color: #b8c4d5; padding: 10px 12px; }
+QPushButton#settingsCategory:hover { background: #233249; }
+QPushButton#settingsCategory:checked { background: #293959; color: white;
+    border-left: 3px solid #77a6ff; }
+QToolButton#settingsHelp { background: transparent; border: none; padding: 1px; }
+QToolButton#settingsHelp:hover { background: #31415a; border-radius: 8px; }
 QListWidget#libraryList { background: transparent; border: none; outline: none; }
 QListWidget#libraryList::item { padding: 14px 12px; margin: 3px 0; border-radius: 9px; }
 QListWidget#libraryList::item:selected { background: #293959; color: #ffffff; }
@@ -181,7 +197,7 @@ class ChatPane(QWidget):
         layout.setSpacing(12)
         header = QHBoxLayout()
         header.addStretch()
-        header.addWidget(QLabel("Authoring skill"))
+        header.addWidget(QLabel("Skill for this message"))
         self.skill = QComboBox()
         self.skill.setMinimumWidth(190)
         self.skill.addItem(record.skill_name, None)
@@ -523,11 +539,8 @@ class MainWindow(QMainWindow):
         self.workspace_label = QLabel(self.state.workspace.name)
         self.workspace_label.setToolTip(str(self.state.workspace))
         self.workspace_label.setObjectName("muted")
+        self.workspace_label.setWordWrap(True)
         side.addWidget(self.workspace_label)
-        workspace_button = QPushButton("Workspace…")
-        workspace_button.setIcon(icon("folder"))
-        workspace_button.clicked.connect(self._choose_workspace)
-        side.addWidget(workspace_button)
         self.settings_button = QPushButton("Settings")
         self.settings_button.setObjectName("nav")
         self.settings_button.setIcon(icon("settings"))
@@ -1076,7 +1089,7 @@ class MainWindow(QMainWindow):
         record = ChatRecord(
             id=uuid4().hex,
             title=f"Authoring {number}",
-            skill_name=self.state.settings.default_authoring_skill,
+            skill_name="eforge-scenario",
         )
         self.state.chats.append(record)
         pane = self._add_chat_pane(record)
@@ -1162,7 +1175,6 @@ class MainWindow(QMainWindow):
                 if name.startswith("eforge-") and path and skill.get("enabled", True):
                     skills[name] = str(path)
         self.skills = skills
-        self.settings_page.set_skills(list(skills))
         for pane in self.chat_panes.values():
             pane.set_skills(skills)
         self.statusBar().showMessage(f"{len(skills)} EvidenceForge skills available", 5000)
@@ -1248,6 +1260,12 @@ class MainWindow(QMainWindow):
         if "error" in response:
             pane.add_system(_error_text(response))
             pane.set_busy(False)
+            return
+        automatic = pane.skill.findText("Automatic")
+        if automatic >= 0:
+            pane.skill.setCurrentIndex(automatic)
+            pane.record.skill_name = "Automatic"
+            self._save()
 
     def _interrupt_chat(self, pane: ChatPane) -> None:
         if pane.record.thread_id:

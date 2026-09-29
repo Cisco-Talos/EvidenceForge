@@ -10,7 +10,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QMessageBox, QToolButton
 
 from evidenceforge.desktop import controller
 from evidenceforge.desktop.app_server import CodexBridge
@@ -79,10 +81,25 @@ def test_settings_defaults_controls_and_legacy_state_migration(
         jobs=[job],
     )
     store.save(original)
+    legacy_data = json.loads(store.path.read_text(encoding="utf-8"))
+    legacy_data["settings"]["default_authoring_skill"] = "eforge-industry-pack"
+    store.path.write_text(json.dumps(legacy_data), encoding="utf-8")
     loaded = store.load(workspace)
     assert loaded.output_directories[str(workspace)] == tmp_path / "old-output"
     assert loaded.settings == AppSettings()
     pane = SettingsPane(loaded.settings, workspace, tmp_path / "old-output")
+    pane.select_category(1)
+    assert pane.pages.currentIndex() == 1
+    assert pane.category_buttons[1].isChecked()
+    pane.show()
+    pane.category_buttons[2].setFocus()
+    QTest.keyClick(pane.category_buttons[2], Qt.Key.Key_Space)
+    assert pane.pages.currentIndex() == 2
+    assert len(pane.findChildren(QToolButton, "settingsHelp")) >= 10
+    assert all(
+        button.toolTip() and button.accessibleName()
+        for button in pane.findChildren(QToolButton, "settingsHelp")
+    )
     pane.close_action.setCurrentIndex(pane.close_action.findData("pause"))
     assert pane.continue_group.isHidden()
     assert not pane.pause_group.isHidden()
@@ -93,8 +110,6 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     pane.close_action.setCurrentIndex(pane.close_action.findData("continue"))
     pane.continue_queued.setChecked(False)
     pane.continue_evaluations.setCurrentIndex(pane.continue_evaluations.findData("hold"))
-    pane.set_skills(["eforge-scenario", "eforge-industry-pack"])
-    pane.default_skill.setCurrentText("eforge-industry-pack")
     store.save(loaded)
     restored = store.load(workspace)
     assert restored.settings.close_action == "continue"
@@ -103,8 +118,9 @@ def test_settings_defaults_controls_and_legacy_state_migration(
     assert restored.settings.pause_close_timing == "wait"
     assert restored.settings.pause_evaluations == "restart"
     assert restored.settings.kill_incomplete_bundles == "delete"
-    assert restored.settings.default_authoring_skill == "eforge-industry-pack"
+    assert "default_authoring_skill" not in restored.settings.model_dump()
     assert restored.jobs[0].id == "legacy"
+    pane.close()
 
 
 def test_two_generation_cards_restore_independent_progress(

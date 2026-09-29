@@ -10,7 +10,8 @@ Generation itself remains deterministic. Windows has not been tested.
    `codex login` if needed. The app also offers **Sign in** in Settings.
 2. From the EvidenceForge checkout, run `uv sync --extra desktop --extra dev`.
 3. Run `uv run --extra desktop eforge-desktop` from the checkout. The first launch uses
-   the current directory as its EvidenceForge workspace. Use **Workspace…** to change it.
+   the current directory as its EvidenceForge workspace. Use **Settings → Workspace**
+   to change it.
 4. Use **Settings → Install skills** if the skill picker is empty. Each authoring tab
    is a separate Codex thread, saved and resumed on the next app launch.
 
@@ -56,10 +57,14 @@ the app remembers the last selected folder per workspace.
 
 ## Settings and quitting
 
-Open Settings from the sidebar or with Cmd/Ctrl+Comma. Workspace holds the current
-workspace and its default output parent. Authoring & tools holds Codex account
-status, sign-in, skill installation, the default skill for new chats, and optional
-Codex/`eforge` executable paths. Existing chats keep their selected skills.
+Open Settings from the sidebar or with Cmd/Ctrl+Comma. Its category list separates
+Workspace, Jobs, and Authoring & tools; each compact setting has a hover help icon.
+Workspace holds the current workspace and its default output parent. Authoring &
+tools holds Codex account status, sign-in, skill installation, and optional
+Codex/`eforge` executable paths. The sidebar shows the current workspace but
+switching happens in Settings. New scenario chats start with the scenario skill;
+the skill picker applies only to the next message and then returns to Automatic.
+Codex can select a relevant installed skill for later requests, including validation.
 Environment variables `EFORGE_DESKTOP_CODEX_BIN` and
 `EFORGE_DESKTOP_EFORGE_BIN` override configured executable paths.
 

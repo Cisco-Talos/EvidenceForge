@@ -109,3 +109,19 @@ Added a dedicated
 macOS/Linux desktop GUI CI matrix. Visual review used an offscreen 1350×840
 render of Settings. Further review should include interactive keyboard and
 visual checks on a visible macOS desktop.
+
+## Stage 0 user review and settings refinement
+
+The first Settings page was a long stack of large panels. Reworked it as a
+three-category view (Workspace, Jobs, Authoring & tools) with compact rows and
+individual hover help icons. The continuation checkbox now has a visible border
+when unchecked and a high-contrast tick when checked. Removed the redundant
+sidebar workspace button; the workspace name remains visible and switching is
+available in Settings. Removed the global default-authoring-skill control and
+migrated older state that contains it. A scenario chat attaches its scenario
+skill for its first message, then returns to Automatic so later requests can
+select a relevant skill; the per-message picker remains an explicit override.
+The existing pack entry points still choose their corresponding pack skills.
+The updated desktop/CLI selection passed 115 tests on macOS, with 14 slow tests
+deselected; Ruff check and format passed. The category layout, checked and
+unchecked controls, and tools page were reviewed in offscreen dark-theme renders.

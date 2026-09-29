@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ChatRecord(BaseModel):
@@ -76,9 +76,16 @@ class AppSettings(BaseModel):
     pause_close_timing: Literal["handoff", "wait"] = "handoff"
     pause_evaluations: Literal["finish", "restart"] = "finish"
     kill_incomplete_bundles: Literal["preserve", "delete"] = "preserve"
-    default_authoring_skill: str = "eforge-scenario"
     codex_path: Path | None = None
     eforge_path: Path | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_default_skill(cls, value: object) -> object:
+        """Discard the redundant global skill preference in older state files."""
+        if isinstance(value, dict):
+            return {key: item for key, item in value.items() if key != "default_authoring_skill"}
+        return value
 
 
 class ScenarioFolders(BaseModel):
