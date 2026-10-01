@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:native": "node scripts/build-native.mjs",
     "test": "vitest run",
     "types:generate": "../.venv/bin/python scripts/generate-types.py",
     "types:check": "../.venv/bin/python scripts/generate-types.py --check",

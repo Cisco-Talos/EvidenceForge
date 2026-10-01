@@ -14,3 +14,11 @@ connection output before running `npm run dev` in this directory.
 Run `npm test`, `npm run build`, and `npm run types:check` in this directory for
 frontend checks. The current source-run preview is under development; the Qt
 prototype remains the documented `eforge-desktop` entry point until cutover.
+
+For a source-run macOS `.app`, use `npm run build:native -- --debug --bundles app`.
+The wrapper builds with Tauri, then applies the transparent official forge mark as
+the `.app` file icon through AppKit. The running app applies the same artwork to
+its Dock icon. This avoids macOS adding a rounded background to the legacy icon.
+The bundled ICNS and other platform icons also contain the full mark with alpha;
+the original full-color sidebar logos remain unchanged. This is a development
+bundle; distributable packaging and signing will be handled separately.

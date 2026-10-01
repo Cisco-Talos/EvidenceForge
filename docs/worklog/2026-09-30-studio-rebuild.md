@@ -669,6 +669,42 @@ cancellation and errors, and built-in source previews/exports in browser and nat
 Restarted only the verified idle default helper after authenticating its snapshot, checking no
 active jobs/chats, and checking PID creation time plus command identity. No user scenarios,
 bundles, conversations, or project assignments were changed during testing. The native visual
-and physical drag review is pending: computer-use access reported that macOS is locked and
-could not unlock it. Asked the user to unlock; do not claim native drop/menu verification until
-that review is performed. Linux native review remains unavailable on this host.
+and physical drag review was initially blocked because macOS was locked. After the user
+unlocked, native review verified the About/Hide/Quit product-name labels, the built-in
+full-width highlighted YAML viewer, inline invalid-name explanation and disabled Save,
+rename cancellation without source changes, and colored collapsed scorecard pillar icons.
+Physical project drops remain unverified: the computer-use drag gesture did not produce a
+project assignment, including after checking coordinate input with a regular button click.
+Do not claim native drag success; ask the user for a manual drop check. No authored source or
+project membership was changed. Linux native review remains unavailable on this host.
+
+Native review images: `/private/tmp/eforge-studio-source-yaml-review.jpg` and
+`/private/tmp/eforge-studio-collapsed-scores-review.jpg`.
+
+## 2026-10-01 — Transparent Dock and .app icon
+
+The user preferred the free-standing forge artwork to macOS's light rounded tile:
+
+- Re-extracted the complete forge mark from the tracked official full-color dark logo,
+  with transparent padding. The old mark clipped the hammer and anvil at its edges.
+  Regenerated the desktop ICNS/ICO/PNG assets and favicon with the Tauri icon generator.
+- Bundled macOS launches explicitly apply the transparent PNG as the Dock icon on the
+  main thread. Tauri's corresponding icon override otherwise runs only in development.
+  This uses AppKit's documented `NSApplication.applicationIconImage` property.
+- Added `npm run build:native -- --debug` for the source-run .app. On macOS it builds
+  the app and applies the matching custom Finder icon with `NSWorkspace.setIcon`;
+  this prevents the platform's synthesized light tile on the .app file. The Swift
+  development helper is restricted to a Studio bundle ID and uses a temporary module
+  cache. Runtime code does not modify the app bundle or other apps. Distribution
+  formats, signing, and preservation of custom icon metadata are deferred to packaging.
+  Linux still uses the normal Tauri build and transparent icon assets.
+
+Verification: 83 React tests and three Rust native-export tests passed; full Ruff,
+Cargo check/format, JavaScript syntax, frontend build, and macOS .app build passed.
+The rebuilt app launched successfully. Finder Get Info visibly showed the transparent
+forge icon in its header and preview. Direct Dock screenshot inspection was unavailable
+through the computer-use Dock target, so the user should confirm its appearance. Closed
+the temporary Finder windows; left the Studio library open for the requested manual
+project-drop check. No scenarios, bundles, conversations, or project assignments changed.
+
+Review image: `/private/tmp/eforge-studio-transparent-app-icon-review.jpg`.

@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod macos_icon;
 mod native_export;
 
 use tauri_plugin_dialog::DialogExt;
@@ -66,6 +68,11 @@ pub fn run() {
     // name for its labels and About panel, including source-run launches.
     context.package_info_mut().name = "EvidenceForge Studio".into();
     tauri::Builder::default()
+        .setup(|_| {
+            #[cfg(target_os = "macos")]
+            macos_icon::set_dock_icon()?;
+            Ok(())
+        })
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
             #[cfg(target_os = "macos")]
