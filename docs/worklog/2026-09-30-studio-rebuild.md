@@ -578,3 +578,51 @@ user job history/files intact. Restarted only the verified idle default helper (
 jobs or turns); its connection remains in private app data. Closed the smoke-test window.
 Screenshots: `/private/tmp/eforge-studio-job-cleanup.jpg` and
 `/private/tmp/eforge-studio-markdown-viewer.jpg`. No Linux native window was available here.
+
+## 2026-10-01 — Acceptance status, grouped deletion, unified packs, and scorecard drill-down
+
+Implemented the next feedback round:
+
+- Scenario library and workspace evaluation indicators now follow the saved acceptance
+  verdict, rather than CLI completion. Failed acceptance uses a red X even with a high
+  overall score; missing/indeterminate verdicts use a yellow warning, and stale results
+  retain their clock indicator. Tooltips include the score and acceptance explanation.
+- Reviewed the existing Test_scenario_1 report read-only. Its overall score is 92.35,
+  but required causality checks failed: event presence 75 < 85, indicator accuracy
+  50 < 85, pivot linkability 66.67 < 80, and temporal integrity 75 < 85. No scenario,
+  generation output, evaluator policy, or saved score was changed.
+- Grouped Delete job and Delete bundle in one compact menu at the end of job actions.
+  Descriptions distinguish removing history from removing files. The existing bundle
+  deletion confirmation and job-state eligibility remain in place.
+- Replaced the two pack navigation destinations with Packs, using collapsible Industry
+  then Organization sections and compact rows with exact version, description, timestamp,
+  and per-pack menus. Both types retain authoring workspaces, cloning, folders, hiding,
+  saved views, and YAML-content search. New pack actions specify the authoring type.
+  Existing per-type saved views still work; combined views use kind `packs`.
+- The overview scorecard includes the high-level pillar scores. Pillars expand to their
+  subscores; acceptance checks, flags, and source counts are collapsed by default in the
+  detailed scorecard. The verdict explicitly says Acceptance passed/failed/indeterminate
+  and explains why an aggregate score cannot override required checks.
+- Subscores use small colored check/X/warning icons with keyboard-accessible tooltips.
+  Green means passed; red means failed; yellow means the minimum passed but the
+  aspirational target was missed. Skipped, unavailable, and unknown measures use a gray
+  dash. Saved criteria take precedence, including their historical thresholds. Diagnostic
+  measures without saved criteria are compared with current configured reference targets;
+  their tooltips identify that comparison and preserve the saved acceptance verdict.
+- Added bounded highlighted raw-report preview and original JSON export through the
+  shared native Save dialog / browser download path. The authenticated report route is
+  workspace-scoped, verifies the managed report path, rejects symlinks and invalid/oversized
+  reports, and supports range requests. Raw JSON is not included in routine snapshots.
+
+Verification: 75 React tests, 67 Python service/background tests, and 3 Rust native-export
+contracts passed. Generated API types, frontend build, macOS native debug build, and full
+Ruff checks passed. Native review checked red acceptance indicators, overview and full
+scorecards, subscore expansion and colored icons, raw JSON preview and Save-dialog opening,
+combined pack rows, and the grouped Delete menu. No user jobs, bundles, or reports were
+removed. Restarted only the verified idle platform helper after checking for active work;
+credentials remain in private app data. Closed the smoke-test window. Linux native testing
+was not available on this host.
+
+Review screenshots: `/private/tmp/eforge-studio-packs-review.jpg`,
+`/private/tmp/eforge-studio-delete-menu-review.jpg`, and
+`/private/tmp/eforge-studio-scorecard-icons-review.jpg`.

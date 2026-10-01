@@ -37,7 +37,8 @@ from evidenceforge.desktop.library import discover_packs, discover_scenarios
 from evidenceforge.desktop.progress import GenerationProgress
 from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import GenerationJob
-from evidenceforge.evaluation.models import QualityReport
+from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
+from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.models.exceptions import PackError
 from evidenceforge.studio.codex import (
     CodexClient,
@@ -360,6 +361,64 @@ class ScorecardSubscore(BaseModel):
     score: float | None
     details: str
     skipped: bool
+    rating: Literal["passed", "failed", "marginal", "unrated"] = "unrated"
+    rating_detail: str = ""
+
+
+def _scorecard_subscore(
+    sub: SubScore, criteria: list[AcceptanceCriterion], thresholds: EvalThresholds
+) -> ScorecardSubscore:
+    """Compare saved verdicts first, then current reference targets for diagnostic measures."""
+    projected = ScorecardSubscore(
+        name=sub.name, score=sub.score, details=sub.details, skipped=sub.skipped
+    )
+    criterion = next((check for check in criteria if check.sub_score_key == sub.key), None)
+    if sub.skipped or (criterion and criterion.applicable is False):
+        projected.rating_detail = "Skipped; excluded from acceptance."
+        return projected
+    if criterion:
+        minimum = criterion.threshold
+        aspirational = criterion.aspirational
+        source = (
+            "Saved required check." if criterion.level == "hard" else "Saved diagnostic target."
+        )
+        if criterion.passed is False:
+            projected.rating = "failed"
+        elif criterion.passed is True:
+            projected.rating = (
+                "marginal"
+                if criterion.meets_aspirational is False
+                or (aspirational is not None and sub.score is not None and sub.score < aspirational)
+                else "passed"
+            )
+        else:
+            projected.rating_detail = "The saved check has no verdict."
+            return projected
+    else:
+        reference = next(
+            (
+                pillar.sub_scores[sub.key]
+                for pillar in thresholds.pillars.values()
+                if sub.key in pillar.sub_scores
+            ),
+            None,
+        )
+        if reference is None or sub.score is None:
+            projected.rating_detail = "No recorded verdict or applicable reference threshold."
+            return projected
+        minimum = reference.minimum
+        aspirational = reference.aspirational
+        source = "Current reference thresholds; this comparison does not change saved acceptance."
+        projected.rating = (
+            "failed"
+            if sub.score < minimum
+            else "marginal"
+            if sub.score < aspirational
+            else "passed"
+        )
+    target = f" Aspirational target {aspirational:g}." if aspirational is not None else ""
+    projected.rating_detail = f"Minimum {minimum:g}.{target} {source}"
+    return projected
 
 
 class ScorecardPillar(BaseModel):
@@ -382,6 +441,7 @@ class ScorecardCriterion(BaseModel):
     actual: float | None
     passed: bool | None
     level: Literal["hard", "target"]
+    applicable: bool | None = None
 
 
 class ScorecardDetail(BaseModel):
@@ -1928,9 +1988,8 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         await studio.emit(job.id, "job.deleted", {"id": job.id})
         return {"status": "completed bundle deleted"}
 
-    @app.get("/v1/jobs/{job_id}/scorecard")
-    def scorecard(job_id: str, studio: StudioService = Depends(authorized)) -> ScorecardDetail:
-        """Read one saved evaluation without putting the full report in every snapshot."""
+    def saved_scorecard(job_id: str, studio: StudioService) -> tuple[Path, QualityReport]:
+        """Read a verified evaluation report belonging to the active workspace."""
         payload = next(
             (
                 entry
@@ -1953,6 +2012,21 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             raise HTTPException(
                 status_code=422, detail="Saved evaluation report is invalid"
             ) from exc
+        return result_file, report
+
+    @app.get("/v1/jobs/{job_id}/report")
+    def raw_scorecard(job_id: str, studio: StudioService = Depends(authorized)) -> FileResponse:
+        """Serve the original saved JSON for bounded previews and native file exports."""
+        result_file, _ = saved_scorecard(job_id, studio)
+        return FileResponse(
+            result_file, media_type="application/json", filename=f"evaluation-{job_id}.json"
+        )
+
+    @app.get("/v1/jobs/{job_id}/scorecard")
+    def scorecard(job_id: str, studio: StudioService = Depends(authorized)) -> ScorecardDetail:
+        """Read one saved evaluation without putting the full report in every snapshot."""
+        _, report = saved_scorecard(job_id, studio)
+        thresholds = load_thresholds()
         return ScorecardDetail(
             scenario_name=report.scenario_name,
             evaluated_at=report.evaluated_at.isoformat(),
@@ -1965,12 +2039,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     name=pillar.name,
                     score=pillar.score,
                     sub_scores=[
-                        ScorecardSubscore(
-                            name=sub.name,
-                            score=sub.score,
-                            details=sub.details,
-                            skipped=sub.skipped,
-                        )
+                        _scorecard_subscore(sub, report.acceptance_criteria, thresholds)
                         for sub in pillar.sub_scores
                     ],
                 )
@@ -1983,6 +2052,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     actual=criterion.actual,
                     passed=criterion.passed,
                     level=criterion.level,
+                    applicable=criterion.applicable,
                 )
                 for criterion in report.acceptance_criteria
             ],

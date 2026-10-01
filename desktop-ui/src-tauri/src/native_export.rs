@@ -55,7 +55,9 @@ fn export_url(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
     }
     let url = base.join(path).map_err(|_| "Invalid Studio export path")?;
     let allowed = (url.path().starts_with("/v1/jobs/")
-        && (url.path().contains("/files/") || url.path().ends_with("/bundle.zip")))
+        && (url.path().contains("/files/")
+            || url.path().ends_with("/bundle.zip")
+            || url.path().ends_with("/report")))
         || (url.path().starts_with("/v1/bundles/")
             && (url.path().contains("/files/") || url.path().ends_with("/bundle.zip")))
         || (url.path().starts_with("/v1/items/")
@@ -273,6 +275,7 @@ mod tests {
     fn exports_only_use_local_studio_file_routes() {
         assert!(export_url("http://127.0.0.1:4400", "/v1/jobs/abc/files/log.json").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/jobs/abc/bundle.zip").is_ok());
+        assert!(export_url("http://127.0.0.1:4400", "/v1/jobs/abc/report").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/bundles/b.zip").is_ok());
         assert!(export_url("https://example.com", "/v1/jobs/a/bundle.zip").is_err());
         assert!(export_url(

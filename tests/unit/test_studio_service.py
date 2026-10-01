@@ -21,11 +21,13 @@ from evidenceforge.desktop.controller import _worker_tick
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import resume_generation
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
+from evidenceforge.evaluation.models import AcceptanceCriterion, SubScore
+from evidenceforge.evaluation.thresholds import load_thresholds
 from evidenceforge.studio.codex import CodexClient, CodexThreadNotReadyError, CodexTimeoutError
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
 from evidenceforge.studio.lifecycle import clone_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
-from evidenceforge.studio.service import StudioService, create_app
+from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import Conversation, StudioStore
 
@@ -842,6 +844,12 @@ def test_saved_views_are_scoped_to_workspace_and_can_be_recalled(
             ).status_code
             == 404
         )
+        pack_view = client.post(
+            "/v1/views", headers=headers, json={"name": "All environments", "kind": "packs"}
+        )
+        assert pack_view.status_code == 200
+        assert pack_view.json()["kind"] == "packs"
+        assert client.delete("/v1/views/All%20environments", headers=headers).status_code == 200
         other_workspace = tmp_path / "other-workspace"
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other_workspace)})
         assert client.get("/v1/views", headers=headers).json() == []
@@ -1127,12 +1135,42 @@ def test_scorecard_detail_reads_only_saved_workspace_evaluation(
         detail = response.json()
         assert detail["overall_score"] == 87.6
         assert detail["pillars"][0]["sub_scores"][0]["score"] == 92
+        assert detail["pillars"][0]["sub_scores"][0]["rating"] == "passed"
         assert detail["acceptance_criteria"][0]["passed"] is True
+        assert client.get("/v1/jobs/evaluation-1/report").status_code == 401
+        raw = client.get("/v1/jobs/evaluation-1/report", headers=headers)
+        assert raw.status_code == 200
+        assert raw.content == result_file.read_bytes()
+        assert raw.headers["content-type"] == "application/json"
+        partial = client.get(
+            "/v1/jobs/evaluation-1/report", headers={**headers, "Range": "bytes=0-30"}
+        )
+        assert partial.status_code == 206
+        assert partial.content == result_file.read_bytes()[:31]
+        failed_report = json.loads(result_file.read_text(encoding="utf-8"))
+        failed_report["overall_score"] = 92.3
+        failed_report["acceptance_passed"] = False
+        failed_report["acceptance_criteria"][0].update(
+            actual=75, threshold=85, passed=False, applicable=True
+        )
+        result_file.write_text(json.dumps(failed_report), encoding="utf-8")
+        detail = client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).json()
+        assert detail["overall_score"] == 92.3
+        assert detail["acceptance_passed"] is False
+        assert detail["acceptance_criteria"][0]["applicable"] is True
+        assert detail["pillars"][0]["sub_scores"][0]["rating"] == "failed"
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other_workspace)})
+        assert client.get("/v1/jobs/evaluation-1/report", headers=headers).status_code == 404
         assert client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).status_code == 404
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
         result_file.write_text("invalid JSON", encoding="utf-8")
         assert client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).status_code == 422
+        assert client.get("/v1/jobs/evaluation-1/report", headers=headers).status_code == 422
+        result_file.unlink()
+        foreign = tmp_path / "foreign.json"
+        foreign.write_text(json.dumps(failed_report), encoding="utf-8")
+        result_file.symlink_to(foreign)
+        assert client.get("/v1/jobs/evaluation-1/report", headers=headers).status_code == 404
 
 
 def test_service_auth_workspace_chat_and_validation(tmp_path: Path, monkeypatch: object) -> None:
@@ -2281,3 +2319,64 @@ def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped
         restarted_store.save_generation(resumed)
         snapshot = client.get("/v1/bootstrap", headers=headers).json()
         assert resumed.id not in snapshot["removed_job_ids"]
+
+
+@pytest.mark.parametrize(
+    ("value", "passed", "aspirational_met", "skipped", "expected"),
+    [
+        (99.0, True, True, False, "passed"),
+        (80.0, True, False, False, "marginal"),
+        (65.0, False, False, False, "failed"),
+        (None, False, None, False, "failed"),
+        (None, None, None, True, "unrated"),
+        (92.0, None, None, False, "unrated"),
+    ],
+)
+def test_subscore_icons_use_saved_thresholds_and_preserve_missing_or_skipped_results(
+    value: float | None,
+    passed: bool | None,
+    aspirational_met: bool | None,
+    skipped: bool,
+    expected: str,
+) -> None:
+    sub = SubScore(
+        name="Event Presence", key="event_presence", weight=1, score=value, skipped=skipped
+    )
+    criterion = AcceptanceCriterion(
+        name="causality.event_presence",
+        pillar="causality",
+        sub_score_key="event_presence",
+        threshold=70,
+        aspirational=90,
+        actual=value,
+        passed=passed,
+        level="hard",
+        applicable=not skipped,
+        meets_aspirational=aspirational_met,
+    )
+    projection = _scorecard_subscore(sub, [criterion], load_thresholds())
+    assert projection.rating == expected
+    if expected != "unrated":
+        assert "Minimum 70" in projection.rating_detail
+        assert "Aspirational target 90" in projection.rating_detail
+        assert "Saved required check" in projection.rating_detail
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [
+        ("distribution_fit", 90, "passed"),
+        ("distribution_fit", 75, "marginal"),
+        ("anomaly_rate", 44, "failed"),
+        ("new_measure", 92, "unrated"),
+    ],
+)
+def test_diagnostic_colors_identify_current_reference_thresholds(
+    key: str, value: float, expected: str
+) -> None:
+    sub = SubScore(name="Diagnostic", key=key, weight=1, score=value)
+    projection = _scorecard_subscore(sub, [], load_thresholds())
+    assert projection.rating == expected
+    if expected != "unrated":
+        assert "Current reference thresholds" in projection.rating_detail
+        assert "does not change saved acceptance" in projection.rating_detail

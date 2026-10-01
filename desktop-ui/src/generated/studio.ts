@@ -659,6 +659,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Raw Scorecard
+         * @description Serve the original saved JSON for bounded previews and native file exports.
+         */
+        get: operations["raw_scorecard_v1_jobs__job_id__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/scorecard": {
         parameters: {
             query?: never;
@@ -1568,7 +1588,7 @@ export interface components {
              * @default scenario
              * @enum {string}
              */
-            kind: "scenario" | "industry_pack" | "organization_pack";
+            kind: "scenario" | "packs" | "industry_pack" | "organization_pack";
             /**
              * Search
              * @default
@@ -1615,6 +1635,8 @@ export interface components {
              * @enum {string}
              */
             level: "hard" | "target";
+            /** Applicable */
+            applicable?: boolean | null;
         };
         /**
          * ScorecardDetail
@@ -1667,6 +1689,17 @@ export interface components {
             details: string;
             /** Skipped */
             skipped: boolean;
+            /**
+             * Rating
+             * @default unrated
+             * @enum {string}
+             */
+            rating: "passed" | "failed" | "marginal" | "unrated";
+            /**
+             * Rating Detail
+             * @default
+             */
+            rating_detail: string;
         };
         /**
          * SkillInstallRequest
@@ -3538,6 +3571,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    raw_scorecard_v1_jobs__job_id__report_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

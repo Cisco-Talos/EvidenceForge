@@ -106,7 +106,7 @@ class SavedView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=80)
-    kind: Literal["scenario", "industry_pack", "organization_pack"] = "scenario"
+    kind: Literal["scenario", "packs", "industry_pack", "organization_pack"] = "scenario"
     search: str = ""
     folder: str | None = None
     project_id: str | None = None

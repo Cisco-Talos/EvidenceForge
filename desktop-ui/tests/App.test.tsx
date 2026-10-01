@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import App from "../src/App";
 import { StudioApi, StudioApiError, StudioSnapshot } from "../src/api";
+import { ScorecardPanel } from "../src/ScorecardPanel";
 import { JobCard } from "../src/components";
 import { BundleFileBrowser } from "../src/BundleFileBrowser";
 import { chronologicalJobs } from "../src/jobOrder";
@@ -126,7 +127,7 @@ test("operation icons distinguish current, warning, and stale results", () => {
     },
     jobs: [
       { id: "gen", kind: "generation" as const, status: "completed", status_message: "", scenario: snapshot.items[0].path, source_sha256: "sha-alpha", output_root: "/tmp/run", started_at: 1800000001 },
-      { id: "eval", kind: "evaluation" as const, status: "completed", status_message: "", generation_id: "gen", output_root: "/tmp/run", created_at: 1800000002 },
+      { id: "eval", kind: "evaluation" as const, status: "completed", status_message: "", generation_id: "gen", output_root: "/tmp/run", created_at: 1800000002, scorecard: { overall_score: 92, acceptance_passed: true } },
     ],
   };
   expect(scenarioStates(snapshot.items[0], complete).map((state) => state.state)).toEqual(["warning", "success", "success"]);
@@ -144,7 +145,7 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
     const { container } = render(<App />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
-    expect(screen.getByText("89/100")).toBeTruthy();
+    expect(await screen.findByText("89/100")).toBeTruthy();
     expect(screen.getByText("12,345 records")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "View scorecard" }));
     expect(screen.getByRole("tab", { name: "Scoring" }).getAttribute("aria-selected")).toBe("true");
@@ -152,6 +153,7 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
     await waitFor(() => expect(screen.getByRole("region", { name: "Saved scorecard" })).toBeTruthy());
     expect(container.querySelector("#job-evaluation-1")?.hasAttribute("open")).toBe(true);
     expect(screen.getByText("Parseability")).toBeTruthy();
+    await user.click(screen.getByText("Acceptance checks"));
     expect(screen.getByText("Schema gate")).toBeTruthy();
     await user.click(screen.getByText("Records by source"));
     expect(screen.getByText("zeek_conn")).toBeTruthy();
@@ -205,8 +207,8 @@ test("a pack clone requests a workspace publisher when one is not configured", a
   snapshot.items = [...originalItems, pack];
   try {
     render(<App />);
-    await user.click(screen.getByRole("button", { name: "Industry packs" }));
-    await user.click(screen.getByRole("button", { name: "Options for finance" }));
+    await user.click(screen.getByRole("button", { name: "Packs" }));
+    await user.click(screen.getByRole("button", { name: "Options for finance 1.0.0" }));
     await user.click(screen.getByRole("menuitem", { name: "Clone pack…" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Publisher ID" })).toBeTruthy());
     expect(screen.getByRole("textbox", { name: "Pack version" })).toHaveProperty("value", "1.0.0");
@@ -352,17 +354,17 @@ test("pack folders remain available while scenario folders are removed", async (
     render(<App />);
     const user = userEvent.setup();
     expect(screen.queryByRole("button", { name: "Filter by folder" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Industry packs" }));
+    await user.click(screen.getByRole("button", { name: "Packs" }));
     await user.click(screen.getByRole("button", { name: "Filter by folder" }));
     await user.click(screen.getByRole("menuitem", { name: "Training" }));
-    expect(screen.getByText("Alpha", { selector: ".card-body strong" })).toBeTruthy();
-    expect(screen.queryByText("Bravo", { selector: ".card-body strong" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open Bravo 2.0" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Saved views" }));
     const dialog = screen.getByRole("dialog", { name: "Saved views" });
     await user.type(within(dialog).getByRole("textbox", { name: "Saved view name" }), "Training items");
     await user.click(within(dialog).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
-      "/v1/views", "POST", { name: "Training items", kind: "industry_pack", search: "", folder: "Training",
+      "/v1/views", "POST", { name: "Training items", kind: "packs", search: "", folder: "Training",
         project_id: null, ungrouped: false, show_hidden: false },
     ));
   } finally {
@@ -374,7 +376,7 @@ test("pack folders remain available while scenario folders are removed", async (
 test("a new virtual folder can be created from the library filter", async () => {
   render(<App />);
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Industry packs" }));
+  await user.click(screen.getByRole("button", { name: "Packs" }));
   await user.click(screen.getByRole("button", { name: "Filter by folder" }));
   await user.click(screen.getByRole("menuitem", { name: "New folder…" }));
   const dialog = screen.getByRole("dialog", { name: "New folder" });
@@ -689,7 +691,8 @@ test("stopped run can regenerate, preview files, and confirm deletion", async ()
   await user.click(screen.getByRole("button", { name: "Close bundle files" }));
   await user.click(screen.getByRole("button", { name: "Regenerate" }));
   expect(request).toHaveBeenCalledWith(`/v1/jobs/${job.id}/regenerate`, "POST");
-  await user.click(screen.getByRole("button", { name: "Delete bundle" }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
+  await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
   const dialog = screen.getByRole("dialog", { name: "Delete bundle" });
   expect(dialog).toBeTruthy();
   await user.click(within(dialog).getByRole("button", { name: "Delete bundle" }));
@@ -707,7 +710,8 @@ test("completed run exposes ZIP export and removes its bundle after confirmation
   await user.click(container.querySelector("summary")!);
   await user.click(screen.getByRole("button", { name: "Download ZIP" }));
   expect(downloadBundle).toHaveBeenCalledWith(job.id, "Alpha-job-1.zip", expect.any(Function));
-  await user.click(screen.getByRole("button", { name: "Delete bundle" }));
+  await user.click(screen.getByRole("button", { name: "Delete" }));
+  await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
   await user.click(within(screen.getByRole("dialog", { name: "Delete bundle" })).getByRole("button", { name: "Delete bundle" }));
   expect(request).toHaveBeenCalledWith(`/v1/jobs/${job.id}/bundle`, "DELETE");
   expect(onChanged).toHaveBeenCalledTimes(1);
@@ -1006,7 +1010,8 @@ test("Job center removes finished history entries while preserving scenario runs
     const finished = container.querySelector("#job-job-1")!;
     const paused = container.querySelector("#job-job-2")!;
     expect(within(paused as HTMLElement).queryByRole("button", { name: "Delete job" })).toBeNull();
-    await user.click(within(finished as HTMLElement).getByRole("button", { name: "Delete job" }));
+    await user.click(within(finished as HTMLElement).getByRole("button", { name: "Delete" }));
+    await user.click(screen.getByRole("menuitem", { name: /Delete job/ }));
     expect(request).toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
@@ -1060,4 +1065,205 @@ test("Open YAML uses the native opener and gives a clear browser-preview hint", 
     await user.click(screen.getByRole("button", { name: "Open YAML" }));
     expect(openPath).toHaveBeenCalledWith(snapshot.items[0].path);
   } finally { delete window.__TAURI_INTERNALS__; }
+});
+
+test.each([
+  { scorecard: { overall_score: 92.3, acceptance_passed: false }, expected: "error", detail: "Failed acceptance · 92/100" },
+  { scorecard: { overall_score: 61, acceptance_passed: true }, expected: "success", detail: "Passed acceptance · 61/100" },
+  { scorecard: { overall_score: 99, acceptance_passed: null }, expected: "warning", detail: "indeterminate" },
+  { scorecard: undefined, expected: "warning", detail: "unavailable" },
+  { scorecard: { error: "Report is missing" }, expected: "error", detail: "Report is missing" },
+])("evaluation icons reflect acceptance rather than completion: $detail", ({ scorecard, expected, detail }) => {
+  const jobs: StudioSnapshot["jobs"] = [
+    { ...snapshot.jobs[0], source_sha256: "sha-alpha", status: "completed" },
+    { id: "eval", kind: "evaluation", status: "completed", generation_id: "job-1", output_root: "/tmp/run", scorecard },
+  ];
+  const state = scenarioStates(snapshot.items[0], { ...snapshot, jobs })[2];
+  expect(state.state).toBe(expected);
+  expect(state.detail).toContain(detail);
+});
+
+test("library and workspace show a failed evaluation even with a high overall score", async () => {
+  const originalJobs = snapshot.jobs;
+  snapshot.jobs = [
+    { ...originalJobs[0], source_sha256: "sha-alpha", status: "completed" },
+    { id: "evaluation-1", kind: "evaluation", status: "completed", generation_id: "job-1", output_root: "/tmp/run", scorecard: { overall_score: 92.3, acceptance_passed: false } },
+  ];
+  try {
+    render(<App />);
+    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
+    await userEvent.setup().click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
+    expect(scenarioStates({ ...snapshot.items[0], source_sha256: "new-revision" }, snapshot)[2].state).toBe("stale");
+  } finally { snapshot.jobs = originalJobs; }
+});
+
+test("Delete menu keeps history removal and bundle deletion together with distinct effects", async () => {
+  const user = userEvent.setup();
+  const onDeleteHistory = vi.fn(async () => undefined);
+  const request = vi.fn(async () => ({}));
+  const { container } = render(<JobCard job={{ ...snapshot.jobs[0], status: "completed" }} api={{ request } as unknown as StudioApi} onDeleteHistory={onDeleteHistory} onError={vi.fn()} onChanged={vi.fn(async () => undefined)} />);
+  await user.click(container.querySelector("summary")!);
+  expect(screen.queryByRole("button", { name: "Delete job" })).toBeNull();
+  const trigger = screen.getByRole("button", { name: "Delete" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  expect(screen.getByRole("menuitem", { name: /Delete job/ })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: /Delete bundle/ })).toBeTruthy();
+  await user.keyboard("{Escape}");
+  expect(document.activeElement).toBe(trigger);
+  expect(request).not.toHaveBeenCalled();
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
+  expect(screen.getByRole("dialog", { name: "Delete bundle" })).toBeTruthy();
+  expect(request).not.toHaveBeenCalled();
+  expect(onDeleteHistory).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.click(trigger);
+  await user.click(screen.getByRole("menuitem", { name: /Delete job/ }));
+  expect(onDeleteHistory).toHaveBeenCalledOnce();
+  expect(request).not.toHaveBeenCalled();
+});
+
+test("evaluations only offer history deletion and active generations offer neither delete action", async () => {
+  const user = userEvent.setup();
+  const api = {} as StudioApi;
+  const callbacks = { onError: vi.fn(), onChanged: vi.fn(async () => undefined), onDeleteHistory: vi.fn(async () => undefined) };
+  const { container, unmount } = render(<JobCard job={{ id: "eval", kind: "evaluation", status: "completed", output_root: "/tmp/run" }} api={api} {...callbacks} />);
+  await user.click(container.querySelector("summary")!);
+  await user.click(screen.getByRole("button", { name: "Delete" }));
+  expect(screen.getByRole("menuitem", { name: /Delete job/ })).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: /Delete bundle/ })).toBeNull();
+  unmount();
+  render(<JobCard job={snapshot.jobs[0]} api={api} {...callbacks} />);
+  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+});
+
+test("Packs combines both types in stable sections, retains filters, and opens the exact pack", async () => {
+  const originalItems = snapshot.items;
+  const pack = { ...originalItems[0], id: "industry", kind: "industry_pack" as const, name: "Sector", description: "Industry defaults", version: "1.0.0" };
+  const org = { ...pack, id: "org", kind: "organization_pack" as const, name: "Team", description: "Organization environment", version: "2.0.0" };
+  snapshot.items = [...originalItems, org, pack];
+  try {
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    const nav = screen.getByRole("navigation", { name: "Main navigation" });
+    expect(within(nav).queryByRole("button", { name: "Industry packs" })).toBeNull();
+    await user.click(within(nav).getByRole("button", { name: "Packs" }));
+    expect([...container.querySelectorAll(".pack-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Industry packs", "Organization packs"]);
+    expect(screen.getByRole("button", { name: "Open Sector 1.0.0" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Team 2.0.0" })).toBeTruthy();
+    const group = container.querySelector(".pack-group") as HTMLDetailsElement;
+    await user.click(group.querySelector("summary")!);
+    expect(group.open).toBe(false);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Pack type" }), "organization_pack");
+    expect(screen.queryByRole("button", { name: "Open Sector 1.0.0" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open Team 2.0.0" }));
+    expect(screen.getByRole("heading", { name: "Team" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Conversations" })).toBeTruthy();
+    await user.click(within(nav).getByRole("button", { name: "Packs" }));
+    await user.click(screen.getByRole("button", { name: "New pack" }));
+    expect(screen.getByRole("menuitem", { name: "Industry pack" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Organization pack" })).toBeTruthy();
+  } finally { snapshot.items = originalItems; }
+});
+
+test("new organization drafts use the correct skill context and remain in the unified library", async () => {
+  const originalConversations = snapshot.conversations;
+  const request = vi.mocked(useStudio().api!.request);
+  const draft = { ...originalConversations[0], id: "org-draft", item_id: null, draft_kind: "organization_pack" as const, title: "New organization pack" };
+  try {
+    const { rerender } = render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Packs" }));
+    snapshot.conversations = [...originalConversations, draft];
+    request.mockResolvedValueOnce(draft);
+    await user.click(screen.getByRole("button", { name: "New organization pack" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/conversations", "POST", { draft_kind: "organization_pack", project_id: null }));
+    rerender(<App />);
+    expect(screen.getByText("New organization pack", { selector: ".draft-banner strong" })).toBeTruthy();
+  } finally { snapshot.conversations = originalConversations; }
+});
+
+test("scorecards start with pillar scores, explain failed acceptance, and expose subscores and raw JSON on demand", async () => {
+  const report = {
+    scenario_name: "Alpha", evaluated_at: "2026-10-01T16:00:00Z", total_records: 100, overall_score: 92.3, acceptance_passed: false,
+    source_counts: { windows: 100 }, flags: ["Required check below threshold"],
+    pillars: [{ name: "Causality", score: 91, sub_scores: [{ name: "Event presence", score: 75, skipped: false, details: "3 of 4 expected events found" }] }],
+    acceptance_criteria: [
+      { name: "causality.event_presence", actual: 75, threshold: 85, level: "hard", passed: false, applicable: true },
+      { name: "Not applicable", actual: null, threshold: 85, level: "hard", passed: false, applicable: false },
+    ],
+  };
+  const request = vi.fn(async () => report);
+  const readTextPreview = vi.fn(async () => ({ text: JSON.stringify(report), truncated: true, binary: false }));
+  const download = vi.fn(async () => ({ status: "browser" }));
+  const { container } = render(<ScorecardPanel jobId="eval" api={{ request, readTextPreview, download } as unknown as StudioApi} />);
+  expect(await screen.findByText("Acceptance failed")).toBeTruthy();
+  expect(screen.getByText(/1 required check failed. The overall score/)).toBeTruthy();
+  const pillar = container.querySelector(".scorecard-pillar") as HTMLDetailsElement;
+  expect(pillar.open).toBe(false);
+  const user = userEvent.setup();
+  await user.click(within(pillar).getByText("Causality"));
+  expect(pillar.open).toBe(true);
+  expect(screen.getByText("Event presence")).toBeTruthy();
+  expect(screen.getByText("3 of 4 expected events found")).toBeTruthy();
+  const checks = container.querySelector(".scorecard-criteria") as HTMLDetailsElement;
+  expect(checks.open).toBe(false);
+  await user.click(screen.getByText("Acceptance checks"));
+  expect(checks.open).toBe(true);
+  expect(screen.getByText("75 / 85 threshold · Required")).toBeTruthy();
+  expect(readTextPreview).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "View raw report" }));
+  await waitFor(() => expect(container.querySelector(".language-json")).toBeTruthy());
+  expect(readTextPreview).toHaveBeenCalledWith("/v1/jobs/eval/report", 64 * 1024);
+  expect(screen.getByText(/Preview limited to 64 KB/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Download report JSON" }));
+  expect(download).toHaveBeenCalledWith("/v1/jobs/eval/report", "evaluation-eval.json");
+});
+
+test("Packs search includes YAML content from both pack types", async () => {
+  const originalItems = snapshot.items;
+  const request = vi.mocked(useStudio().api!.request);
+  const industry = { ...originalItems[0], id: "sector", kind: "industry_pack" as const, name: "Sector" };
+  const org = { ...originalItems[1], id: "team", kind: "organization_pack" as const, name: "Team" };
+  snapshot.items = [...originalItems, industry, org];
+  try {
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Packs" }));
+    request.mockResolvedValueOnce([industry]).mockResolvedValueOnce([org]);
+    await user.type(screen.getByRole("textbox", { name: "Search packs" }), "yaml:persona");
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/items?kind=industry_pack&search=yaml%3Apersona"));
+    expect(request).toHaveBeenCalledWith("/v1/items?kind=organization_pack&search=yaml%3Apersona");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open Sector 2.0" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Open Team 2.0" })).toBeTruthy();
+  } finally { snapshot.items = originalItems; }
+});
+
+test("subscore icons encode passed, failed, marginal, and skipped states with accessible explanations", async () => {
+  vi.stubGlobal("ResizeObserver", class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  const sub_scores = [
+    { name: "Good", score: 100, details: "", skipped: false, rating: "passed", rating_detail: "Minimum 95. Aspirational target 99. Saved required check." },
+    { name: "Bad", score: 75, details: "", skipped: false, rating: "failed", rating_detail: "Minimum 85. Saved required check." },
+    { name: "Near target", score: 90, details: "", skipped: false, rating: "marginal", rating_detail: "Minimum 85. Aspirational target 95. Current reference thresholds; this comparison does not change saved acceptance." },
+    { name: "Not applicable", score: null, details: "", skipped: true, rating: "unrated", rating_detail: "Skipped; excluded from acceptance." },
+  ];
+  const report = { scenario_name: "Alpha", evaluated_at: "2026-10-01T16:00:00Z", total_records: 100, overall_score: 92, acceptance_passed: false, source_counts: {}, flags: [], acceptance_criteria: [], pillars: [{ name: "Causality", score: 92, sub_scores }] };
+  render(<ScorecardPanel jobId="eval" api={{ request: vi.fn(async () => report) } as unknown as StudioApi} compact />);
+  await screen.findByText("Causality");
+  const user = userEvent.setup();
+  await user.click(screen.getByText("Causality"));
+  expect(screen.getByLabelText(/Good: Passed/).classList.contains("subscore-passed")).toBe(true);
+  expect(screen.getByLabelText(/Bad: Failed/).classList.contains("subscore-failed")).toBe(true);
+  const marginal = screen.getByLabelText(/Near target: Marginal/);
+  expect(marginal.classList.contains("subscore-marginal")).toBe(true);
+  expect(screen.getByLabelText(/Not applicable: Skipped/).classList.contains("subscore-unrated")).toBe(true);
+  marginal.focus();
+  expect((await screen.findByRole("tooltip")).textContent).toContain("Minimum 85. Aspirational target 95. Current reference thresholds");
+  expect(screen.queryByRole("button", { name: "View raw report" })).toBeNull();
 });

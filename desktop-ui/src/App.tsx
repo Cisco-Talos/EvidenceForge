@@ -4,7 +4,7 @@ import { DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { CatalogItem, CodexHealth, Conversation, PackPublisherStatus, Project, SavedView, StudioApiError, StudioJob, type ExportProgress } from "./api";
+import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, Project, SavedView, StudioApiError, StudioJob, type ExportProgress } from "./api";
 import { formatTime, shortPath, StatusBadge, ValidationPanel } from "./components";
 import { BundleLibrary } from "./BundleLibrary";
 import { CopyPathButton } from "./CopyPathButton";
@@ -15,16 +15,18 @@ import { ChatView } from "./ChatView";
 import { ScenarioOperations } from "./ScenarioOperations";
 import { scenarioNameError } from "./scenarioName";
 import { ScenarioStates } from "./ScenarioStates";
+import { ScorecardPanel } from "./ScorecardPanel";
+import { PackLibrary } from "./PackLibrary";
 import { useStudio } from "./useStudio";
 import { useNotice } from "./useNotice";
 import "./App.css";
 
-type Section = "scenarios" | "industry_pack" | "organization_pack" | "bundles" | "jobs" | "settings";
+type Section = "scenarios" | "packs" | "bundles" | "jobs" | "settings";
 type WorkspaceTab = "overview" | "conversations" | "validation" | "generation" | "scoring";
 type CloseProblem = { type: "checkpoint_disabled" | "confirm_delete" | "waiting"; jobIds: string[]; failures?: { id: string; detail: string }[] };
 
 const sectionTitles: Record<Section, string> = {
-  scenarios: "Scenarios", industry_pack: "Industry packs", organization_pack: "Org packs",
+  scenarios: "Scenarios", packs: "Packs",
   bundles: "Bundles", jobs: "Job center", settings: "Settings",
 };
 
@@ -38,6 +40,7 @@ function App() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [packFilter, setPackFilter] = useState<"packs" | "industry_pack" | "organization_pack">("packs");
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [folderForm, setFolderForm] = useState<{ original: string | null; name: string; assignItemId: string | null } | null>(null);
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null);
@@ -77,7 +80,7 @@ function App() {
   const [showReconnect, setShowReconnect] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
 
-  const kind = section === "scenarios" ? "scenario" : section;
+  const kind = section === "scenarios" ? "scenario" : section === "packs" ? packFilter : section;
   const selectedProject = snapshot?.projects.find((project) => project.id === selectedProjectId) || null;
   const projectName = selectedProjectId === "ungrouped" ? "Ungrouped" : selectedProject?.name;
   const allDrafts = snapshot?.conversations.filter((chat) => !chat.item_id && chat.draft_kind === "scenario") || [];
@@ -85,7 +88,7 @@ function App() {
   const ungroupedCount = (snapshot?.items.filter((entry) => entry.kind === "scenario" && !entry.hidden && !entry.project_id).length || 0) + allDrafts.filter((draft) => !draft.draft_project_id).length;
   const searchKey = `${kind}:${search.trim()}`;
   const library = useMemo(() => snapshot?.items.filter((entry) =>
-    entry.kind === kind && (!entry.hidden || showHidden) &&
+    (entry.kind === kind || (kind === "packs" && entry.kind !== "scenario")) && (!entry.hidden || showHidden) &&
     (kind === "scenario" || selectedFolder === null || entry.folder === selectedFolder) &&
     (kind !== "scenario" || selectedProjectId === null || (selectedProjectId === "ungrouped" ? !entry.project_id : entry.project_id === selectedProjectId)) &&
     (!search.trim() || (searchResult?.key === searchKey
@@ -95,12 +98,12 @@ function App() {
   const item = snapshot?.items.find((entry) => entry.id === selectedId) || null;
   const draftConversation = snapshot?.conversations.find((chat) => chat.id === draftConversationId) || null;
   const drafts = snapshot?.conversations.filter((chat) =>
-    !chat.item_id && chat.draft_kind === kind &&
+    !chat.item_id && (chat.draft_kind === kind || (kind === "packs" && !!chat.draft_kind && chat.draft_kind !== "scenario")) &&
     (kind !== "scenario" || selectedProjectId === null || (selectedProjectId === "ungrouped" ? !chat.draft_project_id : chat.draft_project_id === selectedProjectId)) &&
     (kind === "scenario" || !selectedFolder) &&
     `${chat.draft_name || chat.title} ${chat.title}`.toLowerCase().includes(search.toLowerCase())) || [];
-  const savedViews = snapshot?.views.filter((view) => view.kind === kind) || [];
-  const hiddenCount = snapshot?.items.filter((entry) => entry.kind === kind && entry.hidden).length || 0;
+  const savedViews = snapshot?.views.filter((view) => section === "packs" ? view.kind !== "scenario" : view.kind === kind) || [];
+  const hiddenCount = snapshot?.items.filter((entry) => (entry.kind === kind || (kind === "packs" && entry.kind !== "scenario")) && entry.hidden).length || 0;
   const conversations = snapshot?.conversations.filter((entry) => entry.item_id === selectedId) || [];
   const itemGenerationIds = new Set(snapshot?.jobs.filter((job) => job.kind === "generation" && job.scenario === item?.path).map((job) => job.id) || []);
   const itemJobs = snapshot?.jobs.filter((job) => item && ((job.kind === "generation" && job.scenario === item.path) || (job.kind === "evaluation" && !!job.generation_id && itemGenerationIds.has(job.generation_id)))) || [];
@@ -131,7 +134,7 @@ function App() {
   }, [snapshot, selectedFolder]);
 
   const commands = [
-    ...(["scenarios", "industry_pack", "organization_pack", "bundles", "jobs", "settings"] as Section[]).map((target) => ({
+    ...(["scenarios", "packs", "bundles", "jobs", "settings"] as Section[]).map((target) => ({
       id: `section:${target}`, label: sectionTitles[target], detail: "Navigate", run: () => {
         setSection(target); setSelectedId(null); setDraftConversationId(null);
       },
@@ -139,7 +142,7 @@ function App() {
     ...(snapshot?.items || []).filter((entry) => !entry.hidden).map((entry) => ({
       id: `item:${entry.id}`, label: entry.name,
       detail: entry.kind === "scenario" ? "Scenario" : entry.kind === "industry_pack" ? "Industry pack" : "Org pack",
-      run: () => { setSection(entry.kind === "scenario" ? "scenarios" : entry.kind); openItem(entry); },
+      run: () => { setSection(entry.kind === "scenario" ? "scenarios" : "packs"); openItem(entry); },
     })),
     ...(snapshot?.projects || []).map((project) => ({
       id: `project:${project.id}`, label: project.name, detail: "Project", run: () => {
@@ -253,6 +256,7 @@ function App() {
   }
 
   function applySavedView(view: SavedView) {
+    if (view.kind !== "scenario") setPackFilter(view.kind);
     setSearch(view.search);
     setShowHidden(view.show_hidden);
     setSelectedFolder(view.kind !== "scenario" && view.folder && snapshot?.folders.includes(view.folder) ? view.folder : null);
@@ -408,7 +412,7 @@ function App() {
       }, 190000);
       await studio.reload();
       setCloningItem(null);
-      setSection(cloned.kind === "industry_pack" ? "industry_pack" : "organization_pack");
+      setSection("packs");
       openItem(cloned);
       showNotice(`Created local pack ${cloned.name}@${cloned.version}.`);
     } catch (error) { setNotice(String(error)); }
@@ -425,7 +429,7 @@ function App() {
 
   function openActiveConversation(chat: Conversation) {
     if (!chat.item_id && chat.draft_kind) {
-      setSection(chat.draft_kind === "scenario" ? "scenarios" : chat.draft_kind);
+      setSection(chat.draft_kind === "scenario" ? "scenarios" : "packs");
       setSelectedId(null);
       setDraftConversationId(chat.id);
       return;
@@ -435,7 +439,7 @@ function App() {
       setNotice("This conversation's source is not in the current workspace.");
       return;
     }
-    setSection(source.kind === "scenario" ? "scenarios" : source.kind);
+    setSection(source.kind === "scenario" ? "scenarios" : "packs");
     openItem(source);
     setSelectedConversation(chat.id);
     setTab("conversations");
@@ -481,14 +485,15 @@ function App() {
     } catch (error) { setNotice(String(error)); }
   }
 
-  async function createDraft(name?: string, projectId?: string | null) {
-    if (!api || !["scenario", "industry_pack", "organization_pack"].includes(kind) || (kind === "scenario" && scenarioNameError(name || ""))) return;
+  async function createDraft(name?: string, projectId?: string | null, packKind?: ItemKind) {
+    const draftKind = section === "scenarios" ? "scenario" : packKind;
+    if (!api || !draftKind || (draftKind === "scenario" && scenarioNameError(name || ""))) return;
     setBusy(true);
     try {
       const created = await api.request<Conversation>("/v1/conversations", "POST", {
-        draft_kind: kind,
-        project_id: kind === "scenario" ? (projectId || null) : null,
-        ...(kind === "scenario" ? { name: name?.trim() } : {}),
+        draft_kind: draftKind,
+        project_id: draftKind === "scenario" ? (projectId || null) : null,
+        ...(draftKind === "scenario" ? { name: name?.trim() } : {}),
       });
       setNewScenarioForm(null);
       await studio.reload();
@@ -552,13 +557,15 @@ function App() {
   }, [snapshot?.settings.workspace]);
 
   useEffect(() => {
-    if (!api || !search.trim() || !["scenario", "industry_pack", "organization_pack"].includes(kind)) {
+    if (!api || !search.trim() || !["scenario", "packs", "industry_pack", "organization_pack"].includes(kind)) {
       setSearchResult(null);
       return;
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void api.request<CatalogItem[]>(`/v1/items?kind=${encodeURIComponent(kind)}&search=${encodeURIComponent(search.trim())}`)
+      const kinds = kind === "packs" ? ["industry_pack", "organization_pack"] : [kind];
+      void Promise.all(kinds.map((entryKind) => api.request<CatalogItem[]>(`/v1/items?kind=${encodeURIComponent(entryKind)}&search=${encodeURIComponent(search.trim())}`)))
+        .then((results) => results.flat())
         .then((found) => { if (!cancelled) setSearchResult({ key: searchKey, ids: new Set(found.map((entry) => entry.id)) }); })
         .catch((error) => { if (!cancelled) setNotice(`Search failed: ${String(error)}`); });
     }, 180);
@@ -569,7 +576,7 @@ function App() {
     if (!draftConversationId || !draftConversation?.item_id) return;
     const authored = snapshot?.items.find((entry) => entry.id === draftConversation.item_id);
     if (!authored) return;
-    setSection(authored.kind === "scenario" ? "scenarios" : authored.kind);
+    setSection(authored.kind === "scenario" ? "scenarios" : "packs");
     setSelectedId(authored.id);
     setSelectedConversation(draftConversation.id);
     setTab("conversations");
@@ -641,15 +648,14 @@ function App() {
 
   if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p><button onClick={() => window.location.reload()}>Retry</button></div>;
 
-  const showLibrary = ["scenarios", "industry_pack", "organization_pack"].includes(section);
+  const showLibrary = ["scenarios", "packs"].includes(section);
   return <Tooltip.Provider><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><img className="brand-mini" src="/brand/icon-32.png" alt="" /><small>STUDIO</small></div>
       <div className="workspace-tag"><span className="workspace-indicator" /><span className="path-value" title={snapshot.settings.workspace}>{shortPath(snapshot.settings.workspace)}</span><CopyPathButton path={snapshot.settings.workspace} label="Copy workspace path" onError={setNotice} /></div>
       <nav className="primary-nav" aria-label="Main navigation">
         <button className={section === "scenarios" ? "selected" : ""} onClick={() => { setSection("scenarios"); setSelectedId(null); setDraftConversationId(null); }}><FileCode2 size={18} /> Scenarios</button>
-        <button className={section === "industry_pack" ? "selected" : ""} onClick={() => { setSection("industry_pack"); setSelectedId(null); setDraftConversationId(null); }}><Layers3 size={18} /> Industry packs</button>
-        <button className={section === "organization_pack" ? "selected" : ""} onClick={() => { setSection("organization_pack"); setSelectedId(null); setDraftConversationId(null); }}><Folder size={18} /> Org packs</button>
+        <button className={section === "packs" ? "selected" : ""} onClick={() => { setSection("packs"); setSelectedId(null); setDraftConversationId(null); }}><Layers3 size={18} /> Packs</button>
         <button className={section === "bundles" ? "selected" : ""} onClick={() => { setSection("bundles"); setSelectedId(null); setDraftConversationId(null); }}><FolderOpen size={18} /> Bundles</button>
         <div className="nav-rule" />
         <button className={section === "jobs" ? "selected" : ""} onClick={() => { setSection("jobs"); setSelectedId(null); setDraftConversationId(null); }}><Activity size={18} /> Job center {activeJobs > 0 && <span className="nav-count">{activeJobs}</span>}</button>
@@ -660,7 +666,7 @@ function App() {
       <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item?.name || draftConversation?.draft_name || "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="icon-button" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}><RefreshCw size={17} /></button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
 
       {showLibrary && !item && !draftConversationId && <div className="page library-page">
-        <div className="page-intro"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>{sectionTitles[section]}</h1><p>{section === "scenarios" ? "Find a scenario and pick up where you left off." : "Reusable environments for realistic scenarios."}</p></div><button className="button-primary" disabled={busy} onClick={() => section === "scenarios" ? setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" }) : void createDraft()}><Plus size={17} /> New {section === "scenarios" ? "scenario" : "pack"}</button></div>
+        <div className="page-intro"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>{sectionTitles[section]}</h1><p>{section === "scenarios" ? "Find a scenario and pick up where you left off." : "Reusable environments for realistic scenarios."}</p></div>{section === "scenarios" ? <button className="button-primary" disabled={busy} onClick={() => setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" })}><Plus size={17} /> New scenario</button> : <DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}><Plus size={17} /> New pack</DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5}><DropdownMenu.Item onSelect={() => void createDraft(undefined, undefined, "industry_pack")}>Industry pack</DropdownMenu.Item><DropdownMenu.Item onSelect={() => void createDraft(undefined, undefined, "organization_pack")}>Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}</div>
         <div className={section === "scenarios" ? "project-browser" : ""}>
           {section === "scenarios" && <aside className="project-rail" aria-label="Projects"><div className="project-rail-heading"><span>PROJECTS</span><button className="icon-button" aria-label="New project" title="New project" onClick={() => setProjectForm({ id: null, name: "", description: "", assignItemId: null })}><Plus size={16} /></button></div>
             <button className={`project-nav-row ${selectedProjectId === null ? "active" : ""}`} aria-label="All scenarios" onClick={() => setSelectedProjectId(null)}><Layers3 size={16} /><span>All scenarios</span><small>{scenarioCount}</small></button>
@@ -670,12 +676,14 @@ function App() {
           <div className="project-library">
             {section === "scenarios" && selectedProjectId !== null && <div className="project-overview"><div><span className="eyebrow">{selectedProject ? "PROJECT" : "SCENARIOS"}</span><h2>{projectName || "Project"}</h2><p>{selectedProject ? selectedProject.description || "Scenarios grouped for this work." : "Scenarios that have not been assigned to a project."}</p></div><span className="project-total">{library.length + drafts.length} {library.length + drafts.length === 1 ? "scenario" : "scenarios"}</span></div>}
             <div className="library-toolbar">
+              {section === "packs" && <select className="pack-type-filter" aria-label="Pack type" value={packFilter} onChange={(event) => setPackFilter(event.target.value as typeof packFilter)}><option value="packs">All pack types</option><option value="industry_pack">Industry</option><option value="organization_pack">Organization</option></select>}
               <div className="search-box"><Search size={17} /><input placeholder={`Search ${sectionTitles[section].toLowerCase()}…`} value={search} onChange={(event) => setSearch(event.target.value)} aria-label={`Search ${sectionTitles[section].toLowerCase()}`} /></div>
               {section !== "scenarios" && <DropdownMenu.Root><DropdownMenu.Trigger className={`folder-filter-trigger ${selectedFolder ? "active" : ""}`} aria-label="Filter by folder" title="Filter by folder"><FolderOpen size={17} />{selectedFolder && <span>{selectedFolder}</span>}</DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu folder-filter-menu" sideOffset={4}><DropdownMenu.Label>Folders</DropdownMenu.Label><DropdownMenu.Item onSelect={() => setSelectedFolder(null)}>{selectedFolder === null && <Check size={14} />} All folders</DropdownMenu.Item>{snapshot.folders.map((folder) => <DropdownMenu.Item key={folder} onSelect={() => setSelectedFolder(folder)}>{selectedFolder === folder && <Check size={14} />} {folder}</DropdownMenu.Item>)}<DropdownMenu.Separator /><DropdownMenu.Item onSelect={() => setFolderForm({ original: null, name: "", assignItemId: null })}><Plus size={14} /> New folder…</DropdownMenu.Item>{selectedFolder && <><DropdownMenu.Item onSelect={() => setFolderForm({ original: selectedFolder, name: selectedFolder, assignItemId: null })}>Rename {selectedFolder}…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setDeletingFolder(selectedFolder)}>Delete {selectedFolder}…</DropdownMenu.Item></>}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
               {hiddenCount > 0 && <button className={`hidden-filter ${showHidden ? "active" : ""}`} aria-label={showHidden ? "Hide hidden items" : "Show hidden items"} title={showHidden ? "Hide hidden items again" : "Include hidden items in this library"} onClick={() => setShowHidden(!showHidden)}><Filter size={15} /> {showHidden ? "Showing hidden" : `Hidden (${hiddenCount})`}</button>}
               <button className={`icon-button saved-views-toggle ${savedViews.length ? "has-views" : ""}`} aria-label="Saved views" title="Saved views" onClick={() => setShowViews(true)}><Bookmark size={17} /></button>
               <span className="result-count">{library.length + drafts.length} {library.length + drafts.length === 1 ? "item" : "items"}</span>
             </div>
+            {section === "packs" ? <PackLibrary items={library} drafts={drafts} folders={snapshot.folders} busy={busy} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onNew={(packKind) => void createDraft(undefined, undefined, packKind)} onClone={(entry) => void beginPackClone(entry)} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, folder) => void assignFolder(entry, folder)} onNewFolder={(entry) => setFolderForm({ original: null, name: "", assignItemId: entry.id })} onDeleteDraft={setDeletingConversation} /> : <>
             {library.length + drafts.length ? <div className="library-grid">
               {drafts.map((draft) => <div className="library-card scenario-card draft-card draggable-card" key={draft.id} draggable={draft.draft_kind === "scenario"} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); setDraggedScenarioId(draft.id); }} onDragEnd={() => { setDraggedScenarioId(null); setDropTargetId(null); }}>
                 <button className="card-open" onClick={() => setDraftConversationId(draft.id)}><span className="card-symbol"><SquarePen size={20} /></span><span className="card-body"><strong>{draft.draft_name || draft.title}</strong><span className="card-description">{draft.active ? "Authoring in progress" : "Ready to author"}</span><span className="card-meta">Not authored yet <span>·</span> Updated {formatTime(draft.updated_at)}{selectedProjectId === null && <><span>·</span>{snapshot.projects.find((project) => project.id === draft.draft_project_id)?.name || "Ungrouped"}</>}</span></span></button>
@@ -689,6 +697,7 @@ function App() {
                 <DropdownMenu.Root><DropdownMenu.Trigger className="card-project-trigger" aria-label={`Options for ${entry.name}`} title="More options"><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4}>{entry.kind !== "scenario" && <DropdownMenu.Sub><DropdownMenu.SubTrigger>Move to folder</DropdownMenu.SubTrigger><DropdownMenu.Portal><DropdownMenu.SubContent className="conversation-menu" sideOffset={5}><DropdownMenu.Item onSelect={() => void assignFolder(entry, null)}>{!entry.folder && <Check size={14} />} No folder</DropdownMenu.Item>{snapshot.folders.map((folder) => <DropdownMenu.Item key={folder} onSelect={() => void assignFolder(entry, folder)}>{entry.folder === folder && <Check size={14} />} {folder}</DropdownMenu.Item>)}<DropdownMenu.Separator /><DropdownMenu.Item onSelect={() => setFolderForm({ original: null, name: "", assignItemId: entry.id })}><Plus size={14} /> New folder…</DropdownMenu.Item></DropdownMenu.SubContent></DropdownMenu.Portal></DropdownMenu.Sub>}{entry.kind === "scenario" ? <DropdownMenu.Item onSelect={() => beginScenarioClone(entry)}><Copy size={14} /> Clone scenario…</DropdownMenu.Item> : <DropdownMenu.Item onSelect={() => void beginPackClone(entry)}><Copy size={14} /> Clone pack…</DropdownMenu.Item>}<DropdownMenu.Item onSelect={() => void setItemHidden(entry, !entry.hidden)}>{entry.hidden ? "Unhide" : "Hide"}</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
               </div>
             </div>)}</div> : <div className="empty-panel tall"><FolderOpen size={30} /><h3>{search ? "No matches" : selectedProject ? "No scenarios in this project" : "Nothing here yet"}</h3><p>{search ? "Try another search." : selectedProject ? "Drag a scenario here or use its project menu." : "Add or import a scenario to start building your library."}</p></div>}
+            </>}
           </div>
         </div>
       </div>}
@@ -698,7 +707,7 @@ function App() {
       {showLibrary && item && <div className="scenario-page">
         <div className="scenario-header"><div><span className="eyebrow">{item.kind.replace("_", " ").toUpperCase()} WORKSPACE</span><h1>{item.name}</h1><p>{item.description || "No description in the source file."}</p><div className="scenario-facts"><span><FileCode2 size={15} /> {item.version || "YAML"}</span>{item.kind === "scenario" && <><span>{item.users} users</span><span>{item.systems} systems</span><span>{item.events} events</span></>}<span>Edited {formatTime(item.modified_at)}</span></div>{item.kind === "scenario" && <ScenarioStates item={item} snapshot={snapshot} />}</div><div className="scenario-header-actions">{item.kind === "scenario" && <><label className="scenario-project-picker"><Folder size={16} /><span>Project</span><select aria-label={`Project for ${item.name}`} value={item.project_id || ""} onChange={(event) => void assignProject(item, event.target.value || null)}><option value="">Ungrouped</option>{snapshot.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><button className="button-quiet" onClick={() => beginScenarioClone(item)}><Copy size={16} /> Clone</button><button className="button-quiet" onClick={() => openExport(item)} disabled={!completedRuns(item).length} title={completedRuns(item).length ? `${isTauri() ? "Export" : "Download"} a completed run` : "Generate a run before exporting"}><Download size={17} /> {isTauri() ? "Export bundle" : "Download bundle"}</button><button className="button-quiet" onClick={() => void validateItem()} disabled={busy}><ShieldCheck size={17} /> Validate</button><button className="button-quiet" onClick={() => { setFocusJobId(null); setTab("generation"); }}><Play size={17} /> Generate</button></>}{item.kind !== "scenario" && <button className="button-quiet" onClick={() => void beginPackClone(item)}><Copy size={16} /> Clone</button>}<button className="button-primary" onClick={() => void createConversation()}><SquarePen size={17} /> New conversation</button></div></div>
         <div className="workspace-tabs" role="tablist">{(["overview", "conversations", "validation", "generation", "scoring"] as WorkspaceTab[]).filter((choice) => item.kind === "scenario" || !["validation", "generation", "scoring"].includes(choice)).map((choice) => <button key={choice} role="tab" aria-selected={tab === choice} className={tab === choice ? "active" : ""} onClick={() => { setFocusJobId(null); setTab(choice); }}>{choice === "overview" && <Layers3 size={16} />}{choice === "conversations" && <MessageSquareText size={16} />}{choice === "validation" && <ShieldCheck size={16} />}{choice === "generation" && <Play size={16} />}{choice === "scoring" && <ClipboardCheck size={16} />}{choice[0].toUpperCase() + choice.slice(1)}{choice === "conversations" && conversations.length > 0 && <span className="tab-count">{conversations.length}</span>}</button>)}</div>
-        {tab === "overview" && <div className="workspace-content overview-grid"><section className="surface"><div className="surface-heading"><h2>Continue work</h2><span className="eyebrow">MOST RECENT</span></div>{conversations.length ? <button className="continue-row" onClick={() => { setSelectedConversation(conversations[0].id); setTab("conversations"); }}><MessageSquareText size={20} /><span><strong>{conversations[0].title}</strong><small>Updated {formatTime(conversations[0].updated_at)}</small></span><ArrowUpRight size={17} /></button> : <div className="subtle-empty">No conversations yet. Start authoring to create one.</div>}</section><section className="surface"><div className="surface-heading"><h2>Source file</h2><span className="eyebrow">AUTHORITATIVE</span></div><div className="path-with-copy source-file-path"><span className="path-value source-path" title={item.path}>{item.path}</span><CopyPathButton path={item.path} label={item.kind === "scenario" ? "Copy scenario path" : "Copy pack path"} onError={setNotice} /></div><button className="button-quiet" onClick={() => void openYaml()}><FolderOpen size={16} /> Open YAML</button></section>{item.kind === "scenario" && <><section className="surface"><div className="surface-heading"><h2>Validation</h2><span className="eyebrow">CHECK QUALITY</span></div><p className="muted">Catch schema and evidence issues before generation.</p><button className="button-quiet" onClick={() => void validateItem()}><ShieldCheck size={16} /> Validate scenario</button></section><section className="surface"><div className="surface-heading"><h2>Latest runs</h2><span className="eyebrow">{itemJobs.length} RECORDED</span></div>{itemJobs.length ? itemJobs.slice(0, 2).map((job) => <div key={job.id} className="recent-job"><div className="path-with-copy recent-path"><span className="path-value" title={job.output_root}>{shortPath(job.output_root)}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={setNotice} /></div><StatusBadge status={job.status} /></div>) : <p className="muted">No runs for this scenario yet.</p>}<button className="button-quiet" onClick={() => { setFocusJobId(null); setTab("generation"); }}><Play size={16} /> Generate / view runs</button></section><section className="surface"><div className="surface-heading"><h2>Latest scorecard</h2><span className="eyebrow">SAVED EVALUATION</span></div>{latestScorecard?.scorecard ? latestScorecard.scorecard.error ? <p className="error-text">{latestScorecard.scorecard.error}</p> : <div className="overview-score"><strong>{latestScorecard.scorecard.overall_score == null ? "N/A" : `${latestScorecard.scorecard.overall_score.toFixed(0)}/100`}</strong><span className={latestScorecard.scorecard.acceptance_passed === true ? "score-pass" : latestScorecard.scorecard.acceptance_passed === false ? "score-fail" : ""}>{latestScorecard.scorecard.acceptance_passed === true ? "PASS" : latestScorecard.scorecard.acceptance_passed === false ? "FAIL" : "INDETERMINATE"}</span><small>{(latestScorecard.scorecard.total_records || 0).toLocaleString()} records</small></div> : <p className="muted">No evaluation saved yet.</p>}<button className="button-quiet" onClick={() => { setFocusJobId(latestScorecard?.id || null); setTab("scoring"); }}><Activity size={16} /> {latestScorecard ? "View scorecard" : "Score a run"}</button></section></>}</div>}
+        {tab === "overview" && <div className="workspace-content overview-grid"><section className="surface"><div className="surface-heading"><h2>Continue work</h2><span className="eyebrow">MOST RECENT</span></div>{conversations.length ? <button className="continue-row" onClick={() => { setSelectedConversation(conversations[0].id); setTab("conversations"); }}><MessageSquareText size={20} /><span><strong>{conversations[0].title}</strong><small>Updated {formatTime(conversations[0].updated_at)}</small></span><ArrowUpRight size={17} /></button> : <div className="subtle-empty">No conversations yet. Start authoring to create one.</div>}</section><section className="surface"><div className="surface-heading"><h2>Source file</h2><span className="eyebrow">AUTHORITATIVE</span></div><div className="path-with-copy source-file-path"><span className="path-value source-path" title={item.path}>{item.path}</span><CopyPathButton path={item.path} label={item.kind === "scenario" ? "Copy scenario path" : "Copy pack path"} onError={setNotice} /></div><button className="button-quiet" onClick={() => void openYaml()}><FolderOpen size={16} /> Open YAML</button></section>{item.kind === "scenario" && <><section className="surface"><div className="surface-heading"><h2>Validation</h2><span className="eyebrow">CHECK QUALITY</span></div><p className="muted">Catch schema and evidence issues before generation.</p><button className="button-quiet" onClick={() => void validateItem()}><ShieldCheck size={16} /> Validate scenario</button></section><section className="surface"><div className="surface-heading"><h2>Latest runs</h2><span className="eyebrow">{itemJobs.length} RECORDED</span></div>{itemJobs.length ? itemJobs.slice(0, 2).map((job) => <div key={job.id} className="recent-job"><div className="path-with-copy recent-path"><span className="path-value" title={job.output_root}>{shortPath(job.output_root)}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={setNotice} /></div><StatusBadge status={job.status} /></div>) : <p className="muted">No runs for this scenario yet.</p>}<button className="button-quiet" onClick={() => { setFocusJobId(null); setTab("generation"); }}><Play size={16} /> Generate / view runs</button></section><section className="surface"><div className="surface-heading"><h2>Latest scorecard</h2><span className="eyebrow">SAVED EVALUATION</span></div>{latestScorecard?.scorecard ? latestScorecard.scorecard.error ? <p className="error-text">{latestScorecard.scorecard.error}</p> : <ScorecardPanel jobId={latestScorecard.id} api={api} compact /> : <p className="muted">No evaluation saved yet.</p>}<button className="button-quiet" onClick={() => { setFocusJobId(latestScorecard?.id || null); setTab("scoring"); }}><Activity size={16} /> {latestScorecard ? "View scorecard" : "Score a run"}</button></section></>}</div>}
         {tab === "conversations" && <div className="conversation-layout"><aside className="conversation-rail"><div className="rail-header"><span>CONVERSATIONS</span><button className="icon-button" title="New conversation" aria-label="New conversation" onClick={() => void createConversation()}><Plus size={17} /></button></div>{conversations.map((chat) => <div className={`conversation-entry ${selectedConversation === chat.id ? "selected" : ""}`} key={chat.id}>
           <button className="conversation-row" aria-label={`Open ${chat.title}`} onClick={() => setSelectedConversation(chat.id)}><MessageSquareText size={17} /><span><strong>{chat.title}</strong><small>{formatTime(chat.updated_at)}</small></span>{chat.active && <span className="active-pulse" />}</button>
           <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button conversation-menu-trigger" aria-label={`Options for ${chat.title}`}><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4}><DropdownMenu.Item onSelect={() => { setEditingConversation(chat); setEditingTitle(chat.title); }}>Rename</DropdownMenu.Item><DropdownMenu.Item disabled={chat.active} onSelect={() => setDeletingConversation(chat)}>Delete</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>

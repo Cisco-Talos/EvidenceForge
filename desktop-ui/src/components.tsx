@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Activity, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, MessageSquareText, Pause, Play, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
-import { Tooltip } from "radix-ui";
+import { DropdownMenu, Tooltip } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import { StudioApi, StudioJob, ValidationResult, type ExportProgress } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
@@ -98,6 +98,8 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const name = scenarioName || job.scenario?.split(/[\\/]/).slice(-2, -1)[0]
     || job.output_root.split(/[\\/]/).slice(-2, -1)[0] || "Run";
   const submitted = jobSubmittedAt(job);
+  const canDeleteHistory = !!onDeleteHistory && ["completed", "stopped", "failed", "cancelled"].includes(job.status);
+  const canDeleteBundle = job.kind === "generation" && !["running", "queued"].includes(job.status);
   const result = job.scorecard?.error || (job.scorecard
     ? `${job.scorecard.overall_score == null ? "N/A" : `${job.scorecard.overall_score.toFixed(0)}/100`} · ${job.scorecard.acceptance_passed === true ? "Pass" : job.scorecard.acceptance_passed === false ? "Fail" : "Indeterminate"}`
     : job.status === "running" ? "Evaluating…" : job.status_message || "Waiting");
@@ -111,7 +113,6 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
       {job.kind === "evaluation" && job.generation_id && onShowSource && <button className="job-source-link" onClick={() => onShowSource(job.generation_id!)}>Jump to generation #{job.generation_id.slice(0, 8)}</button>}
       {job.status_message && job.kind === "generation" && <p className="job-message">{job.status_message}</p>}
     <div className="job-actions">
-      {onDeleteHistory && ["completed", "stopped", "failed", "cancelled"].includes(job.status) && <button className="button-quiet" disabled={working} title="Remove this job from Job center. Its bundle and scorecard are kept." onClick={() => { setWorking(true); void onDeleteHistory().finally(() => setWorking(false)); }}><Trash2 size={16} /> Delete job</button>}
       <button className="button-quiet" onClick={() => void openBundle()}><FolderOpen size={16} /> View files</button>
       {job.kind === "generation" && !["running", "queued"].includes(job.status) && <button className="button-quiet" disabled={exporting} onClick={() => void exportBundle()}><Download size={16} /> {exporting ? "Exporting…" : job.status === "completed" ? (isTauri() ? "Export ZIP" : "Download ZIP") : (isTauri() ? "Export partial ZIP" : "Download partial ZIP")}</button>}
       {job.kind === "generation" && job.status === "running" && <button className="button-quiet" onClick={() => void api.request(`/v1/jobs/${job.id}/suspend`, "POST").catch((error) => onError(String(error)))}><Pause size={16} /> Suspend</button>}
@@ -120,7 +121,10 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
         ? <button className="button-quiet" onClick={() => void api.request("/v1/jobs/resume", "POST", { generation_id: job.id }).catch((error) => onError(String(error)))}><Play size={16} /> Resume</button>
         : <span className="muted small" title="The run stopped before a usable checkpoint was saved">No checkpoint to resume</span>)}
       {job.kind === "generation" && ["stopped", "failed", "cancelled"].includes(job.status) && <button className="button-quiet" disabled={working} onClick={() => void regenerate()}><RotateCcw size={16} /> Regenerate</button>}
-      {job.kind === "generation" && !["running", "queued"].includes(job.status) && <button className="button-quiet" disabled={working} onClick={() => setConfirmDelete(true)}><Trash2 size={16} /> Delete bundle</button>}
+      {(canDeleteHistory || canDeleteBundle) && <DropdownMenu.Root><DropdownMenu.Trigger className="button-quiet job-delete-trigger" disabled={working}><Trash2 size={16} /> Delete <ChevronDown size={13} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu job-delete-menu" sideOffset={5} align="end">
+        {canDeleteHistory && <DropdownMenu.Item onSelect={() => { setWorking(true); void onDeleteHistory!().finally(() => setWorking(false)); }}><strong>Delete job</strong><small>Remove from Job center; keep its files and scorecard.</small></DropdownMenu.Item>}
+        {canDeleteBundle && <DropdownMenu.Item onSelect={() => setConfirmDelete(true)}><strong>Delete bundle…</strong><small>Remove the run’s files and linked evaluations.</small></DropdownMenu.Item>}
+      </DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
     </div>
     {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
     {savedExport && <div className="path-with-copy muted small"><span className="path-value" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved ZIP path" onError={onError} /></div>}

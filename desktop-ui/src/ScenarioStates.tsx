@@ -14,7 +14,17 @@ function jobState(label: string, job: StudioJob | undefined, stale: boolean): Op
   if (job.status === "queued" || job.status === "running" || job.status === "paused") {
     return { label, state: "working", detail: `${label} is ${job.status}.` };
   }
-  if (job.status === "completed") return { label, state: "success", detail: `${label} completed for this scenario revision.` };
+  if (job.status === "completed") {
+    if (job.kind === "evaluation") {
+      const report = job.scorecard;
+      if (report?.error) return { label, state: "error", detail: `Evaluation report is unavailable: ${report.error}` };
+      const score = report?.overall_score == null ? "" : ` · ${report.overall_score.toFixed(0)}/100`;
+      if (report?.acceptance_passed === false) return { label, state: "error", detail: `Failed acceptance${score}. One or more required checks failed for this scenario revision.` };
+      if (report?.acceptance_passed === true) return { label, state: "success", detail: `Passed acceptance${score} for this scenario revision.` };
+      return { label, state: "warning", detail: `Evaluation completed${score}, but acceptance is ${report ? "indeterminate" : "unavailable"}.` };
+    }
+    return { label, state: "success", detail: `${label} completed for this scenario revision.` };
+  }
   return { label, state: "error", detail: `${label} ${job.status}${job.status_message ? `: ${job.status_message}` : "."}` };
 }
 
