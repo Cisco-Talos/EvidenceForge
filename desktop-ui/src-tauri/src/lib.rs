@@ -1,5 +1,7 @@
 mod native_export;
 
+use tauri_plugin_dialog::DialogExt;
+
 fn studio_python() -> std::ffi::OsString {
     if let Some(explicit) = std::env::var_os("EFORGE_STUDIO_PYTHON") {
         return explicit;
@@ -46,6 +48,17 @@ fn studio_exit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let Some(chosen) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = chosen
+        .into_path()
+        .map_err(|_| "A local bundle folder is required")?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -55,6 +68,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             studio_connection,
             studio_exit,
+            choose_bundle_folder,
             native_export::save_studio_export,
             native_export::cancel_studio_export
         ])

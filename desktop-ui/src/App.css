@@ -80,6 +80,7 @@ p { line-height: 1.5; }
 .page-intro p, .scenario-header p { color: var(--muted); margin: 0; max-width: 850px; }
 .eyebrow { display: block; color: var(--mint); text-transform: uppercase; letter-spacing: .15em; font-size: 10px; font-weight: 800; margin-bottom: 10px; }
 .page-intro > button { margin-top: 12px; }
+.bundle-page-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
 .button-primary, .button-quiet, .settings-footer button, .run-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; min-height: 35px; padding: 0 13px; border-radius: 8px; font-weight: 650; }
 .button-primary { border: 1px solid #82a3ff; color: white; background: linear-gradient(180deg,#698bf4,#5278e9); box-shadow: 0 5px 15px #587af328; }
 .button-primary:hover { background: linear-gradient(180deg,#7899ff,#6185f3); }

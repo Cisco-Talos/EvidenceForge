@@ -47,6 +47,7 @@ const snapshot: StudioSnapshot = {
     { id: "job-1", kind: "generation", status: "running", status_message: "", scenario: `${workspace}/scenarios/alpha/scenario.yaml`, output_root: `${workspace}/runs/alpha/one`, progress: { phase: "Generating", completed_hours: 2, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 2" } },
     { id: "job-2", kind: "generation", status: "running", status_message: "", scenario: `${workspace}/scenarios/bravo/scenario.yaml`, output_root: `${workspace}/runs/bravo/two`, progress: { phase: "Generating", completed_hours: 6, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 6" } },
   ],
+  imported_bundles: [],
 };
 
 vi.mock("../src/useStudio", () => ({
@@ -706,6 +707,44 @@ test("bundle library groups runs by scenario and filters their status", async ()
   }
 });
 
+test("imported bundles appear beside Studio runs with read-only management", async () => {
+  const original = snapshot.imported_bundles;
+  snapshot.imported_bundles = [{
+    id: "external-1", workspace, root: "/tmp/cli-output", scenario_name: "Alpha",
+    created_at: 1800000001, size_bytes: 3145728, manifest_sha256: "abc",
+  }];
+  try {
+    const user = userEvent.setup();
+    const request = vi.mocked(useStudio().api!.request);
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Bundles" }));
+    expect(screen.getByText("Imported #external")).toBeTruthy();
+    expect(screen.getByText("3.0 MB", { selector: ".bundle-size" })).toBeTruthy();
+    await user.click(screen.getByText("Imported #external"));
+    expect(screen.getByText(/Studio did not create this bundle/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove from Studio" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove imported bundle" });
+    await user.click(within(dialog).getByRole("button", { name: "Remove from Studio" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bundles/external-1", "DELETE"));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove imported bundle" })).toBeNull());
+  } finally {
+    snapshot.imported_bundles = original;
+  }
+});
+
+test("bundle import accepts a folder and discovery checks workspace runs", async () => {
+  const user = userEvent.setup();
+  const request = vi.mocked(useStudio().api!.request);
+  render(<App />);
+  await user.click(screen.getByRole("button", { name: "Bundles" }));
+  await user.click(screen.getByRole("button", { name: "Import bundle" }));
+  await user.type(screen.getByRole("textbox", { name: "Bundle folder" }), "/tmp/cli-output");
+  await user.click(within(screen.getByRole("dialog", { name: "Import bundle" })).getByRole("button", { name: "Import bundle" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bundles/import", "POST", { path: "/tmp/cli-output" }));
+  await user.click(screen.getByRole("button", { name: "Find in workspace" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bundles/discover", "POST"));
+});
+
 test("bundle viewer highlights YAML and downloads only when requested", async () => {
   const readTextPreview = vi.fn(async () => ({ text: "name: example\nenabled: true\n", truncated: false, binary: false }));
   const download = vi.fn(async () => undefined);
@@ -714,6 +753,15 @@ test("bundle viewer highlights YAML and downloads only when requested", async ()
   expect(download).not.toHaveBeenCalled();
   await userEvent.setup().click(screen.getByRole("button", { name: "Download file" }));
   expect(download).toHaveBeenCalledWith("/v1/jobs/job-1/files/RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yaml", expect.any(Function));
+});
+
+test("imported bundle viewer reads and saves files through its own route", async () => {
+  const readTextPreview = vi.fn(async () => ({ text: "name: external\n", truncated: false, binary: false }));
+  const download = vi.fn(async () => ({ status: "browser" }));
+  render(<BundleFileBrowser jobId="external-1" kind="bundles" files={{ root: "/tmp/cli-output", files: [{ path: "RESOLVED_SCENARIO.yaml", size: 15 }], truncated: false }} api={{ readTextPreview, download } as unknown as StudioApi} onClose={vi.fn()} onError={vi.fn()} />);
+  await waitFor(() => expect(readTextPreview).toHaveBeenCalledWith("/v1/bundles/external-1/files/RESOLVED_SCENARIO.yaml"));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Download file" }));
+  expect(download).toHaveBeenCalledWith("/v1/bundles/external-1/files/RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yaml", expect.any(Function));
 });
 
 test("generation and evaluation cards use the authored scenario name", async () => {

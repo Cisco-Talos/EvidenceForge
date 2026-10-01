@@ -68,6 +68,122 @@ def _progress_line(completed: int, total: int = 4) -> str:
     )
 
 
+def _external_bundle(root: Path, name: str = "external") -> Path:
+    root.mkdir(parents=True)
+    resolved = root / "RESOLVED_SCENARIO.yaml"
+    resolved.write_text("scenario:\n  name: external\n", encoding="utf-8")
+    (root / "GROUND_TRUTH.md").write_text("# Ground truth\n", encoding="utf-8")
+    (root / "GENERATION_MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "kind": "evidenceforge.generation-manifest",
+                "schema_version": "1.0",
+                "created_at": "2026-10-01T12:00:00Z",
+                "scenario": name,
+                "evidenceforge_version": "2.1.2",
+                "runtime": {"python": "3.12", "platform": "darwin"},
+                "generation_seed": 7,
+                "output_target": "default",
+                "formats": ["zeek_conn"],
+                "oob_hosts": [],
+                "overrides": {},
+                "selected_packs": [],
+                "compiled_sha256": "a" * 64,
+                "resolved_file_sha256": sha256(resolved.read_bytes()).hexdigest(),
+                "files": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_external_bundle_import_is_read_only_and_workspace_scoped(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    other = tmp_path / "other"
+    root = _external_bundle(tmp_path / "cli-output")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        assert client.post("/v1/bundles/import", json={"path": str(root)}).status_code == 401
+        response = client.post("/v1/bundles/import", headers=headers, json={"path": str(root)})
+        assert response.status_code == 200, response.text
+        bundle = response.json()
+        assert bundle["scenario_name"] == "external"
+        assert bundle["size_bytes"] > 0
+        assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == [bundle]
+        files = client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).json()
+        assert {entry["path"] for entry in files["files"]} == {
+            "GENERATION_MANIFEST.json",
+            "GROUND_TRUTH.md",
+            "RESOLVED_SCENARIO.yaml",
+        }
+        assert (
+            client.get(f"/v1/bundles/{bundle['id']}/files/GROUND_TRUTH.md", headers=headers).text
+            == "# Ground truth\n"
+        )
+        assert client.get(
+            f"/v1/bundles/{bundle['id']}/files/../outside", headers=headers
+        ).status_code in {400, 404}
+        archive = client.get(f"/v1/bundles/{bundle['id']}/bundle.zip", headers=headers)
+        assert archive.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(archive.content)) as contents:
+            assert contents.read("run/GROUND_TRUTH.md") == b"# Ground truth\n"
+        again = client.post("/v1/bundles/import", headers=headers, json={"path": str(root)}).json()
+        assert again["id"] == bundle["id"]
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(other)})
+        assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == []
+        assert client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).status_code == 404
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
+        assert client.delete(f"/v1/bundles/{bundle['id']}", headers=headers).status_code == 200
+        assert root.is_dir()
+        assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == []
+
+
+def test_external_bundle_discovery_skips_owned_and_rejects_changed_manifest(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    root = _external_bundle(workspace / "runs" / "example" / "run-one")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        assert client.post("/v1/bundles/discover", headers=headers).json() == {"imported": 1}
+        assert client.post("/v1/bundles/discover", headers=headers).json() == {"imported": 0}
+        bundle = client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"][0]
+        manifest = root / "GENERATION_MANIFEST.json"
+        manifest.write_text(manifest.read_text() + "\n", encoding="utf-8")
+        assert client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).status_code == 409
+        manifest.write_text(manifest.read_text().rstrip(), encoding="utf-8")
+        (root / "RESOLVED_SCENARIO.yaml").write_text("tampered", encoding="utf-8")
+        assert client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).status_code == 409
+        invalid = _external_bundle(tmp_path / "invalid")
+        (invalid / "RESOLVED_SCENARIO.yaml").write_text("tampered", encoding="utf-8")
+        assert (
+            client.post(
+                "/v1/bundles/import", headers=headers, json={"path": str(invalid)}
+            ).status_code
+            == 400
+        )
+        (invalid / "GENERATION_MANIFEST.json").write_text("{}", encoding="utf-8")
+        assert (
+            client.post(
+                "/v1/bundles/import", headers=headers, json={"path": str(invalid)}
+            ).status_code
+            == 400
+        )
+        linked = tmp_path / "linked"
+        linked.symlink_to(root, target_is_directory=True)
+        assert (
+            client.post(
+                "/v1/bundles/import", headers=headers, json={"path": str(linked)}
+            ).status_code
+            == 400
+        )
+
+
 def test_export_folder_is_saved_per_workspace(tmp_path: Path, monkeypatch: object) -> None:
     first = tmp_path / "first-workspace"
     second = tmp_path / "second-workspace"

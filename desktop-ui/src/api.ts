@@ -6,6 +6,7 @@ type Schema = components["schemas"];
 export type ItemKind = Schema["CatalogItem"]["kind"];
 // The service serializes every model field in snapshots, including fields with defaults.
 export type CatalogItem = Required<Schema["CatalogItem"]>;
+export type ImportedBundle = Required<Schema["ImportedBundle"]>;
 export type Project = Required<Schema["Project"]>;
 export type SavedView = Required<Schema["SavedView"]>;
 export type Conversation = Required<Schema["Conversation"]>;
@@ -17,13 +18,14 @@ export type GenerationProgress = Required<Schema["GenerationProgress"]>;
 export type StudioJob = Schema["JobSummary"];
 export type ScorecardDetail = Schema["ScorecardDetail"];
 export type PackPublisherStatus = Schema["PackPublisherStatus"];
-export type StudioSnapshot = Omit<Schema["StudioSnapshot"], "settings" | "items" | "projects" | "views" | "conversations" | "jobs" | "codex_health" | "validations"> & {
+export type StudioSnapshot = Omit<Schema["StudioSnapshot"], "settings" | "items" | "projects" | "views" | "conversations" | "jobs" | "codex_health" | "validations" | "imported_bundles"> & {
   settings: StudioSettings;
   items: CatalogItem[];
   projects: Project[];
   views: SavedView[];
   conversations: Conversation[];
   jobs: StudioJob[];
+  imported_bundles: ImportedBundle[];
   codex_health: CodexHealth;
   validations: Record<string, ValidationRecord>;
 };

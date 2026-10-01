@@ -496,8 +496,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   first-class projects that group scenarios within a workspace, with a project overview and
   ungrouped scenarios; connect project overlays in the environment workflow. Review core parity
   before the seven workflow stages. See the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
-- [ ] Index or import preexisting CLI and earlier desktop bundles into Studio's Bundles library,
-  with explicit ownership and safe management rules. The current page lists Studio job records.
+- [ ] Extend Studio's new read-only import of complete CLI and earlier desktop bundles to
+  incomplete external bundles with recognized checkpoints. The Bundles page now indexes complete
+  external bundles by folder or workspace discovery, while Studio-owned incomplete jobs already
+  appear there. Keep external files outside Studio's delete controls.
 - [ ] Streaming output to SIEM/data lakes.
 - [ ] Log format auto-detection from samples.
 - [ ] D3FEND defensive response modeling through scenario defense profiles.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CatalogItem,
+  ImportedBundle,
   Conversation,
   CodexHealth,
   connectStudio,
@@ -55,6 +56,11 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
     next.jobs = [job, ...snapshot.jobs.filter((existing) => existing.id !== job.id)];
   } else if (event.kind === "job.deleted") {
     next.jobs = snapshot.jobs.filter((existing) => existing.id !== event.entity_id);
+  } else if (event.kind === "bundle.imported") {
+    const bundle = event.payload as unknown as ImportedBundle;
+    next.imported_bundles = [bundle, ...snapshot.imported_bundles.filter((entry) => entry.id !== bundle.id)];
+  } else if (event.kind === "bundle.removed") {
+    next.imported_bundles = snapshot.imported_bundles.filter((entry) => entry.id !== event.entity_id);
   } else if (event.kind === "settings.updated") {
     next.settings = event.payload as unknown as StudioSettings;
   } else if (event.kind === "scenario.validated") {

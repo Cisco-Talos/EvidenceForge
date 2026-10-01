@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -55,12 +56,13 @@ from evidenceforge.studio.jobs import (
     reconcile_jobs,
     suspend_generation,
 )
-from evidenceforge.studio.lifecycle import clone_scenario
+from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import (
     CatalogItem,
     Conversation,
+    ImportedBundle,
     Project,
     SavedView,
     StudioEvent,
@@ -144,6 +146,14 @@ class PackCloneRequest(BaseModel):
     version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     publisher: str | None = None
     publisher_display_name: str | None = None
+
+
+class BundleImportRequest(BaseModel):
+    """Local path to a complete generation created outside Studio."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path
 
 
 class EvaluationRequest(BaseModel):
@@ -410,6 +420,7 @@ class StudioSnapshot(BaseModel):
     conversations: list[Conversation]
     codex_health: CodexHealth
     jobs: list[JobSummary]
+    imported_bundles: list[ImportedBundle]
 
 
 class CodexReconnectRequest(BaseModel):
@@ -791,6 +802,10 @@ class StudioService:
             ],
             "codex_health": self.codex_health.model_dump(),
             "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
+            "imported_bundles": [
+                json.loads(bundle.model_dump_json())
+                for bundle in self.store.imported_bundles(workspace)
+            ],
         }
 
 
@@ -1914,6 +1929,200 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 for criterion in report.acceptance_criteria
             ],
             flags=report.flags,
+        )
+
+    def external_bundle(studio: StudioService, bundle_id: str) -> ImportedBundle:
+        bundle = studio.store.imported_bundle(bundle_id)
+        if bundle is None or bundle.workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=404, detail="Imported bundle not found")
+        manifest = bundle.root / "GENERATION_MANIFEST.json"
+        resolved = bundle.root / "RESOLVED_SCENARIO.yaml"
+        try:
+            valid = (
+                not bundle.root.is_symlink()
+                and bundle.root.is_dir()
+                and not manifest.is_symlink()
+                and manifest.is_file()
+                and manifest.stat().st_size <= 8 * 1024**2
+                and not resolved.is_symlink()
+                and resolved.is_file()
+                and resolved.stat().st_size <= 64 * 1024**2
+            )
+            if valid:
+                manifest_bytes = manifest.read_bytes()
+                manifest_data = json.loads(manifest_bytes)
+                valid = hashlib.sha256(
+                    manifest_bytes
+                ).hexdigest() == bundle.manifest_sha256 and hashlib.sha256(
+                    resolved.read_bytes()
+                ).hexdigest() == manifest_data.get("resolved_file_sha256")
+        except (OSError, ValueError, AttributeError):
+            valid = False
+        if not valid:
+            raise HTTPException(
+                status_code=409, detail="Imported bundle has changed or is unavailable"
+            )
+        return bundle
+
+    @app.post("/v1/bundles/import")
+    async def import_bundle(
+        request: BundleImportRequest, studio: StudioService = Depends(authorized)
+    ) -> ImportedBundle:
+        root = request.path.expanduser().resolve()
+        if any(
+            job.output_root.resolve() == root
+            for job in studio.jobs.load_generations()
+            if job.workspace == studio.settings.workspace
+        ):
+            raise HTTPException(status_code=409, detail="This bundle is already managed by Studio")
+        try:
+            bundle = await asyncio.to_thread(
+                inspect_external_bundle, request.path.expanduser(), studio.settings.workspace
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        saved = studio.store.save_imported_bundle(bundle)
+        await studio.emit(saved.id, "bundle.imported", json.loads(saved.model_dump_json()))
+        return saved
+
+    @app.post("/v1/bundles/discover")
+    async def discover_bundles(studio: StudioService = Depends(authorized)) -> dict[str, int]:
+        """Index complete CLI bundles under this workspace's runs directory."""
+        root = studio.settings.workspace / "runs"
+        if root.is_symlink():
+            raise HTTPException(status_code=409, detail="Workspace runs directory is a link")
+        owned = {
+            job.output_root.resolve()
+            for job in studio.jobs.load_generations()
+            if job.workspace == studio.settings.workspace
+        }
+
+        def find() -> list[ImportedBundle]:
+            found: list[ImportedBundle] = []
+            visited = 0
+            for directory, children, names in os.walk(root, followlinks=False):
+                visited += 1
+                path = Path(directory)
+                if visited > 5000:
+                    break
+                if len(path.relative_to(root).parts) >= 4:
+                    children[:] = []
+                else:
+                    children[:] = [name for name in children if not (path / name).is_symlink()]
+                if "GENERATION_MANIFEST.json" not in names or path.resolve() in owned:
+                    continue
+                try:
+                    found.append(inspect_external_bundle(path, studio.settings.workspace))
+                except (OSError, ValueError):
+                    continue
+                children[:] = []
+            return found
+
+        found = await asyncio.to_thread(find)
+        existing = {
+            bundle.root for bundle in studio.store.imported_bundles(studio.settings.workspace)
+        }
+        new_count = len([bundle for bundle in found if bundle.root not in existing])
+        for bundle in found:
+            studio.store.save_imported_bundle(bundle)
+        if new_count:
+            await studio.emit(str(root), "library.refreshed", {"imported_bundles": new_count})
+        return {"imported": new_count}
+
+    @app.delete("/v1/bundles/{bundle_id}")
+    async def forget_bundle(
+        bundle_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, str]:
+        bundle = studio.store.imported_bundle(bundle_id)
+        if bundle is None or bundle.workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=404, detail="Imported bundle not found")
+        studio.store.remove_imported_bundle(bundle_id)
+        await studio.emit(bundle_id, "bundle.removed", {"id": bundle_id})
+        return {"status": "removed from Studio; files unchanged"}
+
+    @app.get("/v1/bundles/{bundle_id}/files")
+    def imported_bundle_files(
+        bundle_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, Any]:
+        bundle = external_bundle(studio, bundle_id)
+        files: list[dict[str, Any]] = []
+        for directory, children, names in os.walk(bundle.root, followlinks=False):
+            children[:] = [name for name in children if not (Path(directory) / name).is_symlink()]
+            for name in names:
+                path = Path(directory) / name
+                if path.is_symlink() or not path.is_file():
+                    continue
+                files.append(
+                    {"path": path.relative_to(bundle.root).as_posix(), "size": path.stat().st_size}
+                )
+                if len(files) >= 500:
+                    return {"root": str(bundle.root), "files": files, "truncated": True}
+        return {"root": str(bundle.root), "files": files, "truncated": False}
+
+    @app.get("/v1/bundles/{bundle_id}/files/{relative_path:path}")
+    def imported_bundle_file(
+        bundle_id: str, relative_path: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        bundle = external_bundle(studio, bundle_id)
+        path = bundle.root / relative_path
+        relative = Path(relative_path)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not path.resolve().is_relative_to(bundle.root.resolve())
+            or not path.is_file()
+            or any(
+                (bundle.root / Path(*relative.parts[:index])).is_symlink()
+                for index in range(1, len(relative.parts) + 1)
+            )
+        ):
+            raise HTTPException(status_code=404, detail="Bundle file not found")
+        return FileResponse(path, filename=path.name)
+
+    @app.get("/v1/bundles/{bundle_id}/bundle.zip")
+    async def export_imported_bundle(
+        bundle_id: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        bundle = external_bundle(studio, bundle_id)
+
+        def make_archive() -> Path:
+            export_dir = studio.paths.cache / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            handle, archive_name = tempfile.mkstemp(
+                prefix="evidenceforge-imported-", suffix=".zip", dir=export_dir
+            )
+            os.close(handle)
+            archive = Path(archive_name)
+            try:
+                with zipfile.ZipFile(
+                    archive, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
+                ) as output:
+                    for source in sorted(bundle.root.rglob("*")):
+                        if source.is_symlink():
+                            raise ValueError("Bundle contains a symlink and cannot be exported")
+                        if source.is_file():
+                            output.write(
+                                source, "run/" + source.relative_to(bundle.root).as_posix()
+                            )
+                    output.writestr(
+                        "EXPORT_README.txt",
+                        "run/ contains an imported EvidenceForge generation bundle. "
+                        "Studio does not own or delete its source files.\n",
+                    )
+            except (OSError, ValueError):
+                archive.unlink(missing_ok=True)
+                raise
+            return archive
+
+        try:
+            archive = await asyncio.to_thread(make_archive)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return FileResponse(
+            archive,
+            filename=f"{_archive_stem(bundle.scenario_name)}-{bundle.id[:8]}.zip",
+            media_type="application/zip",
+            background=BackgroundTask(archive.unlink, missing_ok=True),
         )
 
     @app.get("/v1/jobs/{job_id}/files")

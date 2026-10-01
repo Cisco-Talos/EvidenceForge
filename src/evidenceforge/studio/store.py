@@ -52,6 +52,20 @@ class Project(BaseModel):
     updated_at: float = Field(default_factory=time.time)
 
 
+class ImportedBundle(BaseModel):
+    """A complete external CLI bundle indexed for read-only inspection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    workspace: Path
+    root: Path
+    scenario_name: str
+    created_at: float
+    size_bytes: int
+    manifest_sha256: str
+
+
 class Conversation(BaseModel):
     """One Codex thread associated with a scenario, pack, or draft."""
 
@@ -145,6 +159,13 @@ class StudioStore:
                 kind TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS imported_bundles (
+                id TEXT PRIMARY KEY,
+                workspace TEXT NOT NULL,
+                root TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                UNIQUE (workspace, root)
+            );
             CREATE TABLE IF NOT EXISTS validations (
                 item_id TEXT PRIMARY KEY,
                 source_sha256 TEXT NOT NULL,
@@ -175,6 +196,7 @@ class StudioStore:
             CREATE INDEX IF NOT EXISTS projects_workspace_idx ON projects(workspace);
             CREATE INDEX IF NOT EXISTS conversations_item_idx ON conversations(item_id);
             CREATE INDEX IF NOT EXISTS jobs_workspace_idx ON jobs(workspace, kind);
+            CREATE INDEX IF NOT EXISTS imported_bundles_workspace_idx ON imported_bundles(workspace);
             """
         )
         self._db.execute(
@@ -316,6 +338,49 @@ class StudioStore:
         with self._lock:
             row = self._db.execute("SELECT payload FROM items WHERE id=?", (item_id,)).fetchone()
         return CatalogItem.model_validate_json(row["payload"]) if row else None
+
+    def save_imported_bundle(self, bundle: ImportedBundle) -> ImportedBundle:
+        """Keep one stable identity for each workspace-local external bundle path."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT id FROM imported_bundles WHERE workspace=? AND root=?",
+                (str(bundle.workspace.resolve()), str(bundle.root.resolve())),
+            ).fetchone()
+            if row:
+                bundle.id = row["id"]
+            self._db.execute(
+                "INSERT INTO imported_bundles(id, workspace, root, payload) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (
+                    bundle.id,
+                    str(bundle.workspace.resolve()),
+                    str(bundle.root.resolve()),
+                    bundle.model_dump_json(),
+                ),
+            )
+        return bundle
+
+    def imported_bundle(self, bundle_id: str) -> ImportedBundle | None:
+        """Read one external bundle by its Studio identity."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM imported_bundles WHERE id=?", (bundle_id,)
+            ).fetchone()
+        return ImportedBundle.model_validate_json(row["payload"]) if row else None
+
+    def imported_bundles(self, workspace: Path) -> list[ImportedBundle]:
+        """List external bundles indexed in the selected workspace."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM imported_bundles WHERE workspace=? ORDER BY root",
+                (str(workspace.resolve()),),
+            ).fetchall()
+        return [ImportedBundle.model_validate_json(row["payload"]) for row in rows]
+
+    def remove_imported_bundle(self, bundle_id: str) -> None:
+        """Forget a bundle without touching its files."""
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM imported_bundles WHERE id=?", (bundle_id,))
 
     def items(self, workspace: Path, kind: str | None = None) -> list[CatalogItem]:
         """List indexed items in one workspace."""

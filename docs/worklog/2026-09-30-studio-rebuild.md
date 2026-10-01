@@ -465,3 +465,20 @@ publisher is configured, the dialog collects a publisher ID and display name and
 workspace publisher identity before copying. The clone preserves the pack's virtual folder and
 gets a fresh catalog identity. Tests use the real CLI against a bundled sample pack in an isolated
 workspace, plus browser interaction tests for both clone dialogs.
+
+## External bundle library (October 1)
+
+The Bundles page can import a complete preexisting CLI or earlier desktop generation folder, or
+find complete bundles under the active workspace's `runs/` directory. Imported bundles get stable
+workspace-scoped SQLite identities, search and status filtering, size and creation time, the same
+readable file viewer, and ZIP export. They remain read-only: **Remove from Studio** deletes only
+the index row, never external files. Studio rejects duplicate imports of its own managed jobs.
+
+Import validates the authoritative generation manifest schema and resolved-scenario digest. Subsequent
+file access checks both again and refuses changed paths; the file viewer bounds its listing and
+does not follow links, while ZIP export refuses linked content. The native app offers a folder
+picker, and browser preview accepts a local path. Disposable service tests cover authorization,
+workspace isolation, import identity, discovery, file viewing, export, changed manifests,
+changed resolved input, and safe removal. React tests cover import, discovery, grouping,
+read-only removal, and the viewer route. Incomplete external bundles remain a roadmap item;
+Studio-owned incomplete jobs already appear in the library.

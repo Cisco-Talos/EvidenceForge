@@ -11,8 +11,8 @@ export interface BundleFiles {
   truncated: boolean;
 }
 
-export function bundleFileUrl(jobId: string, path: string): string {
-  return `/v1/jobs/${jobId}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+export function bundleFileUrl(jobId: string, path: string, kind: "jobs" | "bundles" = "jobs"): string {
+  return `/v1/${kind}/${jobId}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function languageFor(path: string): string {
@@ -63,8 +63,8 @@ function highlightedLine(line: string, language: string): React.ReactNode {
   return language === "json" || language === "yaml" ? highlightTokens(line, language) : line;
 }
 
-export function BundleFileBrowser({ jobId, files, api, onClose, onError }: {
-  jobId: string; files: BundleFiles; api: StudioApi;
+export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = "jobs" }: {
+  jobId: string; files: BundleFiles; api: StudioApi; kind?: "jobs" | "bundles";
   onClose: () => void; onError: (message: string) => void;
 }) {
   const first = files.files.find((entry) => /(^|\/)(GROUND_TRUTH\.md|RESOLVED_SCENARIO\.ya?ml|GENERATION_MANIFEST\.json)$/i.test(entry.path))?.path
@@ -83,7 +83,7 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError }: {
     setExportProgress(null);
     setSavedExport(null);
     try {
-      const result = await api.download(bundleFileUrl(jobId, selected), selected.split("/").slice(-1)[0] || "file", setExportProgress);
+      const result = await api.download(bundleFileUrl(jobId, selected, kind), selected.split("/").slice(-1)[0] || "file", setExportProgress);
       if (result.status === "saved") setSavedExport(result.path);
     } catch (reason) { onError(String(reason)); }
     finally { setExporting(false); setExportProgress(null); }
@@ -95,12 +95,12 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError }: {
     setPreview(null);
     setError(null);
     setLoading(true);
-    void api.readTextPreview(bundleFileUrl(jobId, selected))
+    void api.readTextPreview(bundleFileUrl(jobId, selected, kind))
       .then((result) => { if (!cancelled) setPreview(result); })
       .catch((reason) => { if (!cancelled) setError(String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [api, jobId, selected]);
+  }, [api, jobId, kind, selected]);
 
   const lines = preview?.text.split("\n").slice(0, 4000) || [];
   const language = languageFor(selected || "");

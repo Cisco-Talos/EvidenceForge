@@ -56,6 +56,8 @@ fn export_url(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
     let url = base.join(path).map_err(|_| "Invalid Studio export path")?;
     let allowed = (url.path().starts_with("/v1/jobs/")
         && (url.path().contains("/files/") || url.path().ends_with("/bundle.zip")))
+        || (url.path().starts_with("/v1/bundles/")
+            && (url.path().contains("/files/") || url.path().ends_with("/bundle.zip")))
         || (url.path().starts_with("/v1/items/")
             && url.path().contains("/bundles/")
             && url.path().ends_with(".zip"));
