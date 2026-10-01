@@ -376,15 +376,13 @@ folder. The red close button exited the app. The isolated service and files were
 
 ## Outstanding core parity
 
-- Finish and verify Codex app-server conversations, account/skill actions, persistent turns,
-  titles, and per-conversation model/reasoning selection against a real account. A fake server
-  contract is passing.
-- Complete scenario and pack lifecycle and detailed scorecard links. Virtual folders, saved
-  views, the command menu, and compact persisted scorecards are implemented.
-- Implement all quit policies and process identity checks in the detached service, including authoring turns and approval wait.
-- Extend generated OpenAPI types to remaining dynamic endpoints, then complete React
-  interaction/visual tests and real CLI contracts.
-- Validate source-run behavior on macOS and Linux, visually review the macOS window, document launch and state paths, and cut over only after parity acceptance.
+- Review native Codex sign-in and one actual scenario-authoring turn with a real account. Studio
+  service live-turn, recovery, and conversation tests already pass.
+- Keep detailed pack editing, scenario/pack deletion, and imported incomplete bundles for their
+  later workflow stages. Cloning, hiding, virtual organization, saved views, scorecard detail,
+  and complete-bundle import now work in core parity.
+- Complete native-window hands-on review on macOS and Linux smoke. The source-run guide and
+  platform state paths are documented. Cut over `eforge-desktop` only after acceptance.
 
 ## Codex turn and account recovery (October 1)
 
@@ -482,3 +480,11 @@ workspace isolation, import identity, discovery, file viewing, export, changed m
 changed resolved input, and safe removal. React tests cover import, discovery, grouping,
 read-only removal, and the viewer route. Incomplete external bundles remain a roadmap item;
 Studio-owned incomplete jobs already appear in the library.
+
+The browser preview helper was restarted after confirming it had zero active jobs and chats. A
+disposable external bundle was imported through the UI; its scenario group, exact size, read-only
+row, and file viewer appeared as expected. The UI removed its index entry without deleting the
+files. The test fixture was then removed. Visual review also replaced the imported row's opaque
+Studio ID with its folder name and made the file viewer open ground truth first when present.
+`eforge-studio` source-run setup and state locations are now documented in
+`docs/studio-source-run.md` while the Qt entry point remains available for the review gate.

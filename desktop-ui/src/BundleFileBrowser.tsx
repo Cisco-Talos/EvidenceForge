@@ -67,8 +67,9 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
   jobId: string; files: BundleFiles; api: StudioApi; kind?: "jobs" | "bundles";
   onClose: () => void; onError: (message: string) => void;
 }) {
-  const first = files.files.find((entry) => /(^|\/)(GROUND_TRUTH\.md|RESOLVED_SCENARIO\.ya?ml|GENERATION_MANIFEST\.json)$/i.test(entry.path))?.path
-    || files.files[0]?.path || null;
+  const first = ["GROUND_TRUTH.md", "RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yml", "GENERATION_MANIFEST.json"]
+    .map((name) => files.files.find((entry) => entry.path.split("/").slice(-1)[0]?.toLowerCase() === name.toLowerCase())?.path)
+    .find(Boolean) || files.files[0]?.path || null;
   const [selected, setSelected] = useState<string | null>(first);
   const [preview, setPreview] = useState<TextPreview | null>(null);
   const [loading, setLoading] = useState(false);

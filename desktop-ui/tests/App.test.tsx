@@ -597,6 +597,14 @@ test("generation capacity and checkpoint interval are editable in Jobs settings"
   expect(screen.getByRole("status").textContent).toBe("Settings saved");
 });
 
+test("browser preview explains native folder actions without a Tauri invoke error", async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(screen.getByRole("button", { name: "Settings" }));
+  await user.click(screen.getByRole("button", { name: "Open workspace folder" }));
+  expect(screen.getByText(/Folder opening is available in the native app/)).toBeTruthy();
+});
+
 test("stopped run can regenerate, preview files, and confirm deletion", async () => {
   const user = userEvent.setup();
   const request = vi.fn(async (path: string) => path.endsWith("/files")
@@ -718,9 +726,9 @@ test("imported bundles appear beside Studio runs with read-only management", asy
     const request = vi.mocked(useStudio().api!.request);
     render(<App />);
     await user.click(screen.getByRole("button", { name: "Bundles" }));
-    expect(screen.getByText("Imported #external")).toBeTruthy();
+    expect(screen.getByText("cli-output")).toBeTruthy();
     expect(screen.getByText("3.0 MB", { selector: ".bundle-size" })).toBeTruthy();
-    await user.click(screen.getByText("Imported #external"));
+    await user.click(screen.getByText("cli-output"));
     expect(screen.getByText(/Studio did not create this bundle/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Remove from Studio" }));
     const dialog = screen.getByRole("dialog", { name: "Remove imported bundle" });
@@ -762,6 +770,15 @@ test("imported bundle viewer reads and saves files through its own route", async
   await waitFor(() => expect(readTextPreview).toHaveBeenCalledWith("/v1/bundles/external-1/files/RESOLVED_SCENARIO.yaml"));
   await userEvent.setup().click(screen.getByRole("button", { name: "Download file" }));
   expect(download).toHaveBeenCalledWith("/v1/bundles/external-1/files/RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yaml", expect.any(Function));
+});
+
+test("bundle viewer opens ground truth before a manifest when both exist", async () => {
+  const readTextPreview = vi.fn(async () => ({ text: "# Ground truth\n", truncated: false, binary: false }));
+  render(<BundleFileBrowser jobId="job-1" files={{ root: "/tmp/run", files: [
+    { path: "GENERATION_MANIFEST.json", size: 40 },
+    { path: "GROUND_TRUTH.md", size: 15 },
+  ], truncated: false }} api={{ readTextPreview } as unknown as StudioApi} onClose={vi.fn()} onError={vi.fn()} />);
+  await waitFor(() => expect(readTextPreview).toHaveBeenCalledWith("/v1/jobs/job-1/files/GROUND_TRUTH.md"));
 });
 
 test("generation and evaluation cards use the authored scenario name", async () => {

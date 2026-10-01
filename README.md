@@ -313,8 +313,9 @@ uv run eforge eval ./output
 
 ## Development
 
-An experimental local desktop app is available for scenario authoring and generation jobs.
-See [Desktop prototype](docs/desktop-prototype.md) for setup and current scope.
+An experimental Tauri desktop app is available for scenario authoring and generation jobs.
+See [Studio source-run guide](docs/studio-source-run.md) for setup and current scope. The earlier
+[Qt prototype](docs/desktop-prototype.md) remains available during Studio review.
 
 ```bash
 uv sync --all-extras

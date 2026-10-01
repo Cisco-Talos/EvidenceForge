@@ -90,6 +90,15 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
     catch (error) { onError(String(error)); }
   }
 
+  async function openLocalFolder(path: string) {
+    if (!isTauri()) {
+      onError("Folder opening is available in the native app. Use the adjacent copy icon for this path.");
+      return;
+    }
+    try { await openPath(path); }
+    catch (error) { onError(String(error)); }
+  }
+
   async function accountAction() {
     try {
       if (codexStatus?.account?.account) {
@@ -138,9 +147,9 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
     <div className="settings-main">
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
-        <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button onClick={() => void selectWorkspace()}>Open</button></div></div>
-        <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored YAML and bundles stay in your workspace." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openPath(paths.data).catch((error) => onError(String(error)))}><ArrowUpRight size={16} /></button></div></div>
-        <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openPath(paths.logs).catch((error) => onError(String(error)))}><ArrowUpRight size={16} /></button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored YAML and bundles stay in your workspace." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openLocalFolder(paths.data)}><ArrowUpRight size={16} /></button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openLocalFolder(paths.logs)}><ArrowUpRight size={16} /></button></div></div>
       </>}
       {tab === "jobs" && <>
         <div className="section-heading"><div><h2>Job capacity</h2><p>Control how many resource-heavy runs start at once.</p></div></div>
