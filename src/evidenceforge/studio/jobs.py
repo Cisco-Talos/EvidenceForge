@@ -81,7 +81,7 @@ def queue_studio_generation(
         scenario,
         workspace,
         job_store.directory,
-        output_parent,
+        output_parent or settings.output_parents.get(str(workspace.resolve())),
         settings=controller_settings(settings),
         checkpoint_hours=checkpoint_hours,
     )

@@ -54,8 +54,14 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
   } else if (event.kind === "job.created" || event.kind === "job.updated") {
     const job = event.payload as unknown as StudioJob;
     next.jobs = [job, ...snapshot.jobs.filter((existing) => existing.id !== job.id)];
+    if (["queued", "running", "paused"].includes(job.status)) {
+      next.removed_job_ids = snapshot.removed_job_ids?.filter((id) => id !== job.id);
+    }
   } else if (event.kind === "job.deleted") {
     next.jobs = snapshot.jobs.filter((existing) => existing.id !== event.entity_id);
+    next.removed_job_ids = snapshot.removed_job_ids?.filter((id) => id !== event.entity_id);
+  } else if (event.kind === "job.history_removed") {
+    next.removed_job_ids = [...new Set([...(snapshot.removed_job_ids || []), ...event.payload.job_ids as string[]])];
   } else if (event.kind === "bundle.imported") {
     const bundle = event.payload as unknown as ImportedBundle;
     next.imported_bundles = [bundle, ...snapshot.imported_bundles.filter((entry) => entry.id !== bundle.id)];

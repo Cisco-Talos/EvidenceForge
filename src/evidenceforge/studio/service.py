@@ -164,6 +164,22 @@ class EvaluationRequest(BaseModel):
     generation_id: str
 
 
+class ClearCompletedRequest(BaseModel):
+    """Remove completed history entries of one job type in the current workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["generation", "evaluation"]
+
+
+class JobHistoryChange(BaseModel):
+    """Job center entries removed while preserving authoritative run records."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_ids: list[str]
+
+
 class ConversationRequest(BaseModel):
     """Create a conversation within a scenario, pack, or draft."""
 
@@ -422,6 +438,7 @@ class StudioSnapshot(BaseModel):
     conversations: list[Conversation]
     codex_health: CodexHealth
     jobs: list[JobSummary]
+    removed_job_ids: list[str] = Field(default_factory=list)
     imported_bundles: list[ImportedBundle]
 
 
@@ -804,6 +821,7 @@ class StudioService:
             ],
             "codex_health": self.codex_health.model_dump(),
             "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
+            "removed_job_ids": self.store.removed_job_ids(workspace),
             "imported_bundles": [
                 json.loads(bundle.model_dump_json())
                 for bundle in self.store.imported_bundles(workspace)
@@ -1769,6 +1787,44 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         return await asyncio.to_thread(
             lambda: {job.id: _bundle_contents_size(job.output_root) for job in generations}
         )
+
+    @app.delete("/v1/jobs/{job_id}/history")
+    async def remove_job_history(
+        job_id: str, studio: StudioService = Depends(authorized)
+    ) -> JobHistoryChange:
+        payload = next(
+            (
+                job
+                for job in studio.store.job_payloads(studio.settings.workspace)
+                if job["id"] == job_id
+            ),
+            None,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Job not found in this workspace")
+        if payload["status"] not in {"completed", "stopped", "failed", "cancelled"}:
+            raise HTTPException(
+                status_code=409, detail="Finish or stop this job before deleting it"
+            )
+        studio.store.remove_job_history([job_id])
+        await studio.emit(job_id, "job.history_removed", {"job_ids": [job_id]})
+        return JobHistoryChange(job_ids=[job_id])
+
+    @app.post("/v1/jobs/history/clear-completed")
+    async def clear_completed_history(
+        request: ClearCompletedRequest, studio: StudioService = Depends(authorized)
+    ) -> JobHistoryChange:
+        removed = set(studio.store.removed_job_ids(studio.settings.workspace))
+        job_ids = [
+            payload["id"]
+            for payload in studio.store.job_payloads(studio.settings.workspace, request.kind)
+            if payload["status"] == "completed" and payload["id"] not in removed
+        ]
+        studio.store.remove_job_history(job_ids)
+        await studio.emit(
+            str(studio.settings.workspace), "job.history_removed", {"job_ids": job_ids}
+        )
+        return JobHistoryChange(job_ids=job_ids)
 
     @app.post("/v1/jobs/{job_id}/regenerate")
     async def regenerate(

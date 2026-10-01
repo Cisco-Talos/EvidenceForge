@@ -15,6 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.desktop.library import LibraryItem
+from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 
 
 class CatalogItem(BaseModel):
@@ -158,6 +159,9 @@ class StudioStore:
                 workspace TEXT NOT NULL,
                 kind TEXT NOT NULL,
                 payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS removed_job_history (
+                job_id TEXT PRIMARY KEY
             );
             CREATE TABLE IF NOT EXISTS imported_bundles (
                 id TEXT PRIMARY KEY,
@@ -691,7 +695,9 @@ class StudioStore:
             if (conversation := Conversation.model_validate_json(row["payload"])).active
         ]
 
-    def save_job(self, job_id: str, workspace: Path, kind: str, payload: BaseModel) -> None:
+    def save_job(
+        self, job_id: str, workspace: Path, kind: str, payload: GenerationJob | EvaluationJob
+    ) -> None:
         """Durably publish a generation or evaluation job record."""
         with self._lock, self._db:
             self._db.execute(
@@ -699,11 +705,32 @@ class StudioStore:
                 "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
                 (job_id, str(workspace.resolve()), kind, payload.model_dump_json()),
             )
+            if payload.status in {"queued", "running", "paused"}:
+                self._db.execute("DELETE FROM removed_job_history WHERE job_id=?", (job_id,))
 
     def delete_job(self, job_id: str) -> None:
-        """Remove a job record after its incomplete app-owned bundle is safely deleted."""
+        """Remove a job record after its app-owned bundle is safely deleted."""
         with self._lock, self._db:
+            self._db.execute("DELETE FROM removed_job_history WHERE job_id=?", (job_id,))
             self._db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
+    def remove_job_history(self, job_ids: list[str]) -> None:
+        """Hide terminal jobs in Job center without losing run or scorecard metadata."""
+        with self._lock, self._db:
+            self._db.executemany(
+                "INSERT OR IGNORE INTO removed_job_history(job_id) VALUES (?)",
+                [(job_id,) for job_id in job_ids],
+            )
+
+    def removed_job_ids(self, workspace: Path) -> list[str]:
+        """List history entries removed within the selected workspace."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT jobs.id FROM jobs JOIN removed_job_history ON jobs.id=job_id "
+                "WHERE workspace=? ORDER BY jobs.id",
+                (str(workspace.resolve()),),
+            ).fetchall()
+        return [row["id"] for row in rows]
 
     def save_validation(self, item_id: str, source_sha256: str, payload: BaseModel) -> None:
         """Retain the last validation and the exact authored file it checked."""

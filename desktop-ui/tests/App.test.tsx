@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { openPath } from "@tauri-apps/plugin-opener";
 import App from "../src/App";
 import { StudioApi, StudioApiError, StudioSnapshot } from "../src/api";
 import { JobCard } from "../src/components";
@@ -66,6 +67,7 @@ vi.mock("../src/useStudio", () => ({
         acceptance_criteria: [{ name: "Schema gate", threshold: 80, actual: 94, passed: true, level: "hard" }],
         flags: [],
       };
+      if (path === "/v1/jobs/history/clear-completed") return { job_ids: snapshot.jobs.filter((job) => job.kind === (body as { kind: string }).kind && job.status === "completed").map((job) => job.id) };
       if (path === "/v1/settings" && method === "PUT") return body;
       return {};
     }) };
@@ -467,10 +469,9 @@ test("scenario workspace has generation setup and a run-specific scoring action"
     await user.click(screen.getByRole("button", { name: "Generate", exact: true }));
     expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
     const setup = screen.getByRole("heading", { name: "Generate this scenario" }).closest("section")!;
-    await user.clear(screen.getByRole("textbox", { name: "Output parent folder" }));
-    await user.type(screen.getByRole("textbox", { name: "Output parent folder" }), "/tmp/other-runs");
+    expect(screen.queryByRole("textbox", { name: "Output parent folder" })).toBeNull();
     await user.click(within(setup).getByRole("button", { name: "Generate" }));
-    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/generations", "POST", { scenario_id: "alpha", output_parent: "/tmp/other-runs" });
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/generations", "POST", { scenario_id: "alpha" });
     await user.click(screen.getByRole("tab", { name: "Scoring" }));
     expect(screen.getByRole("combobox", { name: "Generated run to evaluate" })).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "Generated run to evaluate" }) as HTMLSelectElement).value).toBe("job-1");
@@ -969,4 +970,94 @@ test("canceling a checkpoint wait restores the open controller intent", async ()
   await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/session/cancel-close", "POST"));
   expect(screen.queryByText("Waiting for checkpoints")).toBeNull();
   delete window.__TAURI_INTERNALS__;
+});
+
+test("Markdown files render safely with a source toggle and XML logs highlight tags", async () => {
+  const markdown = "# Investigation\n\n**Evidence** and `hostname`\n\n| Source | Records |\n| --- | --- |\n| XML | 4 |\n\n<script>bad()</script>\n";
+  const xml = '<?xml version="1.0"?>\n<Event xmlns="urn:windows"><Data Name="User">alice &amp; bob</Data></Event>';
+  const readTextPreview = vi.fn(async (path: string) => ({ text: path.endsWith(".md") ? markdown : xml, truncated: false, binary: false }));
+  const download = vi.fn(async () => ({ status: "browser" }));
+  const { container } = render(<BundleFileBrowser jobId="job-1" files={{ root: "/tmp/run", files: [{ path: "GROUND_TRUTH.md", size: 150 }, { path: "windows.log", size: 170 }], truncated: false }} api={{ readTextPreview, download } as unknown as StudioApi} onClose={vi.fn()} onError={vi.fn()} />);
+  expect(await screen.findByRole("heading", { name: "Investigation" })).toBeTruthy();
+  expect(screen.getByRole("table")).toBeTruthy();
+  expect(container.querySelector("script")).toBeNull();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "View source" }));
+  expect(screen.queryByRole("heading", { name: "Investigation" })).toBeNull();
+  expect(screen.getByText("# Investigation")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Rendered view" }));
+  expect(screen.getByRole("heading", { name: "Investigation" })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: /windows.log/ }));
+  await waitFor(() => expect(container.querySelector(".language-xml")).toBeTruthy());
+  expect(screen.getByText("<Event", { selector: ".syntax-key" })).toBeTruthy();
+  expect(screen.getByText('"User"', { selector: ".syntax-string" })).toBeTruthy();
+  expect(container.querySelector("Event")).toBeNull();
+  expect(download).not.toHaveBeenCalled();
+});
+
+test("Job center removes finished history entries while preserving scenario runs and bundles", async () => {
+  const originalJobs = snapshot.jobs;
+  const request = vi.mocked(useStudio().api!.request);
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, { ...originalJobs[1], status: "paused" }];
+  try {
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Job center/ }));
+    const finished = container.querySelector("#job-job-1")!;
+    const paused = container.querySelector("#job-job-2")!;
+    expect(within(paused as HTMLElement).queryByRole("button", { name: "Delete job" })).toBeNull();
+    await user.click(within(finished as HTMLElement).getByRole("button", { name: "Delete job" }));
+    expect(request).toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
+    await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
+    expect(container.querySelector("#job-job-2")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Bundles/ }));
+    expect(container.querySelector("#job-job-1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Scenarios/ }));
+    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("tab", { name: "Generation" }));
+    expect(container.querySelector("#job-job-1")).toBeTruthy();
+  } finally { snapshot.jobs = originalJobs; }
+});
+
+test("Clear Completed targets one job type and removed source runs can still be revealed", async () => {
+  const originalJobs = snapshot.jobs;
+  const originalRemoved = snapshot.removed_job_ids;
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, originalJobs[1], {
+    id: "evaluation-1", kind: "evaluation", generation_id: "job-1", status: "completed", output_root: "/tmp/run",
+  }];
+  snapshot.removed_job_ids = ["job-1"];
+  const request = vi.mocked(useStudio().api!.request);
+  try {
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /Job center/ }));
+    expect(container.querySelector("#job-job-1")).toBeNull();
+    expect(screen.getByRole("button", { name: "Clear completed generations" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
+    await waitFor(() => expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true));
+    await user.click(screen.getByRole("button", { name: "Clear completed evaluations" }));
+    expect(request).toHaveBeenCalledWith("/v1/jobs/history/clear-completed", "POST", { kind: "evaluation" });
+    await waitFor(() => expect(container.querySelector("#job-evaluation-1")).toBeNull());
+    expect(container.querySelector("#job-job-2")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clear completed generations" }));
+    await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
+  } finally { snapshot.jobs = originalJobs; snapshot.removed_job_ids = originalRemoved; }
+});
+
+
+test("Open YAML uses the native opener and gives a clear browser-preview hint", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(<App />);
+  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Open YAML" }));
+  expect(openPath).not.toHaveBeenCalled();
+  expect(screen.getByRole("status").textContent).toContain("Open YAML is available in the desktop app");
+  unmount();
+  Object.assign(window, { __TAURI_INTERNALS__: {} });
+  try {
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open YAML" }));
+    expect(openPath).toHaveBeenCalledWith(snapshot.items[0].path);
+  } finally { delete window.__TAURI_INTERNALS__; }
 });

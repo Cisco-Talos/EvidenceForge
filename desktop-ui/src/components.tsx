@@ -35,9 +35,10 @@ export function StatusBadge({ status }: { status: string }) {
   return <span className={`status status-${status.toLowerCase().replace(/ /g, "-")}`}><span className="status-dot" />{status}</span>;
 }
 
-export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, api, onError, onChanged }: {
+export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged }: {
   job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean; focusScorecard?: boolean;
   onShowSource?: (generationId: string) => void; api: StudioApi;
+  onDeleteHistory?: () => Promise<void>;
   onError: (message: string) => void; onChanged: () => Promise<void>;
 }) {
   const [files, setFiles] = useState<BundleFiles | null>(null);
@@ -110,6 +111,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
       {job.kind === "evaluation" && job.generation_id && onShowSource && <button className="job-source-link" onClick={() => onShowSource(job.generation_id!)}>Jump to generation #{job.generation_id.slice(0, 8)}</button>}
       {job.status_message && job.kind === "generation" && <p className="job-message">{job.status_message}</p>}
     <div className="job-actions">
+      {onDeleteHistory && ["completed", "stopped", "failed", "cancelled"].includes(job.status) && <button className="button-quiet" disabled={working} title="Remove this job from Job center. Its bundle and scorecard are kept." onClick={() => { setWorking(true); void onDeleteHistory().finally(() => setWorking(false)); }}><Trash2 size={16} /> Delete job</button>}
       <button className="button-quiet" onClick={() => void openBundle()}><FolderOpen size={16} /> View files</button>
       {job.kind === "generation" && !["running", "queued"].includes(job.status) && <button className="button-quiet" disabled={exporting} onClick={() => void exportBundle()}><Download size={16} /> {exporting ? "Exporting…" : job.status === "completed" ? (isTauri() ? "Export ZIP" : "Download ZIP") : (isTauri() ? "Export partial ZIP" : "Download partial ZIP")}</button>}
       {job.kind === "generation" && job.status === "running" && <button className="button-quiet" onClick={() => void api.request(`/v1/jobs/${job.id}/suspend`, "POST").catch((error) => onError(String(error)))}><Pause size={16} /> Suspend</button>}

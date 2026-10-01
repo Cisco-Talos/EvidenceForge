@@ -412,6 +412,7 @@ p { line-height: 1.5; }
 .job-group > summary strong { font-size: 15px; }
 .job-group > summary span { display: grid; place-items: center; min-width: 22px; height: 21px; border-radius: 15px; color: #bcd1ec; background: #28405c; font-size: 11px; }
 .job-group > summary small { margin-left: auto; color: #91abc5; font-size: 11px; }
+.job-group > summary .clear-completed { margin-left: auto; min-height: 28px; font-size: 11px; }
 .job-list { border-top: 1px solid #2b415b; }
 .job-group-empty { padding: 16px 18px; margin: 0; font-size: 12px; }
 .job-row { border-bottom: 1px solid #263a51; background: #142136; scroll-margin-top: 80px; }
@@ -507,6 +508,10 @@ p { line-height: 1.5; }
 .bundle-preview-heading .button-quiet { min-height: 27px; padding: 0 8px; font-size: 11px; }
 .bundle-preview-message { padding: 18px; }
 .bundle-source { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 0; color: #d6e4f5; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
+.bundle-markdown { flex: 1; min-height: 0; overflow: auto; padding: 20px 26px; }
+.bundle-markdown .chat-markdown { font-size: 14px; }
+.bundle-markdown h1 { font-size: 1.8em; }
+.bundle-markdown h2 { font-size: 1.45em; }
 .bundle-source-line { display: grid; grid-template-columns: 48px minmax(0,1fr); min-width: max-content; white-space: pre; }
 .language-email .bundle-source-line, .language-markdown .bundle-source-line { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bundle-source-line > span:last-child { padding-right: 16px; }
@@ -550,6 +555,7 @@ select { min-width: 185px; }
 .settings-save-status { color: var(--mint); font-size: 12px; }
 
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 50; display: flex; align-items: center; gap: 15px; max-width: 480px; padding: 10px 10px 10px 15px; border: 1px solid #5575a0; border-radius: 9px; color: #e8f1ff; background: #263e5d; box-shadow: 0 10px 35px #0008; }
+.toast-error { border-color: #ad606e; background: #472c3d; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px; background: #050b16bb; }
 .close-modal { width: min(560px, 100%); padding: 25px; border: 1px solid #4d6482; border-radius: 14px; background: #172539; box-shadow: 0 28px 70px #000a; }
 .close-modal p { color: #aabed2; }

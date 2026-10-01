@@ -542,3 +542,39 @@ state, without changing browser credentials.
 The helper currently remains running after tasks finish, until logout/reboot or explicit stop.
 An idle shutdown policy is a possible follow-up, not part of this change. Final Dock presentation
 and the native chat/operations changes need user confirmation.
+
+## 2026-10-01 — Native opening, generation defaults, file rendering, and job cleanup
+
+Addressed the next native-window review:
+
+- Added the missing Tauri `opener:allow-open-path` capability with local path scope for
+  the default application. Scenario/pack YAML and Settings folders can open even when
+  the workspace is outside the default home location, including Linux's hidden XDG
+  directories (opener's dot-path matching is explicitly enabled). Browser previews show an explanatory
+  hint for Open YAML instead of calling an unavailable native bridge.
+- Removed the generation destination input. Generation uses the workspace's saved output
+  parent, falling back to `workspace/runs`; each run retains its automatically constructed
+  directory. Fixed the service queue fallback to honor the saved parent. The API still
+  accepts explicit per-request overrides for other callers.
+- Added explicit information/error notification types. Routine notices disappear after
+  five seconds; errors persist with alert semantics until dismissed. New notices cancel
+  older timers.
+- Markdown bundle files render headings, lists, tables, and highlighted fenced code by
+  default, with a source toggle. Reused the safe chat renderer (no embedded HTML or remote
+  images). XML files and XML Windows logs get tag/attribute/string highlighting. Existing
+  bounded preview and download/copy behavior is preserved.
+- Job center provides Delete job for terminal rows and Clear Completed for each job type.
+  These remove history entries only; bundles, scorecards, scenario status, and scenario
+  run history remain available. Paused/queued/running jobs cannot be removed. Cleanup is
+  workspace-scoped, durable across service restarts, and announced through replayable
+  events. A resumed job returns to Job center; evaluation source links can temporarily
+  reveal a removed generation. Delete bundle remains a separate confirmed operation.
+
+Verification: 62 React interaction/hook tests and 57 Python service/helper tests passed;
+API schema generation/check and full Ruff checks passed. The macOS native debug app builds.
+Native smoke review checked Open YAML (no permission error), the simplified Generation tab,
+job cleanup controls, rendered real GROUND_TRUTH.md, and a generated Windows XML log. Kept
+user job history/files intact. Restarted only the verified idle default helper (no active
+jobs or turns); its connection remains in private app data. Closed the smoke-test window.
+Screenshots: `/private/tmp/eforge-studio-job-cleanup.jpg` and
+`/private/tmp/eforge-studio-markdown-viewer.jpg`. No Linux native window was available here.

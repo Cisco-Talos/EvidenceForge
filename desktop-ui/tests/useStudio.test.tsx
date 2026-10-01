@@ -59,3 +59,27 @@ test("live service connection and Codex health update independently", async () =
   unmount();
   expect(socket.close).toHaveBeenCalled();
 });
+
+test("history cleanup events retain run metadata and a resumed job reappears", async () => {
+  const snapshot = { seq: 1, conversations: [], jobs: [
+    { id: "run", kind: "generation", status: "completed", output_root: "/tmp/run" },
+  ], removed_job_ids: [] } as unknown as StudioSnapshot;
+  let onEvent: ((event: StudioEvent) => void) | undefined;
+  const client = {
+    request: vi.fn(async () => snapshot),
+    subscribe: vi.fn((_after: number, event: (value: StudioEvent) => void) => {
+      onEvent = event;
+      return { close: vi.fn() } as unknown as WebSocket;
+    }),
+  } as unknown as StudioApi;
+  vi.mocked(connectStudio).mockResolvedValue(client);
+  const { result, unmount } = renderHook(useStudio);
+  await waitFor(() => expect(result.current.snapshot).not.toBeNull());
+  act(() => onEvent?.({ seq: 2, entity_id: "run", kind: "job.history_removed", payload: { job_ids: ["run"] } }));
+  expect(result.current.snapshot?.removed_job_ids).toEqual(["run"]);
+  expect(result.current.snapshot?.jobs).toHaveLength(1);
+  act(() => onEvent?.({ seq: 3, entity_id: "run", kind: "job.updated", payload: { ...snapshot.jobs[0], status: "queued" } }));
+  expect(result.current.snapshot?.removed_job_ids).toEqual([]);
+  expect(result.current.snapshot?.jobs[0].status).toBe("queued");
+  unmount();
+});

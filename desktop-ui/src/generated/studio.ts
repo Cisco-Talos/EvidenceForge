@@ -574,6 +574,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Job History */
+        delete: operations["remove_job_history_v1_jobs__job_id__history_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/jobs/history/clear-completed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear Completed History */
+        post: operations["clear_completed_history_v1_jobs_history_clear_completed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/regenerate": {
         parameters: {
             query?: never;
@@ -1061,6 +1095,17 @@ export interface components {
             imported: boolean;
         };
         /**
+         * ClearCompletedRequest
+         * @description Remove completed history entries of one job type in the current workspace.
+         */
+        ClearCompletedRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "generation" | "evaluation";
+        };
+        /**
          * CloseWindowRequest
          * @description Explicit resolutions for destructive or non-checkpointable quit cases.
          */
@@ -1312,6 +1357,14 @@ export interface components {
             folder?: string | null;
             /** Project Id */
             project_id?: string | null;
+        };
+        /**
+         * JobHistoryChange
+         * @description Job center entries removed while preserving authoritative run records.
+         */
+        JobHistoryChange: {
+            /** Job Ids */
+            job_ids: string[];
         };
         /**
          * JobScorecard
@@ -1742,6 +1795,8 @@ export interface components {
             codex_health: components["schemas"]["CodexHealth"];
             /** Jobs */
             jobs: components["schemas"]["JobSummary"][];
+            /** Removed Job Ids */
+            removed_job_ids?: string[];
             /** Imported Bundles */
             imported_bundles: components["schemas"]["ImportedBundle"][];
         };
@@ -3310,6 +3365,74 @@ export interface operations {
                     "application/json": {
                         [key: string]: number | null;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_job_history_v1_jobs__job_id__history_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobHistoryChange"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_completed_history_v1_jobs_history_clear_completed_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearCompletedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobHistoryChange"];
                 };
             };
             /** @description Validation Error */

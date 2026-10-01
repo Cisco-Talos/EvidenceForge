@@ -2132,3 +2132,152 @@ def test_codex_classifies_empty_rollout_as_history_pending(tmp_path: Path) -> No
             await client.stop()
 
     asyncio.run(exercise())
+
+
+def test_generation_uses_saved_output_parent_and_accepts_explicit_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    _scenario(workspace, "saved-output")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
+    app = create_app(_paths(tmp_path / "private"), "secret")
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        settings = client.get("/v1/settings", headers=headers).json()
+        parent = tmp_path / "saved-runs"
+        settings["output_parents"] = {str(workspace): str(parent)}
+        client.put("/v1/settings", headers=headers, json=settings)
+        item_id = next(
+            item["id"]
+            for item in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if item["kind"] == "scenario"
+        )
+        first = client.post("/v1/jobs/generations", headers=headers, json={"scenario_id": item_id})
+        second = client.post("/v1/jobs/generations", headers=headers, json={"scenario_id": item_id})
+        assert first.status_code == second.status_code == 200
+        assert Path(first.json()["output_root"]).is_relative_to(parent)
+        assert first.json()["output_root"] != second.json()["output_root"]
+        override = tmp_path / "override"
+        third = client.post(
+            "/v1/jobs/generations",
+            headers=headers,
+            json={"scenario_id": item_id, "output_parent": str(override)},
+        )
+        assert third.status_code == 200
+        assert Path(third.json()["output_root"]).is_relative_to(override)
+
+
+def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace, "history")
+    paths = _paths(tmp_path / "private")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
+    headers = {"X-EForge-Token": "secret"}
+    app = create_app(paths, "secret")
+    with TestClient(app) as client:
+        store = app.state.studio.jobs
+        generations: dict[str, GenerationJob] = {}
+        for status in (
+            "completed",
+            "failed",
+            "stopped",
+            "cancelled",
+            "running",
+            "queued",
+            "paused",
+        ):
+            job = queue_studio_generation(store, scenario, workspace, app.state.studio.settings)
+            job.status = status
+            store.save_generation(job)
+            generations[status] = job
+        completed = generations["completed"]
+        output = completed.output_root / "evidence.xml"
+        output.write_text("<Event>preserve me</Event>", encoding="utf-8")
+        result = tmp_path / "score.json"
+        result.write_text("{}", encoding="utf-8")
+        evaluation = EvaluationJob(
+            id="evaluation",
+            generation_id=completed.id,
+            workspace=workspace,
+            output_root=completed.output_root,
+            result_file=result,
+            log_file=tmp_path / "eval.log",
+            command=[],
+            created_at=time.time(),
+            status="completed",
+        )
+        store.save_evaluation(evaluation)
+        foreign_workspace = tmp_path / "foreign"
+        foreign = queue_studio_generation(
+            store,
+            _scenario(foreign_workspace, "foreign"),
+            foreign_workspace,
+            app.state.studio.settings,
+        )
+        foreign.status = "completed"
+        store.save_generation(foreign)
+        assert client.delete(f"/v1/jobs/{completed.id}/history").status_code == 401
+        assert (
+            client.post("/v1/jobs/history/clear-completed", json={"kind": "generation"}).status_code
+            == 401
+        )
+        assert client.delete(f"/v1/jobs/{foreign.id}/history", headers=headers).status_code == 404
+        for status in ("running", "queued", "paused"):
+            assert (
+                client.delete(
+                    f"/v1/jobs/{generations[status].id}/history", headers=headers
+                ).status_code
+                == 409
+            )
+        for status in ("failed", "stopped", "cancelled"):
+            assert (
+                client.delete(
+                    f"/v1/jobs/{generations[status].id}/history", headers=headers
+                ).status_code
+                == 200
+            )
+        cleared = client.post(
+            "/v1/jobs/history/clear-completed", headers=headers, json={"kind": "generation"}
+        )
+        assert cleared.json() == {"job_ids": [completed.id]}
+        assert client.post(
+            "/v1/jobs/history/clear-completed", headers=headers, json={"kind": "generation"}
+        ).json() == {"job_ids": []}
+        snapshot = client.get("/v1/bootstrap", headers=headers).json()
+        removed = set(snapshot["removed_job_ids"])
+        assert removed == {
+            generations[status].id for status in ("completed", "failed", "stopped", "cancelled")
+        }
+        assert evaluation.id not in removed
+        assert len(snapshot["jobs"]) == 8
+        assert (
+            client.get(f"/v1/jobs/{completed.id}/files/evidence.xml", headers=headers).content
+            == output.read_bytes()
+        )
+        assert result.is_file() and scenario.is_file()
+        assert store.load_evaluations()[0].generation_id == completed.id
+        assert client.post(
+            "/v1/jobs/history/clear-completed", headers=headers, json={"kind": "evaluation"}
+        ).json() == {"job_ids": [evaluation.id]}
+        events = client.get("/v1/events", headers=headers).json()
+        assert any(
+            event["kind"] == "job.history_removed" and event["payload"]["job_ids"] == [completed.id]
+            for event in events
+        )
+    with TestClient(create_app(paths, "secret")) as client:
+        snapshot = client.get("/v1/bootstrap", headers=headers).json()
+        assert set(snapshot["removed_job_ids"]) == removed | {evaluation.id}
+        assert len(snapshot["jobs"]) == 8
+        assert output.is_file() and result.is_file()
+        restarted_store = client.app.state.studio.jobs
+        resumed = next(
+            job for job in restarted_store.load_generations() if job.id == generations["stopped"].id
+        )
+        resumed.status = "queued"
+        restarted_store.save_generation(resumed)
+        snapshot = client.get("/v1/bootstrap", headers=headers).json()
+        assert resumed.id not in snapshot["removed_job_ids"]
