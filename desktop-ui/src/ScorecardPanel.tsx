@@ -10,12 +10,24 @@ function score(value: number | null): string {
   return value == null ? "N/A" : `${value.toFixed(0)}/100`;
 }
 
-function SubscoreResult({ sub }: { sub: ScorecardDetail["pillars"][number]["sub_scores"][number] }) {
+type Measure = ScorecardDetail["pillars"][number]["sub_scores"][number];
+
+function ScoreResult({ sub }: { sub: Measure }) {
   const rating = sub.rating || "unrated";
   const Icon = rating === "passed" ? CheckCircle2 : rating === "failed" ? XCircle : rating === "marginal" ? TriangleAlert : CircleMinus;
   const label = rating === "marginal" ? "Marginal: minimum passed, aspirational target missed" : rating === "unrated" ? sub.skipped ? "Skipped" : "Unrated" : rating === "passed" ? "Passed" : "Failed";
   const detail = `${label}. ${sub.rating_detail || "No recorded verdict or applicable reference threshold."}`;
   return <span className="subscore-result"><strong>{score(sub.score)}</strong><Tooltip.Root><Tooltip.Trigger asChild><span className={`subscore-icon subscore-${rating}`} tabIndex={0} aria-label={`${sub.name}: ${detail}`}><Icon size={15} /></span></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="state-tooltip" sideOffset={6}>{detail}<Tooltip.Arrow className="state-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal></Tooltip.Root></span>;
+}
+
+function pillarResult(pillar: ScorecardDetail["pillars"][number]): Measure {
+  const measures = pillar.sub_scores.filter((sub) => !sub.skipped);
+  const failed = measures.filter((sub) => sub.rating === "failed").length;
+  const marginal = measures.filter((sub) => sub.rating === "marginal").length;
+  const unrated = measures.filter((sub) => !sub.rating || sub.rating === "unrated").length;
+  const rating = failed ? "failed" : marginal ? "marginal" : !measures.length || unrated ? "unrated" : "passed";
+  const detail = !measures.length ? "No applicable measures." : `${failed} failed, ${marginal} marginal, ${unrated} unrated out of ${measures.length} applicable measures. Status summarizes the measures below; it does not replace saved acceptance. Expand for each measure’s threshold and source.`;
+  return { name: pillar.name, score: pillar.score, skipped: !measures.length, details: "", rating, rating_detail: detail };
 }
 
 export function ScorecardPanel({ jobId, api, compact = false }: { jobId: string; api: StudioApi; compact?: boolean }) {
@@ -66,8 +78,8 @@ export function ScorecardPanel({ jobId, api, compact = false }: { jobId: string;
     <p className={`scorecard-verdict ${verdictClass}`}>{report.acceptance_passed === false ? `${failed.length || "One or more"} required check${failed.length === 1 ? "" : "s"} failed. The overall score does not override required checks.` : report.acceptance_passed === true ? "All applicable required checks passed." : "There is not enough evaluated evidence to determine acceptance."}</p>
     {compact && <small className="muted">{report.total_records.toLocaleString()} records</small>}
     <div className="scorecard-pillars">{report.pillars.map((pillar, index) => <details className="scorecard-pillar" key={`${jobId}-${pillar.name}-${index}`}>
-      <summary className="scorecard-pillar-heading"><strong>{pillar.name}</strong><span>{score(pillar.score)}</span><ChevronDown size={14} /></summary>
-      {pillar.sub_scores.length ? <ul>{pillar.sub_scores.map((sub, subIndex) => <li key={`${sub.name}-${subIndex}`}><span>{sub.name}{sub.skipped ? " · Skipped" : ""}</span><SubscoreResult sub={sub} />{sub.details && <small>{sub.details}</small>}</li>)}</ul> : <p className="muted small">No subscores recorded.</p>}
+      <summary className="scorecard-pillar-heading"><strong>{pillar.name}</strong><ScoreResult sub={pillarResult(pillar)} /><ChevronDown className="pillar-chevron" size={14} /></summary>
+      {pillar.sub_scores.length ? <ul>{pillar.sub_scores.map((sub, subIndex) => <li key={`${sub.name}-${subIndex}`}><span>{sub.name}{sub.skipped ? " · Skipped" : ""}</span><ScoreResult sub={sub} />{sub.details && <small>{sub.details}</small>}</li>)}</ul> : <p className="muted small">No subscores recorded.</p>}
     </details>)}</div>
     {!compact && <>
       {report.acceptance_criteria.length > 0 && <details className="scorecard-criteria" key={`criteria-${jobId}`}><summary>Acceptance checks <span className={failed.length ? "score-fail" : ""}>{failed.length ? `${failed.length} required checks failed` : `${report.acceptance_criteria.length} checks`}</span><ChevronDown size={14} /></summary><ul>{report.acceptance_criteria.map((criterion, index) => <li key={`${criterion.name}-${index}`}><span className={criterion.passed === true ? "score-pass" : criterion.passed === false && criterion.applicable !== false ? "score-fail" : ""}>{criterion.applicable === false ? "N/A" : criterion.passed === true ? "Pass" : criterion.passed === false ? "Fail" : "N/A"}</span><strong>{criterion.name}</strong><small>{criterion.actual == null ? "No score" : criterion.actual.toFixed(0)} / {criterion.threshold.toFixed(0)} threshold · {criterion.level === "hard" ? "Required" : "Target"}</small></li>)}</ul></details>}

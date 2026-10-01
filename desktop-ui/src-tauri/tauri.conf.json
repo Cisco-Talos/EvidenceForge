@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "EvidenceForge Studio",
+        "dragDropEnabled": false,
         "width": 1440,
         "height": 900,
         "minWidth": 1000,

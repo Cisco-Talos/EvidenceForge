@@ -106,6 +106,57 @@ export interface paths {
         patch: operations["update_item_v1_items__item_id__patch"];
         trace?: never;
     };
+    "/v1/items/{item_id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source Files */
+        get: operations["source_files_v1_items__item_id__files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/files/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source File */
+        get: operations["source_file_v1_items__item_id__files__filename__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scenarios/{item_id}/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rename Item */
+        post: operations["rename_item_v1_scenarios__item_id__rename_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/scenarios/{item_id}/clone": {
         parameters: {
             query?: never;
@@ -1618,6 +1669,16 @@ export interface components {
             name: string;
         };
         /**
+         * ScenarioRenameRequest
+         * @description Rename the authored scenario at the revision displayed in Studio.
+         */
+        ScenarioRenameRequest: {
+            /** Name */
+            name: string;
+            /** Source Sha256 */
+            source_sha256: string;
+        };
+        /**
          * ScorecardCriterion
          * @description One threshold decision from the saved evaluation.
          */
@@ -1710,6 +1771,34 @@ export interface components {
             scope: string;
             /** Agent */
             agent: string;
+        };
+        /**
+         * SourceFile
+         * @description Filename and byte size of an authorized catalog source.
+         */
+        SourceFile: {
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+        };
+        /**
+         * SourceFiles
+         * @description One indexed source file available in the built-in viewer.
+         */
+        SourceFiles: {
+            /**
+             * Root
+             * Format: path
+             */
+            root: string;
+            /** Files */
+            files: components["schemas"]["SourceFile"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
         /**
          * StudioEvent
@@ -2144,6 +2233,110 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ItemUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_files_v1_items__item_id__files_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceFiles"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_file_v1_items__item_id__files__filename__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_item_v1_scenarios__item_id__rename_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioRenameRequest"];
             };
         };
         responses: {

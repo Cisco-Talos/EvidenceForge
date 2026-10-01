@@ -626,3 +626,49 @@ was not available on this host.
 Review screenshots: `/private/tmp/eforge-studio-packs-review.jpg`,
 `/private/tmp/eforge-studio-delete-menu-review.jpg`, and
 `/private/tmp/eforge-studio-scorecard-icons-review.jpg`.
+
+## 2026-10-01 — Project drops, score summary icons, scenario names, and source YAML
+
+Implemented the next feedback round:
+
+- Disabled Tauri's native file-drop interception for the Studio window so HTML scenario
+  drops can reach the project rail. This behavior on macOS is also documented in the
+  [upstream report](https://github.com/tauri-apps/tauri/issues/14373). Drag identity is retained
+  synchronously, drop targets accept the internal scenario/draft types, and moving over a
+  target's children retains its highlight. Authored and draft scenarios both use the existing
+  workspace-scoped project assignment API; Ungrouped remains a drop destination.
+- Collapsed scorecard pillar rows now have the same small colored check/X/warning icons as
+  their expanded measures. A pillar summarizes its applicable child statuses, rather than
+  treating a high weighted score as a pass. Tooltips explain the counts and preserve the
+  distinction from the saved overall acceptance verdict. Unknown measures remain gray.
+- The scenario workspace name (and draft workspace name) is clickable with a pencil icon.
+  Inline edits use the same live name validation as new scenarios, Enter to save, and Escape
+  or the X to cancel. Save failures keep the edit and show an inline explanation.
+- Authored scenario renaming changes only the top-level YAML name at the displayed source
+  hash. The backend refuses stale edits and active authoring conflicts, preserves comments,
+  other YAML values, line endings, and file mode, and replaces the file atomically. Stable item
+  ID, source path, project, and conversation/run links remain in place. Ambiguous name nodes
+  or alias replacements that would affect other values are refused.
+- Replaced Open YAML with View YAML, using the existing highlighted read-only file viewer
+  for scenarios and packs in both browser and native mode. Source viewing uses the available
+  width without an unnecessary single-file navigation column. The new authenticated source
+  routes expose only the indexed YAML, not neighboring files, reject links, enforce the current
+  workspace, and support bounded range previews. Save a copy follows the native export route.
+- Tauri's menu/ About metadata now uses the product name EvidenceForge Studio, and predefined
+  macOS menu labels replace the Cargo name `evidenceforge-studio` while retaining native actions.
+
+Verification: 83 React tests, 77 Python service/background tests, and three Rust native-export
+contracts passed. Generated API freshness, frontend/native macOS debug app builds, full Ruff,
+Cargo format, and diff whitespace checks passed. The route tests cover authentication, exact-file
+access, ranges, symlinks, and workspace isolation; rename tests cover stale/active conflicts,
+stable identity and project/conversation links, comment/CRLF/flow-style YAML preservation,
+permissions, and alias/duplicate-key rejection. UI tests cover typed/native drop contracts,
+child-target transitions, both scenario kinds, collapsed status icons, inline name validation,
+cancellation and errors, and built-in source previews/exports in browser and native modes.
+
+Restarted only the verified idle default helper after authenticating its snapshot, checking no
+active jobs/chats, and checking PID creation time plus command identity. No user scenarios,
+bundles, conversations, or project assignments were changed during testing. The native visual
+and physical drag review is pending: computer-use access reported that macOS is locked and
+could not unlock it. Asked the user to unlock; do not claim native drop/menu verification until
+that review is performed. Linux native review remains unavailable on this host.

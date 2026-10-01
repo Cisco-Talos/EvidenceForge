@@ -12,7 +12,7 @@ export interface BundleFiles {
   truncated: boolean;
 }
 
-export function bundleFileUrl(jobId: string, path: string, kind: "jobs" | "bundles" = "jobs"): string {
+export function bundleFileUrl(jobId: string, path: string, kind: "jobs" | "bundles" | "items" = "jobs"): string {
   return `/v1/${kind}/${jobId}/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
@@ -82,7 +82,7 @@ function highlightedLine(line: string, language: string): React.ReactNode {
 }
 
 export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = "jobs" }: {
-  jobId: string; files: BundleFiles; api: StudioApi; kind?: "jobs" | "bundles";
+  jobId: string; files: BundleFiles; api: StudioApi; kind?: "jobs" | "bundles" | "items";
   onClose: () => void; onError: (message: string) => void;
 }) {
   const first = ["GROUND_TRUTH.md", "RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yml", "GENERATION_MANIFEST.json"]
@@ -125,8 +125,9 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
 
   const lines = preview?.text.split("\n").slice(0, 4000) || [];
   const language = languageFor(selected || "", preview?.text || "");
-  return <div className="modal-backdrop"><div className="close-modal bundle-browser" role="dialog" aria-modal="true" aria-label="Bundle files">
-    <div className="bundle-browser-heading"><div><h2>Bundle files</h2><div className="path-with-copy"><span className="path-value source-path" title={files.root}>{files.root}</span><CopyPathButton path={files.root} label="Copy bundle path" onError={onError} /></div></div><button className="icon-button" aria-label="Close bundle files" onClick={onClose}><X size={18} /></button></div>
+  const title = kind === "items" ? "Source YAML" : "Bundle files";
+  return <div className="modal-backdrop"><div className={`close-modal bundle-browser ${kind === "items" ? "source-file-browser" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+    <div className="bundle-browser-heading"><div><h2>{title}</h2><div className="path-with-copy"><span className="path-value source-path" title={files.root}>{files.root}</span><CopyPathButton path={files.root} label={kind === "items" ? "Copy source folder path" : "Copy bundle path"} onError={onError} /></div></div><button className="icon-button" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={18} /></button></div>
     <div className="bundle-browser-layout"><nav className="bundle-file-list" aria-label="Bundle file list">{files.files.length ? files.files.map((file) => <button key={file.path} className={`bundle-file-row ${selected === file.path ? "selected" : ""}`} onClick={() => setSelected(file.path)}><FileCode2 size={15} /><span title={file.path}>{file.path}</span><small>{file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}</small></button>) : <p className="muted">This bundle has no files yet.</p>}{files.truncated && <p className="muted">Showing the first 500 files.</p>}</nav>
       <div className="bundle-preview"><div className="bundle-preview-heading"><div className="path-with-copy bundle-selected-path"><strong className="path-value" title={selected || undefined}>{selected || "Choose a file"}</strong>{selected && <CopyPathButton path={`${files.root.replace(/[\\/]$/, "")}/${selected}`} label="Copy file path" onError={onError} />}</div>{language === "markdown" && <button className="button-quiet" aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>{showSource ? "Rendered view" : "View source"}</button>}{selected && <button className="button-quiet" disabled={exporting} onClick={() => void saveSelectedFile()}><Download size={15} /> {exporting ? "Saving…" : isTauri() ? "Save a copy" : "Download file"}</button>}</div>
         {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}

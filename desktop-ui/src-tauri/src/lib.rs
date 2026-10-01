@@ -61,7 +61,30 @@ fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, String>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    // The default application menu uses Cargo's package name. Use the product
+    // name for its labels and About panel, including source-run launches.
+    context.package_info_mut().name = "EvidenceForge Studio".into();
     tauri::Builder::default()
+        .menu(|app| {
+            let menu = tauri::menu::Menu::default(app)?;
+            #[cfg(target_os = "macos")]
+            for entry in menu.items()? {
+                if let Some(submenu) = entry.as_submenu() {
+                    for item in submenu.items()? {
+                        if let Some(predefined) = item.as_predefined_menuitem() {
+                            let text = predefined.text()?;
+                            if text.contains("evidenceforge-studio") {
+                                predefined.set_text(
+                                    text.replace("evidenceforge-studio", "EvidenceForge Studio"),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(menu)
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(native_export::ExportState::default())
@@ -72,6 +95,6 @@ pub fn run() {
             native_export::save_studio_export,
             native_export::cancel_studio_export
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

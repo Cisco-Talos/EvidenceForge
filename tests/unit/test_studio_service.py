@@ -25,7 +25,7 @@ from evidenceforge.evaluation.models import AcceptanceCriterion, SubScore
 from evidenceforge.evaluation.thresholds import load_thresholds
 from evidenceforge.studio.codex import CodexClient, CodexThreadNotReadyError, CodexTimeoutError
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
-from evidenceforge.studio.lifecycle import clone_scenario
+from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
 from evidenceforge.studio.service import StudioService, _scorecard_subscore, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
@@ -2380,3 +2380,135 @@ def test_diagnostic_colors_identify_current_reference_thresholds(
     if expected != "unrated":
         assert "Current reference thresholds" in projection.rating_detail
         assert "does not change saved acceptance" in projection.rating_detail
+
+
+def test_source_yaml_view_is_authorized_exact_file_and_workspace_scoped(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    path = _scenario(workspace, "alpha")
+    neighbor = path.parent / "private.txt"
+    neighbor.write_text("Not an indexed source", encoding="utf-8")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        item = client.get("/v1/bootstrap", headers=headers).json()["items"][0]
+        url = f"/v1/items/{item['id']}/files"
+        assert client.get(url).status_code == 401
+        assert client.get(url, headers=headers).json() == {
+            "root": str(path.parent),
+            "files": [{"path": path.name, "size": path.stat().st_size}],
+            "truncated": False,
+        }
+        assert client.get(f"{url}/{path.name}", headers=headers).content == path.read_bytes()
+        response = client.get(f"{url}/{path.name}", headers={**headers, "Range": "bytes=0-9"})
+        assert response.status_code == 206
+        assert response.content == path.read_bytes()[:10]
+        assert client.get(f"{url}/private.txt", headers=headers).status_code == 404
+        assert client.get(f"{url}/sub/../private.txt", headers=headers).status_code == 404
+        original = path.read_bytes()
+        path.unlink()
+        path.symlink_to(neighbor)
+        assert client.get(url, headers=headers).status_code == 404
+        assert client.get(f"{url}/{path.name}", headers=headers).status_code == 404
+        path.unlink()
+        path.write_bytes(original)
+        client.post(
+            "/v1/workspaces/select", headers=headers, json={"path": str(tmp_path / "other")}
+        )
+        assert client.get(url, headers=headers).status_code == 404
+
+
+def test_scenario_name_edit_changes_source_but_keeps_identity_and_rejects_conflicts(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    path = _scenario(workspace, "alpha")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        item = client.get("/v1/bootstrap", headers=headers).json()["items"][0]
+        project = client.post("/v1/projects", headers=headers, json={"name": "Training"}).json()
+        client.patch(f"/v1/items/{item['id']}", headers=headers, json={"project_id": project["id"]})
+        chat = client.post(
+            "/v1/conversations", headers=headers, json={"item_id": item["id"]}
+        ).json()
+        url = f"/v1/scenarios/{item['id']}/rename"
+        request = {"name": "New_Name-2", "source_sha256": item["source_sha256"]}
+        assert client.post(url, json=request).status_code == 401
+        assert (
+            client.post(url, headers=headers, json={**request, "name": "bad name"}).status_code
+            == 422
+        )
+        service = client.app.state.studio
+        conversation = service.store.conversation(chat["id"])
+        conversation.active = True
+        service.store.save_conversation(conversation)
+        assert client.post(url, headers=headers, json=request).status_code == 409
+        conversation.active = False
+        service.store.save_conversation(conversation)
+        response = client.post(url, headers=headers, json=request)
+        assert response.status_code == 200, response.text
+        updated = response.json()
+        assert updated["id"] == item["id"]
+        assert updated["path"] == str(path)
+        assert updated["project_id"] == project["id"]
+        assert updated["name"] == "New_Name-2"
+        assert updated["source_sha256"] != item["source_sha256"]
+        assert path.read_text().startswith('name: "New_Name-2"\n')
+        assert service.store.conversation(chat["id"]).item_id == item["id"]
+        assert (
+            client.get("/v1/items?search=name:New_Name-2", headers=headers).json()[0]["id"]
+            == item["id"]
+        )
+        assert (
+            client.post(url, headers=headers, json={**request, "name": "stale"}).status_code == 409
+        )
+        client.post(
+            "/v1/workspaces/select", headers=headers, json={"path": str(tmp_path / "other")}
+        )
+        assert client.post(url, headers=headers, json=request).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("contents", "expected"),
+    [
+        (
+            '# Keep notes\nname: old  # Keep comment\nversion: "2.0"\n',
+            '# Keep notes\nname: "new"  # Keep comment\nversion: "2.0"\n',
+        ),
+        ('"name": \'old\'\r\nversion: "2.0"\r\n', '"name": "new"\r\nversion: "2.0"\r\n'),
+        ('{"name": "old", "version": "2.0"}\n', '{"name": "new", "version": "2.0"}\n'),
+        ('name: |\n  old\nversion: "2.0"\n', 'name: "new"\nversion: "2.0"\n'),
+    ],
+)
+def test_rename_scenario_retains_other_yaml_text_and_permissions(
+    tmp_path: Path, contents: str, expected: str
+) -> None:
+    path = tmp_path / "scenario.yaml"
+    path.write_bytes(contents.encode())
+    path.chmod(0o640)
+    rename_scenario(path, "new", sha256(path.read_bytes()).hexdigest())
+    assert path.read_bytes() == expected.encode()
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "name: old\nname: duplicate\n",
+        "other: &title old\nname: *title\n",
+        "name: &title old\nother: *title\n",
+        "name: [old]\n",
+    ],
+)
+def test_rename_scenario_rejects_ambiguous_or_shared_name_nodes(
+    tmp_path: Path, contents: str
+) -> None:
+    path = tmp_path / "scenario.yaml"
+    path.write_text(contents, encoding="utf-8")
+    with pytest.raises(ValueError):
+        rename_scenario(path, "new", sha256(path.read_bytes()).hexdigest())
+    assert path.read_text() == contents
+    assert list(tmp_path.iterdir()) == [path]

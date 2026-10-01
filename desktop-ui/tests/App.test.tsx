@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1050,20 +1050,25 @@ test("Clear Completed targets one job type and removed source runs can still be 
 });
 
 
-test("Open YAML uses the native opener and gives a clear browser-preview hint", async () => {
-  const user = userEvent.setup();
-  const { unmount } = render(<App />);
-  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
-  await user.click(screen.getByRole("button", { name: "Open YAML" }));
-  expect(openPath).not.toHaveBeenCalled();
-  expect(screen.getByRole("status").textContent).toContain("Open YAML is available in the desktop app");
-  unmount();
-  Object.assign(window, { __TAURI_INTERNALS__: {} });
+test.each([false, true])("View YAML uses the built-in viewer in browser and native mode: %s", async (native) => {
+  if (native) Object.assign(window, { __TAURI_INTERNALS__: {} });
+  const request = vi.mocked(useStudio().api!.request);
+  const readTextPreview = vi.mocked(useStudio().api!.readTextPreview);
+  request.mockResolvedValueOnce({ root: `${workspace}/scenarios/alpha`, files: [{ path: "scenario.yaml", size: 128 }], truncated: false });
+  readTextPreview.mockResolvedValueOnce({ text: "name: Alpha\nversion: 2.0", truncated: false, binary: false });
   try {
+    const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
-    await user.click(screen.getByRole("button", { name: "Open YAML" }));
-    expect(openPath).toHaveBeenCalledWith(snapshot.items[0].path);
+    await user.click(screen.getByRole("button", { name: "View YAML" }));
+    const viewer = await screen.findByRole("dialog", { name: "Source YAML" });
+    await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
+    expect(readTextPreview).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml");
+    expect(openPath).not.toHaveBeenCalled();
+    await user.click(within(viewer).getByRole("button", { name: native ? "Save a copy" : "Download file" }));
+    expect(useStudio().api!.download).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml", "scenario.yaml", expect.any(Function));
+    await user.click(within(viewer).getByRole("button", { name: "Close source yaml" }));
+    expect(screen.queryByRole("dialog", { name: "Source YAML" })).toBeNull();
   } finally { delete window.__TAURI_INTERNALS__; }
 });
 
@@ -1266,4 +1271,97 @@ test("subscore icons encode passed, failed, marginal, and skipped states with ac
   marginal.focus();
   expect((await screen.findByRole("tooltip")).textContent).toContain("Minimum 85. Aspirational target 95. Current reference thresholds");
   expect(screen.queryByRole("button", { name: "View raw report" })).toBeNull();
+});
+
+
+test("project drop targets use drag types, ignore child transitions, and clear after leaving", async () => {
+  const originalProjects = snapshot.projects;
+  snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "", updated_at: 1 }];
+  try {
+    render(<App />);
+    const target = screen.getByRole("button", { name: "Open project Casework" }).closest(".project-nav-entry")!;
+    const transfer = { types: ["application/x-evidenceforge-scenario"], dropEffect: "", getData: vi.fn(() => "alpha") };
+    expect(fireEvent.dragOver(target, { dataTransfer: transfer })).toBe(false);
+    expect(target.classList.contains("drop-target")).toBe(true);
+    const leaveChild = createEvent.dragLeave(target);
+    Object.defineProperty(leaveChild, "relatedTarget", { value: target.querySelector("span") });
+    fireEvent(target, leaveChild);
+    expect(target.classList.contains("drop-target")).toBe(true);
+    const leaveTarget = createEvent.dragLeave(target);
+    Object.defineProperty(leaveTarget, "relatedTarget", { value: document.body });
+    fireEvent(target, leaveTarget);
+    expect(target.classList.contains("drop-target")).toBe(false);
+    expect(fireEvent.dragOver(target, { dataTransfer: { types: ["Files"] } })).toBe(true);
+    expect(target.classList.contains("drop-target")).toBe(false);
+    fireEvent.drop(target, { dataTransfer: transfer });
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "project-1" }));
+  } finally { snapshot.projects = originalProjects; }
+});
+
+test("scenario workspace title validates names, cancels, saves the displayed revision, and retains errors", async () => {
+  render(<App />);
+  const user = userEvent.setup();
+  const request = vi.mocked(useStudio().api!.request);
+  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Rename scenario Alpha" }));
+  const input = screen.getByRole("textbox", { name: "Scenario Name" });
+  expect(document.activeElement).toBe(input);
+  await user.clear(input);
+  await user.type(input, "Invalid name");
+  expect(screen.getByText(/no spaces/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save scenario name" }).hasAttribute("disabled")).toBe(true);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("button", { name: "Rename scenario Alpha" })).toBeTruthy();
+  expect(request).not.toHaveBeenCalledWith(expect.stringContaining("/rename"), expect.anything(), expect.anything());
+  await user.click(screen.getByRole("button", { name: "Rename scenario Alpha" }));
+  await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
+  await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Revised_Alpha-1");
+  request.mockRejectedValueOnce(new StudioApiError(409, "The scenario changed. Refresh it before renaming"));
+  await user.keyboard("{Enter}");
+  expect(await screen.findByText(/Refresh it before renaming/)).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Scenario Name" })).toHaveProperty("value", "Revised_Alpha-1");
+  request.mockResolvedValueOnce({});
+  await user.click(screen.getByRole("button", { name: "Save scenario name" }));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Scenario Name" })).toBeNull());
+  expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/rename", "POST", { name: "Revised_Alpha-1", source_sha256: "sha-alpha" });
+  expect(useStudio().reload).toHaveBeenCalled();
+});
+
+test.each(["passed", "failed", "marginal", "unrated"])("collapsed score rows summarize their measure icons: %s", async (rating) => {
+  const report = { scenario_name: "Alpha", evaluated_at: "2026-10-01T16:00:00Z", total_records: 100, overall_score: 92, acceptance_passed: true, source_counts: {}, flags: [], acceptance_criteria: [], pillars: [{ name: "Causality", score: 92, sub_scores: [{ name: "Check", score: 90, details: "", skipped: false, rating, rating_detail: "" }] }] };
+  const { container } = render(<ScorecardPanel jobId="eval" api={{ request: vi.fn(async () => report) } as unknown as StudioApi} compact />);
+  await screen.findByText("Causality");
+  const pillar = container.querySelector(".scorecard-pillar") as HTMLDetailsElement;
+  expect(pillar.open).toBe(false);
+  const icon = pillar.querySelector(`summary .subscore-${rating}`);
+  expect(icon).toBeTruthy();
+  expect(icon?.getAttribute("aria-label")).toContain("Causality:");
+  expect(icon?.getAttribute("aria-label")).toContain("does not replace saved acceptance");
+});
+
+
+test("draft scenarios can be dragged into a project and renamed from their workspace title", async () => {
+  const originalProjects = snapshot.projects;
+  const originalConversations = snapshot.conversations;
+  const draft = { ...originalConversations[0], id: "draft-1", item_id: null, thread_id: null, title: "New conversation", draft_kind: "scenario" as const, draft_name: "Draft_name", draft_project_id: null, draft_path: `${workspace}/scenarios/studio-draft/scenario.yaml` };
+  snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "", updated_at: 1 }];
+  snapshot.conversations = [...originalConversations, draft];
+  try {
+    render(<App />);
+    const user = userEvent.setup();
+    const card = screen.getByText("Draft_name", { selector: ".card-body strong" }).closest(".library-card")!;
+    const data: Record<string, string> = {};
+    const transfer = { effectAllowed: "", dropEffect: "", setData: (key: string, value: string) => { data[key] = value; }, getData: (key: string) => data[key] || "" };
+    fireEvent.dragStart(card, { dataTransfer: transfer });
+    const target = screen.getByRole("button", { name: "Open project Casework" });
+    fireEvent.dragOver(target, { dataTransfer: transfer });
+    fireEvent.drop(target, { dataTransfer: transfer });
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_project_id: "project-1" }));
+    await user.click(within(card).getByRole("button", { name: /Draft_nameReady to author/ }));
+    await user.click(screen.getByRole("button", { name: "Rename scenario Draft_name" }));
+    await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
+    await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Named_draft");
+    await user.click(screen.getByRole("button", { name: "Save scenario name" }));
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_name: "Named_draft" }));
+  } finally { snapshot.projects = originalProjects; snapshot.conversations = originalConversations; }
 });

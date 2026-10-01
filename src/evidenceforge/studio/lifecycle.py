@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,68 @@ _SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 _MAX_CLONE_BYTES = 1024**3
 _MAX_MANIFEST_BYTES = 8 * 1024**2
 _MAX_RESOLVED_BYTES = 64 * 1024**2
+
+
+def rename_scenario(source: Path, name: str, expected_sha256: str) -> None:
+    """Change only the authored name, retaining formatting and the source path.
+
+    Reject stale edits and YAML aliases whose replacement would change other
+    authored values. Replace the file atomically so indexing never sees a
+    partially written scenario.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name):
+        raise ValueError("Use 1–80 letters, digits, hyphens, or underscores; no spaces")
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("The authored scenario must be a regular file, not a link")
+    if source.stat().st_size > _MAX_MANIFEST_BYTES:
+        raise ValueError("This scenario exceeds the 8 MiB name-edit limit")
+    contents = source.read_bytes()
+    if hashlib.sha256(contents).hexdigest() != expected_sha256:
+        raise FileExistsError("The scenario changed. Refresh it before renaming")
+    text = contents.decode("utf-8")
+    try:
+        document = yaml.compose(text)
+        original = yaml.safe_load(text)
+        if not isinstance(document, yaml.MappingNode) or not isinstance(original, dict):
+            raise ValueError("The scenario must be a YAML mapping")
+        names = [
+            (key, value)
+            for key, value in document.value
+            if isinstance(key, yaml.ScalarNode) and key.value == "name"
+        ]
+        if len(names) != 1:
+            raise ValueError("The scenario needs exactly one top-level name field")
+        key, value = names[0]
+        if not isinstance(value, yaml.ScalarNode) or value.start_mark.index < key.end_mark.index:
+            raise ValueError("Edit the scenario name directly in YAML to replace its alias")
+        replacement = json.dumps(name)
+        if value.style in {"|", ">"}:
+            replacement += "\r\n" if "\r\n" in text else "\n"
+        updated = text[: value.start_mark.index] + replacement + text[value.end_mark.index :]
+        parsed = yaml.safe_load(updated)
+        if parsed != {**original, "name": name}:
+            raise ValueError("Renaming this YAML would change other fields; edit it directly")
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            "The scenario YAML could not be parsed; repair it before renaming"
+        ) from exc
+
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".eforge-name-", dir=source.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(updated.encode("utf-8"))
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.chmod(source.stat().st_mode & 0o777)
+        if (
+            source.is_symlink()
+            or hashlib.sha256(source.read_bytes()).hexdigest() != expected_sha256
+        ):
+            raise FileExistsError("The scenario changed. Refresh it before renaming")
+        temporary.replace(source)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def inspect_external_bundle(root: Path, workspace: Path) -> ImportedBundle:

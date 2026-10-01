@@ -57,7 +57,7 @@ from evidenceforge.studio.jobs import (
     reconcile_jobs,
     suspend_generation,
 )
-from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle
+from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import (
@@ -257,6 +257,34 @@ class ItemUpdate(BaseModel):
     hidden: bool | None = None
     folder: str | None = None
     project_id: str | None = None
+
+
+class ScenarioRenameRequest(BaseModel):
+    """Rename the authored scenario at the revision displayed in Studio."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class SourceFile(BaseModel):
+    """Filename and byte size of an authorized catalog source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    size: int
+
+
+class SourceFiles(BaseModel):
+    """One indexed source file available in the built-in viewer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path
+    files: list[SourceFile]
+    truncated: bool = False
 
 
 class FolderRequest(BaseModel):
@@ -1007,6 +1035,55 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         studio.store.save_item(item)
         await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
         return item
+
+    def catalog_source(item_id: str, studio: StudioService) -> CatalogItem:
+        item = studio.store.item(item_id)
+        if (
+            item is None
+            or item.workspace.resolve() != studio.settings.workspace.resolve()
+            or item.path.is_symlink()
+            or not item.path.is_file()
+        ):
+            raise HTTPException(status_code=404, detail="Source YAML not found in this workspace")
+        return item
+
+    @app.get("/v1/items/{item_id}/files")
+    def source_files(item_id: str, studio: StudioService = Depends(authorized)) -> SourceFiles:
+        item = catalog_source(item_id, studio)
+        return SourceFiles(
+            root=item.path.parent,
+            files=[SourceFile(path=item.path.name, size=item.path.stat().st_size)],
+        )
+
+    @app.get("/v1/items/{item_id}/files/{filename:path}")
+    def source_file(
+        item_id: str, filename: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        item = catalog_source(item_id, studio)
+        if filename != item.path.name:
+            raise HTTPException(status_code=404, detail="Source YAML not found")
+        return FileResponse(item.path, filename=item.path.name)
+
+    @app.post("/v1/scenarios/{item_id}/rename")
+    async def rename_item(
+        item_id: str, request: ScenarioRenameRequest, studio: StudioService = Depends(authorized)
+    ) -> CatalogItem:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Only scenarios can be renamed here")
+        if any(chat.active for chat in studio.store.conversations(item.workspace, item.id)):
+            raise HTTPException(status_code=409, detail="Wait for active chats before renaming")
+        try:
+            await asyncio.to_thread(rename_scenario, item.path, request.name, request.source_sha256)
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await studio.scan()
+        updated = studio.store.item(item.id)
+        if updated is None:
+            raise HTTPException(status_code=500, detail="Renamed scenario could not be indexed")
+        return updated
 
     @app.post("/v1/scenarios/{item_id}/clone")
     async def clone_item(
