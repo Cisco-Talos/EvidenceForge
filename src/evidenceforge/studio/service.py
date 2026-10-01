@@ -24,6 +24,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.background import BackgroundTask
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
+from evidenceforge.composition.publisher import (
+    PublisherIdentity,
+    effective_publisher,
+    set_publisher,
+)
 from evidenceforge.desktop.controller import _delete_owned_complete, _delete_owned_incomplete
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import _eforge_command
@@ -32,6 +37,7 @@ from evidenceforge.desktop.progress import GenerationProgress
 from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.evaluation.models import QualityReport
+from evidenceforge.models.exceptions import PackError
 from evidenceforge.studio.codex import (
     CodexClient,
     CodexThreadNotReadyError,
@@ -49,6 +55,7 @@ from evidenceforge.studio.jobs import (
     reconcile_jobs,
     suspend_generation,
 )
+from evidenceforge.studio.lifecycle import clone_scenario
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import (
@@ -107,6 +114,36 @@ class GenerationRequest(BaseModel):
     scenario_id: str
     output_parent: Path | None = None
     checkpoint_hours: int | None = Field(default=None, ge=0)
+
+
+class ScenarioCloneRequest(BaseModel):
+    """Name for a new independent copy of one authored scenario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80)
+
+
+class PackPublisherStatus(BaseModel):
+    """Effective authoring identity used by the CLI for new local packs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    configured: bool
+    publisher: str | None = None
+    publisher_display_name: str | None = None
+    scope: Literal["user", "project"] | None = None
+
+
+class PackCloneRequest(BaseModel):
+    """Requested exact identity for a new editable local pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80)
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    publisher: str | None = None
+    publisher_display_name: str | None = None
 
 
 class EvaluationRequest(BaseModel):
@@ -875,6 +912,139 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         studio.store.save_item(item)
         await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
         return item
+
+    @app.post("/v1/scenarios/{item_id}/clone")
+    async def clone_item(
+        item_id: str, request: ScenarioCloneRequest, studio: StudioService = Depends(authorized)
+    ) -> CatalogItem:
+        item = studio.store.item(item_id)
+        workspace = studio.settings.workspace
+        if (
+            item is None
+            or item.kind != "scenario"
+            or item.workspace.resolve() != workspace.resolve()
+        ):
+            raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+        try:
+            cloned_path = await asyncio.to_thread(
+                clone_scenario, item.path, workspace, request.name.strip()
+            )
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source = next(
+            (found for found in discover_scenarios(workspace, []) if found.path == cloned_path),
+            None,
+        )
+        if source is None:
+            raise HTTPException(status_code=500, detail="Cloned scenario could not be indexed")
+        cloned = studio.store.upsert_item(workspace, "scenario", source)
+        if item.project_id is not None:
+            cloned.project_id = item.project_id
+            studio.store.save_item(cloned)
+        await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
+        return cloned
+
+    @app.get("/v1/packs/publisher")
+    def pack_publisher(studio: StudioService = Depends(authorized)) -> PackPublisherStatus:
+        try:
+            identity, scope = effective_publisher(studio.settings.workspace)
+        except PackError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return PackPublisherStatus(
+            configured=identity is not None,
+            publisher=identity.publisher if identity else None,
+            publisher_display_name=identity.publisher_display_name if identity else None,
+            scope=scope,
+        )
+
+    @app.post("/v1/packs/{item_id}/clone")
+    async def clone_pack(
+        item_id: str, request: PackCloneRequest, studio: StudioService = Depends(authorized)
+    ) -> CatalogItem:
+        item = studio.store.item(item_id)
+        workspace = studio.settings.workspace
+        if (
+            item is None
+            or item.kind not in {"industry_pack", "organization_pack"}
+            or item.workspace.resolve() != workspace.resolve()
+        ):
+            raise HTTPException(status_code=404, detail="Pack not found in this workspace")
+        if bool(request.publisher) != bool(request.publisher_display_name):
+            raise HTTPException(status_code=400, detail="Enter both publisher ID and display name")
+        try:
+            identity, _scope = effective_publisher(workspace)
+            if identity is None:
+                if not request.publisher or not request.publisher_display_name:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Configure a publisher identity before cloning a pack",
+                    )
+                identity = PublisherIdentity(
+                    publisher=request.publisher,
+                    publisher_display_name=request.publisher_display_name,
+                )
+                set_publisher(workspace, identity, scope="project", force=False)
+            elif request.publisher and (
+                identity.publisher != request.publisher
+                or identity.publisher_display_name != request.publisher_display_name
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The configured publisher identity differs from this request",
+                )
+        except (PackError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        def copy_with_cli() -> dict[str, Any]:
+            completed = subprocess.run(
+                [
+                    *_eforge_command(controller_settings(studio.settings)),
+                    "pack",
+                    "copy",
+                    str(item.path),
+                    "--name",
+                    request.name,
+                    "--version",
+                    request.version,
+                    "--project-root",
+                    str(workspace),
+                    "--json",
+                ],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+            )
+            try:
+                result = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                result = {}
+            if completed.returncode != 0 or not result.get("copied"):
+                detail = result.get("error") or completed.stderr[-1500:] or "Pack copy failed"
+                raise ValueError(str(detail))
+            return result
+
+        try:
+            copied = await asyncio.to_thread(copy_with_cli)
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        pack_path = Path(copied["pack"]["location"]) / "pack.yaml"
+        source_kind = "industry" if item.kind == "industry_pack" else "organization"
+        source = next(
+            (found for found in discover_packs(workspace, source_kind) if found.path == pack_path),
+            None,
+        )
+        if source is None:
+            raise HTTPException(status_code=500, detail="Copied pack could not be indexed")
+        cloned = studio.store.upsert_item(workspace, item.kind, source)
+        if item.folder is not None:
+            cloned.folder = item.folder
+            studio.store.save_item(cloned)
+        await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
+        return cloned
 
     @app.get("/v1/folders")
     def folders(studio: StudioService = Depends(authorized)) -> list[str]:

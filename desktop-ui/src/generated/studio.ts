@@ -106,6 +106,57 @@ export interface paths {
         patch: operations["update_item_v1_items__item_id__patch"];
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clone Item */
+        post: operations["clone_item_v1_scenarios__item_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/packs/publisher": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pack Publisher */
+        get: operations["pack_publisher_v1_packs_publisher_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/packs/{item_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clone Pack */
+        post: operations["clone_pack_v1_packs__item_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/folders": {
         parameters: {
             query?: never;
@@ -1183,6 +1234,34 @@ export interface components {
             scorecard?: components["schemas"]["JobScorecard"] | null;
         };
         /**
+         * PackCloneRequest
+         * @description Requested exact identity for a new editable local pack.
+         */
+        PackCloneRequest: {
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /** Publisher */
+            publisher?: string | null;
+            /** Publisher Display Name */
+            publisher_display_name?: string | null;
+        };
+        /**
+         * PackPublisherStatus
+         * @description Effective authoring identity used by the CLI for new local packs.
+         */
+        PackPublisherStatus: {
+            /** Configured */
+            configured: boolean;
+            /** Publisher */
+            publisher?: string | null;
+            /** Publisher Display Name */
+            publisher_display_name?: string | null;
+            /** Scope */
+            scope?: ("user" | "project") | null;
+        };
+        /**
          * Project
          * @description A workspace-local group of scenarios, independent of their file paths.
          */
@@ -1314,6 +1393,14 @@ export interface components {
              * @default false
              */
             show_hidden: boolean;
+        };
+        /**
+         * ScenarioCloneRequest
+         * @description Name for a new independent copy of one authored scenario.
+         */
+        ScenarioCloneRequest: {
+            /** Name */
+            name: string;
         };
         /**
          * ScorecardCriterion
@@ -1825,6 +1912,111 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ItemUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_item_v1_scenarios__item_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioCloneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pack_publisher_v1_packs_publisher_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackPublisherStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_pack_v1_packs__item_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackCloneRequest"];
             };
         };
         responses: {

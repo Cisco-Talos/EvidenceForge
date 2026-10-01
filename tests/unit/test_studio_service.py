@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Event
 
 import psutil
+import pytest
 from fastapi.testclient import TestClient
 
 from evidenceforge.desktop.controller import _worker_tick
@@ -22,6 +23,7 @@ from evidenceforge.desktop.jobs import resume_generation
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
 from evidenceforge.studio.codex import CodexClient, CodexThreadNotReadyError, CodexTimeoutError
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
+from evidenceforge.studio.lifecycle import clone_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
 from evidenceforge.studio.service import StudioService, create_app
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
@@ -95,6 +97,119 @@ def test_export_folder_is_saved_per_workspace(tmp_path: Path, monkeypatch: objec
         assert client.get("/v1/export-location", headers=headers).json() == {
             "directory": str(export_dir)
         }
+
+
+def test_scenario_clone_copies_authored_files_and_project_without_history(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    original = _scenario(workspace, "alpha")
+    companion = original.parent / "ENVIRONMENT.md"
+    companion.write_text("Original briefing\n", encoding="utf-8")
+    paths = _paths(tmp_path / "private")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(paths, "secret")) as client:
+        item = next(
+            entry
+            for entry in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if entry["path"] == str(original)
+        )
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Alpha project"}
+        ).json()
+        client.patch(f"/v1/items/{item['id']}", headers=headers, json={"project_id": project["id"]})
+        response = client.post(
+            f"/v1/scenarios/{item['id']}/clone", headers=headers, json={"name": "alpha-copy"}
+        )
+        assert response.status_code == 200
+        cloned = response.json()
+        target = Path(cloned["path"])
+        assert cloned["id"] != item["id"]
+        assert cloned["name"] == "alpha-copy"
+        assert cloned["project_id"] == project["id"]
+        assert target.parent != original.parent
+        assert (target.parent / "ENVIRONMENT.md").read_text() == "Original briefing\n"
+        assert "name: alpha\n" in original.read_text()
+        assert client.get("/v1/bootstrap", headers=headers).json()["conversations"] == []
+        duplicate = client.post(
+            f"/v1/scenarios/{item['id']}/clone", headers=headers, json={"name": "alpha-copy"}
+        )
+        assert duplicate.status_code == 409
+        assert (
+            client.post(
+                f"/v1/scenarios/{item['id']}/clone", headers=headers, json={"name": "../escape"}
+            ).status_code
+            == 400
+        )
+
+
+def test_scenario_clone_rejects_links_and_shared_source_folders(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    original = _scenario(workspace, "alpha")
+    (original.parent / "outside-link").symlink_to(tmp_path)
+    with pytest.raises(ValueError, match="contains a link"):
+        clone_scenario(original, workspace, "alpha-copy")
+    assert not (workspace / "scenarios" / "alpha-copy").exists()
+    (original.parent / "outside-link").unlink()
+    (original.parent / "other.yaml").write_text(
+        "name: other\nversion: '1.0'\nenvironment:\n  users: []\n  systems: []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="multiple scenarios"):
+        clone_scenario(original, workspace, "alpha-copy")
+    shared = workspace / "scenarios" / "shared.yaml"
+    shared.write_text("name: shared\nversion: '1.0'\n", encoding="utf-8")
+    copied = clone_scenario(shared, workspace, "shared-copy")
+    assert copied.read_text(encoding="utf-8").startswith('name: "shared-copy"')
+    assert not (copied.parent / "other.yaml").exists()
+    linked_workspace = tmp_path / "linked-workspace"
+    linked_workspace.mkdir()
+    (linked_workspace / "scenarios").symlink_to(workspace / "scenarios")
+    with pytest.raises(ValueError, match="must not be a link"):
+        clone_scenario(original, linked_workspace, "linked-copy")
+
+
+def test_pack_clone_uses_cli_and_configures_project_publisher_when_requested(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        item = next(
+            entry
+            for entry in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if entry["kind"] == "industry_pack" and entry["name"] == "finance"
+        )
+        assert client.get("/v1/packs/publisher").status_code == 401
+        assert client.get("/v1/packs/publisher", headers=headers).json()["configured"] is False
+        route = f"/v1/packs/{item['id']}/clone"
+        request = {"name": "finance-studio", "version": "1.0.0"}
+        assert client.post(route, headers=headers, json=request).status_code == 409
+        response = client.post(
+            route,
+            headers=headers,
+            json={
+                **request,
+                "publisher": "studio-test",
+                "publisher_display_name": "Studio Test",
+            },
+        )
+        assert response.status_code == 200, response.text
+        cloned = response.json()
+        assert cloned["id"] != item["id"]
+        assert cloned["kind"] == "industry_pack"
+        assert cloned["name"] == "finance-studio"
+        assert cloned["path"].startswith(str(workspace / ".eforge" / "packs"))
+        manifest = Path(cloned["path"]).read_text(encoding="utf-8")
+        assert "publisher: studio-test" in manifest
+        assert "name: finance-studio" in manifest
+        publisher = client.get("/v1/packs/publisher", headers=headers).json()
+        assert publisher["publisher"] == "studio-test"
+        assert publisher["scope"] == "project"
+        assert client.post(route, headers=headers, json=request).status_code == 400
 
 
 def test_scenario_two_draft_promotes_and_keeps_conversation(

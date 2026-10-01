@@ -450,3 +450,18 @@ showed the matching evaluation and its saved detailed report. This improves core
 not the Stage 6 evidence drill-down or comparison workflow. Verification: 75 focused Python
 service/desktop tests, 42 React tests, generated API type check, frontend build, and full Ruff
 check/format pass.
+
+## Scenario and pack cloning (October 1)
+
+The scenario library and scenario workspace can clone an authored scenario into a new workspace
+folder. The clone copies companion files with the YAML, changes its top-level name, and keeps the
+original's project assignment. It does not inherit conversations, validation, runs, or scores.
+Cloning refuses source links, linked companion files, shared folders with multiple scenarios,
+oversized folders, and an existing destination. The new file gets a fresh catalog identity.
+
+Pack libraries and workspaces can clone an industry or organization pack with the existing
+`eforge pack copy` command, keeping CLI validation and provenance rules authoritative. If no
+publisher is configured, the dialog collects a publisher ID and display name and saves them as a
+workspace publisher identity before copying. The clone preserves the pack's virtual folder and
+gets a fresh catalog identity. Tests use the real CLI against a bundled sample pack in an isolated
+workspace, plus browser interaction tests for both clone dialogs.

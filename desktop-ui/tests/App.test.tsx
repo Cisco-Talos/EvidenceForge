@@ -55,6 +55,7 @@ vi.mock("../src/useStudio", () => ({
       if (path.endsWith("/history")) return { thread: { turns: [] } };
       if (path === "/v1/codex/pending") return [];
       if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
+      if (path === "/v1/packs/publisher") return { configured: false, publisher: null, publisher_display_name: null, scope: null };
       if (path === "/v1/jobs/bundle-sizes") return { "job-1": 1536, "completed-run": 2 * 1024 ** 2 };
       if (path === "/v1/jobs/evaluation-1/scorecard") return {
         scenario_name: "Alpha", evaluated_at: "2026-09-30T16:00:00Z",
@@ -164,6 +165,62 @@ test("library cards keep operation icons beside the title without a redundant se
   expect(card?.querySelector(".card-footer")).toBeNull();
   expect(within(card as HTMLElement).getByRole("button", { name: "Download bundle for Alpha" })).toBeTruthy();
   expect(screen.queryByText("Local service")).toBeNull();
+});
+
+test("a scenario can be cloned from its library menu with a new name", async () => {
+  const user = userEvent.setup();
+  const request = vi.mocked(useStudio().api!.request);
+  const originalItems = snapshot.items;
+  try {
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clone scenario…" }));
+    expect(screen.getByRole("dialog", { name: "Clone scenario" })).toBeTruthy();
+    const clone = { ...snapshot.items[0], id: "alpha-copy", name: "Alpha-copy", path: `${workspace}/scenarios/Alpha-copy/scenario.yaml` };
+    snapshot.items = [...originalItems, clone];
+    request.mockResolvedValueOnce(clone);
+    await user.clear(screen.getByRole("textbox", { name: "New scenario name" }));
+    await user.type(screen.getByRole("textbox", { name: "New scenario name" }), "Alpha-copy");
+    await user.click(screen.getByRole("button", { name: "Clone scenario" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/clone", "POST", { name: "Alpha-copy" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Clone scenario" })).toBeNull());
+    expect(screen.getByRole("heading", { name: "Alpha-copy" })).toBeTruthy();
+  } finally {
+    snapshot.items = originalItems;
+  }
+});
+
+test("a pack clone requests a workspace publisher when one is not configured", async () => {
+  const user = userEvent.setup();
+  const request = vi.mocked(useStudio().api!.request);
+  const originalItems = snapshot.items;
+  const pack = {
+    ...originalItems[0], id: "pack-1", kind: "industry_pack" as const,
+    name: "finance", version: "1.0.0", path: `${workspace}/packs/industry/finance/pack.yaml`,
+  };
+  const clone = { ...pack, id: "pack-2", name: "finance-copy", path: `${workspace}/packs/industry/finance-copy/pack.yaml` };
+  snapshot.items = [...originalItems, pack];
+  try {
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Industry packs" }));
+    await user.click(screen.getByRole("button", { name: "Options for finance" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clone pack…" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Publisher ID" })).toBeTruthy());
+    expect(screen.getByRole("textbox", { name: "Pack version" })).toHaveProperty("value", "1.0.0");
+    await user.type(screen.getByRole("textbox", { name: "Publisher ID" }), "local-team");
+    await user.type(screen.getByRole("textbox", { name: "Publisher display name" }), "Local Team");
+    snapshot.items = [...originalItems, pack, clone];
+    request.mockResolvedValueOnce(clone);
+    await user.click(screen.getByRole("button", { name: "Clone pack" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith(
+      "/v1/packs/pack-1/clone", "POST",
+      { name: "finance-copy", version: "1.0.0", publisher: "local-team", publisher_display_name: "Local Team" },
+      190000,
+    ));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "finance-copy" })).toBeTruthy());
+  } finally {
+    snapshot.items = originalItems;
+  }
 });
 
 test("projects filter scenarios and accept card drops, with Ungrouped as a destination", async () => {
