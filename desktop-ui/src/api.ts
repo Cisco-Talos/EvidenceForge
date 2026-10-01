@@ -18,6 +18,10 @@ export type GenerationProgress = Required<Schema["GenerationProgress"]>;
 export type StudioJob = Schema["JobSummary"];
 export type ScorecardDetail = Schema["ScorecardDetail"];
 export type PackPublisherStatus = Schema["PackPublisherStatus"];
+export type ImportReview = Omit<Schema["ImportReview"], "rows"> & { rows: DependencyRow[] };
+export type DependencyRow = Schema["DependencyRow"];
+export type DependencyHealth = Schema["DependencyHealth"];
+export type ImportResult = Omit<Schema["ImportResult"], "item"> & { item?: CatalogItem | null };
 export type StudioSnapshot = Omit<Schema["StudioSnapshot"], "settings" | "items" | "projects" | "views" | "conversations" | "jobs" | "codex_health" | "validations" | "imported_bundles"> & {
   settings: StudioSettings;
   items: CatalogItem[];

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -18,13 +19,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
+from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
 from evidenceforge.composition.publisher import (
     PublisherIdentity,
     effective_publisher,
@@ -39,12 +42,24 @@ from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
-from evidenceforge.models.exceptions import PackError
+from evidenceforge.models.exceptions import ConfigurationError, PackError, PathSafetyError
 from evidenceforge.studio.codex import (
     CodexClient,
     CodexThreadNotReadyError,
     CodexTimeoutError,
     CodexUnavailableError,
+)
+from evidenceforge.studio.imports import (
+    DependencyHealth,
+    ImportCommitRequest,
+    ImportReview,
+    PackImportRequest,
+    PreparedImport,
+    ScenarioImportRequest,
+    build_portable_archive,
+    dependency_health,
+    prepare_archive,
+    prepare_scenario,
 )
 from evidenceforge.studio.jobs import (
     StudioJobStore,
@@ -341,6 +356,45 @@ class ValidationResult(BaseModel):
     error: str = ""
 
 
+class ImportResult(BaseModel):
+    """The imported scenario or number of prepared pack dependencies."""
+
+    model_config = ConfigDict(extra="forbid")
+    item: CatalogItem | None = None
+    packs: int = 0
+
+
+def _validate_source(settings: StudioSettings, source: Path, workspace: Path) -> ValidationResult:
+    """Run advisory CLI validation against an explicit source and workspace."""
+    try:
+        result = subprocess.run(
+            [
+                *_eforge_command(controller_settings(settings)),
+                "validate",
+                str(source),
+                "--project-root",
+                str(workspace),
+                "--json",
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            report = None
+        return ValidationResult(
+            exit_code=result.returncode,
+            report=report if isinstance(report, dict) else None,
+            error=result.stderr[-2000:],
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return ValidationResult(exit_code=-1, error=str(exc))
+
+
 class ResumeRequest(BaseModel):
     """Resume all paused jobs or one selected generation."""
 
@@ -364,6 +418,7 @@ class ValidationRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_sha256: str
+    dependency_sha256: str = ""
     completed_at: float
     result: ValidationResult
 
@@ -523,6 +578,7 @@ class StudioSnapshot(BaseModel):
     folders: list[str]
     views: list[SavedView]
     validations: dict[str, ValidationRecord]
+    dependencies: dict[str, DependencyHealth] = Field(default_factory=dict)
     conversations: list[Conversation]
     codex_health: CodexHealth
     jobs: list[JobSummary]
@@ -568,6 +624,8 @@ class StudioService:
         self.codex_lock = asyncio.Lock()
         self._last_scan = time.monotonic()
         self._progress_signatures: dict[str, tuple[tuple[str, int, int], ...]] = {}
+        self.imports: dict[str, PreparedImport] = {}
+        self.import_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Index the selected workspace and start durable job reconciliation."""
@@ -596,6 +654,8 @@ class StudioService:
             except asyncio.CancelledError:
                 pass
         await self.codex.stop()
+        for plan in self.imports.values():
+            plan.close()
         self.store.close()
 
     async def _codex_event(self, method: str, params: dict[str, Any]) -> None:
@@ -887,7 +947,36 @@ class StudioService:
         self._last_scan = time.monotonic()
         if {item.id: item for item in items} != {item.id: item for item in before}:
             await self.emit(str(workspace), "library.refreshed", {"count": len(items)})
+        await self.refresh_dependencies(items)
         return items
+
+    async def refresh_dependencies(
+        self, items: list[CatalogItem] | None = None
+    ) -> dict[str, DependencyHealth]:
+        """Refresh actual dependency files after scans and explicit user requests."""
+        workspace = self.settings.workspace
+        selected = [
+            item
+            for item in (items if items is not None else self.store.items(workspace))
+            if item.kind == "scenario"
+        ]
+        before = self.store.dependency_health([item.id for item in selected])
+        results: dict[str, DependencyHealth] = {}
+        for item in selected:
+            health = await asyncio.to_thread(dependency_health, item.path, workspace)
+            old = before.get(item.id)
+            health.changed_at = (
+                (old.get("changed_at", 0) if old else 0)
+                if not old or old.get("fingerprint") == health.fingerprint
+                else time.time()
+            )
+            results[item.id] = health
+            if old != json.loads(health.model_dump_json()):
+                self.store.save_dependency_health(item.id, health)
+                await self.emit(
+                    item.id, "scenario.dependencies", json.loads(health.model_dump_json())
+                )
+        return results
 
     def snapshot(self) -> dict[str, Any]:
         """Return a coherent view for first load and reconnection."""
@@ -904,6 +993,7 @@ class StudioService:
             "folders": self.store.folders(workspace),
             "views": [json.loads(view.model_dump_json()) for view in self.store.views(workspace)],
             "validations": self.store.validations([item.id for item in items]),
+            "dependencies": self.store.dependency_health([item.id for item in items]),
             "conversations": [
                 json.loads(chat.model_dump_json()) for chat in self.store.conversations(workspace)
             ],
@@ -995,6 +1085,183 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
     @app.post("/v1/library/refresh")
     async def refresh(studio: StudioService = Depends(authorized)) -> list[CatalogItem]:
         return await studio.scan()
+
+    def retain_import(studio: StudioService, plan: PreparedImport) -> ImportReview:
+        for key, previous in list(studio.imports.items()):
+            if time.monotonic() - previous.created_at > 1800:
+                previous.close()
+                studio.imports.pop(key)
+        if len(studio.imports) >= 8:
+            plan.close()
+            raise HTTPException(
+                status_code=409, detail="Close an earlier import review before opening another"
+            )
+        studio.imports[plan.review.id] = plan
+        return plan.review
+
+    def import_plan(studio: StudioService, preview_id: str) -> PreparedImport:
+        plan = studio.imports.get(preview_id)
+        if plan is None or plan.workspace != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=404, detail="Import review not found in this workspace")
+        return plan
+
+    @app.post("/v1/imports/scenario/preview")
+    async def preview_scenario(
+        request: ScenarioImportRequest, studio: StudioService = Depends(authorized)
+    ) -> ImportReview:
+        if request.project_id:
+            project = studio.store.project(request.project_id)
+            if (
+                project is None
+                or project.workspace.resolve() != studio.settings.workspace.resolve()
+            ):
+                raise HTTPException(status_code=404, detail="Project not found in this workspace")
+        try:
+            plan = await asyncio.to_thread(
+                prepare_scenario, request, studio.settings.workspace, studio.paths.cache
+            )
+        except FileExistsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (
+            OSError,
+            ValueError,
+            ConfigurationError,
+            PathSafetyError,
+            PackError,
+            ValidationError,
+            yaml.YAMLError,
+        ) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return retain_import(studio, plan)
+
+    @app.post("/v1/imports/pack/preview")
+    async def preview_pack(
+        request: PackImportRequest, studio: StudioService = Depends(authorized)
+    ) -> ImportReview:
+        try:
+            plan = await asyncio.to_thread(
+                prepare_archive, request, studio.settings.workspace, studio.paths.cache
+            )
+        except (OSError, ValueError, PackError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return retain_import(studio, plan)
+
+    @app.delete("/v1/imports/{preview_id}")
+    async def discard_import(
+        preview_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, str]:
+        async with studio.import_lock:
+            plan = import_plan(studio, preview_id)
+            plan.close()
+            studio.imports.pop(preview_id)
+        return {"status": "discarded"}
+
+    @app.post("/v1/imports/{preview_id}/validate")
+    async def validate_import(
+        preview_id: str, studio: StudioService = Depends(authorized)
+    ) -> ValidationResult:
+        async with studio.import_lock:
+            plan = import_plan(studio, preview_id)
+            if plan.target is None:
+                raise HTTPException(status_code=400, detail="This review is for pack import")
+            # Prepare the destination's overlay context without copying it into the imported scenario.
+            config = studio.settings.workspace / ".eforge/config"
+            target = plan.stage / ".eforge/config"
+            try:
+                if target.exists():
+                    shutil.rmtree(target)
+                if config.is_dir():
+                    total = 0
+                    for path in config.rglob("*"):
+                        if path.is_symlink():
+                            raise ValueError("Workspace overlays contain a link")
+                        if path.is_file():
+                            total += path.stat().st_size
+                    if config.is_symlink() or total > 16 * 1024**2:
+                        raise ValueError(
+                            "Workspace overlays exceed the bounded preview limit or contain links"
+                        )
+                    shutil.copytree(config, target)
+                return await asyncio.to_thread(
+                    _validate_source, studio.settings, plan.stage / plan.target, plan.stage
+                )
+            except (OSError, ValueError) as exc:
+                return ValidationResult(exit_code=-1, error=str(exc))
+
+    @app.post("/v1/imports/{preview_id}/commit")
+    async def commit_import(
+        preview_id: str, request: ImportCommitRequest, studio: StudioService = Depends(authorized)
+    ) -> ImportResult:
+        async with studio.import_lock:
+            plan = import_plan(studio, preview_id)
+            if plan.project_id:
+                project = studio.store.project(plan.project_id)
+                if (
+                    project is None
+                    or project.workspace.resolve() != studio.settings.workspace.resolve()
+                ):
+                    raise HTTPException(
+                        status_code=409, detail="The selected project changed. Review again"
+                    )
+            try:
+                path = await asyncio.to_thread(
+                    plan.commit, studio.settings.workspace, request.accepted_publishers
+                )
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (OSError, ValueError, PackError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            items = await studio.scan()
+            item = next((item for item in items if item.path == path), None) if path else None
+            if path and item is None:
+                raise HTTPException(status_code=500, detail="Imported YAML could not be indexed")
+            if item:
+                item.project_id = plan.project_id
+                item.imported = True
+                studio.store.save_item(item)
+                await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
+            result = ImportResult(
+                item=item,
+                packs=sum(row.kind == "pack" and row.status == "copy" for row in plan.review.rows),
+            )
+            plan.close()
+            studio.imports.pop(preview_id)
+            await studio.emit(
+                str(studio.settings.workspace), "library.refreshed", {"reason": "imported"}
+            )
+            return result
+
+    @app.post("/v1/scenarios/{item_id}/dependencies/refresh")
+    async def refresh_item_dependencies(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> DependencyHealth:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        return (await studio.refresh_dependencies([item]))[item.id]
+
+    @app.get("/v1/packs/{item_id}/export")
+    async def export_pack(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        item = catalog_source(item_id, studio)
+        if item.kind == "scenario":
+            raise HTTPException(status_code=400, detail="Choose a pack")
+        temporary = Path(tempfile.mkdtemp(prefix="studio-pack-export-", dir=studio.paths.cache))
+        target = temporary / "release.efpack"
+        try:
+            reference, kind = parse_pack_cli_reference(str(item.path))
+            repository = PackRepository(studio.settings.workspace)
+            pack = await asyncio.to_thread(repository.resolve, reference, expected_type=kind)
+            await asyncio.to_thread(build_portable_archive, repository, pack, target)
+        except (OSError, ValueError, PackError) as exc:
+            shutil.rmtree(temporary)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return FileResponse(
+            target,
+            filename=f"{item.name}-{item.version}.efpack",
+            background=BackgroundTask(shutil.rmtree, temporary),
+        )
 
     @app.get("/v1/items")
     def items(
@@ -1116,6 +1383,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             cloned.project_id = item.project_id
             studio.store.save_item(cloned)
         await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
+        await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
         return cloned
 
     @app.get("/v1/packs/publisher")
@@ -1216,6 +1484,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             cloned.folder = item.folder
             studio.store.save_item(cloned)
         await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
+        await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
         return cloned
 
     @app.get("/v1/folders")
@@ -1440,41 +1709,22 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         if item is None or item.kind != "scenario":
             raise HTTPException(status_code=404, detail="Scenario not found")
 
-        def run() -> ValidationResult:
-            try:
-                result = subprocess.run(
-                    [
-                        *_eforge_command(controller_settings(studio.settings)),
-                        "validate",
-                        str(item.path),
-                        "--project-root",
-                        str(studio.settings.workspace),
-                        "--json",
-                    ],
-                    cwd=studio.settings.workspace,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=180,
-                )
-                try:
-                    report = json.loads(result.stdout)
-                except json.JSONDecodeError:
-                    report = None
-                return ValidationResult(
-                    exit_code=result.returncode,
-                    report=report if isinstance(report, dict) else None,
-                    error=result.stderr[-2000:],
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                return ValidationResult(exit_code=-1, error=str(error))
-
-        result = await asyncio.to_thread(run)
-        studio.store.save_validation(item.id, item.source_sha256, result)
+        if item.workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+        health = (await studio.refresh_dependencies([item]))[item.id]
+        result = await asyncio.to_thread(
+            _validate_source, studio.settings, item.path, studio.settings.workspace
+        )
+        studio.store.save_validation(item.id, item.source_sha256, result, health.fingerprint)
         await studio.emit(
             item.id,
             "scenario.validated",
-            {"source_sha256": item.source_sha256, "result": json.loads(result.model_dump_json())},
+            {
+                "source_sha256": item.source_sha256,
+                "dependency_sha256": health.fingerprint,
+                "completed_at": time.time(),
+                "result": json.loads(result.model_dump_json()),
+            },
         )
         return result
 
@@ -1986,6 +2236,11 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             raise HTTPException(
                 status_code=409, detail="The source scenario is no longer available"
             )
+        if not (await studio.refresh_dependencies([item]))[item.id].ready:
+            raise HTTPException(
+                status_code=409,
+                detail="Resolve this scenario's dependency errors before regenerating",
+            )
         try:
             job = await asyncio.to_thread(
                 queue_studio_generation,
@@ -2390,6 +2645,14 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         item = studio.store.item(request.scenario_id)
         if item is None or item.kind != "scenario":
             raise HTTPException(status_code=404, detail="Scenario not found")
+        if item.workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+        health = (await studio.refresh_dependencies([item]))[item.id]
+        if not health.ready:
+            raise HTTPException(
+                status_code=409,
+                detail="Resolve the scenario's missing or conflicting dependencies before generating",
+            )
         try:
             job = await asyncio.to_thread(
                 queue_studio_generation,

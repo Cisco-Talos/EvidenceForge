@@ -590,6 +590,48 @@ select { min-width: 185px; }
 .close-choice { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; padding: 10px; border: 1px solid #30455e; border-radius: 8px; color: #b9cce0; overflow-wrap: anywhere; }
 .close-choice select { min-width: 190px; }
 .close-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.import-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; max-height: calc(100dvh - 40px); overflow-y: auto; width: min(600px, calc(100vw - 32px)); }
+.import-review-dialog { width: min(850px, calc(100vw - 32px)); }
+.import-dialog .close-modal-actions { position: sticky; bottom: -24px; z-index: 1; margin: 20px -24px -24px; padding: 14px 24px; background: #172337; border-top: 1px solid #30445c; flex-wrap: wrap; }
+.import-dialog h2 { margin-top: 0; }
+.import-path-field { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 8px; }
+.import-path-field input { flex: 1; min-width: 0; }
+.scenario-split-button, .library-pack-actions { display: flex; align-items: stretch; gap: 8px; }
+.scenario-split-button { gap: 0; }
+.scenario-split-button:has(.split-trigger) > button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.scenario-split-button .split-trigger { padding: 0 10px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: #8ca7ff; }
+.import-action-menu [role="menuitemradio"] { padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-radius: 5px; cursor: pointer; outline: none; }
+.import-action-menu [role="menuitemradio"] > span { width: 16px; }
+.import-action-menu [data-highlighted] { background: #365475; }
+.import-destination { margin: 15px 0; color: #aabed2; font-size: 12px; }
+.import-destination .path-with-copy { margin-top: 5px; font-size: 13px; }
+.dependency-rows { display: flex; flex-direction: column; gap: 2px; }
+.dependency-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 5px; border-bottom: 1px solid #2b405a; min-width: 0; }
+.dependency-row > svg { flex: none; margin-top: 3px; color: #dfb65c; }
+.dependency-available > svg { color: #76d8a7; }
+.dependency-missing > svg, .dependency-conflict > svg { color: #f08a98; }
+.dependency-copy > svg { color: #e6bd70; }
+.dependency-row > div { flex: 1; min-width: 0; }
+.dependency-row strong { display: block; font-size: 13px; color: #dae6f4; overflow-wrap: anywhere; }
+.dependency-row small { display: block; margin-top: 3px; color: #a4b8cf; font-size: 12px; overflow-wrap: anywhere; }
+.dependency-row .dependency-path { color: #7996b5; }
+.dependency-row > span { color: #93a8c0; font-size: 11px; flex: none; padding-top: 3px; }
+.dependency-row details { font-size: 11px; color: #acbdd3; margin-top: 5px; overflow-wrap: anywhere; }
+.import-locations, .import-documents { margin-top: 16px; padding: 10px 0; color: #bfd0e3; font-size: 13px; }
+.import-locations summary, .import-documents summary { cursor: pointer; }
+.import-documents label { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.import-validation { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 18px; }
+.import-validation > small { color: #96acc5; }
+.import-validation .validation-panel { width: 100%; }
+.dependency-panel { margin: 0 35px 12px; padding: 12px 16px; border: 1px solid #304960; border-radius: 9px; background: #122033; }
+.dependency-panel header { display: flex; align-items: center; gap: 10px; }
+.dependency-panel header > div { flex: 1; min-width: 0; }
+.dependency-panel header strong { display: block; font-size: 13px; }
+.dependency-panel header small { display: block; color: #98aec8; font-size: 12px; margin-top: 4px; }
+.dependency-panel > details { margin-top: 10px; font-size: 12px; color: #afc1d7; }
+.dependency-panel summary { cursor: pointer; }
+.dependencies-missing { border-color: #985560; }
+@media (max-width: 700px) { .dependency-panel { margin-left: 16px; margin-right: 16px; } .dependency-panel header { flex-wrap: wrap; } .dependency-panel header > div { flex-basis: 75%; } }
 .modal-field { display: flex; flex-direction: column; gap: 8px; margin-top: 15px; color: #bfd0e3; font-weight: 620; }
 .modal-field input, .modal-field select { width: 100%; }
 .button-danger { min-height: 35px; padding: 0 13px; border: 1px solid #ad5d66; border-radius: 8px; color: white; background: #8c3949; font-weight: 650; }

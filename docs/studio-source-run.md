@@ -50,6 +50,38 @@ workspace, app data folder, and logs.
 
 ## Current review scope
 
+### Import scenarios and packs
+
+Open **New scenario**, enter a valid scenario name and optional project, then use the arrow
+beside **Create scenario** to select **Import scenario**. Choose an authored YAML file and
+review its dependencies. Nothing is published until you confirm the review.
+
+The import copies nested includes and referenced email corpora into
+`scenarios/<name>/`, repairs their local paths, and offers nearby Markdown documents as
+selectable supporting files. The root is saved as `scenario.yaml`; include fragments live in
+`.sources/` so they do not appear as separate scenarios. Originals stay untouched.
+
+Exact pack versions already in the active workspace are reused first. Add one or more
+**Source workspaces for missing packs** to copy the required packs here. Organization path
+dependencies are rebound to workspace packs; their industry lock digests stay intact. Review
+shows any resulting organization digest change. An existing different pack with the same
+publisher, type, name, and version is preserved. Source-workspace configuration overlays are
+not imported; the scenario uses the destination workspace's `.eforge/config`.
+
+**Validate prepared scenario** is optional. Its findings do not block scenario import. You may
+also import with missing dependencies: the scenario workspace lists the exact requirements and
+provides **Import packs** and a refresh icon. Generation remains unavailable until dependencies
+resolve. Checks refresh after Studio imports and completed authoring turns, and during periodic
+disk scans (about every ten seconds); use the icon for an immediate check after external edits.
+
+In **Packs**, **Import packs** accepts an `.efpack` release or copies the packs from an explicit
+source workspace. Additional workspaces can supply locked dependencies. The review lists exact
+versions and publisher namespaces; conflicting releases cannot overwrite existing packs. Each
+pack's menu has **Export pack…**, producing an `.efpack` with its locked closure and portable
+references. Native mode uses the Save dialog; browser preview uses a download.
+
+### Other current workflows
+
 The scenario library groups scenarios into projects; pack libraries use virtual folders. Each
 scenario workspace contains Overview, Conversations, Validation, Generation, and Scoring views.
 Generation provides the output destination and run controls; Scoring lets you choose a completed

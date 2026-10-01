@@ -72,6 +72,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/imports/scenario/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Scenario */
+        post: operations["preview_scenario_v1_imports_scenario_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/pack/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Pack */
+        post: operations["preview_pack_v1_imports_pack_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/{preview_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Discard Import */
+        delete: operations["discard_import_v1_imports__preview_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/{preview_id}/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Import */
+        post: operations["validate_import_v1_imports__preview_id__validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/{preview_id}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit Import */
+        post: operations["commit_import_v1_imports__preview_id__commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scenarios/{item_id}/dependencies/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Item Dependencies */
+        post: operations["refresh_item_dependencies_v1_scenarios__item_id__dependencies_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/packs/{item_id}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Pack */
+        get: operations["export_pack_v1_packs__item_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/items": {
         parameters: {
             query?: never;
@@ -1310,6 +1429,53 @@ export interface components {
             draft_project_id?: string | null;
         };
         /**
+         * DependencyHealth
+         * @description Live dependency readiness independent of optional scenario validation.
+         */
+        DependencyHealth: {
+            /** Ready */
+            ready: boolean;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Rows */
+            rows: components["schemas"]["DependencyRow"][];
+            /**
+             * Changed At
+             * @default 0
+             */
+            changed_at: number;
+        };
+        /**
+         * DependencyRow
+         * @description A dependency's identity, availability, and proposed action.
+         */
+        DependencyRow: {
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "include" | "asset" | "pack" | "document" | "overlay";
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "copy" | "missing" | "conflict" | "warning";
+            /** Detail */
+            detail: string;
+            /** Source */
+            source?: string | null;
+            /** Destination */
+            destination?: string | null;
+            /** Source Digest */
+            source_digest?: string | null;
+            /** Digest */
+            digest?: string | null;
+        };
+        /**
          * EvaluationRequest
          * @description Request an evaluation for a completed generation.
          */
@@ -1390,6 +1556,57 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * ImportCommitRequest
+         * @description Publisher namespaces acknowledged by confirming the displayed review.
+         */
+        ImportCommitRequest: {
+            /** Accepted Publishers */
+            accepted_publishers?: string[];
+        };
+        /**
+         * ImportResult
+         * @description The imported scenario or number of prepared pack dependencies.
+         */
+        ImportResult: {
+            item?: components["schemas"]["CatalogItem"] | null;
+            /**
+             * Packs
+             * @default 0
+             */
+            packs: number;
+        };
+        /**
+         * ImportReview
+         * @description A prepared snapshot that can be inspected and optionally validated.
+         */
+        ImportReview: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "scenario" | "pack";
+            /** Name */
+            name: string;
+            /**
+             * Destination
+             * Format: path
+             */
+            destination: string;
+            /** Rows */
+            rows?: components["schemas"]["DependencyRow"][];
+            /** Documents */
+            documents?: string[];
+            /** Publishers */
+            publishers?: string[];
+            /**
+             * Can Import
+             * @default true
+             */
+            can_import: boolean;
         };
         /**
          * ImportedBundle
@@ -1512,6 +1729,19 @@ export interface components {
             publisher?: string | null;
             /** Publisher Display Name */
             publisher_display_name?: string | null;
+        };
+        /**
+         * PackImportRequest
+         * @description One received release archive; destination is the active workspace.
+         */
+        PackImportRequest: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Source Workspaces */
+            source_workspaces?: string[];
         };
         /**
          * PackPublisherStatus
@@ -1667,6 +1897,29 @@ export interface components {
         ScenarioCloneRequest: {
             /** Name */
             name: string;
+        };
+        /**
+         * ScenarioImportRequest
+         * @description Explicit source locations and destination choices for one scenario.
+         */
+        ScenarioImportRequest: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Name */
+            name: string;
+            /** Project Id */
+            project_id?: string | null;
+            /** Source Workspaces */
+            source_workspaces?: string[];
+            /** Pack Locations */
+            pack_locations?: {
+                [key: string]: string;
+            };
+            /** Documents */
+            documents?: string[] | null;
         };
         /**
          * ScenarioRenameRequest
@@ -1912,6 +2165,10 @@ export interface components {
             validations: {
                 [key: string]: components["schemas"]["ValidationRecord"];
             };
+            /** Dependencies */
+            dependencies?: {
+                [key: string]: components["schemas"]["DependencyHealth"];
+            };
             /** Conversations */
             conversations: components["schemas"]["Conversation"][];
             codex_health: components["schemas"]["CodexHealth"];
@@ -2008,6 +2265,11 @@ export interface components {
         ValidationRecord: {
             /** Source Sha256 */
             source_sha256: string;
+            /**
+             * Dependency Sha256
+             * @default
+             */
+            dependency_sha256: string;
             /** Completed At */
             completed_at: number;
             result: components["schemas"]["ValidationResult"];
@@ -2172,6 +2434,247 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogItem"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_scenario_v1_imports_scenario_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_pack_v1_imports_pack_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    discard_import_v1_imports__preview_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_import_v1_imports__preview_id__validate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_import_v1_imports__preview_id__commit_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                preview_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_item_dependencies_v1_scenarios__item_id__dependencies_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DependencyHealth"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_pack_v1_packs__item_id__export_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

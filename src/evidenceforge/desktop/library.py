@@ -9,6 +9,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.utils import load_scenario_source_graph
+
 
 class LibraryItem(BaseModel):
     """A scenario or pack discovered from an authored YAML file."""
@@ -33,7 +36,7 @@ _text_cache: dict[tuple[Path, int, int], str] = {}
 
 
 def _read_yaml_file(path: Path, size: int) -> dict[str, object] | None:
-    if size > 2_000_000:
+    if size > 16 * 1024**2:
         return None
     with path.open(encoding="utf-8") as stream:
         data = yaml.safe_load(stream)
@@ -69,11 +72,18 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         data = _read_yaml(path)
     except (OSError, UnicodeError, yaml.YAMLError):
         return None
+    if not data:
+        return None
+    if "includes" in data or "include" in data:
+        try:
+            data = load_scenario_source_graph(path).data
+        except (ConfigurationError, OSError, ValueError):
+            # Keep a repairable root visible; dependency health explains missing inputs.
+            pass
     if (
-        not data
-        or "name" not in data
+        "name" not in data
         or ("version" not in data and "scenario_version" not in data)
-        or "environment" not in data
+        or not any(key in data for key in ("environment", "composition", "includes", "include"))
     ):
         return None
     try:
@@ -191,7 +201,8 @@ def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[Libr
             children[:] = [
                 child
                 for child in children
-                if child not in {"data", "runs", "blind-test", ".git", ".eforge-generation"}
+                if child
+                not in {"data", "runs", "blind-test", ".git", ".eforge-generation", ".sources"}
             ]
             for filename in filenames:
                 if filename.endswith((".yaml", ".yml")):

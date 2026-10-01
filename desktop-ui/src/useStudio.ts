@@ -74,6 +74,8 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
       ...snapshot.validations,
       [event.entity_id]: event.payload as unknown as StudioSnapshot["validations"][string],
     };
+  } else if (event.kind === "scenario.dependencies") {
+    next.dependencies = { ...snapshot.dependencies, [event.entity_id]: event.payload as unknown as NonNullable<StudioSnapshot["dependencies"]>[string] };
   } else if (event.kind === "codex.health") {
     next.codex_health = event.payload as unknown as CodexHealth;
   }

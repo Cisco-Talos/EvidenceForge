@@ -496,6 +496,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   first-class projects that group scenarios within a workspace, with a project overview and
   ungrouped scenarios; connect project overlays in the environment workflow. Review core parity
   before the seven workflow stages. See the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+- [ ] Add Studio scenario YAML import with dependency review, nested includes and supporting
+  assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
+  import/export with exact versions and locked dependency closure; source workspaces supply copies
+  into the destination workspace. See the same Studio worklog for the import design decisions.
 - [ ] Extend Studio's new read-only import of complete CLI and earlier desktop bundles to
   incomplete external bundles with recognized checkpoints. The Bundles page now indexes complete
   external bundles by folder or workspace discovery, while Studio-owned incomplete jobs already

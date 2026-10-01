@@ -708,3 +708,112 @@ the temporary Finder windows; left the Studio library open for the requested man
 project-drop check. No scenarios, bundles, conversations, or project assignments changed.
 
 Review image: `/private/tmp/eforge-studio-transparent-app-icon-review.jpg`.
+
+## 2026-10-01 — Scenario YAML import dependency design
+
+The user requested a Create/Import split button in New Scenario, with Create as the default
+and the existing live scenario-name validation gating both actions. No import UI or service
+implementation has landed yet; discussion expanded the dependency requirements first.
+
+Agreed requirements:
+
+- Show an explicit dependency review with the same colored status icons as scorecards.
+  Copy the nested scenario include graph and repair local references without changing originals.
+- Offer optional validation of the prepared copy after reference/digest/lock reconciliation.
+  It runs only when requested; findings are advisory and do not prevent scenario import.
+- Look for the exact pack version already available in the destination Studio workspace first.
+  Missing packs do not prevent importing the scenario: persist a dependency error on its workspace
+  with the publisher/type/name/version required and an action to import missing packs.
+- Selected source workspaces supply pack copies into the destination workspace, rather than
+  ongoing external references. Pack import and export belong in the Packs panel as well.
+
+Verified the multi-source question using disposable directories and the real compiler/repository:
+one Scenario 2.0 compiled with direct path industry references in two source workspaces; one
+organization pack validated with locked path industry dependencies in both sources. A project
+reference resolved only against the active workspace and failed when the pack existed only in
+another source. All three probes passed; temporary fixture files were removed automatically.
+
+Design details still to carry into implementation/review:
+
+- Match publisher, type, name, and exact version. Check expected digests where locks or source
+  evidence supply them; a bare scenario reference does not itself pin a digest.
+- Offer multiple explicit source locations or per-dependency Locate actions; never infer another
+  project root by searching scenario ancestors. Rebind imported references to destination-local
+  packs and preserve exact locked dependencies.
+- Digest conflicts are distinct from absence. Pack relocation can change semantic source bytes,
+  so path rewrites and lock updates need a reviewed, deterministic strategy; do not silently
+  overwrite an existing different release under the same identity/version.
+- Dependency health must refresh after pack imports/changes. Scenarios with missing dependencies
+  remain editable; generation needs resolved inputs. Optional validation remains separate.
+- Include referenced non-include assets such as email corpora; present Markdown companions as
+  selectable files. Source project overlays need an explicit handling policy because they can
+  affect output even though the scenario YAML does not reference them.
+- Existing .efpack CLI build/import/hydration supplies closure and conflict-checking foundations;
+  the Studio pack panel currently lacks import/export controls. Add portability tests, especially
+  for path dependencies across source workspaces, rather than assuming existing archive handling
+  makes every such path relocatable.
+
+The user subsequently confirmed that the preceding UI/icon feedback appeared to work. Import
+design remains the active conversation; no user files, app settings, or running jobs were changed
+by these probes.
+
+## 2026-10-01 — Reviewed YAML and pack import
+
+Implemented the approved import flow, including the user's last requirement for automatic
+dependency refresh plus a manual refresh icon:
+
+- New Scenario now has an accessible Create/Import split button, defaulting to Create. Both
+  actions use the same live name validation and project selection. Native import uses a filtered
+  YAML picker; browser preview accepts a local path. Confirmation opens the imported scenario
+  by its stable catalog ID.
+- Scenario preview captures a bounded include graph and copies it into a disposable cache stage.
+  The imported root is `scenarios/<name>/scenario.yaml`; nested fragments use `.sources/` and
+  relative rewritten references. Library discovery excludes these fragments, while resolving
+  root metadata from includes. Imported names live in the root so inline rename and clone work.
+  Referenced email corpora follow the existing bounded, contained asset contract. Nearby Markdown
+  companions are selectable. Original source files and external source workspaces stay untouched.
+- Dependency review uses green readiness, yellow copy/note, and red missing/conflict icons.
+  Workspace exact versions take precedence. Multiple explicit source workspaces can supply an
+  organization and its locked industry dependencies. New organization copies rebind external
+  industry paths to workspace packs, retain industry bytes and locks, and display original and
+  prepared organization digests. Existing conflicting versions are preserved.
+- Optional validation runs only on request, against the prepared copy and destination overlays.
+  Findings are advisory, including schema errors; they do not disable scenario import. Missing
+  packs also do not block import. The workspace shows persistent exact dependency findings and
+  Import packs/refresh controls, and unresolved inputs prevent new generation or regeneration.
+- Packs now have `.efpack`/source-workspace import and an Export pack menu action. Export captures
+  the complete validated lock closure, rebinds external references, and uses deterministic ZIP
+  metadata. Native export uses the existing authenticated Save-dialog route. Import requires
+  acknowledgement of the displayed publisher namespaces and blocks release conflicts.
+- Dependency health is stored in SQLite, refreshed after imports and completed authoring turns,
+  checked during the existing periodic disk scan, and streamed to the UI. Manual refresh reads
+  files immediately. Nested input or pack changes invalidate validation and run status freshness;
+  normal validation records now capture the dependency fingerprint as well as the root hash.
+- Reviews are workspace-bound, expire after 30 minutes, and are limited to eight pending stages.
+  Confirmation rechecks captured source bytes, destination reservations, project identity, and
+  publisher acknowledgement. Publishing never replaces an existing directory. Failed publication
+  rolls back only newly created roots. Cancellation removes the disposable cache stage.
+
+Verification: 108 Python service/import/pack-release/library tests and 90 React interaction tests,
+the three Rust native-export contracts, generated API freshness, full Ruff, Cargo formatting,
+diff checks, and frontend/macOS debug app builds passed. New contracts cover nested metadata and
+includes, assets and selected documents, multiple pack source workspaces, missing and conflicting
+locks, source deletion after copy, deterministic portable release round trips, stale reviews,
+publication rollback, unsafe inputs, workspace/project isolation, optional validation, native
+picker invocation, publisher acknowledgement, immediate import refresh, streamed health, and
+restart persistence. A small imported fixture passes the real CLI before and after publication.
+
+Browser review at 1280×720 and 712×724 verified colored dependency rows, adjacent path-copy
+icons, Create/Import selection, optional validation of a missing dependency, enabled import
+after that advisory finding, and cancellation without publishing. Made the action footer sticky
+so short windows retain Cancel/Confirm while the review scrolls. Saved screenshots:
+`/private/tmp/eforge-studio-import-review.png` and
+`/private/tmp/eforge-studio-import-review-compact.png`. Closed the agent-created review tab and
+discarded its stage; no scenario or pack was imported into the user's workspace during visual QA.
+
+The default helper and isolated preview helper were restarted only after authenticated snapshots
+showed no active/queued jobs or active chats, and PID creation time plus command identity matched.
+The preview's launch agent needed reloading to restore its explicit temporary app-data environment;
+the default helper's environment and user settings were preserved. Native visual/picker testing
+remains pending because macOS is locked. Linux native review is unavailable on this host. Pause
+for the user's real-scenario import and native-picker feedback before advancing the roadmap.

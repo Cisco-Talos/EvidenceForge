@@ -53,6 +53,9 @@ test("live service connection and Codex health update independently", async () =
     onEvent?.({ seq: 4, entity_id: "chat-1", kind: "conversation.updated", payload: {} });
   });
   expect(received).toEqual(["conversation.event", "conversation.updated"]);
+  act(() => onEvent?.({ seq: 5, entity_id: "scenario", kind: "scenario.dependencies", payload: { ready: true, fingerprint: "fresh-pack-digest", rows: [], changed_at: 123 } }));
+  expect(result.current.snapshot?.dependencies?.scenario.fingerprint).toBe("fresh-pack-digest");
+  expect(result.current.snapshot?.dependencies?.scenario.ready).toBe(true);
   unsubscribe();
   act(() => onDisconnect?.());
   expect(result.current.liveState).toBe("disconnected");

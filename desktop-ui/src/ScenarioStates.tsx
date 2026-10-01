@@ -28,10 +28,10 @@ function jobState(label: string, job: StudioJob | undefined, stale: boolean): Op
   return { label, state: "error", detail: `${label} ${job.status}${job.status_message ? `: ${job.status_message}` : "."}` };
 }
 
-function validationState(item: CatalogItem, record?: ValidationRecord): OperationState {
+function validationState(item: CatalogItem, record?: ValidationRecord, dependencyFingerprint?: string, dependencyChangedAt = 0): OperationState {
   if (!record) return { label: "Validation", state: "none", detail: "This scenario has not been validated in Studio." };
-  if (record.source_sha256 !== item.source_sha256) {
-    return { label: "Validation", state: "stale", detail: "Validation predates the latest scenario edit." };
+  if (record.source_sha256 !== item.source_sha256 || !!record.dependency_sha256 && !!dependencyFingerprint && record.dependency_sha256 !== dependencyFingerprint || !record.dependency_sha256 && dependencyChangedAt > record.completed_at) {
+    return { label: "Validation", state: "stale", detail: "Validation predates the latest scenario or dependency change." };
   }
   const counts = record.result.report?.severity_counts as { warning?: number; error?: number } | undefined;
   if (record.result.exit_code !== 0 || (counts?.error || 0) > 0) {
@@ -45,14 +45,15 @@ function validationState(item: CatalogItem, record?: ValidationRecord): Operatio
 
 export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
   const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
-  const currentGenerations = generations.filter((job) => job.source_sha256 === item.source_sha256);
+  const changedAt = snapshot.dependencies?.[item.id]?.changed_at || 0;
+  const currentGenerations = generations.filter((job) => job.source_sha256 === item.source_sha256 && (!changedAt || (job.created_at || job.started_at || 0) >= changedAt));
   const generation = latest(currentGenerations);
   const currentIds = new Set(currentGenerations.map((job) => job.id));
   const allIds = new Set(generations.map((job) => job.id));
   const evaluations = snapshot.jobs.filter((job) => job.kind === "evaluation" && !!job.generation_id && allIds.has(job.generation_id));
   const currentEvaluations = evaluations.filter((job) => !!job.generation_id && currentIds.has(job.generation_id));
   return [
-    validationState(item, snapshot.validations[item.id]),
+    validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt),
     jobState("Generation", generation, generations.some((job) => job.status === "completed")),
     jobState("Evaluation", latest(currentEvaluations), evaluations.some((job) => job.status === "completed")),
   ];

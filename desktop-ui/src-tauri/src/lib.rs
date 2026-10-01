@@ -61,6 +61,25 @@ fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, String>
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+#[tauri::command]
+fn choose_import_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
+    let extensions: &[&str] = if kind == "scenario" {
+        &["yaml", "yml"]
+    } else {
+        &["efpack"]
+    };
+    let Some(chosen) = app
+        .dialog()
+        .file()
+        .add_filter("EvidenceForge", extensions)
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = chosen.into_path().map_err(|_| "A local file is required")?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut context = tauri::generate_context!();
@@ -99,6 +118,7 @@ pub fn run() {
             studio_connection,
             studio_exit,
             choose_bundle_folder,
+            choose_import_file,
             native_export::save_studio_export,
             native_export::cancel_studio_export
         ])

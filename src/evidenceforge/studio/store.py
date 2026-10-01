@@ -176,6 +176,10 @@ class StudioStore:
                 completed_at REAL NOT NULL,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS dependency_health (
+                item_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS views (
                 workspace TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -206,6 +210,11 @@ class StudioStore:
         self._db.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(name, description, content)"
         )
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(validations)")}
+        if "dependency_sha256" not in columns:
+            self._db.execute(
+                "ALTER TABLE validations ADD COLUMN dependency_sha256 TEXT NOT NULL DEFAULT ''"
+            )
         self._db.commit()
 
     def close(self) -> None:
@@ -732,15 +741,17 @@ class StudioStore:
             ).fetchall()
         return [row["id"] for row in rows]
 
-    def save_validation(self, item_id: str, source_sha256: str, payload: BaseModel) -> None:
+    def save_validation(
+        self, item_id: str, source_sha256: str, payload: BaseModel, dependency_sha256: str = ""
+    ) -> None:
         """Retain the last validation and the exact authored file it checked."""
         with self._lock, self._db:
             self._db.execute(
-                "INSERT INTO validations(item_id, source_sha256, completed_at, payload) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET "
+                "INSERT INTO validations(item_id, source_sha256, completed_at, payload, dependency_sha256) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(item_id) DO UPDATE SET "
                 "source_sha256=excluded.source_sha256, completed_at=excluded.completed_at, "
-                "payload=excluded.payload",
-                (item_id, source_sha256, time.time(), payload.model_dump_json()),
+                "payload=excluded.payload, dependency_sha256=excluded.dependency_sha256",
+                (item_id, source_sha256, time.time(), payload.model_dump_json(), dependency_sha256),
             )
 
     def validations(self, item_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -755,11 +766,33 @@ class StudioStore:
         return {
             str(row["item_id"]): {
                 "source_sha256": row["source_sha256"],
+                "dependency_sha256": row["dependency_sha256"],
                 "completed_at": row["completed_at"],
                 "result": json.loads(row["payload"]),
             }
             for row in rows
         }
+
+    def save_dependency_health(self, item_id: str, payload: BaseModel) -> None:
+        """Persist dependency readiness for reopening a scenario workspace."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO dependency_health(item_id, payload) VALUES (?, ?) ON CONFLICT(item_id) DO UPDATE SET payload=excluded.payload",
+                (item_id, payload.model_dump_json()),
+            )
+
+    def dependency_health(self, item_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return dependency checks scoped to visible catalog identities."""
+        if not item_ids:
+            return {}
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM dependency_health WHERE item_id IN ("
+                + ",".join("?" for _ in item_ids)
+                + ")",
+                item_ids,
+            ).fetchall()
+        return {row["item_id"]: json.loads(row["payload"]) for row in rows}
 
     def job_payloads(
         self, workspace: Path | None = None, kind: str | None = None
