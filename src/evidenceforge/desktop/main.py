@@ -185,6 +185,21 @@ def _error_text(message: dict[str, Any]) -> str:
     return str(error or "Unknown Codex error")
 
 
+def _clean_conversation_title(value: str) -> str:
+    """Keep generated names short and suitable for a menu or tab."""
+    first_line = value.strip().splitlines()[0] if value.strip() else ""
+    return first_line.strip(" \t\"'`•.-:;#").strip()[:70]
+
+
+def _prompt_title(prompt: str) -> str:
+    """Show a useful title immediately while the optional title turn runs."""
+    compact = " ".join(prompt.split())
+    if len(compact) <= 70:
+        return _clean_conversation_title(compact)
+    prefix = compact[:70]
+    return _clean_conversation_title(prefix.rsplit(" ", 1)[0] or prefix)
+
+
 class ChatComposer(QPlainTextEdit):
     """Send on Return, leaving modified Return for multiline prompts."""
 
@@ -772,6 +787,9 @@ class MainWindow(QMainWindow):
         self.skills: dict[str, str] = {}
         self.models: list[CodexModel] = []
         self.chat_panes: dict[str, ChatPane] = {}
+        self._title_threads: dict[str, tuple[str, str]] = {}
+        self._title_pending: set[str] = set()
+        self._title_loading: set[str] = set()
         self.job_progress: dict[str, GenerationProgress] = {}
         self.evaluation_jobs: dict[str, EvaluationJob] = {
             job.id: job for job in self.job_store.load_evaluations()
@@ -1287,10 +1305,13 @@ class MainWindow(QMainWindow):
             self._save()
 
     def _context_chats(self, path: Path, kind: str) -> list[ChatRecord]:
+        canonical_path = path.expanduser().resolve()
         return [
             record
             for record in self.state.chats
-            if record.context_path == path and record.context_kind == kind
+            if record.context_path is not None
+            and record.context_path.expanduser().resolve() == canonical_path
+            and record.context_kind == kind
         ]
 
     def _open_existing_context_chat(self, path: Path, kind: str) -> bool:
@@ -1320,20 +1341,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_chat_tab_titles(self) -> None:
         for pane in self.chat_panes.values():
-            record = pane.record
             index = self.tabs.indexOf(pane)
-            if index < 0:
-                continue
-            if record.context_path and record.context_kind:
-                related = self._context_chats(record.context_path, record.context_kind)
-                position = next(
-                    (number for number, other in enumerate(related, 1) if other.id == record.id),
-                    1,
-                )
-                title = f"{record.title} · {position}" if len(related) > 1 else record.title
-            else:
-                title = record.title
-            self.tabs.setTabText(index, title)
+            if index >= 0:
+                self.tabs.setTabText(index, pane.record.title)
 
     def _validate_library_item(self, item: LibraryItem) -> None:
         self.jobs.scenario.setText(str(item.path))
@@ -1541,12 +1551,15 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         for number, related in reversed(list(enumerate(self._context_chats(path, kind), 1))):
             action = menu.addAction(
-                f"Conversation {number}",
+                related.conversation_title or f"New conversation {number}",
                 lambda _checked=False, chosen=related: self._activate_chat(chosen),
             )
+            action.setData(related.id)
             action.setCheckable(True)
             action.setChecked(related.id == record.id)
             action.setToolTip("Closed tab" if not related.open else related.title)
+            if related.conversation_title is None:
+                self._load_conversation_title(related)
 
     def _update_authoring_empty(self) -> None:
         has_tabs = self.tabs.count() > 0
@@ -1561,9 +1574,13 @@ class MainWindow(QMainWindow):
         for record in reversed(self.state.chats):
             if not record.open:
                 self.recent_menu.addAction(
-                    record.title,
+                    f"{record.title} · {record.conversation_title}"
+                    if record.conversation_title
+                    else record.title,
                     lambda _checked=False, record_id=record.id: self._reopen_chat(record_id),
                 )
+                if record.conversation_title is None:
+                    self._load_conversation_title(record)
 
     def _reopen_chat(self, record_id: str) -> None:
         record = next((entry for entry in self.state.chats if entry.id == record_id), None)
@@ -1802,6 +1819,8 @@ class MainWindow(QMainWindow):
         if "error" in response:
             return
         thread = response.get("result", {}).get("thread", {})
+        thread_name = thread.get("name")
+        first_prompt: str | None = None
         for turn in thread.get("turns", []):
             turn_id = str(turn.get("id", "history"))
             for item in turn.get("items", []):
@@ -1812,17 +1831,29 @@ class MainWindow(QMainWindow):
                         if part.get("type") == "text"
                     )
                     if text:
+                        if first_prompt is None:
+                            first_prompt = text
                         pane.add_user(text)
                 elif item.get("type") == "agentMessage" and item.get("text"):
                     pane.add_agent_text(str(item["text"]))
                 elif item.get("type") not in {"userMessage", "agentMessage"}:
                     pane.add_activity(turn_id, item)
+        if isinstance(thread_name, str) and thread_name.strip():
+            self._set_conversation_title(pane.record, thread_name, sync_thread=False)
+        elif first_prompt and pane.record.conversation_title is None:
+            self._set_conversation_title(
+                pane.record, _prompt_title(first_prompt), sync_thread=False
+            )
+            self._request_conversation_title(pane.record, first_prompt)
 
     def _send_chat(self, pane: ChatPane, text: str) -> None:
         if not self.bridge.initialized:
             pane.add_system("Codex is not connected.")
             return
         pane.add_user(text)
+        if pane.record.conversation_title is None:
+            self._set_conversation_title(pane.record, _prompt_title(text), sync_thread=False)
+            self._request_conversation_title(pane.record, text)
         pane.set_busy(True)
         pane.record.skill_name = pane.skill.currentText()
         self._save()
@@ -1859,7 +1890,157 @@ class MainWindow(QMainWindow):
             return
         pane.record.thread_id = str(response["result"]["thread"]["id"])
         self._save()
+        if pane.record.conversation_title and pane.record.id not in self._title_pending:
+            self._sync_thread_name(pane.record)
         self._start_turn(pane, text)
+
+    def _set_conversation_title(
+        self, record: ChatRecord, title: str, *, sync_thread: bool = True
+    ) -> None:
+        cleaned = _clean_conversation_title(title)
+        if not cleaned or cleaned == record.conversation_title:
+            return
+        record.conversation_title = cleaned
+        self._refresh_chat_tab_titles()
+        for pane in self.chat_panes.values():
+            for action in pane.conversations_menu.actions():
+                if action.data() == record.id:
+                    action.setText(cleaned)
+        self._save()
+        if sync_thread:
+            self._sync_thread_name(record)
+
+    def _sync_thread_name(self, record: ChatRecord) -> None:
+        if self.bridge.initialized and record.thread_id and record.conversation_title:
+            self.bridge.request(
+                "thread/name/set",
+                {"threadId": record.thread_id, "name": record.conversation_title},
+            )
+
+    def _request_conversation_title(self, record: ChatRecord, first_prompt: str) -> None:
+        if record.id in self._title_pending or not self.bridge.initialized:
+            return
+        quick = next((model for model in self.models if "luna" in model.id.casefold()), None)
+        if quick is None:
+            self._sync_thread_name(record)
+            return
+        self._title_pending.add(record.id)
+        self.bridge.request(
+            "thread/start",
+            {
+                "cwd": str(self.state.workspace),
+                "ephemeral": True,
+                "sandbox": "read-only",
+                "approvalPolicy": "never",
+                "model": quick.id,
+            },
+            lambda response, record_id=record.id, prompt=first_prompt: self._title_thread_started(
+                record_id, prompt, response
+            ),
+        )
+
+    def _load_conversation_title(self, record: ChatRecord) -> None:
+        if not self.bridge.initialized or not record.thread_id or record.id in self._title_loading:
+            return
+        self._title_loading.add(record.id)
+        self.bridge.request(
+            "thread/read",
+            {"threadId": record.thread_id, "includeTurns": True},
+            lambda response, current=record: self._title_history_response(current, response),
+        )
+
+    def _title_history_response(self, record: ChatRecord, response: dict[str, Any]) -> None:
+        self._title_loading.discard(record.id)
+        if "error" in response or record.conversation_title is not None:
+            return
+        thread = response.get("result", {}).get("thread", {})
+        name = thread.get("name")
+        if isinstance(name, str) and name.strip():
+            self._set_conversation_title(record, name, sync_thread=False)
+            return
+        for turn in thread.get("turns", []):
+            for item in turn.get("items", []):
+                if item.get("type") != "userMessage":
+                    continue
+                prompt = "\n".join(
+                    str(part.get("text", ""))
+                    for part in item.get("content", [])
+                    if part.get("type") == "text"
+                )
+                if prompt:
+                    self._set_conversation_title(record, _prompt_title(prompt), sync_thread=False)
+                    self._request_conversation_title(record, prompt)
+                    return
+
+    def _title_thread_started(
+        self, record_id: str, first_prompt: str, response: dict[str, Any]
+    ) -> None:
+        if "error" in response:
+            self._title_pending.discard(record_id)
+            record = next((chat for chat in self.state.chats if chat.id == record_id), None)
+            if record is not None:
+                self._sync_thread_name(record)
+            return
+        thread_id = str(response.get("result", {}).get("thread", {}).get("id", ""))
+        if not thread_id:
+            self._title_pending.discard(record_id)
+            record = next((chat for chat in self.state.chats if chat.id == record_id), None)
+            if record is not None:
+                self._sync_thread_name(record)
+            return
+        self._title_threads[thread_id] = (record_id, "")
+        self.bridge.request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "effort": "low",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Give this EvidenceForge conversation a specific 3–7 word title "
+                            "based on the user's first message. Ignore file paths. "
+                            "Reply with only the title, without quotes or punctuation.\n\n"
+                            f"First message: {first_prompt[:1000]}"
+                        ),
+                    }
+                ],
+            },
+            lambda result, tid=thread_id: self._title_turn_started(tid, result),
+        )
+
+    def _title_turn_started(self, thread_id: str, response: dict[str, Any]) -> None:
+        if "error" in response:
+            pending = self._title_threads.pop(thread_id, None)
+            if pending:
+                self._title_pending.discard(pending[0])
+                record = next((chat for chat in self.state.chats if chat.id == pending[0]), None)
+                if record is not None:
+                    self._sync_thread_name(record)
+
+    def _title_event(self, method: str, params: dict[str, Any]) -> bool:
+        thread_id = params.get("threadId")
+        pending = self._title_threads.get(thread_id)
+        if pending is None:
+            return False
+        record_id, output = pending
+        if method == "item/agentMessage/delta":
+            self._title_threads[thread_id] = (record_id, output + str(params.get("delta", "")))
+        elif method == "item/completed":
+            item = params.get("item", {})
+            if isinstance(item, dict) and item.get("type") == "agentMessage" and not output:
+                self._title_threads[thread_id] = (record_id, str(item.get("text", "")))
+        elif method == "turn/completed":
+            self._title_threads.pop(thread_id, None)
+            self._title_pending.discard(record_id)
+            record = next((chat for chat in self.state.chats if chat.id == record_id), None)
+            if record is not None:
+                turn = params.get("turn", {})
+                if isinstance(turn, dict) and turn.get("status") == "completed" and output.strip():
+                    self._set_conversation_title(record, output)
+                else:
+                    self._sync_thread_name(record)
+        return True
 
     def _start_turn(self, pane: ChatPane, text: str) -> None:
         skill_name = pane.skill.currentText()
@@ -1903,6 +2084,16 @@ class MainWindow(QMainWindow):
 
     def _codex_event(self, method: str, params: object) -> None:
         if not isinstance(params, dict):
+            return
+        if self._title_event(method, params):
+            return
+        if method == "thread/name/updated":
+            record = next(
+                (chat for chat in self.state.chats if chat.thread_id == params.get("threadId")),
+                None,
+            )
+            if record is not None and isinstance(params.get("threadName"), str):
+                self._set_conversation_title(record, params["threadName"], sync_thread=False)
             return
         if method in {"account/updated", "account/login/completed"}:
             self.bridge.request("account/read", {"refreshToken": False}, self._account_response)

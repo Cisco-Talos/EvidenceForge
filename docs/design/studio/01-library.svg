@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img">
+<title>Scenarios</title>
+<defs><linearGradient id="primary" x2="0" y2="1"><stop stop-color="#789bff"/><stop offset="1" stop-color="#5278e9"/></linearGradient></defs>
+<rect x="0" y="0" width="1440" height="900" rx="0" fill="#0b111c"/>
+<rect x="0" y="0" width="222" height="900" rx="0" fill="#0e1826"/>
+<rect x="221" y="0" width="1" height="900" rx="0" fill="#223248"/>
+<rect x="222" y="0" width="1218" height="59" rx="0" fill="#0c1421"/>
+<rect x="222" y="58" width="1218" height="1" rx="0" fill="#223248"/>
+<rect x="18" y="23" width="34" height="34" rx="9" fill="#3d62b0"/>
+<text x="35" y="46" fill="#c3d5ff" font-size="25" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">≋</text>
+<text x="63" y="41" fill="#e9edf5" font-size="17" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">EvidenceForge</text>
+<text x="64" y="58" fill="#72d9c4" font-size="9" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">S T U D I O</text>
+<rect x="16" y="86" width="190" height="34" rx="7" fill="#17273a"/>
+<circle cx="29" cy="103" r="4" fill="#72d9c4"/>
+<text x="40" y="108" fill="#adbed0" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Documents / EvidenceForge</text>
+<rect x="12" y="130" width="198" height="40" rx="8" fill="#233958"/>
+<rect x="12" y="130" width="3" height="40" rx="2" fill="#80a7ff"/>
+<text x="30" y="156" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="60" y="155" fill="#e9edf5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenarios</text>
+<text x="30" y="205" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▱</text>
+<text x="60" y="204" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Industry packs</text>
+<text x="30" y="254" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="60" y="253" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Org packs</text>
+<text x="30" y="315" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◌</text>
+<text x="60" y="314" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Job center</text>
+<text x="31" y="850" fill="#9db3cb" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">⚙</text>
+<text x="60" y="850" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Settings</text>
+<text x="254" y="38" fill="#e9edf5" font-size="13" font-weight="650" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenarios</text>
+<text x="1300" y="38" fill="#72d9c4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">●  Local service</text>
+<text x="258" y="105" fill="#72d9c4" font-size="10" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">YOUR WORKSPACE</text>
+<text x="258" y="149" fill="#e9edf5" font-size="34" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenarios</text>
+<text x="258" y="176" fill="#94a9be" font-size="14" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Find a scenario and pick up where you left off.</text>
+<rect x="1230" y="113" width="169" height="36" rx="8" fill="url(#primary)" stroke="#45648e"/>
+<text x="1314" y="136" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">+  New scenario</text>
+<rect x="258" y="207" width="774" height="43" rx="9" fill="#142237" stroke="#37516f"/>
+<text x="275" y="234" fill="#849cb7" font-size="22" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">⌕</text>
+<text x="306" y="234" fill="#7189a2" font-size="13" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Search names, descriptions, users, hosts, YAML…</text>
+<rect x="1044" y="211" width="99" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="1093" y="234" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">☷  Filters</text>
+<rect x="1153" y="211" width="122" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="1214" y="234" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Saved views</text>
+<text x="1298" y="237" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">6 scenarios</text>
+<rect x="258" y="276" width="205" height="560" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="277" y="307" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Projects</text>
+<text x="282" y="321" fill="#91aee0" font-size="15" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="307" y="321" fill="#94a9be" font-size="12" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">All scenarios</text>
+<text x="430" y="321" fill="#8399b0" font-size="11" font-weight="400" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">6</text>
+<rect x="270" y="343" width="181" height="37" rx="7" fill="#253d5d"/>
+<text x="282" y="367" fill="#91aee0" font-size="15" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="307" y="367" fill="#e9edf5" font-size="12" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Healthcare</text>
+<text x="430" y="367" fill="#8399b0" font-size="11" font-weight="400" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">3</text>
+<text x="282" y="413" fill="#91aee0" font-size="15" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="307" y="413" fill="#94a9be" font-size="12" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Branch office</text>
+<text x="430" y="413" fill="#8399b0" font-size="11" font-weight="400" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">2</text>
+<text x="282" y="459" fill="#91aee0" font-size="15" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="307" y="459" fill="#94a9be" font-size="12" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Research</text>
+<text x="430" y="459" fill="#8399b0" font-size="11" font-weight="400" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">1</text>
+<text x="282" y="536" fill="#8eb4ff" font-size="12" font-weight="650" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">+  New folder</text>
+<rect x="484" y="276" width="443" height="163" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="503" y="307" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Healthcare breach</text>
+<rect x="504" y="326" width="34" height="34" rx="8" fill="#243d60"/>
+<text x="521" y="349" fill="#a7c4ff" font-size="19" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="505" y="385" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Credential access across clinical and IT hosts</text>
+<text x="505" y="413" fill="#7f9ab4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">12 users   ·   18 systems   ·   Validated</text>
+<text x="898" y="305" fill="#839dbc" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">↗</text>
+<rect x="949" y="276" width="443" height="163" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="968" y="307" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Branch office intrusion</text>
+<rect x="969" y="326" width="34" height="34" rx="8" fill="#243d60"/>
+<text x="986" y="349" fill="#a7c4ff" font-size="19" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="970" y="385" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Remote access and lateral movement exercise</text>
+<text x="970" y="413" fill="#7f9ab4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">8 users   ·   11 systems   ·   2 runs</text>
+<text x="1363" y="305" fill="#839dbc" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">↗</text>
+<rect x="484" y="458" width="443" height="163" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="503" y="489" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">APT healthcare campaign</text>
+<rect x="504" y="508" width="34" height="34" rx="8" fill="#243d60"/>
+<text x="521" y="531" fill="#a7c4ff" font-size="19" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="505" y="567" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Multi-stage investigation with patient data</text>
+<text x="505" y="595" fill="#7f9ab4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">18 users   ·   24 systems   ·   Draft</text>
+<text x="898" y="487" fill="#839dbc" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">↗</text>
+<rect x="949" y="458" width="443" height="163" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="968" y="489" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Insider exfiltration</text>
+<rect x="969" y="508" width="34" height="34" rx="8" fill="#243d60"/>
+<text x="986" y="531" fill="#a7c4ff" font-size="19" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="970" y="567" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Finance team activity and false leads</text>
+<text x="970" y="595" fill="#7f9ab4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">6 users   ·   9 systems   ·   1 run</text>
+<text x="1363" y="487" fill="#839dbc" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">↗</text>
+</svg>

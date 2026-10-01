@@ -1,0 +1,70 @@
+import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
+import { Tooltip } from "radix-ui";
+import { CatalogItem, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
+
+type State = "none" | "stale" | "working" | "success" | "warning" | "error";
+interface OperationState { label: string; state: State; detail: string }
+
+function latest(jobs: StudioJob[]): StudioJob | undefined {
+  return [...jobs].sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
+}
+
+function jobState(label: string, job: StudioJob | undefined, stale: boolean): OperationState {
+  if (!job) return { label, state: stale ? "stale" : "none", detail: stale ? `${label} was completed for an older scenario revision.` : `${label} has not been run.` };
+  if (job.status === "queued" || job.status === "running" || job.status === "paused") {
+    return { label, state: "working", detail: `${label} is ${job.status}.` };
+  }
+  if (job.status === "completed") return { label, state: "success", detail: `${label} completed for this scenario revision.` };
+  return { label, state: "error", detail: `${label} ${job.status}${job.status_message ? `: ${job.status_message}` : "."}` };
+}
+
+function validationState(item: CatalogItem, record?: ValidationRecord): OperationState {
+  if (!record) return { label: "Validation", state: "none", detail: "This scenario has not been validated in Studio." };
+  if (record.source_sha256 !== item.source_sha256) {
+    return { label: "Validation", state: "stale", detail: "Validation predates the latest scenario edit." };
+  }
+  const counts = record.result.report?.severity_counts as { warning?: number; error?: number } | undefined;
+  if (record.result.exit_code !== 0 || (counts?.error || 0) > 0) {
+    return { label: "Validation", state: "error", detail: `${counts?.error || "Some"} validation errors in the current revision.` };
+  }
+  if ((counts?.warning || 0) > 0) {
+    return { label: "Validation", state: "warning", detail: `Current revision is valid with ${counts?.warning} warnings.` };
+  }
+  return { label: "Validation", state: "success", detail: "Current revision passed validation." };
+}
+
+export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
+  const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
+  const currentGenerations = generations.filter((job) => job.source_sha256 === item.source_sha256);
+  const generation = latest(currentGenerations);
+  const currentIds = new Set(currentGenerations.map((job) => job.id));
+  const allIds = new Set(generations.map((job) => job.id));
+  const evaluations = snapshot.jobs.filter((job) => job.kind === "evaluation" && !!job.generation_id && allIds.has(job.generation_id));
+  const currentEvaluations = evaluations.filter((job) => !!job.generation_id && currentIds.has(job.generation_id));
+  return [
+    validationState(item, snapshot.validations[item.id]),
+    jobState("Generation", generation, generations.some((job) => job.status === "completed")),
+    jobState("Evaluation", latest(currentEvaluations), evaluations.some((job) => job.status === "completed")),
+  ];
+}
+
+const icons = {
+  none: CircleMinus,
+  stale: Clock3,
+  working: LoaderCircle,
+  success: CheckCircle2,
+  warning: TriangleAlert,
+  error: XCircle,
+};
+
+export function ScenarioStates({ item, snapshot, compact = false }: { item: CatalogItem; snapshot: StudioSnapshot; compact?: boolean }) {
+  return <div className={`scenario-states ${compact ? "compact" : ""}`} aria-label="Scenario operation status">
+    {scenarioStates(item, snapshot).map(({ label, state, detail }) => {
+      const Icon = icons[state];
+      return <Tooltip.Root key={label}>
+        <Tooltip.Trigger asChild><span className={`state-icon state-${state}`} tabIndex={0} aria-label={`${label}: ${detail}`}><Icon size={compact ? 16 : 15} />{!compact && <small>{label}</small>}</span></Tooltip.Trigger>
+        <Tooltip.Portal><Tooltip.Content className="state-tooltip" sideOffset={6}>{detail}<Tooltip.Arrow className="state-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+      </Tooltip.Root>;
+    })}
+  </div>;
+}

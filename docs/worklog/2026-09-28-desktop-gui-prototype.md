@@ -247,3 +247,34 @@ Codex replies align left with a green accent. The macOS offscreen render of
 multiple scenario conversations and the conversation transcript was reviewed.
 The 46 desktop Qt tests passed, including reuse, reopen, legacy matching,
 conversation switching, model/effort display, and message styling.
+
+## Conversation identity and titles
+
+Continue authoring now compares resolved scenario paths, so macOS aliases such
+as `/var` and `/private/var` reuse the same saved chat. The library action uses
+the item currently displayed in its detail pane. A click-through test covers
+two existing scenario tabs with aliased paths.
+
+Conversation labels now persist separately from scenario names. The first user
+message supplies an immediate title; when the Codex model catalog offers a
+Luna model, an ephemeral low-effort title turn refines it without changing the
+authoring conversation. The app also reads an existing Codex thread name and
+can load first-message titles for closed chats when their menu is opened.
+Generated names are saved in desktop state and applied to the authoring thread
+through `thread/name/set`. The complete desktop suite passed 48 tests on macOS;
+Ruff check and format passed.
+
+## Scenario-centered authoring navigation proposal
+
+Conversation titles belong in the conversation history, not in the top-level
+scenario tab label; tabs now show only the scenario name. The growing
+Conversations dropdown and one tab per conversation should be replaced by a
+scenario workspace with a persistent, searchable conversation list beside the
+chat. The scenario library remains the entry point. Continue authoring selects
+the scenario's last active conversation; New conversation creates another in
+that scenario. Scenario and conversation rows should show active-turn status so
+several authoring/validation turns can continue while the user switches views.
+Drafts without a scenario file need their own section, and pack authoring should
+use the same pattern within each pack's workspace. This navigation change is a
+proposal for user review, not implemented in this pass. The tab-label change
+passed 13 focused desktop chat tests and Ruff check/format.

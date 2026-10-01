@@ -143,6 +143,7 @@ class LibraryPane(QWidget):
         self._recent_paths: tuple[Path, ...] = ()
         self._programmatic_highlight: QTreeWidgetItem | None = None
         self._preview_key: tuple[Path, float] | None = None
+        self._detail_item: LibraryItem | None = None
         outer = QVBoxLayout(self)
         outer.setContentsMargins(25, 24, 25, 24)
         outer.setSpacing(20)
@@ -968,6 +969,7 @@ class LibraryPane(QWidget):
     def _selection_changed(self, *_args: object) -> None:
         self._clear_programmatic_highlight()
         item = self.selected_item()
+        self._detail_item = item
         current = self.tree.currentItem()
         selected_folder = (
             self.selected_folder_name()
@@ -1158,12 +1160,12 @@ class LibraryPane(QWidget):
             widget.setVisible(visible)
 
     def _emit_selected(self, signal: Signal) -> None:
-        item = self.selected_item()
+        item = self._detail_item
         if item is not None:
             signal.emit(item)
 
     def _open_selected(self) -> None:
-        item = self.selected_item()
+        item = self._detail_item
         if item is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(item.path)))
 

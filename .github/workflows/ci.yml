@@ -114,6 +114,69 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: uv run pytest --no-cov tests/unit/test_desktop_*.py
 
+  studio:
+    name: Studio (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Install Studio dependencies
+        run: uv sync --extra studio --extra dev
+
+      - name: Install frontend dependencies
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Test local service and job lifecycle
+        run: uv run pytest --no-cov tests/unit/test_studio_service.py
+
+      - name: Check generated API types
+        working-directory: desktop-ui
+        run: npm run types:check
+
+      - name: Test frontend interactions
+        working-directory: desktop-ui
+        run: npm test
+
+      - name: Build frontend
+        working-directory: desktop-ui
+        run: npm run build
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Check Tauri shell
+        working-directory: desktop-ui/src-tauri
+        run: cargo +stable check --locked
+
   windows-checkpoint-durability:
     name: Windows checkpoint durability
     runs-on: windows-latest
@@ -153,7 +216,7 @@ jobs:
   ci-required:
     name: Required CI
     runs-on: ubuntu-latest
-    needs: [lint, tests, desktop-gui, windows-checkpoint-durability]
+    needs: [lint, tests, desktop-gui, studio, windows-checkpoint-durability]
     if: always()
 
     steps:
@@ -171,6 +234,11 @@ jobs:
 
           if [ "${{ needs.desktop-gui.result }}" != "success" ]; then
             echo "Desktop GUI finished with result: ${{ needs.desktop-gui.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.studio.result }}" != "success" ]; then
+            echo "Studio finished with result: ${{ needs.studio.result }}"
             exit 1
           fi
 

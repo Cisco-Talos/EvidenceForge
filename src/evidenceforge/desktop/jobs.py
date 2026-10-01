@@ -95,6 +95,7 @@ def start_generation(
         pid=pid,
         process_created_at=created_at,
         started_at=time.time(),
+        submitted_at=time.time(),
         workspace=workspace,
         command=command,
         owned_output=True,
@@ -146,6 +147,7 @@ def queue_generation(
         progress_file=job_files / f"{job_id}.jsonl",
         log_file=job_files / f"{job_id}.log",
         started_at=time.time(),
+        submitted_at=time.time(),
         status="queued",
         workspace=workspace,
         command=command,
@@ -182,6 +184,11 @@ def resume_generation(job: GenerationJob, workspace: Path, state_directory: Path
     """Resume a checkpointed run while retaining its bundle and library identity."""
     if process_running(job):
         raise RuntimeError("Generation is still running")
+    from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+    checkpoint = IncrementalCheckpointStore(job.output_root)
+    if not checkpoint.recovery_index_entries(read_only=True):
+        raise RuntimeError("No recovery checkpoint exists for this run; inspect its partial files")
     progress_file = state_directory / "jobs" / f"{job.id}-resume-{uuid4().hex[:8]}.jsonl"
     command_prefix = (
         job.command[: job.command.index("generate")]
@@ -202,6 +209,7 @@ def resume_generation(job: GenerationJob, workspace: Path, state_directory: Path
     pid, created_at = _start_process(command, cwd=workspace.resolve(), log_file=job.log_file)
     job.pid = pid
     job.process_created_at = created_at
+    job.progress_history.append(job.progress_file)
     job.progress_file = progress_file
     job.started_at = time.time()
     job.status = "running"

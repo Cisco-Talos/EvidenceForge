@@ -580,7 +580,11 @@ def test_pid_mismatch_does_not_kill_unrelated_process(tmp_path: Path) -> None:
         job.process_created_at = 1.0
         controller._terminate_owned(job)
         assert process.poll() is None
-        job.process_created_at = controller.psutil.Process(process.pid).create_time()
+        actual_start = controller.psutil.Process(process.pid).create_time()
+        job.process_created_at = actual_start + 0.5
+        controller._terminate_owned(job)
+        assert process.poll() is None
+        job.process_created_at = actual_start
         controller._terminate_owned(job)
         process.wait(timeout=5)
         assert process.poll() is not None
@@ -588,6 +592,30 @@ def test_pid_mismatch_does_not_kill_unrelated_process(tmp_path: Path) -> None:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+
+
+def test_process_exit_during_group_lookup_does_not_break_quit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("POSIX process group lookup")
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True
+    )
+    try:
+        job = _generation(tmp_path, "exiting", status="running")
+        job.pid = process.pid
+        job.process_created_at = controller.psutil.Process(process.pid).create_time()
+
+        def process_exited(_pid: int) -> int:
+            raise ProcessLookupError("process exited before group lookup")
+
+        monkeypatch.setattr(controller.os, "getpgid", process_exited)
+        controller._terminate_owned(job)
+        assert process.poll() is None
+    finally:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def _fake_cli(tmp_path: Path) -> Path:
@@ -614,6 +642,14 @@ def _fake_cli(tmp_path: Path) -> Path:
         "'data': {'hour': number, 'total_hours': 8, 'completed_simulated_hours': number, "
         "'total_simulated_hours': 8}}) + '\\n')\n"
         "        if (root / 'suspend-request').exists():\n"
+        "            checkpoint = root / '.eforge-generation'\n"
+        "            (checkpoint / 'CURRENT.json').write_text(json.dumps({\n"
+        "                'recoveries': [{'sequence': 1, 'manifest_sha256': '0' * 64}]}))\n"
+        "            (checkpoint / 'suspended.json').write_text(json.dumps({\n"
+        "                'kind': 'evidenceforge.generation-suspended', 'schema_version': '1.0',\n"
+        "                'request_id': 'fake-request', 'completed_ns': time.time_ns(),\n"
+        "                'cursor': {'phase': 'tail', 'completed_simulated_hours': number,\n"
+        "                           'next_hour': None}}))\n"
         "            sys.exit(0)\n"
         "        time.sleep(.12)\n"
         "    (root / 'GENERATION_MANIFEST.json').write_text('{}')\n",

@@ -21,6 +21,7 @@ class ControlIntent(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     action: Literal["open", "continue", "pause", "kill", "resume"] = "resume"
     settings: AppSettings = Field(default_factory=AppSettings)
+    authoring_turns: Literal["stop", "finish"] = "finish"
     generation_exceptions: dict[str, str] = Field(default_factory=dict)
     resume_generation_id: str | None = None
 

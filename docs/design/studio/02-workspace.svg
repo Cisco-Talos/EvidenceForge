@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img">
+<title>Scenario workspace</title>
+<defs><linearGradient id="primary" x2="0" y2="1"><stop stop-color="#789bff"/><stop offset="1" stop-color="#5278e9"/></linearGradient></defs>
+<rect x="0" y="0" width="1440" height="900" rx="0" fill="#0b111c"/>
+<rect x="0" y="0" width="222" height="900" rx="0" fill="#0e1826"/>
+<rect x="221" y="0" width="1" height="900" rx="0" fill="#223248"/>
+<rect x="222" y="0" width="1218" height="59" rx="0" fill="#0c1421"/>
+<rect x="222" y="58" width="1218" height="1" rx="0" fill="#223248"/>
+<rect x="18" y="23" width="34" height="34" rx="9" fill="#3d62b0"/>
+<text x="35" y="46" fill="#c3d5ff" font-size="25" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">≋</text>
+<text x="63" y="41" fill="#e9edf5" font-size="17" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">EvidenceForge</text>
+<text x="64" y="58" fill="#72d9c4" font-size="9" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">S T U D I O</text>
+<rect x="16" y="86" width="190" height="34" rx="7" fill="#17273a"/>
+<circle cx="29" cy="103" r="4" fill="#72d9c4"/>
+<text x="40" y="108" fill="#adbed0" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Documents / EvidenceForge</text>
+<rect x="12" y="130" width="198" height="40" rx="8" fill="#233958"/>
+<rect x="12" y="130" width="3" height="40" rx="2" fill="#80a7ff"/>
+<text x="30" y="156" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="60" y="155" fill="#e9edf5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenarios</text>
+<text x="30" y="205" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▱</text>
+<text x="60" y="204" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Industry packs</text>
+<text x="30" y="254" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="60" y="253" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Org packs</text>
+<text x="30" y="315" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◌</text>
+<text x="60" y="314" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Job center</text>
+<text x="31" y="850" fill="#9db3cb" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">⚙</text>
+<text x="60" y="850" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Settings</text>
+<text x="254" y="38" fill="#e9edf5" font-size="13" font-weight="650" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenario workspace</text>
+<text x="1300" y="38" fill="#72d9c4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">●  Local service</text>
+<text x="258" y="95" fill="#72d9c4" font-size="11" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">SCENARIOS  /  HEALTHCARE BREACH</text>
+<text x="258" y="143" fill="#e9edf5" font-size="32" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Healthcare breach</text>
+<text x="258" y="172" fill="#94a9be" font-size="14" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Credential access across clinical and IT hosts with an 8-hour investigation window.</text>
+<rect x="258" y="190" width="104" height="28" rx="6" fill="#172940" stroke="#2d4866"/>
+<text x="310" y="208" fill="#b5cce3" font-size="11" font-weight="500" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenario 2.0</text>
+<rect x="372" y="190" width="80" height="28" rx="6" fill="#172940" stroke="#2d4866"/>
+<text x="412" y="208" fill="#b5cce3" font-size="11" font-weight="500" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">12 users</text>
+<rect x="463" y="190" width="91" height="28" rx="6" fill="#172940" stroke="#2d4866"/>
+<text x="508" y="208" fill="#b5cce3" font-size="11" font-weight="500" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">18 systems</text>
+<rect x="562" y="190" width="92" height="28" rx="6" fill="#172940" stroke="#2d4866"/>
+<text x="608" y="208" fill="#b5cce3" font-size="11" font-weight="500" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">46 events</text>
+<rect x="666" y="190" width="113" height="28" rx="6" fill="#172940" stroke="#2d4866"/>
+<text x="722" y="208" fill="#b5cce3" font-size="11" font-weight="500" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Updated today</text>
+<rect x="1102" y="132" width="111" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="1157" y="155" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">✓  Validate</text>
+<rect x="1224" y="132" width="176" height="36" rx="8" fill="url(#primary)" stroke="#45648e"/>
+<text x="1312" y="155" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">+  Conversation</text>
+<rect x="242" y="245" width="1198" height="1" rx="0" fill="#2b4059"/>
+<text x="259" y="234" fill="#e9edf5" font-size="13" font-weight="630" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Overview</text>
+<rect x="259" y="243" width="70" height="3" rx="2" fill="#7294f3"/>
+<text x="379" y="234" fill="#94a9be" font-size="13" font-weight="630" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Conversations  3</text>
+<text x="559" y="234" fill="#94a9be" font-size="13" font-weight="630" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Validation</text>
+<text x="696" y="234" fill="#94a9be" font-size="13" font-weight="630" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Runs  2</text>
+<rect x="258" y="277" width="550" height="211" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="277" y="308" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Continue work</text>
+<text x="278" y="325" fill="#82a0bd" font-size="10" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">MOST RECENT CONVERSATION</text>
+<rect x="278" y="344" width="510" height="89" rx="8" fill="#1b304b" stroke="#3b5777"/>
+<text x="297" y="376" fill="#e9edf5" font-size="15" font-weight="650" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Investigate credential timeline</text>
+<text x="297" y="399" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Last worked on today at 10:42 AM</text>
+<text x="758" y="391" fill="#98baff" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">↗</text>
+<rect x="827" y="277" width="573" height="211" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="846" y="308" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Validation</text>
+<rect x="847" y="330" width="533" height="63" rx="8" fill="#193c3d" stroke="#3a7064"/>
+<text x="866" y="358" fill="#9be9d0" font-size="15" font-weight="670" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">●  Valid with 3 warnings</text>
+<text x="866" y="380" fill="#b1c9cb" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Resource forecast: 218 MiB peak · 45 MiB output</text>
+<rect x="847" y="424" width="136" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="915" y="447" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">View findings</text>
+<rect x="258" y="507" width="550" height="253" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="277" y="538" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Source and environment</text>
+<text x="278" y="558" fill="#b6c9dc" font-size="13" font-weight="620" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">scenario.yaml</text>
+<text x="278" y="585" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Industry pack: Healthcare 1.2.0</text>
+<text x="278" y="610" fill="#94a9be" font-size="12" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Org pack: Bayview Hospital 1.0.0</text>
+<rect x="278" y="691" width="124" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="340" y="714" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Open YAML</text>
+<rect x="827" y="507" width="573" height="253" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="846" y="538" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Recent runs</text>
+<text x="848" y="559" fill="#e9edf5" font-size="13" font-weight="610" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Today, 10:16 AM</text>
+<text x="1253" y="559" fill="#72d9c4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Evaluated  ·  92</text>
+<rect x="847" y="579" width="533" height="1" rx="0" fill="#2b4059"/>
+<text x="848" y="607" fill="#e9edf5" font-size="13" font-weight="610" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Yesterday, 3:41 PM</text>
+<text x="1253" y="607" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Completed</text>
+<rect x="847" y="689" width="112" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="903" y="712" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">View runs</text>
+</svg>

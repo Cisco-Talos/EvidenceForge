@@ -18,6 +18,7 @@ class ChatRecord(BaseModel):
 
     id: str
     title: str
+    conversation_title: str | None = None
     thread_id: str | None = None
     skill_name: str = "eforge-scenario"
     context_path: Path | None = None
@@ -36,10 +37,12 @@ class GenerationJob(BaseModel):
     scenario: Path
     output_root: Path
     progress_file: Path
+    progress_history: list[Path] = Field(default_factory=list)
     log_file: Path
     pid: int = 0
     process_created_at: float = 0.0
     started_at: float
+    submitted_at: float | None = None
     status: Literal[
         "queued", "running", "completed", "stopped", "paused", "failed", "cancelled"
     ] = "running"
@@ -48,6 +51,7 @@ class GenerationJob(BaseModel):
     checkpoint_hours: int = 24
     owned_output: bool = False
     status_message: str = ""
+    source_sha256: str | None = None
 
 
 class EvaluationJob(BaseModel):
@@ -83,6 +87,7 @@ class AppSettings(BaseModel):
     skill_install_scope: Literal["global", "workspace"] = "global"
     skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
     remember_library_view: bool = True
+    max_concurrent_generations: int = Field(default=2, ge=1, le=16)
     codex_path: Path | None = None
     eforge_path: Path | None = None
 

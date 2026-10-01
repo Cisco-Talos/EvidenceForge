@@ -69,7 +69,12 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         data = _read_yaml(path)
     except (OSError, UnicodeError, yaml.YAMLError):
         return None
-    if not data or "name" not in data or "version" not in data or "environment" not in data:
+    if (
+        not data
+        or "name" not in data
+        or ("version" not in data and "scenario_version" not in data)
+        or "environment" not in data
+    ):
         return None
     try:
         search_text, modified_at = _scenario_text(path)
@@ -86,7 +91,7 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         path=path.resolve(),
         name=str(data["name"]),
         description=str(data.get("description") or "").strip(),
-        version=str(data["version"]),
+        version=str(data.get("scenario_version", data.get("version", ""))),
         users=_count(environment.get("users")),
         systems=_count(environment.get("systems")),
         events=_count(events),

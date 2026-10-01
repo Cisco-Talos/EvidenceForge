@@ -19,10 +19,14 @@ from evidenceforge.desktop.job_store import ControlIntent, JobStore
 from evidenceforge.desktop.jobs import _start_process, request_suspension, resume_generation
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import QualityReport
+from evidenceforge.generation.checkpoints.control import read_suspension_record
+from evidenceforge.generation.checkpoints.errors import CheckpointError
+from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
 
 logger = logging.getLogger(__name__)
 _controller_processes: list[subprocess.Popen[bytes]] = []
 _evaluation_processes: list[subprocess.Popen[bytes]] = []
+_PROCESS_START_TOLERANCE_SECONDS = 0.01
 
 
 class ProcessRecord(Protocol):
@@ -38,7 +42,7 @@ def _running(job: ProcessRecord) -> bool:
     try:
         process = psutil.Process(job.pid)
         return (
-            abs(process.create_time() - job.process_created_at) < 2
+            abs(process.create_time() - job.process_created_at) < _PROCESS_START_TOLERANCE_SECONDS
             and process.is_running()
             and process.status() != psutil.STATUS_ZOMBIE
         )
@@ -50,8 +54,13 @@ def _terminate_owned(job: ProcessRecord) -> None:
     """Terminate a verified app-owned process group or standalone process."""
     if not _running(job):
         return
-    parent = psutil.Process(job.pid)
-    owns_group = os.name == "posix" and os.getpgid(job.pid) == job.pid
+    try:
+        parent = psutil.Process(job.pid)
+        owns_group = os.name == "posix" and os.getpgid(job.pid) == job.pid
+    except (OSError, psutil.NoSuchProcess, psutil.AccessDenied):
+        return
+    if not _running(job):
+        return
     try:
         if owns_group:
             os.killpg(job.pid, signal.SIGTERM)
@@ -88,7 +97,31 @@ def _delete_owned_incomplete(job: GenerationJob) -> bool:
     marker = root / ".eforge-desktop-job.json"
     if not job.owned_output or root.is_symlink() or not root.is_dir():
         return False
-    if (root / "GENERATION_MANIFEST.json").exists() or not marker.is_file():
+    if (root / "GENERATION_MANIFEST.json").exists() or marker.is_symlink() or not marker.is_file():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if payload.get("job_id") != job.id or _running(job):
+        return False
+    shutil.rmtree(root)
+    return True
+
+
+def _delete_owned_complete(job: GenerationJob) -> bool:
+    """Delete a finished bundle only when its marker proves this GUI job owns it."""
+    root = job.output_root
+    marker = root / ".eforge-desktop-job.json"
+    manifest = root / "GENERATION_MANIFEST.json"
+    if not job.owned_output or root.is_symlink() or not root.is_dir():
+        return False
+    if (
+        marker.is_symlink()
+        or manifest.is_symlink()
+        or not marker.is_file()
+        or not manifest.is_file()
+    ):
         return False
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
@@ -144,17 +177,29 @@ def _worker_tick(store: JobStore, intent: ControlIntent) -> bool:
     changed = False
     generations = store.load_generations()
     evaluations = store.load_evaluations()
+    running_generations = sum(job.status == "running" and _running(job) for job in generations)
     action = intent.action
     for job in generations:
         previous = job.model_dump()
         if job.status == "running" and not _running(job):
             if (job.output_root / "GENERATION_MANIFEST.json").is_file():
                 job.status = "completed"
-            elif (
-                job.status_message == "Pause requested"
-                and (job.output_root / ".eforge-generation").exists()
-            ):
-                job.status = "paused"
+            elif job.status_message == "Pause requested":
+                checkpoint = IncrementalCheckpointStore(job.output_root)
+                try:
+                    suspended = read_suspension_record(checkpoint)
+                    recoveries = checkpoint.recovery_index_entries(read_only=True)
+                except CheckpointError:
+                    suspended = None
+                    recoveries = ()
+                if suspended is not None and recoveries:
+                    job.status = "paused"
+                    job.status_message = ""
+                else:
+                    job.status = "stopped"
+                    job.status_message = (
+                        "Generation stopped before a resumable checkpoint was saved"
+                    )
             else:
                 job.status = "stopped"
         if action == "kill":
@@ -200,7 +245,11 @@ def _worker_tick(store: JobStore, intent: ControlIntent) -> bool:
         elif action in {"open", "resume", "continue"}:
             selected = intent.resume_generation_id is None or job.id == intent.resume_generation_id
             can_start = action != "continue" or intent.settings.continue_queued_generations
-            if job.status == "queued" and can_start:
+            if (
+                job.status == "queued"
+                and can_start
+                and running_generations < intent.settings.max_concurrent_generations
+            ):
                 try:
                     job.pid, job.process_created_at = _start_process(
                         job.command,
@@ -209,21 +258,20 @@ def _worker_tick(store: JobStore, intent: ControlIntent) -> bool:
                     )
                     job.status = "running"
                     job.status_message = ""
+                    running_generations += 1
                 except (OSError, ValueError) as error:
                     job.status = "failed"
                     job.status_message = str(error)[:500]
             elif job.status in {"paused", "stopped"} and action == "resume" and selected:
-                if (job.output_root / ".eforge-generation").exists():
+                if job.pid == 0 and not (job.output_root / ".eforge-generation").exists():
+                    job.status = "queued"
+                else:
                     try:
                         resume_generation(
                             job, job.workspace or job.scenario.parent, store.directory
                         )
-                    except (OSError, RuntimeError, ValueError) as error:
+                    except (OSError, RuntimeError, ValueError, CheckpointError) as error:
                         job.status_message = f"Resume failed: {error}"
-                elif job.pid == 0:
-                    job.status = "queued"
-                else:
-                    job.status_message = "No checkpoint is available for this job"
         if job.model_dump() != previous:
             store.save_generation(job)
             changed = True
@@ -274,7 +322,10 @@ def _lock_is_live(path: Path) -> bool:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         process = psutil.Process(int(payload["pid"]))
-        return abs(process.create_time() - float(payload["created_at"])) < 2
+        return (
+            abs(process.create_time() - float(payload["created_at"]))
+            < _PROCESS_START_TOLERANCE_SECONDS
+        )
     except (OSError, ValueError, KeyError, psutil.NoSuchProcess, psutil.AccessDenied):
         return False
 

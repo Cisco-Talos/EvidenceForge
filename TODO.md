@@ -2,7 +2,7 @@
 
 **Status:** 2.1.2 release preparation; post-v2.1.1 realism fixes merged to dev
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-24
+**Last Roadmap Review:** 2026-09-30
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -58,6 +58,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Reproduce and fix the `apt-healthcare-breach` preview generation failure at
+  collection hour 9 (`Deferred session process projection has no unique transport endpoint`).
+  Diagnose the owning network/session planner contract and add a focused regression; the run
+  stopped before its first checkpoint. See the
+  [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
 - [x] **P1** Preserve Windows facts in Snare and validate its native representation. All 43 variants
   have typed projections and field-level gates against both frozen SOF-ELK revisions; historical
   ambiguity remains explicit. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
@@ -486,8 +491,13 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   structural validity, passes to zero errors, required-reference loading, warning churn, and
   repair regressions across representative scenario families. Use manual scenario-authoring
   acceptance for the 2.0 release candidates and final release.
-- [ ] Complete the local desktop GUI for scenario and pack libraries, evaluation scorecards,
-  bundle export, and overlay editing. See [desktop prototype notes](docs/desktop-prototype.md).
+- [ ] Rebuild the local desktop GUI as Tauri/React with scenario workspaces, durable jobs,
+  conversation history, pack libraries, scorecards, bundle export, and overlay editing. Include
+  first-class projects that group scenarios within a workspace, with a project overview and
+  ungrouped scenarios; connect project overlays in the environment workflow. Review core parity
+  before the seven workflow stages. See the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+- [ ] Index or import preexisting CLI and earlier desktop bundles into Studio's Bundles library,
+  with explicit ownership and safe management rules. The current page lists Studio job records.
 - [ ] Streaming output to SIEM/data lakes.
 - [ ] Log format auto-detection from samples.
 - [ ] D3FEND defensive response modeling through scenario defense profiles.

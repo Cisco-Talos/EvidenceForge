@@ -136,9 +136,13 @@ def test_existing_scenario_context_is_thread_metadata_not_a_drafted_message(
         monkeypatch.setattr(window.bridge, "request", request)
         window.bridge.initialized = True
         window._send_chat(pane, "Please add a Linux host")
-        assert [method for method, _ in requests] == ["thread/start", "turn/start"]
+        assert [method for method, _ in requests] == [
+            "thread/start",
+            "thread/name/set",
+            "turn/start",
+        ]
         assert str(scenario) in requests[0][1]["developerInstructions"]
-        assert requests[1][1]["input"][0] == {
+        assert requests[2][1]["input"][0] == {
             "type": "text",
             "text": "Please add a Linux host",
         }
@@ -309,6 +313,7 @@ def test_tool_activity_collapses_into_one_link_and_restores_from_history(
         assert "eforge validate case.yaml" not in pane.transcript.toPlainText()
         assert "Valid." in pane.transcript.toPlainText()
         assert len(pane._activity["turn-1"]) == 2
+        assert pane.record.conversation_title == "Validate"
     finally:
         window.close()
         app.processEvents()
@@ -349,6 +354,63 @@ def test_continue_authoring_reuses_open_and_closed_scenario_chat(
         assert len(window.state.chats) == 1
         assert window.tabs.count() == 1
         assert window.tabs.currentWidget().record.thread_id == "existing-thread"
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_continue_authoring_reuses_existing_tab_through_path_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import ChatRecord, DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    paths = [workspace / "scenarios" / name / "scenario.yaml" for name in ("alpha", "bravo")]
+    for path in paths:
+        path.parent.mkdir(parents=True)
+        path.write_text(f"version: '1.0'\nname: {path.parent.name}\nenvironment: {{}}\n")
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(workspace, target_is_directory=True)
+    chats = [
+        ChatRecord(
+            id=path.parent.name,
+            title=path.parent.name,
+            context_path=alias / "scenarios" / path.parent.name / "scenario.yaml",
+            context_kind="scenario",
+            thread_id=f"thread-{path.parent.name}",
+        )
+        for path in paths
+    ]
+    window = MainWindow(
+        StateStore(tmp_path / "state"), DesktopState(workspace=workspace, chats=chats)
+    )
+    try:
+        window.show()
+        app.processEvents()
+        library = window.scenario_library
+        original_tabs = window.tabs.count()
+        for path in reversed(paths):
+            window._navigate(0)
+            app.processEvents()
+            row = library._tree_items[path.resolve()]
+            QTest.mouseClick(
+                library.tree.viewport(),
+                Qt.MouseButton.LeftButton,
+                pos=library.tree.visualItemRect(row).center(),
+            )
+            QTest.mouseClick(library.edit, Qt.MouseButton.LeftButton)
+            app.processEvents()
+            assert window.tabs.currentWidget().record.id == path.parent.name
+            assert window.tabs.count() == original_tabs
     finally:
         window.close()
         app.processEvents()
@@ -446,17 +508,140 @@ def test_scenario_conversation_menu_starts_and_switches_chats(
         assert window.tabs.count() == 2
         second = window.tabs.currentWidget()
         assert second is not first
-        assert window.tabs.tabText(window.tabs.indexOf(first)) == "case · 1"
-        assert window.tabs.tabText(window.tabs.indexOf(second)) == "case · 2"
+        assert window.tabs.tabText(window.tabs.indexOf(first)) == "case"
+        assert window.tabs.tabText(window.tabs.indexOf(second)) == "case"
         window._populate_context_conversations(second)
         next(
             action
             for action in second.conversations_menu.actions()
-            if action.text() == "Conversation 1"
+            if action.text() == "New conversation 1"
         ).trigger()
         assert window.tabs.currentWidget() is first
         window._author_scenario(LibraryItem(path=path, name="case"))
         assert len(window.state.chats) == 2
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_conversations_get_fast_model_titles_and_keep_them_after_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge, CodexModel
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    path = workspace / "scenarios" / "case" / "scenario.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    store = StateStore(tmp_path / "state")
+    window = MainWindow(store, DesktopState(workspace=workspace))
+    try:
+        window._author_scenario(LibraryItem(path=path, name="case"))
+        pane = window.tabs.currentWidget()
+        window.models = [CodexModel(id="gpt-6-luna", displayName="GPT-6 Luna")]
+        window.bridge.initialized = True
+        requests: list[tuple[str, dict[str, Any]]] = []
+
+        def request(
+            method: str,
+            parameters: dict[str, Any],
+            callback: Callable[[dict[str, Any]], None] | None = None,
+        ) -> None:
+            requests.append((method, parameters))
+            if callback and method == "thread/start":
+                thread_id = "title-thread" if parameters.get("ephemeral") else "authoring-thread"
+                callback({"result": {"thread": {"id": thread_id}}})
+            elif callback and method == "turn/start":
+                callback({"result": {"turn": {"id": "turn-1"}}})
+
+        monkeypatch.setattr(window.bridge, "request", request)
+        window._send_chat(pane, "Add Linux hosts and SSH evidence")
+        assert any(
+            method == "thread/start"
+            and params.get("ephemeral") is True
+            and params.get("model") == "gpt-6-luna"
+            for method, params in requests
+        )
+        window._codex_event(
+            "item/agentMessage/delta",
+            {"threadId": "title-thread", "itemId": "title", "delta": "Linux SSH Evidence"},
+        )
+        window._codex_event(
+            "turn/completed", {"threadId": "title-thread", "turn": {"status": "completed"}}
+        )
+        assert pane.record.conversation_title == "Linux SSH Evidence"
+        assert window.tabs.tabText(window.tabs.indexOf(pane)) == "case"
+        assert (
+            "thread/name/set",
+            {"threadId": "authoring-thread", "name": "Linux SSH Evidence"},
+        ) in requests
+        window._populate_context_conversations(pane)
+        assert any(
+            action.text() == "Linux SSH Evidence" for action in pane.conversations_menu.actions()
+        )
+        assert store.load(workspace).chats[0].conversation_title == "Linux SSH Evidence"
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_closed_conversation_gets_title_from_saved_thread_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from evidenceforge.desktop.app_server import CodexBridge
+    from evidenceforge.desktop.library import LibraryItem
+    from evidenceforge.desktop.main import MainWindow
+    from evidenceforge.desktop.state import DesktopState, StateStore
+
+    monkeypatch.setattr(CodexBridge, "start", lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    workspace = tmp_path / "workspace"
+    path = workspace / "scenarios" / "case" / "scenario.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text("version: '1.0'\nname: case\nenvironment: {}\n")
+    window = MainWindow(StateStore(tmp_path / "state"), DesktopState(workspace=workspace))
+    try:
+        window._author_scenario(LibraryItem(path=path, name="case"))
+        first = window.tabs.currentWidget()
+        first.record.thread_id = "saved-thread"
+        window._close_chat_tab(window.tabs.indexOf(first))
+        second = window._create_context_chat("case", path, "scenario", "eforge-scenario")
+        window.bridge.initialized = True
+
+        def request(
+            method: str,
+            _parameters: dict[str, Any],
+            callback: Callable[[dict[str, Any]], None] | None = None,
+        ) -> None:
+            if method == "thread/read" and callback:
+                callback(
+                    {
+                        "result": {
+                            "thread": {
+                                "name": "Revise SSH Evidence",
+                                "turns": [],
+                            }
+                        }
+                    }
+                )
+
+        monkeypatch.setattr(window.bridge, "request", request)
+        window._populate_context_conversations(second)
+        assert first.record.conversation_title == "Revise SSH Evidence"
+        assert any(
+            action.text() == "Revise SSH Evidence" for action in second.conversations_menu.actions()
+        )
     finally:
         window.close()
         app.processEvents()
