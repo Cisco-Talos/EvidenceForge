@@ -31,6 +31,7 @@ from evidenceforge.desktop.library import discover_packs, discover_scenarios
 from evidenceforge.desktop.progress import GenerationProgress
 from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import GenerationJob
+from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.studio.codex import (
     CodexClient,
     CodexThreadNotReadyError,
@@ -283,6 +284,55 @@ class JobScorecard(BaseModel):
     total_records: int | None = None
     evaluated_at: str | None = None
     error: str | None = None
+
+
+class ScorecardSubscore(BaseModel):
+    """One saved quality measure shown in the desktop scorecard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    score: float | None
+    details: str
+    skipped: bool
+
+
+class ScorecardPillar(BaseModel):
+    """A quality pillar and its saved measures."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    score: float | None
+    sub_scores: list[ScorecardSubscore]
+
+
+class ScorecardCriterion(BaseModel):
+    """One threshold decision from the saved evaluation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    threshold: float
+    actual: float | None
+    passed: bool | None
+    level: Literal["hard", "target"]
+
+
+class ScorecardDetail(BaseModel):
+    """Bounded, readable projection of an authoritative evaluation report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario_name: str
+    evaluated_at: str
+    overall_score: float | None
+    acceptance_passed: bool | None
+    total_records: int
+    source_counts: dict[str, int]
+    pillars: list[ScorecardPillar]
+    acceptance_criteria: list[ScorecardCriterion]
+    flags: list[str]
 
 
 class JobSummary(BaseModel):
@@ -1634,6 +1684,67 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         studio.store.delete_job(job.id)
         await studio.emit(job.id, "job.deleted", {"id": job.id})
         return {"status": "completed bundle deleted"}
+
+    @app.get("/v1/jobs/{job_id}/scorecard")
+    def scorecard(job_id: str, studio: StudioService = Depends(authorized)) -> ScorecardDetail:
+        """Read one saved evaluation without putting the full report in every snapshot."""
+        payload = next(
+            (
+                entry
+                for entry in studio.store.job_payloads(studio.settings.workspace, "evaluation")
+                if entry["id"] == job_id
+            ),
+            None,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Evaluation not found")
+        result_file = Path(payload["result_file"])
+        expected = studio.jobs.directory / "jobs" / f"{job_id}.json"
+        if result_file != expected or result_file.is_symlink() or not result_file.is_file():
+            raise HTTPException(status_code=404, detail="Saved evaluation report is unavailable")
+        if result_file.stat().st_size > 32 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Saved evaluation report is too large")
+        try:
+            report = QualityReport.model_validate_json(result_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422, detail="Saved evaluation report is invalid"
+            ) from exc
+        return ScorecardDetail(
+            scenario_name=report.scenario_name,
+            evaluated_at=report.evaluated_at.isoformat(),
+            overall_score=report.overall_score,
+            acceptance_passed=report.acceptance_passed,
+            total_records=report.total_records,
+            source_counts=report.source_counts,
+            pillars=[
+                ScorecardPillar(
+                    name=pillar.name,
+                    score=pillar.score,
+                    sub_scores=[
+                        ScorecardSubscore(
+                            name=sub.name,
+                            score=sub.score,
+                            details=sub.details,
+                            skipped=sub.skipped,
+                        )
+                        for sub in pillar.sub_scores
+                    ],
+                )
+                for pillar in report.pillars
+            ],
+            acceptance_criteria=[
+                ScorecardCriterion(
+                    name=criterion.name,
+                    threshold=criterion.threshold,
+                    actual=criterion.actual,
+                    passed=criterion.passed,
+                    level=criterion.level,
+                )
+                for criterion in report.acceptance_criteria
+            ],
+            flags=report.flags,
+        )
 
     @app.get("/v1/jobs/{job_id}/files")
     def bundle_files(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, Any]:

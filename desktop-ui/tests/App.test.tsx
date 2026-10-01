@@ -56,6 +56,14 @@ vi.mock("../src/useStudio", () => ({
       if (path === "/v1/codex/pending") return [];
       if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
       if (path === "/v1/jobs/bundle-sizes") return { "job-1": 1536, "completed-run": 2 * 1024 ** 2 };
+      if (path === "/v1/jobs/evaluation-1/scorecard") return {
+        scenario_name: "Alpha", evaluated_at: "2026-09-30T16:00:00Z",
+        overall_score: 89.4, acceptance_passed: true, total_records: 12345,
+        source_counts: { zeek_conn: 12345 },
+        pillars: [{ name: "Parseability", score: 94, sub_scores: [{ name: "Schema", score: 94, details: "Valid fields", skipped: false }] }],
+        acceptance_criteria: [{ name: "Schema gate", threshold: 80, actual: 94, passed: true, level: "hard" }],
+        flags: [],
+      };
       if (path === "/v1/settings" && method === "PUT") return body;
       return {};
     }) };
@@ -129,13 +137,20 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
       scorecard: { overall_score: 89.4, acceptance_passed: true, total_records: 12345, evaluated_at: "2026-09-30T16:00:00Z" } },
   ];
   try {
-    render(<App />);
+    const { container } = render(<App />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
     expect(screen.getByText("89/100")).toBeTruthy();
     expect(screen.getByText("12,345 records")).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    await user.click(screen.getByRole("button", { name: "View scorecard" }));
+    expect(screen.getByRole("tab", { name: "Runs" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText(/89\/100 · Pass/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole("region", { name: "Saved scorecard" })).toBeTruthy());
+    expect(container.querySelector("#job-evaluation-1")?.hasAttribute("open")).toBe(true);
+    expect(screen.getByText("Parseability")).toBeTruthy();
+    expect(screen.getByText("Schema gate")).toBeTruthy();
+    await user.click(screen.getByText("Records by source"));
+    expect(screen.getByText("zeek_conn")).toBeTruthy();
   } finally {
     snapshot.jobs = originalJobs;
   }

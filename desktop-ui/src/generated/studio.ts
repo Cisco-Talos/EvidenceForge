@@ -574,6 +574,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/scorecard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scorecard
+         * @description Read one saved evaluation without putting the full report in every snapshot.
+         */
+        get: operations["scorecard_v1_jobs__job_id__scorecard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/files": {
         parameters: {
             query?: never;
@@ -1294,6 +1314,77 @@ export interface components {
              * @default false
              */
             show_hidden: boolean;
+        };
+        /**
+         * ScorecardCriterion
+         * @description One threshold decision from the saved evaluation.
+         */
+        ScorecardCriterion: {
+            /** Name */
+            name: string;
+            /** Threshold */
+            threshold: number;
+            /** Actual */
+            actual: number | null;
+            /** Passed */
+            passed: boolean | null;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "hard" | "target";
+        };
+        /**
+         * ScorecardDetail
+         * @description Bounded, readable projection of an authoritative evaluation report.
+         */
+        ScorecardDetail: {
+            /** Scenario Name */
+            scenario_name: string;
+            /** Evaluated At */
+            evaluated_at: string;
+            /** Overall Score */
+            overall_score: number | null;
+            /** Acceptance Passed */
+            acceptance_passed: boolean | null;
+            /** Total Records */
+            total_records: number;
+            /** Source Counts */
+            source_counts: {
+                [key: string]: number;
+            };
+            /** Pillars */
+            pillars: components["schemas"]["ScorecardPillar"][];
+            /** Acceptance Criteria */
+            acceptance_criteria: components["schemas"]["ScorecardCriterion"][];
+            /** Flags */
+            flags: string[];
+        };
+        /**
+         * ScorecardPillar
+         * @description A quality pillar and its saved measures.
+         */
+        ScorecardPillar: {
+            /** Name */
+            name: string;
+            /** Score */
+            score: number | null;
+            /** Sub Scores */
+            sub_scores: components["schemas"]["ScorecardSubscore"][];
+        };
+        /**
+         * ScorecardSubscore
+         * @description One saved quality measure shown in the desktop scorecard.
+         */
+        ScorecardSubscore: {
+            /** Name */
+            name: string;
+            /** Score */
+            score: number | null;
+            /** Details */
+            details: string;
+            /** Skipped */
+            skipped: boolean;
         };
         /**
          * SkillInstallRequest
@@ -2988,6 +3079,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scorecard_v1_jobs__job_id__scorecard_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScorecardDetail"];
                 };
             };
             /** @description Validation Error */

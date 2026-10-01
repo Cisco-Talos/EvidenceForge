@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, MessageSquareText, Pause, Play, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
@@ -7,6 +7,7 @@ import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { CopyPathButton } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { jobSubmittedAt } from "./jobOrder";
+import { ScorecardPanel } from "./ScorecardPanel";
 
 export function shortPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -34,8 +35,8 @@ export function StatusBadge({ status }: { status: string }) {
   return <span className={`status status-${status.toLowerCase().replace(/ /g, "-")}`}><span className="status-dot" />{status}</span>;
 }
 
-export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, onShowSource, api, onError, onChanged }: {
-  job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean;
+export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, api, onError, onChanged }: {
+  job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean; focusScorecard?: boolean;
   onShowSource?: (generationId: string) => void; api: StudioApi;
   onError: (message: string) => void; onChanged: () => Promise<void>;
 }) {
@@ -45,6 +46,8 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [savedExport, setSavedExport] = useState<string | null>(null);
+  const [showScorecard, setShowScorecard] = useState(focusScorecard);
+  useEffect(() => { if (focusScorecard) setShowScorecard(true); }, [focusScorecard]);
   async function openBundle() {
     try {
       setFiles(await api.request<BundleFiles>(`/v1/jobs/${job.id}/files`));
@@ -102,6 +105,8 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div>
       {job.kind === "generation" && <><p className="muted small">{detail}</p>{!!progress?.storyline_total && <p className="muted small">Storyline {progress.storyline_event} of {progress.storyline_total}</p>}</>}
       {job.kind === "evaluation" && job.scorecard && !job.scorecard.error && <p className="muted small">{(job.scorecard.total_records || 0).toLocaleString()} records evaluated</p>}
+      {job.kind === "evaluation" && job.scorecard && !job.scorecard.error && <button className="job-source-link" aria-expanded={showScorecard} onClick={() => setShowScorecard(!showScorecard)}>{showScorecard ? "Hide scorecard" : "View scorecard"}</button>}
+      {showScorecard && job.kind === "evaluation" && <ScorecardPanel jobId={job.id} api={api} />}
       {job.kind === "evaluation" && job.generation_id && onShowSource && <button className="job-source-link" onClick={() => onShowSource(job.generation_id!)}>Jump to generation #{job.generation_id.slice(0, 8)}</button>}
       {job.status_message && job.kind === "generation" && <p className="job-message">{job.status_message}</p>}
     <div className="job-actions">

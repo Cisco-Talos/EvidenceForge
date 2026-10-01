@@ -805,6 +805,80 @@ def test_completed_evaluation_summary_restores_saved_scorecard(tmp_path: Path) -
     assert job_summary(json.loads(job.model_dump_json()))["scorecard"]["error"]
 
 
+def test_scorecard_detail_reads_only_saved_workspace_evaluation(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    workspace = tmp_path / "workspace"
+    other_workspace = tmp_path / "other"
+    paths = _paths(tmp_path / "private")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    app = create_app(paths, "secret")
+    result_file = paths.state / "jobs" / "evaluation-1.json"
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(
+        json.dumps(
+            {
+                "scenario_name": "casework",
+                "evaluated_at": "2026-09-30T16:00:00Z",
+                "overall_score": 87.6,
+                "acceptance_passed": True,
+                "total_records": 12345,
+                "source_counts": {"zeek_conn": 321},
+                "pillars": [
+                    {
+                        "number": 1,
+                        "name": "Parseability",
+                        "weight": 0.2,
+                        "score": 92,
+                        "sub_scores": [
+                            {"name": "Schema", "key": "schema", "weight": 1, "score": 92}
+                        ],
+                    }
+                ],
+                "acceptance_criteria": [
+                    {
+                        "name": "Schema gate",
+                        "pillar": "Parseability",
+                        "sub_score_key": "schema",
+                        "threshold": 80,
+                        "actual": 92,
+                        "passed": True,
+                        "level": "hard",
+                    }
+                ],
+                "flags": ["Review timestamps"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    job = EvaluationJob(
+        id="evaluation-1",
+        generation_id="generation-1",
+        workspace=workspace,
+        output_root=workspace / "run",
+        result_file=result_file,
+        log_file=paths.state / "jobs" / "evaluation-1.log",
+        command=[],
+        created_at=1,
+        status="completed",
+    )
+    app.state.studio.store.save_job(job.id, workspace, "evaluation", job)
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        assert client.get("/v1/jobs/evaluation-1/scorecard").status_code == 401
+        response = client.get("/v1/jobs/evaluation-1/scorecard", headers=headers)
+        assert response.status_code == 200
+        detail = response.json()
+        assert detail["overall_score"] == 87.6
+        assert detail["pillars"][0]["sub_scores"][0]["score"] == 92
+        assert detail["acceptance_criteria"][0]["passed"] is True
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(other_workspace)})
+        assert client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).status_code == 404
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
+        result_file.write_text("invalid JSON", encoding="utf-8")
+        assert client.get("/v1/jobs/evaluation-1/scorecard", headers=headers).status_code == 422
+
+
 def test_service_auth_workspace_chat_and_validation(tmp_path: Path, monkeypatch: object) -> None:
     workspace = tmp_path / "workspace"
     _scenario(workspace, "alpha")

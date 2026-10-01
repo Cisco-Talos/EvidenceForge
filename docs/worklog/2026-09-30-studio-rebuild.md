@@ -433,3 +433,20 @@ frontend build, and full Ruff check/format pass.
 The browser preview helper and Vite server were restarted after confirming zero active jobs and
 chats. The refreshed helper and preview responded on loopback; no authored files or run bundles
 were changed by the restart.
+
+## Run-linked scorecard detail (October 1)
+
+The scenario overview's saved score now has a direct **View scorecard** action. It opens the
+matching evaluation row in that scenario's run history and highlights it. The row loads a readable
+projection of its saved quality report only when opened: overall result, flags, pillars and
+subscores, acceptance checks, and record counts by source. The full report stays on disk, so
+routine workspace snapshots remain small. The new authenticated route is scoped to the active
+workspace and reads only its app-owned evaluation report path.
+
+Service and React tests cover the exact run link, report rendering, authorization, workspace
+isolation, and invalid reports. The disposable browser preview was restarted after confirming
+zero active jobs and chats; opening the latest score for `lumenforge-drive-by-beacon` visibly
+showed the matching evaluation and its saved detailed report. This improves core parity but is
+not the Stage 6 evidence drill-down or comparison workflow. Verification: 75 focused Python
+service/desktop tests, 42 React tests, generated API type check, frontend build, and full Ruff
+check/format pass.

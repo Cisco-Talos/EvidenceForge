@@ -15,6 +15,7 @@ export type QuitSettings = Required<Schema["QuitSettings"]>;
 export type StudioSettings = Omit<Required<Schema["StudioSettings"]>, "quit"> & { quit: QuitSettings };
 export type GenerationProgress = Required<Schema["GenerationProgress"]>;
 export type StudioJob = Schema["JobSummary"];
+export type ScorecardDetail = Schema["ScorecardDetail"];
 export type StudioSnapshot = Omit<Schema["StudioSnapshot"], "settings" | "items" | "projects" | "views" | "conversations" | "jobs" | "codex_health" | "validations"> & {
   settings: StudioSettings;
   items: CatalogItem[];
