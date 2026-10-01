@@ -20,6 +20,12 @@ has been configured to continue in the background. Reopen Studio to reconnect to
 The source checkout, Python environment, Node.js, and Rust build tools are required for this
 development release. A bundled standalone app is planned later.
 
+On macOS, the helper runs as a transient user launchd service, independently of the window.
+Its private `service-agent.plist` lives in Studio's state directory; the registration lasts for
+the current login session and adds no login item. This keeps a closed Studio window from retaining
+a macOS 27 background-process Dock entry. Linux uses a detached process. The helper currently
+remains available after its tasks finish and exits on logout, reboot, or an explicit stop.
+
 ## Workspace and app data
 
 The first launch creates a default workspace in the platform's Documents directory, named
@@ -45,8 +51,10 @@ workspace, app data folder, and logs.
 ## Current review scope
 
 The scenario library groups scenarios into projects; pack libraries use virtual folders. Each
-scenario workspace contains an overview, persistent conversations, validation, runs, and saved
-scores. The job center shows all generation and evaluation rows in stable order with independent
+scenario workspace contains Overview, Conversations, Validation, Generation, and Scoring views.
+Generation provides the output destination and run controls; Scoring lets you choose a completed
+run to evaluate and view its saved scores. The job center shows all generation and evaluation rows
+in stable order with independent
 progress. The Bundles page groups Studio runs and read-only imported complete CLI bundles by
 scenario. A bundle can be inspected with the file viewer or exported as a ZIP. Removing an
 imported bundle from Studio removes its index entry and leaves its files in place. Studio can

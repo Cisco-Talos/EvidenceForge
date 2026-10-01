@@ -339,9 +339,9 @@ def test_scenario_two_draft_promotes_and_keeps_conversation(
         draft = client.post(
             "/v1/conversations",
             headers=headers,
-            json={"draft_kind": "scenario", "name": "My new scenario"},
+            json={"draft_kind": "scenario", "name": "My-new-scenario"},
         ).json()
-        assert draft["draft_name"] == "My new scenario"
+        assert draft["draft_name"] == "My-new-scenario"
         target = Path(draft["draft_path"])
         target.parent.mkdir(parents=True)
         target.write_text(
@@ -356,6 +356,31 @@ def test_scenario_two_draft_promotes_and_keeps_conversation(
         assert item["name"] == "authored-two"
         assert linked["item_id"] == item["id"]
         assert linked["draft_kind"] is None
+
+
+@pytest.mark.parametrize(
+    "name", ["Scenario with spaces", "scenario.yaml", "bad/name", "", "x" * 81]
+)
+def test_scenario_draft_rejects_invalid_names_at_create_and_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    app = create_app(_paths(tmp_path / "private"), "secret")
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        invalid = client.post(
+            "/v1/conversations", headers=headers, json={"draft_kind": "scenario", "name": name}
+        )
+        assert invalid.status_code == 422
+        assert client.get("/v1/conversations", headers=headers).json() == []
+        valid = client.post(
+            "/v1/conversations",
+            headers=headers,
+            json={"draft_kind": "scenario", "name": "Valid-scenario_2"},
+        ).json()
+        route = f"/v1/conversations/{valid['id']}"
+        assert client.patch(route, headers=headers, json={"draft_name": name}).status_code == 422
+        assert app.state.studio.store.conversation(valid["id"]).draft_name == "Valid-scenario_2"
 
 
 def test_checkpoint_setting_regeneration_and_incomplete_bundle_cleanup(
@@ -886,14 +911,14 @@ def test_draft_conversation_links_authored_file_and_project(
         created = client.post(
             "/v1/conversations",
             headers=headers,
-            json={"draft_kind": "scenario", "project_id": project["id"], "name": "New case"},
+            json={"draft_kind": "scenario", "project_id": project["id"], "name": "New-case"},
         )
         assert created.status_code == 200, created.text
         draft = created.json()
         target = Path(draft["draft_path"])
         assert draft["item_id"] is None
         assert draft["draft_project_id"] == project["id"]
-        assert draft["draft_name"] == "New case"
+        assert draft["draft_name"] == "New-case"
         assert target.parent.parent == workspace / "scenarios"
         assert not target.exists()
         assert (
@@ -1467,6 +1492,7 @@ def test_codex_turn_uses_scenario_context_and_preserves_fast_completion(
     assert "thread/resume" not in [record["method"] for record in records]
     assert turn["params"]["input"][0] == {"type": "text", "text": "Validate this scenario"}
     assert turn["params"]["input"][1]["name"] == "eforge-scenario"
+    assert turn["params"]["summary"] == "auto"
 
 
 def test_uncertain_codex_turn_preserves_attempt_without_overwriting_fast_completion(
@@ -1589,6 +1615,7 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
     assert draft["draft_path"] in started["params"]["developerInstructions"]
     turn = next(record for record in records if record["method"] == "turn/start")
     assert turn["params"]["input"][1]["name"] == "eforge-scenario"
+    assert turn["params"]["summary"] == "auto"
 
 
 def test_close_conflict_and_paused_reopen_require_explicit_resume(

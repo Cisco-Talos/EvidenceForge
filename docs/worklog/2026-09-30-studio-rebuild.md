@@ -488,3 +488,57 @@ files. The test fixture was then removed. Visual review also replaced the import
 Studio ID with its folder name and made the file viewer open ground truth first when present.
 `eforge-studio` source-run setup and state locations are now documented in
 `docs/studio-source-run.md` while the Qt entry point remains available for the review gate.
+
+## Chat presentation and scenario operations (October 1)
+
+Agent messages now render Markdown, with highlighted Python, YAML, and JSON fences, readable
+lists, tables, and inline code. Embedded HTML remains disabled; external links retain safe new-tab
+behavior, while filesystem references remain readable text rather than broken browser links.
+The conversation title above the chat has a pencil and inline editing, with Enter to save and
+Escape to cancel. Renaming refreshes the persistent conversation list.
+
+Tool activity keeps its collapsed conversation summary and adds expandable entries with brief
+command previews, execution output, file changes, and Codex-provided reasoning summaries. Started
+and completed events update the same entry. Summary and command-output deltas update live, and new
+turns explicitly request Codex's automatic summaries. Historical reasoning entries with no summary
+say so; raw reasoning content is not displayed.
+
+New scenario and draft-rename inputs validate the canonical letters/numbers/hyphens/underscores
+name contract as the user types. A short red message explains invalid input, submission is disabled,
+and the API applies the same constraint. Scenario workspaces now have separate **Generation** and
+**Scoring** tabs: output-folder setup and generation history in the former; a completed-run picker,
+evaluation action, and saved scorecards in the latter. Scorecard and source-generation links open
+the exact row across those tabs. Responsive fixes contain the tab strip and long names, keep the
+chat composer visible, and reserve adequate room for library status icons.
+
+Verification: 55 React tests and 55 focused Python service/background tests pass. Generated API
+type checks, frontend and debug macOS native builds, and full Ruff check/format pass. Browser review
+confirmed the Scoring setup, rendered Markdown, title editing/cancellation, and command previews.
+Screenshot: `/private/tmp/eforge-studio-chat-review.jpg`. Core parity remains under user review.
+
+## macOS background helper attribution (October 1)
+
+The user's extra Dock entry has the macOS 27 **Running in Background** label. The native window
+process had exited, but macOS continued attributing its detached Python descendants to Studio;
+NSWorkspace did not report a second window application. Apple's macOS 27 support guidance explains
+this attribution: <https://support.apple.com/en-us/125671>.
+
+macOS helper startup now uses a transient, per-data-directory user launchd service instead of an
+app-spawned orphan process. Its mode-0600 plist stays in private Studio state; it adds no login
+item, KeepAlive rule, or automatic startup on subsequent logins. Only runtime-location and
+EvidenceForge environment variables are forwarded, keeping unrelated shell credentials out of
+the plist. Existing live helpers are still reattached, and a stopped registered helper can be
+started again. Linux retains the detached process contract.
+
+A real disposable launchd helper started successfully and served authenticated API requests. The
+updated native app attached to its independent helper, and closing the native window exited the
+shell while retaining the helper. The disposable registrations were removed after confirming no
+active work. The idle platform helper was restarted through launchd, and an idle leftover
+smoke-test helper was stopped; authored files and bundles were preserved. A combined preview/default
+restart was rejected by automatic approval review because it also wrote a token to a publicly
+served frontend file; the completed restart was narrowed to the idle platform helper and private
+state, without changing browser credentials.
+
+The helper currently remains running after tasks finish, until logout/reboot or explicit stop.
+An idle shutdown policy is a possible follow-up, not part of this change. Final Dock presentation
+and the native chat/operations changes need user confirmation.

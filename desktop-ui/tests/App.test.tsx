@@ -105,7 +105,7 @@ test("path controls copy the complete path even when the label is shortened", as
     expect(writeText).toHaveBeenCalledWith(snapshot.items[0].path);
     expect(screen.getByRole("button", { name: "Path copied" })).toBeTruthy();
 
-    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    await user.click(screen.getByRole("tab", { name: "Generation" }));
     await user.click(container.querySelector("#job-job-1 > summary")!);
     await user.click(screen.getByRole("button", { name: "Copy bundle path" }));
     expect(writeText).toHaveBeenCalledWith(snapshot.jobs[0].output_root);
@@ -145,7 +145,7 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
     expect(screen.getByText("89/100")).toBeTruthy();
     expect(screen.getByText("12,345 records")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "View scorecard" }));
-    expect(screen.getByRole("tab", { name: "Runs" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Scoring" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText(/89\/100 · Pass/)).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("region", { name: "Saved scorecard" })).toBeTruthy());
     expect(container.querySelector("#job-evaluation-1")?.hasAttribute("open")).toBe(true);
@@ -404,7 +404,7 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
   const draft = {
     id: "draft-1", workspace, item_id: null, draft_kind: "scenario" as const,
     draft_path: `${workspace}/scenarios/studio-draft-1/scenario.yaml`,
-    draft_project_id: null, draft_name: "Short scenario", thread_id: null, title: "New conversation", model_id: null,
+    draft_project_id: null, draft_name: "Short-scenario", thread_id: null, title: "New conversation", model_id: null,
     reasoning_effort: null, active: false, needs_attention: false, connection_note: null,
     updated_at: 1800000100,
   };
@@ -416,16 +416,16 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
     const view = render(<App />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New scenario" }));
-    await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Short scenario");
+    await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Short-scenario");
     await user.click(screen.getByRole("button", { name: "Create scenario" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Message to Codex" })).toBeTruthy());
     expect(screen.getByText("Create a scenario")).toBeTruthy();
     expect(useStudio().api?.request).toHaveBeenCalledWith(
-      "/v1/conversations", "POST", { draft_kind: "scenario", project_id: null, name: "Short scenario" },
+      "/v1/conversations", "POST", { draft_kind: "scenario", project_id: null, name: "Short-scenario" },
     );
     await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Scenarios" }));
-    expect(screen.getByRole("button", { name: /^Short scenario/ })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^Short scenario/ }));
+    expect(screen.getByRole("button", { name: /^Short-scenario/ })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^Short-scenario/ }));
     expect(screen.getByRole("textbox", { name: "Message to Codex" })).toBeTruthy();
     snapshot.items = [...originalItems, { ...originalItems[0], id: "authored-1", path: draft.draft_path, name: "New authored" }];
     snapshot.conversations = [{ ...draft, item_id: "authored-1", draft_kind: null, draft_project_id: null }, ...originalConversations];
@@ -436,6 +436,68 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
     snapshot.conversations = originalConversations;
     snapshot.items = originalItems;
   }
+});
+
+test("scenario names show live errors and block invalid creation", async () => {
+  render(<App />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "New scenario" }));
+  const input = screen.getByRole("textbox", { name: "Scenario Name" });
+  const create = screen.getByRole("button", { name: "Create scenario" });
+  expect(create.hasAttribute("disabled")).toBe(true);
+  await user.type(input, "A scenario!");
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByText("Use letters, numbers, hyphens, or underscores; no spaces.")).toBeTruthy();
+  expect(create.hasAttribute("disabled")).toBe(true);
+  await user.clear(input);
+  await user.type(input, "A-scenario_2");
+  expect(input.getAttribute("aria-invalid")).toBe("false");
+  expect(screen.queryByText("Use letters, numbers, hyphens, or underscores; no spaces.")).toBeNull();
+  expect(create.hasAttribute("disabled")).toBe(false);
+});
+
+test("scenario workspace has generation setup and a run-specific scoring action", async () => {
+  const originalJobs = snapshot.jobs;
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed", started_at: 1800000010 }, originalJobs[1],
+    { ...originalJobs[0], id: "older-alpha", status: "completed", started_at: 1800000000 }];
+  try {
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Generate", exact: true }));
+    expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
+    const setup = screen.getByRole("heading", { name: "Generate this scenario" }).closest("section")!;
+    await user.clear(screen.getByRole("textbox", { name: "Output parent folder" }));
+    await user.type(screen.getByRole("textbox", { name: "Output parent folder" }), "/tmp/other-runs");
+    await user.click(within(setup).getByRole("button", { name: "Generate" }));
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/generations", "POST", { scenario_id: "alpha", output_parent: "/tmp/other-runs" });
+    await user.click(screen.getByRole("tab", { name: "Scoring" }));
+    expect(screen.getByRole("combobox", { name: "Generated run to evaluate" })).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: "Generated run to evaluate" }) as HTMLSelectElement).value).toBe("job-1");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Generated run to evaluate" }), "older-alpha");
+    await user.click(screen.getByRole("button", { name: "Evaluate" }));
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/evaluations", "POST", { generation_id: "older-alpha" });
+    expect(screen.queryByText("Bravo")).toBeNull();
+  } finally { snapshot.jobs = originalJobs; }
+});
+
+test("scoring source links navigate back to the exact generation tab and row", async () => {
+  const originalJobs = snapshot.jobs;
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, {
+    id: "evaluation-1", kind: "evaluation", status: "completed", status_message: "",
+    generation_id: "job-1", output_root: originalJobs[0].output_root,
+  }];
+  try {
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("tab", { name: "Scoring" }));
+    await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
+    expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "Scoring" }));
+    expect(screen.getByRole("tab", { name: "Scoring" }).getAttribute("aria-selected")).toBe("true");
+  } finally { snapshot.jobs = originalJobs; }
 });
 
 test("Codex status dot explains a stalled connection and reconnects with active-turn warning", async () => {

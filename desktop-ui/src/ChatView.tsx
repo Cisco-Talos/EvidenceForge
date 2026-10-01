@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, CirclePause, Sparkles } from "lucide-react";
+import { ArrowUp, Check, CirclePause, Pencil, Sparkles, X } from "lucide-react";
 import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type TurnSubmission } from "./api";
+import { ChatActivity, upsertActivity, type ActivityItem } from "./ChatActivity";
+import { ChatMarkdown } from "./ChatMarkdown";
 
 interface HistoryItem { type: string; text?: string; content?: { type: string; text?: string }[]; [key: string]: unknown }
 interface HistoryTurn { id?: string; status?: string; items?: HistoryItem[] }
@@ -36,25 +38,18 @@ function flattenHistory(history: CodexHistory, localTurns: LocalTurn[]): { messa
       } else if (item.type === "agentMessage" && item.text) {
         messages.push({ id: `${turn.id}-${index}`, role: "agent", text: item.text });
       } else if (item.type !== "userMessage" && item.type !== "agentMessage") {
-        activities.push(item);
+        activities.push({ ...item, id: typeof item.id === "string" ? item.id : `${turn.id}-${index}`, status: typeof item.status === "string" ? item.status : turn.status || "completed" });
       }
     }
   }
   return { messages, activities };
 }
 
-function activityLabel(item: HistoryItem): string {
-  if (item.type === "commandExecution") return "Command";
-  if (item.type === "fileChange") return "File change";
-  if (item.type === "reasoning") return "Reasoning";
-  return item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
-}
-
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, onDraftSubmitted, onError }: {
+export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, onDraftSubmitted, onRenamed, onError }: {
   item: Pick<CatalogItem, "name" | "kind">;
   conversation: Conversation | null;
   codexHealth: CodexHealth;
@@ -62,6 +57,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   subscribeEvents: (listener: (event: StudioEvent) => void) => () => void;
   initialDraft?: string;
   onDraftSubmitted?: (conversationId: string) => void;
+  onRenamed?: () => Promise<void>;
   onError: (error: string) => void;
 }) {
   const [history, setHistory] = useState<CodexHistory>({});
@@ -71,7 +67,11 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const [skill, setSkill] = useState("");
   const [sending, setSending] = useState(false);
   const [localTurns, setLocalTurns] = useState<LocalTurn[]>([]);
-  const [liveActivity, setLiveActivity] = useState<HistoryItem[]>([]);
+  const [liveActivity, setLiveActivity] = useState<ActivityItem[]>([]);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [title, setTitle] = useState(conversation?.title || "");
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
   const [historyPending, setHistoryPending] = useState(false);
   const [historyWarning, setHistoryWarning] = useState(false);
   const [answer, setAnswer] = useState("");
@@ -161,6 +161,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   }, [api, conversationId, loadHistory, onError]);
 
   useEffect(() => { setDraft(""); }, [conversationId]);
+  useEffect(() => { setTitle(conversation?.title || ""); setEditingTitle(false); }, [conversationId, conversation?.title]);
   useEffect(() => { if (initialDraft) setDraft(initialDraft); }, [conversationId, initialDraft]);
 
   useEffect(() => {
@@ -216,10 +217,24 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
         setLiveActivity([]);
         void loadHistory(completedId);
       } else if (method === "item/started" || method === "item/completed") {
-        const activity = params.item as HistoryItem;
+        const activity = params.item as ActivityItem;
         if (activity && activity.type !== "agentMessage" && activity.type !== "userMessage") {
-          setLiveActivity((current) => [...current, activity]);
+          setLiveActivity((current) => upsertActivity(current, { ...activity, status: activity.status || (method === "item/completed" ? "completed" : "inProgress") }));
         }
+      } else if (method === "item/reasoning/summaryTextDelta" || method === "item/commandExecution/outputDelta") {
+        const id = String(params.itemId || "");
+        if (!id) return;
+        setLiveActivity((current) => {
+          const entry = current.find((activity) => activity.id === id) || { id, type: method.includes("reasoning") ? "reasoning" : "commandExecution", status: "inProgress" };
+          if (method.includes("reasoning")) {
+            const summary = [...(entry.summary || [])];
+            const index = typeof params.summaryIndex === "number" ? params.summaryIndex : 0;
+            if (index < 0 || index > 100) return current;
+            summary[index] = (summary[index] || "") + String(params.delta || "");
+            return upsertActivity(current, { ...entry, summary });
+          }
+          return upsertActivity(current, { ...entry, aggregatedOutput: ((entry.aggregatedOutput || "") + String(params.delta || "")).slice(-256 * 1024) });
+        });
       }
     });
   }, [conversationId, loadHistory, subscribeEvents]);
@@ -273,6 +288,19 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     catch (error) { onError(String(error)); }
   }
 
+  async function saveTitle() {
+    const value = titleDraft.trim();
+    if (!conversationId || !value || savingTitle) return;
+    setSavingTitle(true);
+    try {
+      await api.request(`/v1/conversations/${conversationId}`, "PATCH", { title: value });
+      setTitle(value);
+      setEditingTitle(false);
+      await onRenamed?.();
+    } catch (error) { onError(String(error)); }
+    finally { setSavingTitle(false); }
+  }
+
   async function send() {
     const text = draft.trim();
     if (!conversationId || !text || sending || conversation?.active || codexHealth.state !== "connected" || status?.account_ready === false) return;
@@ -312,14 +340,14 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   if (!conversation) return <section className="chat-panel"><div className="chat-body"><div className="chat-welcome"><Sparkles size={26} /><h2>Select a conversation</h2><p>Every conversation stays connected to {item.name}.</p></div></div></section>;
 
   return <section className="chat-panel">
-    <div className="chat-topline"><div><strong>{conversation.title}</strong><span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
+    <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" maxLength={80} value={titleDraft} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTitle(false); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={savingTitle || !titleDraft.trim()}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" disabled={savingTitle} onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
     {conversation.connection_note && <p className="chat-connection-note" role="status">{conversation.connection_note}</p>}
     <div className="chat-body" ref={chatBody} onScroll={trackChatScroll}><div className="message-list">
       {!messages.length && !localTurns.length && !conversation.active && <div className="chat-welcome"><div className="chat-symbol"><Sparkles size={25} /></div><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{isNewDraft ? "Describe what you want to build. Codex will use the appropriate EvidenceForge skill and save the authored file in this workspace." : `Ask Codex to build, revise, or explain this ${item.kind === "scenario" ? "scenario" : "pack"}. Its source path is already in conversation context.`}</p></div>}
-      {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble"><span className="message-author">{message.role === "user" ? "You" : "Codex"}</span><p>{message.text}</p></div></div>)}
-      {!!activities.length && <details className="tool-activity"><summary><ChevronDown size={15} /> {activities.length} earlier activities</summary>{activities.map((activity, index) => <div key={index}>{activityLabel(activity)} · {String(activity.status || "complete")}</div>)}</details>}
-      {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><p>{turn.agentText}</p></div></div>}</Fragment>)}
-      {!!liveActivity.length && <details className="tool-activity"><summary><ChevronDown size={15} /> Working · {liveActivity.length} activities</summary>{liveActivity.map((activity, index) => <div key={index}>{activityLabel(activity)} · {String(activity.status || "in progress")}</div>)}</details>}
+      {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble"><span className="message-author">{message.role === "user" ? "You" : "Codex"}</span>{message.role === "agent" ? <ChatMarkdown text={message.text} /> : <p>{message.text}</p>}</div></div>)}
+      <ChatActivity items={activities} />
+      {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><ChatMarkdown text={turn.agentText} /></div></div>}</Fragment>)}
+      <ChatActivity items={liveActivity} working={!!conversation.active || sending} />
       {conversation.active && !localTurns.some((turn) => !turn.completed && turn.agentText) && <p className="working-note"><span className="active-pulse" /> {codexHealth.state === "connected" ? "Codex is working…" : "Codex connection is uncertain…"}</p>}
       {historyPending && <p className="history-sync" role="status">{historyWarning ? "Conversation history is still unavailable. " : "Syncing conversation history…"}{historyWarning && <button type="button" onClick={() => void loadHistory(expectedTurnId.current || undefined)}>Retry</button>}</p>}
       {threadPending.map((entry) => <div className="approval-card" key={entry.request_id}><strong>{entry.method.includes("requestUserInput") ? "Codex needs your input" : "Codex requests approval"}</strong><p>{String(entry.params.reason || entry.params.command || entry.method)}</p>{entry.method.includes("requestUserInput") ? <><input aria-label="Answer Codex" value={answer} onChange={(event) => setAnswer(event.target.value)} /><button className="button-primary" onClick={() => void answerRequest(entry, { answers: Object.fromEntries(((entry.params.questions as {id: string}[]) || []).map((question) => [question.id, { answers: [answer] }])) })}>Send answer</button></> : <div className="approval-actions"><button className="button-quiet" onClick={() => void answerRequest(entry, { decision: "decline" })}>Decline</button><button className="button-primary" onClick={() => void answerRequest(entry, { decision: "accept", permissions: entry.params.permissions || {} })}>Approve</button></div>}</div>)}

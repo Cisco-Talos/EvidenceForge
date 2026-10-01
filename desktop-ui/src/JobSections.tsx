@@ -3,9 +3,11 @@ import type { StudioApi, StudioJob } from "./api";
 import { JobCard } from "./components";
 import { chronologicalJobs } from "./jobOrder";
 
-export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId }: {
+export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId, kinds = ["generation", "evaluation"], onNavigateJob }: {
   jobs: StudioJob[]; nameFor: (job: StudioJob) => string | undefined; api: StudioApi;
   onError: (message: string) => void; onChanged: () => Promise<void>; focusJobId?: string | null;
+  kinds?: ("generation" | "evaluation")[];
+  onNavigateJob?: (job: StudioJob) => void;
 }) {
   const [openKinds, setOpenKinds] = useState<Record<string, boolean>>({});
   const [highlightedJobId, setHighlightedJobId] = useState<string | null>(null);
@@ -22,6 +24,8 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
   function showJob(jobId: string) {
     const source = document.getElementById(`job-${jobId}`);
     if (!(source instanceof HTMLDetailsElement)) {
+      const target = jobs.find((job) => job.id === jobId);
+      if (target && onNavigateJob) { onNavigateJob(target); return; }
       onError("The selected job is no longer in this run history.");
       return;
     }
@@ -39,7 +43,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
     source.scrollIntoView?.({ block: "center", behavior: "auto" });
   }
 
-  return <div className="job-sections">{(["generation", "evaluation"] as const).map((kind) => {
+  return <div className="job-sections">{kinds.map((kind) => {
     const entries = chronologicalJobs(jobs.filter((job) => job.kind === kind));
     const active = entries.filter((job) => ["running", "queued", "paused"].includes(job.status)).length;
     return <details className="job-group" key={kind} open={openKinds[kind] ?? true} onToggle={(event) => { const open = event.currentTarget.open; setOpenKinds((current) => ({ ...current, [kind]: open })); }}>

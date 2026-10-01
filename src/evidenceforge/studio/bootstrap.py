@@ -6,7 +6,6 @@ import json
 import os
 import secrets
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -20,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 if os.name == "posix":
     import fcntl
 
+from evidenceforge.studio.background import start_background_service
 from evidenceforge.studio.paths import StudioPaths, studio_paths
 from evidenceforge.studio.service import create_app
 
@@ -74,15 +74,7 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
         if descriptor and _is_live(descriptor):
             return descriptor
         app_paths.logs.mkdir(parents=True, exist_ok=True)
-        with (app_paths.logs / "service.log").open("ab") as log:
-            subprocess.Popen(
-                [sys.executable, "-m", "evidenceforge.studio.bootstrap", "--serve"],
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                env={**os.environ, "EFORGE_STUDIO_DAEMON": "1"},
-            )
+        start_background_service(app_paths)
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             descriptor = _read_descriptor(app_paths.service_file)

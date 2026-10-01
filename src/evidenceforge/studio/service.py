@@ -172,7 +172,7 @@ class ConversationRequest(BaseModel):
     item_id: str | None = None
     draft_kind: Literal["scenario", "industry_pack", "organization_pack"] | None = None
     project_id: str | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=80)
+    name: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class ConversationUpdate(BaseModel):
@@ -183,7 +183,9 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     model_id: str | None = None
     reasoning_effort: str | None = None
-    draft_name: str | None = Field(default=None, min_length=1, max_length=80)
+    draft_name: str | None = Field(
+        default=None, min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$"
+    )
     draft_project_id: str | None = None
 
 
@@ -1646,7 +1648,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 conversation.title = " ".join(request.text.strip().split()[:7])[:80]
             else:
                 await studio.codex.call("thread/resume", {"threadId": conversation.thread_id})
-            parameters = {"threadId": conversation.thread_id, "input": inputs}
+            parameters = {"threadId": conversation.thread_id, "input": inputs, "summary": "auto"}
             if conversation.model_id:
                 parameters["model"] = conversation.model_id
             if conversation.reasoning_effort:
