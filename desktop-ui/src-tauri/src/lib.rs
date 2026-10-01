@@ -1,5 +1,6 @@
 #[cfg(target_os = "macos")]
 mod macos_icon;
+mod native_dialog;
 mod native_export;
 
 use tauri_plugin_dialog::DialogExt;
@@ -51,33 +52,29 @@ fn studio_exit(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let Some(chosen) = app.dialog().file().blocking_pick_folder() else {
-        return Ok(None);
-    };
-    let path = chosen
-        .into_path()
-        .map_err(|_| "A local bundle folder is required")?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+async fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let path = native_dialog::select_local_path(|complete| {
+        app.dialog().file().pick_folder(complete);
+    })
+    .await?;
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
-fn choose_import_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
+async fn choose_import_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
     let extensions: &[&str] = if kind == "scenario" {
         &["yaml", "yml"]
     } else {
         &["efpack"]
     };
-    let Some(chosen) = app
-        .dialog()
-        .file()
-        .add_filter("EvidenceForge", extensions)
-        .blocking_pick_file()
-    else {
-        return Ok(None);
-    };
-    let path = chosen.into_path().map_err(|_| "A local file is required")?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    let path = native_dialog::select_local_path(|complete| {
+        app.dialog()
+            .file()
+            .add_filter("EvidenceForge", extensions)
+            .pick_file(complete);
+    })
+    .await?;
+    Ok(path.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

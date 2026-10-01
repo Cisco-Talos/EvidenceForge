@@ -210,12 +210,13 @@ pub async fn save_studio_export(
             dialog = dialog.set_directory(directory);
         }
     }
-    let Some(chosen) = dialog.blocking_save_file() else {
+    let Some(destination) = crate::native_dialog::select_local_path(|complete| {
+        dialog.save_file(complete);
+    })
+    .await?
+    else {
         return Ok(None);
     };
-    let destination = chosen
-        .into_path()
-        .map_err(|_| "A local file path is required")?;
     let cancellation = Arc::new(ExportCancellation::default());
     {
         let mut active = state.0.lock().map_err(|_| "Export state is unavailable")?;

@@ -817,3 +817,23 @@ The preview's launch agent needed reloading to restore its explicit temporary ap
 the default helper's environment and user settings were preserved. Native visual/picker testing
 remains pending because macOS is locked. Linux native review is unavailable on this host. Pause
 for the user's real-scenario import and native-picker feedback before advancing the roadmap.
+
+## 2026-10-01 — Native file picker deadlock
+
+- Captured a three-second stack sample of the user's stalled source-run window. Its macOS main
+  thread was parked in `choose_import_file → blocking_pick_file → Receiver::recv`; AppKit could
+  not service the open panel while that synchronous command waited for the panel's completion.
+- Made import and folder commands asynchronous and bridged the dialog plugin's nonblocking
+  callbacks through a shared one-shot receiver. Save dialogs use the same bridge so no dialog
+  waits block the UI thread or consume a runtime worker for the lifetime of the panel.
+- Added native regression tests for yielding while a dialog remains open, selected-path delivery,
+  cancellation, and an unexpectedly dropped callback. All six native tests, all 90 React tests,
+  full Ruff checks, Cargo formatting, diff checks, and the frontend/macOS debug build pass.
+- With macOS unlocked, tested the actual rebuilt `.app`: cancelled and reopened the YAML picker,
+  selected the repository's branch-office YAML, selected a source folder, and cancelled the
+  export Save dialog. Each panel returned to the responsive Studio window. No scenario or pack
+  was published and no export was written during these checks.
+- The development watcher replaced the sampled process after the code changed. Stopped that
+  verified window and watcher, then terminated the separate native test window after verification,
+  as requested. The background helper remains running. Linux native testing is still unavailable
+  on this host; real-scenario import review remains the next user feedback gate.
