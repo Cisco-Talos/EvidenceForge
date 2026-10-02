@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { StudioApi, StudioJob } from "./api";
 import { formatTime, JobCard } from "./components";
-import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
+import { recentJobs, jobSubmittedAt } from "./jobOrder";
 import { jobStatusCounts } from "./workspaceSummaries";
 import { HeaderSummary } from "./WorkspaceSection";
 
@@ -86,8 +86,8 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
   }
 
   return <div className="job-sections">{kinds.map((kind) => {
-    const entries = chronologicalJobs(visibleJobs.filter((job) => job.kind === kind));
-    const latest = entries[entries.length - 1];
+    const entries = recentJobs(visibleJobs.filter((job) => job.kind === kind));
+    const latest = entries[0];
     if (flat) return <div key={kind} className="job-list">{entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />)}</div>;
     return <details className="job-group" key={kind} open={openKinds[kind] ?? true} onToggle={(event) => { const open = event.currentTarget.open; setOpenKinds((current) => ({ ...current, [kind]: open })); }}>
       <summary><strong>{kind === "generation" ? "Generations" : "Evaluations"}</strong><span>{entries.length}</span><small className="group-summary"><HeaderSummary summary={{ headline: jobStatusCounts(entries) || "No jobs", detail: latest ? `Latest: ${nameFor(latest) || "Run"} #${latest.id.slice(0, 8)}${jobSubmittedAt(latest) ? ` · ${formatTime(jobSubmittedAt(latest))}` : ""}` : "" }} /></small>{manageHistory && <button className="button-quiet clear-completed" aria-label={`Clear completed ${kind === "generation" ? "generations" : "evaluations"}`} title="Remove completed jobs from Job center. Bundles and scorecards are kept." disabled={clearing !== null || !entries.some((job) => job.status === "completed")} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearCompleted(kind); }}><Trash2 size={14} /> {clearing === kind ? "Clearing…" : "Clear Completed"}</button>}</summary>

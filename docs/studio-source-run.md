@@ -104,16 +104,19 @@ capacity warnings, and a manual refresh icon. Refresh before a large run to rech
 machine capacity. Predictions do not replace validation or reserve capacity for other jobs.
 
 Generation uses the configured output parent and automatically constructs each run directory.
-The **Runs** section lists generations and imported bundles in stable submission/import order,
+The **Runs** section lists generations and imported bundles newest first by original submission/import time,
 with measured size, generation progress and the latest evaluation outcome on each row. Expand a
 run to inspect/export/delete its bundle, operate its generation, and see its scores directly;
 expand the score pillars for subscores or open the raw report. Only the latest valid saved
 evaluation is retained for each run. A crashed, interrupted, or unreadable evaluation keeps the
 previous score; a completed report replaces it even when the data fails required quality checks.
-The job center shows generation and evaluation operations in stable order with independent
+The job center shows generation and evaluation operations newest first with independent
 progress. The Bundles
 page groups Studio runs and read-only imported complete CLI bundles by
-scenario. A bundle can be inspected with the file viewer or exported as a ZIP. Removing an
+scenario, with the most recent groups and bundles first. Resuming a job does not change its order.
+Conversations show the most recently updated first; Continue opens that conversation. Packs show
+names A–Z, with the newest numeric version first within each name. A bundle can be inspected with
+the file viewer or exported as a ZIP. Removing an
 imported bundle from Studio removes its index entry and leaves its files in place. Studio can
 clone scenarios and packs into the workspace; their existing conversations and runs stay linked
 to the original. Native exports and file copies use Save dialogs.

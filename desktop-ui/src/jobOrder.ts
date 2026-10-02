@@ -20,3 +20,9 @@ export function chronologicalJobs(jobs: StudioJob[]): StudioJob[] {
   return [...jobs].sort((left, right) =>
     jobSubmittedAt(left) - jobSubmittedAt(right) || left.id.localeCompare(right.id));
 }
+
+/** Newest submissions first; process restarts never move an existing row. */
+export function recentJobs(jobs: StudioJob[]): StudioJob[] {
+  return [...jobs].sort((left, right) =>
+    jobSubmittedAt(right) - jobSubmittedAt(left) || left.id.localeCompare(right.id));
+}

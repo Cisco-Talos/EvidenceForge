@@ -27,7 +27,7 @@ afterEach(() => cleanup());
 test("runs directly list bundles and their scores in stable original submission order", async () => {
   const imported = { id: "import", root: "/external/bundle", created_at: 150, size_bytes: 1024 } as ImportedBundle;
   const { container, request, props, rerender } = setup([second, evaluation, run, { ...run, id: "unfinished", status: "running", submitted_at: 400 }], vi.fn(async () => detail), null, [imported]);
-  expect([...container.querySelectorAll(".scenario-runs > .job-row")].map((entry) => entry.id)).toEqual(["workspace-run-first", "bundle-import", "workspace-run-second", "workspace-run-unfinished"]);
+  expect([...container.querySelectorAll(".scenario-runs > .job-row")].map((entry) => entry.id)).toEqual(["workspace-run-unfinished", "workspace-run-second", "bundle-import", "workspace-run-first"]);
   expect(row("second").querySelector("summary")).toHaveTextContent("2.0 MB");
   expect(within(row("second")).getByText("92/100 · Failed · 1,000 records")).toBeVisible();
   expect(within(row("second")).getByLabelText(/Evaluation: Failed acceptance/)).toHaveClass("state-error");
@@ -38,7 +38,7 @@ test("runs directly list bundles and their scores in stable original submission 
   await userEvent.setup().click(within(row("first")).getByRole("button", { name: "Evaluate" }));
   expect(request).toHaveBeenCalledWith("/v1/jobs/evaluations", "POST", { generation_id: "first" });
   rerender(<Tooltip.Provider><ScenarioRuns {...props} jobs={[{ ...second, started_at: 999 }, evaluation, { ...run, started_at: 1000 }]} /></Tooltip.Provider>);
-  expect([...container.querySelectorAll(".workspace-run")].map((entry) => entry.id)).toEqual(["workspace-run-first", "workspace-run-second"]);
+  expect([...container.querySelectorAll(".workspace-run")].map((entry) => entry.id)).toEqual(["workspace-run-second", "workspace-run-first"]);
 });
 
 test("expanding a run opens its scorecard beside bundle actions without an intermediate picker", async () => {

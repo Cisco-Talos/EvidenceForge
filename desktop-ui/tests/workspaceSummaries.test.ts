@@ -15,6 +15,15 @@ test("latest submission stays the summary target when an older run resumes later
   expect(summary.detail).toContain("Latest run #new-run");
 });
 
+test("equal timestamps and missing legacy dates use the same tie order for rows and header", () => {
+  const a = { ...run, id: "a", submitted_at: 20 };
+  const z = { ...run, id: "z", submitted_at: 20 };
+  expect(orderedBundles([z, a], [])[0].id).toBe(latestJob([z, a])?.id);
+  expect(latestJob([z, a])?.id).toBe("a");
+  const unknown = [z, a].map((job) => ({ ...job, submitted_at: undefined, started_at: undefined }));
+  expect(orderedBundles(unknown, [])[0].id).toBe(latestJob(unknown)?.id);
+});
+
 test("merged runs summary keeps generation, score, counts and input freshness together", () => {
   const evaluation: StudioJob = { ...run, id: "score", kind: "evaluation", generation_id: run.id, created_at: 25, scorecard: { overall_score: 96, acceptance_passed: false } };
   const older = { ...run, id: "older", status: "paused", submitted_at: 15 };
@@ -84,7 +93,7 @@ test.each([
 test("bundles use submission order across owned and imported data with a deterministic tie", () => {
   const imported = { id: "import", root: "/external/bundle", created_at: 30, size_bytes: 3072 } as ImportedBundle;
   const queued = { ...run, id: "queued", status: "queued", submitted_at: 40 };
-  expect(orderedBundles([queued, run], [imported]).map((entry) => entry.id)).toEqual(["old-run", "import", "queued"]);
+  expect(orderedBundles([queued, run], [imported]).map((entry) => entry.id)).toEqual(["queued", "import", "old-run"]);
   expect(bundleSummary([run], [imported], { "old-run": 1024 }).headline).toBe("Completed · 3.0 KB · Imported");
   expect(bundleSummary([queued, run], [imported], {}).headline).toBe("Queued · Bundle pending");
   expect(bundleSummary([queued, run], [imported], {}).detail).toContain("3 bundles · 2 complete · 1 incomplete");

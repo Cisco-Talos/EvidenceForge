@@ -1517,3 +1517,23 @@ Verification: all 181 React tests pass, including newest-run isolation, header s
   `/private/tmp/eforge-runs-header-compact.png`. No service, CLI, schema, skill, or user-state changes;
   native runtime/Linux were not rerun. Closed the review tab, reset viewport and stopped disposable
   services. Native app rebuilt for reopening. Unrelated scenario deletions remain excluded.
+
+## 2026-10-02 — Newest-first lists and numeric pack versions
+
+User requested newest-first ordering throughout chronological lists and alphabetical packs with
+versions subsorted. Workspace runs, all generation/evaluation progress lists and Job center now
+use descending original submission time. Bundles interleave owned and imported rows newest first,
+and scenario groups are ordered by their newest visible bundle. Resume does not change position.
+Header and scenario-state selectors share the row tie-breaker, including missing legacy dates.
+Conversations use descending update time; Continue targets the first visible conversation.
+Industry and Organization sections retain their order; pack names sort A–Z, with numeric versions
+newest first within each name (1.10.0 before 1.2.0). Draft packs are alphabetized as well.
+User-selected library sorting, filters, saved views and evaluation replacement rules are unchanged.
+
+Verification: all 184 React tests pass, covering owned/imported interleaving, bundle group order,
+resume stability, latest header consistency, conversations and numeric pack versions. Generated
+API type checks, TypeScript/frontend compilation, full Ruff check/format and diff checks pass.
+The macOS release .app rebuilt successfully. Visually reviewed newest-first workspace rows and
+latest score/input notices; screenshot `/private/tmp/eforge-recent-order-review.png`. Closed the
+temporary preview, reset its viewport and stopped disposable Vite/service processes. Frontend-only
+changes; CLI, skills and service contracts are unchanged. Unrelated scenario deletions excluded.

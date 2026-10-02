@@ -29,8 +29,8 @@ export function PackLibrary({ items, drafts, projects, busy, onOpen, onOpenDraft
 }) {
   const projectName = (id: string | null) => projects.find((project) => project.id === id)?.name || "Ungrouped";
   return <div className="job-sections pack-sections">{(["industry_pack", "organization_pack"] as PackKind[]).map((kind) => {
-    const packs = items.filter((item) => item.kind === kind).sort((a, b) => a.name.localeCompare(b.name) || (a.publisher || "").localeCompare(b.publisher || "") || a.version.localeCompare(b.version) || a.id.localeCompare(b.id));
-    const pending = drafts.filter((draft) => draft.draft_kind === kind);
+    const packs = items.filter((item) => item.kind === kind).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || b.version.localeCompare(a.version, undefined, { numeric: true }) || (a.publisher || "").localeCompare(b.publisher || "") || a.id.localeCompare(b.id));
+    const pending = drafts.filter((draft) => draft.draft_kind === kind).sort((a, b) => (a.draft_name || a.title).localeCompare(b.draft_name || b.title, undefined, { sensitivity: "base" }) || b.updated_at - a.updated_at || a.id.localeCompare(b.id));
     const authors = [...new Set(packs.map((pack) => pack.publisher_display_name || pack.publisher || "Unknown author"))];
     const updated = Math.max(0, ...packs.map((pack) => pack.modified_at), ...pending.map((draft) => draft.updated_at));
     const title = kind === "industry_pack" ? "Industry packs" : "Organization packs";

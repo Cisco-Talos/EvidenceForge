@@ -12,7 +12,7 @@ import { EnvironmentView } from "./EnvironmentView";
 import { ScenarioRuns } from "./ScenarioRuns";
 import { environmentState, generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
 import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPanel";
-import { chronologicalJobs } from "./jobOrder";
+import { recentJobs } from "./jobOrder";
 import { countLabel, environmentSummary, latestJob, latestRunState, runsSummary, validationSummary } from "./workspaceSummaries";
 
 export type WorkspaceTarget = "overview" | "environment" | "conversations" | "validation" | "generation" | "scoring";
@@ -44,8 +44,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const chatFocus = target === "conversations";
   const preferred = conversations[0];
   const selected = conversations.find((chat) => chat.id === selectedConversation) || null;
-  const generations = chronologicalJobs(jobs.filter((job) => job.kind === "generation"));
-  const evaluations = chronologicalJobs(jobs.filter((job) => job.kind === "evaluation"));
+  const generations = recentJobs(jobs.filter((job) => job.kind === "generation"));
+  const evaluations = recentJobs(jobs.filter((job) => job.kind === "evaluation"));
   const active = generations.filter((job) => ["running", "queued", "paused"].includes(job.status));
   const states = scenarioStates(item, snapshot);
   const health = snapshot.dependencies?.[item.id];

@@ -1,6 +1,6 @@
 import type { CatalogItem, DependencyHealth, ImportedBundle, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime } from "./components";
-import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
+import { recentJobs, jobSubmittedAt } from "./jobOrder";
 import { generationInputs, generationIsCurrent, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
 
 export interface SectionSummary {
@@ -14,7 +14,7 @@ export function countLabel(count: number, singular: string, plural = `${singular
 
 /** Describe the latest submission, even when an older run finished more recently. */
 export function latestJob(jobs: StudioJob[]): StudioJob | undefined {
-  return chronologicalJobs(jobs).slice(-1)[0];
+  return recentJobs(jobs)[0];
 }
 
 /** A process failure cannot replace the latest completed, readable quality report. */
@@ -85,12 +85,12 @@ export type BundleEntry = { kind: "job"; id: string; time: number; job: StudioJo
 export function orderedBundles(jobs: StudioJob[], imports: ImportedBundle[]): BundleEntry[] {
   return [...jobs.map((job) => ({ kind: "job" as const, id: job.id, time: jobSubmittedAt(job), job })),
     ...imports.map((bundle) => ({ kind: "import" as const, id: bundle.id, time: bundle.created_at, bundle }))]
-    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+    .sort((a, b) => b.time - a.time || a.id.localeCompare(b.id));
 }
 
 export function bundleSummary(jobs: StudioJob[], imports: ImportedBundle[], sizes: Record<string, number | null>): SectionSummary {
   const entries = orderedBundles(jobs, imports);
-  const latest = entries[entries.length - 1];
+  const latest = entries[0];
   if (!latest) return { headline: "No bundles yet", detail: "No generated or imported data" };
   const complete = jobs.filter((job) => job.status === "completed").length + imports.length;
   const totals = `${countLabel(entries.length, "bundle")} · ${complete} complete${entries.length > complete ? ` · ${entries.length - complete} incomplete` : ""}`;

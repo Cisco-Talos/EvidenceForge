@@ -1,7 +1,7 @@
 import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
-import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
+import { recentJobs, jobSubmittedAt } from "./jobOrder";
 
 type State = "none" | "stale" | "working" | "success" | "warning" | "error";
 export interface OperationState { label: string; state: State; detail: string }
@@ -15,7 +15,7 @@ export function environmentState(health?: DependencyHealth, refreshing = false):
 }
 
 function latest(jobs: StudioJob[]): StudioJob | undefined {
-  return chronologicalJobs(jobs).slice(-1)[0];
+  return recentJobs(jobs)[0];
 }
 
 export function jobState(label: string, job: StudioJob | undefined, stale: boolean): OperationState {

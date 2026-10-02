@@ -6,7 +6,7 @@ import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { CopyPathButton } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
-import { chronologicalJobs } from "./jobOrder";
+import { recentJobs } from "./jobOrder";
 import { bundleSummary, orderedBundles } from "./workspaceSummaries";
 import { HeaderSummary } from "./WorkspaceSection";
 
@@ -96,13 +96,13 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
     }
     const term = search.trim().toLowerCase();
     return [...byPath.entries()].map(([path, group]) => ({ ...group, path,
-      jobs: chronologicalJobs(group.jobs.filter((job) =>
+      jobs: recentJobs(group.jobs.filter((job) =>
         (status === "all" || (status === "complete" ? job.status === "completed" : job.status !== "completed")) &&
         `${group.name} ${job.id} ${job.output_root}`.toLowerCase().includes(term))),
       imports: status === "incomplete" ? [] : group.imports.filter((bundle) =>
         `${group.name} ${bundle.id} ${bundle.root}`.toLowerCase().includes(term)),
     })).filter((group) => (group.jobs.length || group.imports.length) && (project === "all" || (project === "ungrouped" ? !group.item?.project_id : group.item?.project_id === project)))
-      .sort((left, right) => left.name.localeCompare(right.name) || left.path.localeCompare(right.path));
+      .sort((left, right) => (orderedBundles(right.jobs, right.imports)[0]?.time || 0) - (orderedBundles(left.jobs, left.imports)[0]?.time || 0) || left.name.localeCompare(right.name) || left.path.localeCompare(right.path));
   }, [generations, imports, snapshot.items, search, status, project]);
   const visibleCount = groups.reduce((count, group) => count + group.jobs.length + group.imports.length, 0);
   async function importBundle() {

@@ -781,7 +781,7 @@ test("job center renders independent progress bars for simultaneous generations"
   expect(bars.map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["25", "75"]);
 });
 
-test("job rows stay in submission order and sections can collapse", async () => {
+test("job rows stay newest-first in submission order and sections can collapse", async () => {
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [
     { ...originalJobs[1], submitted_at: 20, started_at: 20 },
@@ -792,7 +792,7 @@ test("job rows stay in submission order and sections can collapse", async () => 
     const { container } = await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
     expect([...container.querySelectorAll(".job-group")].map((entry) => entry.querySelector("summary strong")?.textContent)).toEqual(["Generations", "Evaluations"]);
-    expect([...container.querySelectorAll(".job-group:first-child .job-row-name strong")].map((entry) => entry.textContent)).toEqual(["Alpha", "Bravo"]);
+    expect([...container.querySelectorAll(".job-group:first-child .job-row-name strong")].map((entry) => entry.textContent)).toEqual(["Bravo", "Alpha"]);
     const generations = container.querySelector(".job-group") as HTMLDetailsElement;
     await userEvent.setup().click(generations.querySelector("summary")!);
     expect(generations.open).toBe(false);
@@ -811,6 +811,46 @@ test("legacy resumed jobs use their bundle creation time for stable order", () =
   const first = { ...snapshot.jobs[0], id: "first", output_root: `${workspace}/runs/alpha/20260930-120000-1234abcd`, started_at: 1000 };
   const second = { ...snapshot.jobs[1], id: "second", output_root: `${workspace}/runs/bravo/20260930-130000-5678abcd`, started_at: 200 };
   expect(chronologicalJobs([second, first]).map((job) => job.id)).toEqual(["first", "second"]);
+});
+
+test("packs sort by name A–Z and numeric version newest-first within each name", async () => {
+  const original = snapshot.items;
+  snapshot.items = [
+    { ...original[0], id: "z", kind: "industry_pack", name: "Zebra", version: "9.0.0" },
+    { ...original[0], id: "a2", kind: "industry_pack", name: "Alpha", version: "1.2.0" },
+    { ...original[0], id: "a10", kind: "industry_pack", name: "Alpha", version: "1.10.0" },
+    { ...original[0], id: "a20", kind: "industry_pack", name: "Alpha", version: "2.0.0" },
+  ];
+  try {
+    await renderExpandedApp();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Packs", exact: true }));
+    await expandLibraryGroups(".pack-group");
+    expect(screen.getAllByRole("button", { name: /^Open (Alpha|Zebra) / }).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open Alpha 2.0.0", "Open Alpha 1.10.0", "Open Alpha 1.2.0", "Open Zebra 9.0.0",
+    ]);
+  } finally { snapshot.items = original; }
+});
+
+test("bundle groups and their owned/imported rows are newest-first without moving resumed jobs", async () => {
+  const originalJobs = snapshot.jobs;
+  const originalImports = snapshot.imported_bundles;
+  snapshot.jobs = [
+    { ...originalJobs[0], submitted_at: 100, status: "completed" },
+    { ...originalJobs[0], id: "older", submitted_at: 50, started_at: 5000, status: "completed" },
+    { ...originalJobs[1], submitted_at: 200, status: "completed" },
+  ];
+  snapshot.imported_bundles = [{ id: "import", workspace, root: "/external/import", scenario_name: "Alpha", created_at: 150, size_bytes: 1024, manifest_sha256: "abc" }];
+  try {
+    const view = await renderExpandedApp();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Bundles", exact: true }));
+    await expandLibraryGroups(".bundle-group");
+    expect([...view.container.querySelectorAll(".bundle-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Bravo", "Alpha"]);
+    const alpha = view.container.querySelectorAll(".bundle-group")[1];
+    expect([...alpha.querySelectorAll(".job-list > .job-row")].map((entry) => entry.id)).toEqual(["bundle-import", "job-job-1", "job-older"]);
+    snapshot.jobs = snapshot.jobs.map((job) => ({ ...job, started_at: 9999 }));
+    view.rerender(<App />);
+    expect([...alpha.querySelectorAll(".job-list > .job-row")].map((entry) => entry.id)).toEqual(["bundle-import", "job-job-1", "job-older"]);
+  } finally { snapshot.jobs = originalJobs; snapshot.imported_bundles = originalImports; }
 });
 
 test("bundle library groups runs by scenario and filters their status", async () => {
@@ -1644,7 +1684,7 @@ test("pack and bundle groups begin collapsed with visible counts and independent
 });
 
 
-test("Continue and the conversation list share active-first recency order for this scenario only", async () => {
+test("Continue and the conversation list share newest-first recency order for this scenario only", async () => {
   const original = snapshot.conversations;
   snapshot.conversations = [
     { ...original[0], item_id: "bravo", updated_at: 2000000100 },
@@ -1656,15 +1696,15 @@ test("Continue and the conversation list share active-first recency order for th
     const user = userEvent.setup();
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    expect(screen.getByRole("button", { name: "Continue" }).title).toContain("Latest active turn");
+    expect(screen.getByRole("button", { name: "Continue" }).title).toContain("Newest completed turn");
     await user.click(screen.getByRole("button", { name: "Conversations", exact: true }));
     const region = screen.getByRole("region", { name: "Conversations" });
     expect(within(region).getAllByRole("button", { name: /^Open / }).map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Open Latest active turn", "Open Older active turn", "Open Newest completed turn",
+      "Open Newest completed turn", "Open Latest active turn", "Open Older active turn",
     ]);
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByRole("button", { name: "Rename conversation Latest active turn" })).toBeTruthy();
-    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/recent-active/history");
+    expect(screen.getByRole("button", { name: "Rename conversation Newest completed turn" })).toBeTruthy();
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/chat-2/history");
     expect(vi.mocked(useStudio().api!.request).mock.calls.some(([path, method]) => path === "/v1/conversations" && method === "POST")).toBe(false);
   } finally { snapshot.conversations = original; }
 });
@@ -1716,16 +1756,16 @@ test("returning from chat preserves the draft and expanded workspace sections", 
 
 test("collapsed Generation shows every live progress stream and retains progress after updates", async () => {
   const original = snapshot.jobs;
-  snapshot.jobs = [original[0], { ...original[1], scenario: original[0].scenario }];
+  snapshot.jobs = [{ ...original[0], submitted_at: 10 }, { ...original[1], submitted_at: 20, scenario: original[0].scenario }];
   try {
     const user = userEvent.setup();
     const view = await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const generation = screen.getByRole("region", { name: "Runs" });
-    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["25", "75"]);
+    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["75", "25"]);
     snapshot.jobs = [{ ...snapshot.jobs[0], progress: { ...snapshot.jobs[0].progress!, completed_hours: 3 } }, snapshot.jobs[1]];
     view.rerender(<App />);
-    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["38", "75"]);
+    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["75", "38"]);
     await user.click(within(generation).getByRole("button", { name: /Run #job-2/ }));
     await waitFor(() => expect(view.container.querySelector("#workspace-run-job-2")).toHaveAttribute("open"));
   } finally { snapshot.jobs = original; }
