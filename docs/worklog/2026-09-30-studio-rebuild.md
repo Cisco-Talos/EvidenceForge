@@ -1070,3 +1070,10 @@ and stopped the verified temporary helper/frontend after an authenticated idle c
 Handoff: pause after items 1–3. Native core acceptance is already granted; do not re-require that
 review. Deeper environment work, isolated authoring drafts, advanced preflight/queue controls,
 evaluation drill-down/comparison, and delivery presets are still subsequent workflow slices.
+
+Committed implementation as `75d09d0d`. Restarted the normal launchd helper after authenticated
+idle and PID/creation-time/command checks. The new service preserved all existing settings and
+the identities of ten catalog items, one project, three conversations, one job, and imported
+bundles; job status/output associations also match. Confirmed the new search schema and default
+five-match preference are live. The native release app is rebuilt; reopen Studio to attach to
+the refreshed helper. No later workflow slices were started.
