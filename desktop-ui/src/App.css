@@ -302,6 +302,13 @@ p { line-height: 1.5; }
 .summary-context { color: #8ea7c1; font-size: 11px; }
 .summary-inputs { display: inline-flex; align-items: center; gap: 4px; color: #f1cc8f; font-size: 11px; }
 .summary-inputs > svg { flex: none; }
+.summary-review { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+.summary-score { font-weight: 600; }
+.summary-score.score-success { color: #80d8b7; }
+.summary-score.score-error { color: #f89bab; }
+.summary-score.score-warning, .summary-evaluation-attempt { color: #f1cc8f; }
+.summary-score.score-working { color: #a8c2ff; }
+.summary-score.score-none { color: #9bb1ca; }
 .workspace-section-actions { display: flex; align-items: center; flex: none; gap: 8px; }
 .workspace-section-actions button { font-size: 12px; padding: 7px 10px; }
 .workspace-section-body { padding: 18px; border-top: 1px solid var(--line-soft); }

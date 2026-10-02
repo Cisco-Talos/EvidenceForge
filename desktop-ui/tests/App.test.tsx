@@ -1745,7 +1745,8 @@ test("folded Runs summarizes the latest generation and only its evaluation", asy
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const runs = screen.getByRole("region", { name: "Runs", exact: true });
     expect(within(runs).getByRole("button", { name: "Runs", exact: true })).toHaveAttribute("aria-expanded", "false");
-    expect(runs.querySelector("header")).toHaveTextContent("Queued · Not evaluated");
+    expect(runs.querySelector("header")).toHaveTextContent("Queued");
+    expect(runs.querySelector("header .summary-score")).toHaveTextContent("Score · Not evaluated");
     expect(runs.querySelector("header")).toHaveTextContent("Latest run #new-run");
     expect(runs.querySelector("header")).toHaveTextContent("2 runs · 1 queued");
     expect(runs.querySelector("header")).not.toHaveTextContent("98/100");
@@ -1754,6 +1755,7 @@ test("folded Runs summarizes the latest generation and only its evaluation", asy
       { ...snapshot.jobs[1], id: "new-eval", generation_id: "new-run", created_at: 300, scorecard: { overall_score: 92, acceptance_passed: false, total_records: 2000 } }];
     view.rerender(<App />);
     expect(runs.querySelector("header")).toHaveTextContent("92/100 · Failed · 2,000 records");
+    expect(runs.querySelector("header .summary-score")).toHaveClass("score-error");
     expect(within(runs).getByLabelText(/Failed acceptance · 92\/100/)).toHaveClass("state-error");
     expect(within(runs).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
   } finally { snapshot.jobs = original; }
@@ -1902,7 +1904,10 @@ test("workspace result icons preserve generation success and scoring failure whe
     expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
     expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
     expect(generation.querySelector("header")).toHaveTextContent("Inputs unverified");
+    expect(generation.querySelector("header .summary-review .summary-inputs")).toHaveTextContent("Inputs unverified");
     expect(scoring.querySelector("header")).toHaveTextContent("96/100 · Failed");
+    expect(scoring.querySelector("header .summary-score")).toHaveTextContent("Score · 96/100 · Failed");
+    expect(scoring.querySelector("header .summary-score")).toHaveClass("score-error");
     expect(within(scoring).getByText("Inputs unverified")).toHaveAttribute("title", expect.stringContaining("no dependency fingerprint"));
     expect(within(generation).queryByText("Inputs changed")).toBeNull();
     expect(generation.querySelector(".state-stale")).toBeNull();
@@ -1912,5 +1917,10 @@ test("workspace result icons preserve generation success and scoring failure whe
     expect(within(generation).getByText("Inputs changed")).toBeVisible();
     expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
     expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+    await userEvent.setup().click(within(generation).getByRole("button", { name: "Runs", exact: true }));
+    expect(generation.querySelector("header .summary-inputs")).toHaveTextContent("Inputs changed");
+    const row = view.container.querySelector("#workspace-run-job-1")!;
+    expect(row.querySelector(".run-score-summary")).toHaveTextContent("96/100 · Failed");
+    expect(row.querySelector(".summary-inputs")).toHaveTextContent("Inputs changed");
   } finally { snapshot.jobs = originalJobs; snapshot.dependencies = originalDependencies; snapshot.items = originalItems; }
 });

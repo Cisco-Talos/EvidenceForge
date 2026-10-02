@@ -20,13 +20,39 @@ test("merged runs summary keeps generation, score, counts and input freshness to
   const older = { ...run, id: "older", status: "paused", submitted_at: 15 };
   const imported = { id: "imported", created_at: 30, size_bytes: 2048 } as ImportedBundle;
   const summary = runsSummary([run, older], [imported], [evaluation], item, snapshot, { "old-run": 1024 });
-  expect(summary.headline).toBe("Completed · Generated data 1.0 KB · 96/100 · Failed");
+  expect(summary.headline).toBe("Completed · Generated data 1.0 KB");
+  expect(summary.score?.headline).toBe("96/100 · Failed");
+  expect(summary.score?.status.state).toBe("error");
   expect(summary.detail).toContain("3 runs · 1 paused · 1 imported");
   expect(summary.detail).toContain("Latest run #old-run");
   expect(summary.inputs?.state).toBe("current");
-  expect(runsSummary([{ ...run, id: "new", submitted_at: 40 }], [], [evaluation], item, snapshot, {}).headline).toContain("Not evaluated");
+  expect(runsSummary([{ ...run, id: "new", submitted_at: 40 }], [], [evaluation], item, snapshot, {}).score?.headline).toBe("Not evaluated");
   expect(runsSummary([], [imported], [], item, snapshot, {}).headline).toBe("Completed · 2.0 KB · Imported");
-  expect(runsSummary([], [], [], item, snapshot, {}, 1024).headline).toBe("Estimated data 1.0 KB · Not evaluated");
+  expect(runsSummary([], [], [], item, snapshot, {}, 1024).headline).toBe("Estimated data 1.0 KB");
+});
+
+test.each([
+  { generation: { ...run, dependency_sha256: undefined, submitted_at: 5 }, state: "unverified", label: "Inputs unverified" },
+  { generation: { ...run, source_sha256: "previous" }, state: "changed", label: "Inputs changed" },
+])("the latest run's score and $label remain together in its header summary", ({ generation, state, label }) => {
+  const evaluation: StudioJob = { ...run, id: "score", kind: "evaluation", generation_id: generation.id, created_at: 25, scorecard: { overall_score: 96, acceptance_passed: false, total_records: 121793 } };
+  const summary = runsSummary([generation], [], [evaluation], item, snapshot, {});
+  expect(summary.score?.headline).toBe("96/100 · Failed · 121,793 records");
+  expect(summary.score?.status.state).toBe("error");
+  expect(summary.inputs).toMatchObject({ state, label });
+});
+
+test.each(["running", "failed", "completed"])("a %s retry without a readable report keeps the latest run's saved score in the header", (status) => {
+  const saved: StudioJob = { ...run, kind: "evaluation", id: "saved", generation_id: run.id, created_at: 21, scorecard: { overall_score: 96, acceptance_passed: false } };
+  const retry = { ...saved, id: "retry", submitted_at: undefined, created_at: 30, status, scorecard: status === "completed" ? { error: "Unreadable report" } : undefined };
+  const summary = runsSummary([run], [], [saved, retry], item, snapshot, {});
+  expect(summary.score?.headline).toBe("96/100 · Failed");
+  expect(summary.score?.attempt).toContain("Showing the previous saved score");
+  expect(summary.score?.attempt).toContain(status === "completed" ? "Score report unavailable" : `Evaluation ${status}`);
+  const replacement = { ...retry, status: "completed", scorecard: { overall_score: 91, acceptance_passed: false } };
+  const replaced = runsSummary([run], [], [saved, replacement], item, snapshot, {});
+  expect(replaced.score?.headline).toBe("91/100 · Failed");
+  expect(replaced.score?.attempt).toBeUndefined();
 });
 
 test("an actual completed size is separate from the estimate for changed inputs", () => {

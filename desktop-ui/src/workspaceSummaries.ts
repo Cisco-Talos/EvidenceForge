@@ -3,7 +3,10 @@ import { formatBundleSize, formatTime } from "./components";
 import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
 import { generationInputs, generationIsCurrent, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
 
-export interface SectionSummary { headline: string; detail: string; inputs?: RunInputStatus }
+export interface SectionSummary {
+  headline: string; detail: string; inputs?: RunInputStatus;
+  score?: { headline: string; status: OperationState; attempt?: string };
+}
 
 export function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -12,6 +15,11 @@ export function countLabel(count: number, singular: string, plural = `${singular
 /** Describe the latest submission, even when an older run finished more recently. */
 export function latestJob(jobs: StudioJob[]): StudioJob | undefined {
   return chronologicalJobs(jobs).slice(-1)[0];
+}
+
+/** A process failure cannot replace the latest completed, readable quality report. */
+export function latestSavedEvaluation(evaluations: StudioJob[]): StudioJob | undefined {
+  return latestJob(evaluations.filter((job) => job.status === "completed" && job.scorecard && !job.scorecard.error));
 }
 
 export function jobStatusCounts(jobs: StudioJob[]): string {
@@ -61,11 +69,14 @@ export function runsSummary(jobs: StudioJob[], imports: ImportedBundle[], evalua
   const latest = latestJob(jobs);
   if (!latest && imports.length) return bundleSummary(jobs, imports, sizes);
   const generation = generationSummary(latest, item, snapshot, latest ? sizes[latest.id] : null, estimate);
-  const evaluation = latestJob(evaluations.filter((job) => job.generation_id === latest?.id));
-  const score = scoringSummary(latest, evaluation, item, snapshot);
+  const linked = evaluations.filter((job) => job.generation_id === latest?.id);
+  const evaluation = latestJob(linked);
+  const saved = latestSavedEvaluation(linked);
+  const score = scoringSummary(latest, saved || evaluation, item, snapshot);
   const active = jobs.filter((job) => ["running", "queued", "paused"].includes(job.status));
   return { ...generation,
-    headline: `${generation.headline} · ${score.headline}`,
+    score: { headline: score.headline, status: latestRunState("Evaluation", saved || evaluation, !generation.inputs || generation.inputs.state === "current"),
+      attempt: saved && evaluation && saved.id !== evaluation.id ? `${scoringSummary(latest, evaluation, item, snapshot).headline} · Showing the previous saved score` : undefined },
     detail: [countLabel(jobs.length + imports.length, "run"), active.length && jobStatusCounts(active), imports.length && `${imports.length} imported`, latest && generation.detail].filter(Boolean).join(" · ") };
 }
 

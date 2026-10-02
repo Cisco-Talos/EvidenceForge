@@ -1491,3 +1491,29 @@ Reviewed the actual UI at 1280×900 and 712×724, including native Enter disclos
   Native app rebuilt for reopening. Closed the review tab, reset the viewport, and stopped the
   disposable services. Unrelated existing scenario deletions remain excluded. Ready for workspace
   feedback before advancing to later workflow stages.
+
+## 2026-10-02 — Prominent latest-run score and input notices
+
+User accepted Runs and requested the latest run's score and input-status notices in its header,
+while keeping them on individual rows. Read-only inspection confirmed the screenshot's 96/100
+report belongs to the older `a90ee038` generation; newer `2fcb41b4` has no evaluation. The header's
+Not evaluated summary was correctly associated with the newer run, rather than losing the score.
+
+- Runs now has a dedicated, color-coded Score line with acceptance outcome and record count.
+  Inputs unverified/changed appears immediately beside it, wrapping below in compact windows;
+  hover descriptions remain available. Generation/size and run context stay on separate lines.
+  Individual run score/input summaries retain their existing location and behavior.
+- Header score selection uses only evaluations linked to the latest submitted generation. A
+  crashed/interrupted/unreadable retry retains that run's last readable completed score, with an
+  explicit retry-status notice. A completed quality-failed report replaces it normally. The shared
+  readable-report selector is also used by the row's existing saved scorecard.
+
+Verification: all 181 React tests pass, including newest-run isolation, header score styling,
+  unverified/changed notice placement, retained row details, and ongoing/failed/unreadable retries
+  versus completed replacements. Generated API types, TypeScript/frontend compilation, full Ruff
+  check/format, diff checks, and the macOS release build pass. Reviewed actual folded/expanded
+  headers at 1280×900 and 712×724 with score and input warnings visible together. Screenshots:
+  `/private/tmp/eforge-runs-header-review.png`, `/private/tmp/eforge-runs-header-collapsed.png`,
+  `/private/tmp/eforge-runs-header-compact.png`. No service, CLI, schema, skill, or user-state changes;
+  native runtime/Linux were not rerun. Closed the review tab, reset viewport and stopped disposable
+  services. Native app rebuilt for reopening. Unrelated scenario deletions remain excluded.

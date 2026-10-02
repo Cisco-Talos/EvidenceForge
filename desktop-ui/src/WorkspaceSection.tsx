@@ -3,7 +3,8 @@ import { ChevronRight, TriangleAlert } from "lucide-react";
 import type { SectionSummary } from "./workspaceSummaries";
 
 export function HeaderSummary({ summary }: { summary: SectionSummary }) {
-  return <span className="header-summary"><span className="summary-outcome">{summary.headline}</span><span className="summary-context" title={summary.detail}>{summary.detail}</span>{summary.inputs && summary.inputs.state !== "current" && <span className="summary-inputs" title={summary.inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{summary.inputs.label}</span>}</span>;
+  const inputs = summary.inputs && summary.inputs.state !== "current" && <span className="summary-inputs" title={summary.inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{summary.inputs.label}</span>;
+  return <span className="header-summary"><span className="summary-outcome">{summary.headline}</span>{summary.score && <span className="summary-review"><span className={`summary-score score-${summary.score.status.state}`} title={summary.score.status.detail}>Score · {summary.score.headline}</span>{inputs}</span>}<span className="summary-context" title={summary.detail}>{summary.detail}</span>{summary.score?.attempt && <span className="summary-evaluation-attempt">{summary.score.attempt}</span>}{!summary.score && inputs}</span>;
 }
 
 /** Workspace headers remain useful even when their optional details are folded. */

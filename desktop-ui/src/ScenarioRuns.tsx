@@ -5,7 +5,7 @@ import { ImportedBundleRow } from "./BundleLibrary";
 import { formatTime, JobCard } from "./components";
 import { generationInputs, OperationStatus } from "./ScenarioStates";
 import { ScorecardPanel } from "./ScorecardPanel";
-import { latestJob, latestRunState, orderedBundles, scoringSummary } from "./workspaceSummaries";
+import { latestJob, latestRunState, latestSavedEvaluation, orderedBundles, scoringSummary } from "./workspaceSummaries";
 import { jobSubmittedAt } from "./jobOrder";
 
 /** A run owns its generated files and its latest saved evaluation. */
@@ -51,7 +51,7 @@ export function ScenarioRuns({ jobs, imports, sizes, item, snapshot, api, focusJ
     const generation = entry.job;
     const linked = evaluations.filter((job) => job.generation_id === generation.id);
     const newest = latestJob(linked);
-    const saved = latestJob(linked.filter((job) => job.status === "completed" && job.scorecard && !job.scorecard.error));
+    const saved = latestSavedEvaluation(linked);
     const active = linked.find((job) => ["running", "queued", "paused"].includes(job.status));
     const inputs = generationInputs(generation, item, snapshot);
     const current = inputs.state === "current";
