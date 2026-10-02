@@ -1280,3 +1280,50 @@ Refreshed the authenticated idle helper after checking process and launchd ident
   project/conversation/job/imported-bundle IDs and job associations remained unchanged. Closed
   review tabs, reset the viewport, and stopped disposable services. The native app is rebuilt for
   reopening. Existing unrelated iteration-test scenario deletions remain excluded from this work.
+
+## 2026-10-02 — Scenario workspace with dedicated chat focus
+
+User selected Chat focus from the workspace alternatives, requested Continue target the most
+recent active conversation, and moved single-file information into the scenario header.
+
+- Replaced workspace subtabs and the upper action cluster with compact, collapsed Conversations,
+  Environment, Validation, Generation, Scoring, and Bundles sections. Status, counts, forecasts,
+  saved score summaries, and relevant actions remain in headers. Rows without details have no
+  disclosure control. Clone/hide use a compact menu; the project selector remains beside the title.
+- Continue opens the first conversation in a shared, deterministic order: active turns first,
+  descending update time within each group, then stable ID for ties. The list uses the identical
+  order and is scoped to the selected item. Continue never creates a conversation when one exists;
+  the authoring command uses the same target, creating only when the scenario has no conversations.
+- Conversation focus preserves the scenario header, path/copy/View YAML, a persistent conversation
+  rail with rename/delete, model/reasoning controls, and a composer within the window. Back to
+  workspace keeps the chat mounted, retaining its unsent draft, transcript, and event subscription.
+  Previously expanded workspace sections survive the round trip.
+- Scenario/pack YAML paths now sit directly below the summary, with the copy icon immediately
+  adjacent. Long descriptions preview two lines and expand inline when they overflow; there is
+  no separate source-file or description section. Empty validation/scoring/bundle rows stay plain.
+- Every running, queued, or paused generation has its own progress bar even when Generation is
+  folded. Opening its progress row reveals the exact job. Expanded operations keep chronological
+  run history and source-generation navigation without another type accordion. Bundles include
+  owned runs and unambiguously linked imports; their row IDs cannot collide with generation rows.
+  Sizes refresh during active generation; fresh completed data takes precedence over an estimate.
+
+Verification: all 140 React tests pass, including active-first selection, recency/tie ordering,
+  scenario isolation, no duplicate creation, draft/expansion retention, independent folded progress
+  updates, exact source navigation, unique bundle/job row identities, and inline description
+  expansion. Existing chat streaming, manual-scroll, validation repair, source viewing, settings,
+  project, and library tests pass. Generated API types, full Ruff check/format, diff checks, and
+  the macOS release app build pass. No CLI, authored schema, skill, or service contracts changed.
+
+Reviewed the actual browser UI at 1280×900 and 712×724, including keyboard expansion, long text,
+  conversation targeting, and unsent-draft retention. Compact chat document/main heights equal
+  the 724px viewport and the composer ends at 662px. No browser errors were reported. Native
+  Studio connected to the existing helper and rendered a real scenario workspace successfully;
+  the Mac locked before the next native Continue interaction. Browser interaction tests cover
+  that path. Closed only the native process launched for review and restored the library group's
+  pre-review collapsed state. Linux native testing was not available on this macOS host.
+  Screenshots: `/private/tmp/eforge-workspace-chat-focus.jpg`,
+  `/private/tmp/eforge-chat-focus-desktop.jpg`, and `/private/tmp/eforge-chat-focus-compact.jpg`.
+
+The native app is rebuilt for reopening. Disposable review tabs/services are closed; the existing
+  helper remains available. This is a workspace-design refinement in the configuration tranche;
+  later workflow stages await feedback. Unrelated iteration-test source deletions remain excluded.

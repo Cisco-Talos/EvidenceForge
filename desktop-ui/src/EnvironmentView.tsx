@@ -54,9 +54,9 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, api, onPrepare, onError }: {
+export function EnvironmentView({ item, packs, dependencyFingerprint, api, onPrepare, onError, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; api: StudioApi;
-  onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void;
+  onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
   const [refresh, setRefresh] = useState(0);
@@ -70,7 +70,7 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, api, onPre
     void api.request<EnvironmentReport>(`/v1/scenarios/${item.id}/environment`, "GET", undefined, 180000).then((value) => { if (!cancelled) setReport(value); }).catch((failure) => { if (!cancelled) setError(String(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [api, item.id, item.source_sha256, dependencyFingerprint, refresh]);
-  return <div className="workspace-content environment-view"><div className="section-heading"><div><h2>Environment</h2><p>Inspect exact pack versions, source declarations, and the resolved model before generating.</p></div><button className="icon-button" aria-label="Refresh environment" title="Read current scenario, packs, and overlays" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button></div>
+  return <div className="workspace-content environment-view"><div className="section-heading"><div>{!embedded && <h2>Environment</h2>}<p>Inspect exact pack versions, source declarations, and the resolved model before generating.</p></div><button className="icon-button" aria-label="Refresh environment" title="Read current scenario, packs, and overlays" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button></div>
     {loading && <p role="status" className="muted">Resolving environment…</p>}{error && <p role="alert" className="field-error">{error}</p>}
     {report && <>{!report.valid && <p role="alert" className="field-error">{report.error} Use Validation to review findings, or prepare a repair in chat.</p>}{report.source_sha256 !== item.source_sha256 && <p className="run-revision-note">The source changed during inspection. Refresh the library to load this revision.</p>}<InspectionSection title="Selected packs" count={`${report.selected_packs.length} pack${report.selected_packs.length === 1 ? "" : "s"}`} actions={<button ref={pickerTrigger} className="button-quiet" onClick={() => setPicker(true)}><SquarePen size={15} /> Choose packs</button>}>{report.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span><strong>{pack.name} <small>{pack.version}</small></strong><code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>)}</ul> : <p className="muted">{report.valid ? "This scenario uses its inline environment and defaults; no packs are required." : "Selected packs could not be resolved."}</p>}</InspectionSection>
     <ConfigurationLayers item={item} report={report} api={api} onRefresh={() => setRefresh((value) => value + 1)} onPrepare={onPrepare} onError={onError} />

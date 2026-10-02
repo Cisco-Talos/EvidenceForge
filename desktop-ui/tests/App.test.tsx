@@ -1,3 +1,4 @@
+import { workspaceConversations } from "../src/workspaceConversations";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -125,7 +126,7 @@ test("path controls copy the complete path even when the label is shortened", as
     expect(writeText).toHaveBeenCalledWith(snapshot.items[0].path);
     expect(screen.getByRole("button", { name: "Path copied" })).toBeTruthy();
 
-    await user.click(screen.getByRole("tab", { name: "Generation" }));
+    await user.click(screen.getByRole("button", { name: "Generation", exact: true }));
     await user.click(container.querySelector("#job-job-1 > summary")!);
     await user.click(screen.getByRole("button", { name: "Copy bundle path" }));
     expect(writeText).toHaveBeenCalledWith(snapshot.jobs[0].output_root);
@@ -162,11 +163,11 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
     const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    expect(await screen.findByText("89/100")).toBeTruthy();
-    expect(screen.getByText("12,345 records")).toBeTruthy();
+    expect(await screen.findByText(/89\/100 · Passed/)).toBeTruthy();
+    expect(screen.getByText(/12,345 records/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "View scorecard" }));
-    expect(screen.getByRole("tab", { name: "Scoring" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByText(/89\/100 · Pass/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Scoring", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("89/100 · Pass")).toBeTruthy();
     await waitFor(() => expect(screen.getByRole("region", { name: "Saved scorecard" })).toBeTruthy());
     expect(container.querySelector("#job-evaluation-1")?.hasAttribute("open")).toBe(true);
     expect(screen.getByText("Parseability")).toBeTruthy();
@@ -488,7 +489,7 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
     snapshot.items = [...originalItems, { ...originalItems[0], id: "authored-1", path: draft.draft_path, name: "New authored" }];
     snapshot.conversations = [{ ...draft, item_id: "authored-1", draft_kind: null, draft_project_id: null }, ...originalConversations];
     view.rerender(<App />);
-    await waitFor(() => expect(screen.getByRole("tab", { name: /Conversations/ })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Back to workspace" })).toBeTruthy());
     expect(screen.getByText("New authored", { selector: ".topbar-title strong" })).toBeTruthy();
   } finally {
     snapshot.conversations = originalConversations;
@@ -522,23 +523,23 @@ test("scenario workspace has generation setup and a run-specific scoring action"
     await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("button", { name: "Generate", exact: true }));
-    expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
-    const setup = screen.getByRole("heading", { name: "Generate this scenario" }).closest("section")!;
+    await user.click(screen.getByRole("button", { name: "Generation", exact: true }));
+    expect(screen.getByRole("button", { name: "Generation", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    const setup = screen.getByRole("region", { name: "Generation" });
     expect(screen.queryByRole("textbox", { name: "Output parent folder" })).toBeNull();
     await user.click(within(setup).getByRole("button", { name: "Generate" }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/generations", "POST", { scenario_id: "alpha" });
-    await user.click(screen.getByRole("tab", { name: "Scoring" }));
+    await user.click(screen.getByRole("button", { name: "Scoring", exact: true }));
     expect(screen.getByRole("combobox", { name: "Generated run to evaluate" })).toBeTruthy();
     expect((screen.getByRole("combobox", { name: "Generated run to evaluate" }) as HTMLSelectElement).value).toBe("job-1");
     await user.selectOptions(screen.getByRole("combobox", { name: "Generated run to evaluate" }), "older-alpha");
-    await user.click(screen.getByRole("button", { name: "Evaluate" }));
+    await user.click(within(screen.getByRole("region", { name: "Scoring" })).getByRole("button", { name: "Evaluate" }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/evaluations", "POST", { generation_id: "older-alpha" });
     expect(screen.queryByText("Bravo")).toBeNull();
   } finally { snapshot.jobs = originalJobs; }
 });
 
-test("scoring source links navigate back to the exact generation tab and row", async () => {
+test("scoring source links reveal the exact generation section and row without closing Scoring", async () => {
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, {
     id: "evaluation-1", kind: "evaluation", status: "completed", status_message: "",
@@ -548,12 +549,13 @@ test("scoring source links navigate back to the exact generation tab and row", a
     const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("tab", { name: "Scoring" }));
+    await user.click(screen.getByRole("button", { name: "Scoring", exact: true }));
     await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
-    expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Generation", exact: true }).getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true);
-    await user.click(screen.getByRole("tab", { name: "Scoring" }));
-    expect(screen.getByRole("tab", { name: "Scoring" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Scoring", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Scoring", exact: true }));
+    expect(screen.getByRole("button", { name: "Scoring", exact: true }).getAttribute("aria-expanded")).toBe("false");
   } finally { snapshot.jobs = originalJobs; }
 });
 
@@ -601,7 +603,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
   try {
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("tab", { name: "Validation" }));
+    await user.click(screen.getByRole("button", { name: "Validation", exact: true }));
     await user.click(screen.getByRole("button", { name: "Fix in chat" }));
     expect(request).toHaveBeenCalledWith("/v1/conversations", "POST", { item_id: "alpha" });
     const draft = screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement;
@@ -613,8 +615,8 @@ test("validation findings open a new chat with a reviewable repair draft", async
     await waitFor(() => expect(request).toHaveBeenCalledWith(
       "/v1/conversations/chat-fix/turns", "POST", expect.objectContaining({ text: expect.stringContaining("Unknown host") }),
     ));
-    await user.click(screen.getByRole("tab", { name: "Overview" }));
-    await user.click(screen.getByRole("tab", { name: /Conversations/ }));
+    await user.click(screen.getByRole("button", { name: "Back to workspace" }));
+    await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
     expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("");
   } finally {
     snapshot.validations = originalValidations;
@@ -635,7 +637,7 @@ test("job center counts working chats separately from chats awaiting input", asy
     expect(screen.getByLabelText("1 active chats")).toBeTruthy();
     expect(screen.getByLabelText("1 chats need input")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Initial design.*Alpha.*Working/ }));
-    expect(screen.getByRole("tab", { name: /Conversations/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "Back to workspace" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Initial design" })).toBeTruthy();
   } finally {
     snapshot.conversations = original;
@@ -646,7 +648,7 @@ test("scenario workspace opens the correct persistent conversations", async () =
   const user = userEvent.setup();
   await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-  await user.click(screen.getByRole("tab", { name: /Conversations/ }));
+  await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
   expect(screen.getAllByText("Initial design").length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Open Revise timeline" }));
   expect(within(screen.getByRole("main")).getAllByText("Revise timeline").length).toBeGreaterThan(0);
@@ -657,7 +659,7 @@ test("conversation menu exposes rename and delete actions", async () => {
   const user = userEvent.setup();
   await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-  await user.click(screen.getByRole("tab", { name: /Conversations/ }));
+  await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
   await user.click(screen.getByRole("menuitem", { name: "Rename" }));
   const name = screen.getByRole("textbox", { name: "Conversation name" });
@@ -964,7 +966,7 @@ test("Enter submits a turn while Shift+Enter inserts a newline", async () => {
   const user = userEvent.setup();
   await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-  await user.click(screen.getByRole("tab", { name: /Conversations/ }));
+  await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
   const input = screen.getByRole("textbox", { name: "Message to Codex" });
   await user.type(input, "check{shift>}{enter}{/shift}this{enter}");
   const client = useStudio().api;
@@ -1077,7 +1079,7 @@ test("Job center removes finished history entries while preserving scenario runs
     expect(container.querySelector("#job-job-1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Scenarios/ }));
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("tab", { name: "Generation" }));
+    await user.click(screen.getByRole("button", { name: "Generation", exact: true }));
     expect(container.querySelector("#job-job-1")).toBeTruthy();
   } finally { snapshot.jobs = originalJobs; }
 });
@@ -1226,7 +1228,7 @@ test("Packs combines both types in stable sections, retains filters, and opens t
     expect(screen.queryByRole("button", { name: "Open Sector 1.0.0" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Open Team 2.0.0" }));
     expect(screen.getByRole("heading", { name: "Team" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Conversations" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Conversations" })).toBeTruthy();
     await user.click(within(nav).getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "New pack" }));
@@ -1636,4 +1638,131 @@ test("pack and bundle groups begin collapsed with visible counts and independent
     expect(bundles[0].open).toBe(true);
     expect(bundles[1].open).toBe(false);
   } finally { snapshot.items = originalItems; }
+});
+
+
+test("Continue and the conversation list share active-first recency order for this scenario only", async () => {
+  const original = snapshot.conversations;
+  snapshot.conversations = [
+    { ...original[0], item_id: "bravo", updated_at: 2000000100 },
+    { ...original[0], id: "old-active", title: "Older active turn", active: true, updated_at: 100 },
+    { ...original[1], title: "Newest completed turn", updated_at: 2000000000 },
+    { ...original[1], id: "recent-active", title: "Latest active turn", active: true, updated_at: 200 },
+  ];
+  try {
+    const user = userEvent.setup();
+    await renderExpandedApp();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    expect(screen.getByRole("button", { name: "Continue" }).title).toContain("Latest active turn");
+    await user.click(screen.getByRole("button", { name: "Conversations", exact: true }));
+    const region = screen.getByRole("region", { name: "Conversations" });
+    expect(within(region).getAllByRole("button", { name: /^Open / }).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open Latest active turn", "Open Older active turn", "Open Newest completed turn",
+    ]);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByRole("button", { name: "Rename conversation Latest active turn" })).toBeTruthy();
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/recent-active/history");
+    expect(vi.mocked(useStudio().api!.request).mock.calls.some(([path, method]) => path === "/v1/conversations" && method === "POST")).toBe(false);
+  } finally { snapshot.conversations = original; }
+});
+
+test("conversation ordering uses recency then ID when no turns are active", () => {
+  const chats = snapshot.conversations;
+  const ordered = workspaceConversations([
+    { ...chats[0], id: "z", updated_at: 5 }, { ...chats[1], id: "b", updated_at: 10 },
+    { ...chats[1], id: "a", updated_at: 10 }, { ...chats[0], item_id: "bravo", updated_at: 100 },
+  ], "alpha");
+  expect(ordered.map((chat) => chat.id)).toEqual(["a", "b", "z"]);
+});
+
+test("workspace has folded sections, inline YAML, and no empty source or validation disclosures", async () => {
+  const user = userEvent.setup();
+  const { container } = await renderExpandedApp();
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.queryByRole("region", { name: "Scenario YAML" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Validation", exact: true })).toBeNull();
+  expect(screen.getByRole("button", { name: "Validate", exact: true })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Scoring", exact: true })).toBeNull();
+  expect(screen.getByRole("button", { name: "Score a run" })).toBeDisabled();
+  for (const name of ["Conversations", "Environment", "Generation", "Bundles"]) {
+    expect(within(screen.getByRole("region", { name, exact: true })).getByRole("button", { name, exact: true })).toHaveAttribute("aria-expanded", "false");
+  }
+  const path = container.querySelector(".workspace-heading .path-value")!;
+  expect(path.textContent).toBe(snapshot.items[0].path);
+  expect(path.nextElementSibling).toBe(screen.getByRole("button", { name: "Copy scenario path" }));
+  expect(screen.getAllByRole("button", { name: "Generate", exact: true })).toHaveLength(1);
+});
+
+test("returning from chat preserves the draft and expanded workspace sections", async () => {
+  const user = userEvent.setup();
+  await renderExpandedApp();
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+  await user.click(screen.getByRole("button", { name: "Generation", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  const draft = screen.getByRole("textbox", { name: "Message to Codex" });
+  await user.type(draft, "Keep this unsent draft");
+  const historyCalls = vi.mocked(useStudio().api!.request).mock.calls.filter(([path]) => path === "/v1/conversations/chat-1/history").length;
+  await user.click(screen.getByRole("button", { name: "Back to workspace" }));
+  expect(screen.getByRole("button", { name: "Generation", exact: true })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.queryByRole("textbox", { name: "Message to Codex" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Continue" }));
+  expect(screen.getByRole("textbox", { name: "Message to Codex" })).toHaveValue("Keep this unsent draft");
+  expect(vi.mocked(useStudio().api!.request).mock.calls.filter(([path]) => path === "/v1/conversations/chat-1/history")).toHaveLength(historyCalls);
+});
+
+test("collapsed Generation shows every live progress stream and retains progress after updates", async () => {
+  const original = snapshot.jobs;
+  snapshot.jobs = [original[0], { ...original[1], scenario: original[0].scenario }];
+  try {
+    const user = userEvent.setup();
+    const view = await renderExpandedApp();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const generation = screen.getByRole("region", { name: "Generation" });
+    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["25", "75"]);
+    snapshot.jobs = [{ ...snapshot.jobs[0], progress: { ...snapshot.jobs[0].progress!, completed_hours: 3 } }, snapshot.jobs[1]];
+    view.rerender(<App />);
+    expect(within(generation).getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["38", "75"]);
+    await user.click(within(generation).getByRole("button", { name: /Run #job-2/ }));
+    await waitFor(() => expect(view.container.querySelector("#job-job-2")).toHaveAttribute("open"));
+  } finally { snapshot.jobs = original; }
+});
+
+test("bundles and generation details can open together with unique row identities", async () => {
+  const user = userEvent.setup();
+  const { container } = await renderExpandedApp();
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+  await user.click(screen.getByRole("button", { name: "Generation", exact: true }));
+  await user.click(within(screen.getByRole("region", { name: "Bundles", exact: true })).getByRole("button", { name: "Bundles", exact: true }));
+  const ids = [...container.querySelectorAll("[id]")].map((element) => element.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(container.querySelector("#job-job-1")).toBeTruthy();
+  expect(container.querySelector("#workspace-bundle-job-1")).toBeTruthy();
+});
+
+
+test("a long workspace description expands inline without creating another section", async () => {
+  const originalItems = snapshot.items;
+  const scroll = Object.getOwnPropertyDescriptor(HTMLParagraphElement.prototype, "scrollHeight");
+  const height = Object.getOwnPropertyDescriptor(HTMLParagraphElement.prototype, "clientHeight");
+  Object.defineProperty(HTMLParagraphElement.prototype, "scrollHeight", { configurable: true, get: () => 100 });
+  Object.defineProperty(HTMLParagraphElement.prototype, "clientHeight", { configurable: true, get: () => 40 });
+  snapshot.items = [{ ...originalItems[0], description: "A long description. ".repeat(50) }, originalItems[1]];
+  try {
+    const user = userEvent.setup();
+    const { container } = await renderExpandedApp();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    expect(container.querySelector(".workspace-description")).not.toHaveClass("expanded");
+    await user.click(screen.getByRole("button", { name: "Show full description" }));
+    expect(container.querySelector(".workspace-description")).toHaveClass("expanded");
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(container.querySelector(".workspace-description")).not.toHaveClass("expanded");
+    expect(screen.queryByRole("region", { name: "Description" })).toBeNull();
+  } finally {
+    snapshot.items = originalItems;
+    if (scroll) Object.defineProperty(HTMLParagraphElement.prototype, "scrollHeight", scroll);
+    else Reflect.deleteProperty(HTMLParagraphElement.prototype, "scrollHeight");
+    if (height) Object.defineProperty(HTMLParagraphElement.prototype, "clientHeight", height);
+    else Reflect.deleteProperty(HTMLParagraphElement.prototype, "clientHeight");
+  }
 });

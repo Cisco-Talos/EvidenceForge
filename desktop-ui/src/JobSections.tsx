@@ -4,12 +4,12 @@ import type { StudioApi, StudioJob } from "./api";
 import { JobCard } from "./components";
 import { chronologicalJobs } from "./jobOrder";
 
-export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId, kinds = ["generation", "evaluation"], onNavigateJob, manageHistory = false, removedJobIds = [] }: {
+export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId, kinds = ["generation", "evaluation"], onNavigateJob, manageHistory = false, removedJobIds = [], flat = false }: {
   jobs: StudioJob[]; nameFor: (job: StudioJob) => string | undefined; api: StudioApi;
   onError: (message: string) => void; onChanged: () => Promise<void>; focusJobId?: string | null;
   kinds?: ("generation" | "evaluation")[];
   onNavigateJob?: (job: StudioJob) => void;
-  manageHistory?: boolean; removedJobIds?: string[];
+  manageHistory?: boolean; removedJobIds?: string[]; flat?: boolean;
 }) {
   const [openKinds, setOpenKinds] = useState<Record<string, boolean>>({});
   const [highlightedJobId, setHighlightedJobId] = useState<string | null>(null);
@@ -86,6 +86,7 @@ export function JobSections({ jobs, nameFor, api, onError, onChanged, focusJobId
   return <div className="job-sections">{kinds.map((kind) => {
     const entries = chronologicalJobs(visibleJobs.filter((job) => job.kind === kind));
     const active = entries.filter((job) => ["running", "queued", "paused"].includes(job.status)).length;
+    if (flat) return <div key={kind} className="job-list">{entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />)}</div>;
     return <details className="job-group" key={kind} open={openKinds[kind] ?? true} onToggle={(event) => { const open = event.currentTarget.open; setOpenKinds((current) => ({ ...current, [kind]: open })); }}>
       <summary><strong>{kind === "generation" ? "Generations" : "Evaluations"}</strong><span>{entries.length}</span>{active > 0 && <small>{active} active or queued</small>}{manageHistory && <button className="button-quiet clear-completed" aria-label={`Clear completed ${kind === "generation" ? "generations" : "evaluations"}`} title="Remove completed jobs from Job center. Bundles and scorecards are kept." disabled={clearing !== null || !entries.some((job) => job.status === "completed")} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void clearCompleted(kind); }}><Trash2 size={14} /> {clearing === kind ? "Clearing…" : "Clear Completed"}</button>}</summary>
       <div className="job-list">{entries.length ? entries.map((job) => <JobCard key={job.id} job={job} name={nameFor(job)} onDeleteHistory={manageHistory ? () => removeHistory(job.id) : undefined} highlighted={job.id === highlightedJobId} focusScorecard={job.id === focusJobId && job.kind === "evaluation"} onShowSource={showJob} api={api} onError={onError} onChanged={onChanged} />) : <p className="muted job-group-empty">No {kind === "generation" ? "generations" : "evaluations"} in this list.</p>}</div>

@@ -8,7 +8,7 @@ import { ExportStatus } from "./ExportStatus";
 import { formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
 import { chronologicalJobs } from "./jobOrder";
 
-function ImportedBundleRow({ bundle, api, onError, onChanged }: {
+export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
   bundle: ImportedBundle; api: StudioApi; onError: (message: string) => void; onChanged: () => Promise<void>;
 }) {
   const [files, setFiles] = useState<BundleFiles | null>(null);

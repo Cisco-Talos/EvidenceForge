@@ -36,11 +36,11 @@ export function StatusBadge({ status }: { status: string }) {
   return <span className={`status status-${status.toLowerCase().replace(/ /g, "-")}`}><span className="status-dot" />{status}</span>;
 }
 
-export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged }: {
+export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged, idPrefix = "job" }: {
   job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean; focusScorecard?: boolean;
   onShowSource?: (generationId: string) => void; api: StudioApi;
   onDeleteHistory?: () => Promise<void>;
-  onError: (message: string) => void; onChanged: () => Promise<void>;
+  onError: (message: string) => void; onChanged: () => Promise<void>; idPrefix?: string;
 }) {
   const [files, setFiles] = useState<BundleFiles | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -104,7 +104,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const result = job.scorecard?.error || (job.scorecard
     ? `${job.scorecard.overall_score == null ? "N/A" : `${job.scorecard.overall_score.toFixed(0)}/100`} · ${job.scorecard.acceptance_passed === true ? "Pass" : job.scorecard.acceptance_passed === false ? "Fail" : "Indeterminate"}`
     : job.status === "running" ? "Evaluating…" : job.status_message || "Waiting");
-  return <details className={`job-row ${highlighted ? "source-highlight" : ""}`} id={`job-${job.id}`}>
+  return <details className={`job-row ${highlighted ? "source-highlight" : ""}`} id={`${idPrefix}-${job.id}`}>
     <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong>{grouped ? `Run #${job.id.slice(0, 8)}` : name}</strong>{grouped && sizeBytes != null && <span className="bundle-size" title="Size of bundle contents on disk; ZIP size may differ">{formatBundleSize(sizeBytes)}</span>}</span><small>{job.kind === "evaluation" ? `Evaluates run #${job.generation_id?.slice(0, 8) || "unknown"}` : grouped ? "Generation" : `Run #${job.id.slice(0, 8)}`}</small></span><time className="job-row-time" title={submitted ? new Date(submitted * 1000).toLocaleString() : undefined}>{submitted ? formatTime(submitted) : "Time unknown"}</time><StatusBadge status={job.status} /><span className="job-row-result">{job.kind === "generation" ? <><span>{phase} · {percent === null ? "Preparing" : `${percent}%`}</span><span className="progress-track" role="progressbar" aria-valuenow={percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${name} generation progress`}><span style={{ width: `${percent ?? 0}%` }} /></span></> : result}</span><ChevronDown size={16} className="job-row-chevron" /></summary>
     <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div>
       {job.kind === "generation" && <>{job.input_snapshot && <p className="muted small" title="Includes, exact packs, overlays, and embedded data were captured before this run was queued. Subsequent edits apply to new runs.">Inputs captured {formatTime(submitted)}</p>}<p className="muted small">{detail}</p>{!!progress?.storyline_total && <p className="muted small">Storyline {progress.storyline_event} of {progress.storyline_total}</p>}</>}

@@ -75,14 +75,17 @@ const icons = {
   error: XCircle,
 };
 
+export function OperationStatus({ status, compact = true, focusable = true }: { status: OperationState; compact?: boolean; focusable?: boolean }) {
+  const { label, state, detail } = status;
+  const Icon = icons[state];
+  return <Tooltip.Root>
+    <Tooltip.Trigger asChild><span className={`state-icon state-${state}`} tabIndex={focusable ? 0 : undefined} aria-label={`${label}: ${detail}`}><Icon size={compact ? 16 : 15} />{!compact && <small>{label}</small>}</span></Tooltip.Trigger>
+    <Tooltip.Portal><Tooltip.Content className="state-tooltip" sideOffset={6}>{detail}<Tooltip.Arrow className="state-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+  </Tooltip.Root>;
+}
+
 export function ScenarioStates({ item, snapshot, compact = false }: { item: CatalogItem; snapshot: StudioSnapshot; compact?: boolean }) {
   return <div className={`scenario-states ${compact ? "compact" : ""}`} aria-label="Scenario operation status">
-    {scenarioStates(item, snapshot).map(({ label, state, detail }) => {
-      const Icon = icons[state];
-      return <Tooltip.Root key={label}>
-        <Tooltip.Trigger asChild><span className={`state-icon state-${state}`} tabIndex={0} aria-label={`${label}: ${detail}`}><Icon size={compact ? 16 : 15} />{!compact && <small>{label}</small>}</span></Tooltip.Trigger>
-        <Tooltip.Portal><Tooltip.Content className="state-tooltip" sideOffset={6}>{detail}<Tooltip.Arrow className="state-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
-      </Tooltip.Root>;
-    })}
+    {scenarioStates(item, snapshot).map((status) => <OperationStatus key={status.label} status={status} compact={compact} />)}
   </div>;
 }
