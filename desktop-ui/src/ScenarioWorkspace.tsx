@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, ClipboardCheck, Copy, Download, Folder, FolderOpen, Layers3, MessageSquareText, MoreHorizontal, Play, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Copy, Download, Folder, FolderOpen, MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import type { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, StudioJob, StudioSnapshot } from "./api";
@@ -10,9 +10,8 @@ import { ChatView } from "./ChatView";
 import { ConversationList } from "./ConversationList";
 import { HeaderSummary, WorkspaceSection } from "./WorkspaceSection";
 import { EnvironmentView } from "./EnvironmentView";
-import { DependencyPanel } from "./DependencyPanel";
 import { ScenarioOperations } from "./ScenarioOperations";
-import { generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
+import { environmentState, generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
 import { currentPrediction } from "./ResourceForecastPanel";
 import { ImportedBundleRow } from "./BundleLibrary";
 import { chronologicalJobs } from "./jobOrder";
@@ -35,6 +34,9 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   onChanged: () => Promise<void>; onError: (message: string) => void;
 }) {
   const [expanded, setExpanded] = useState<string[]>([]);
+  const [environmentRefreshing, setEnvironmentRefreshing] = useState(false);
+  const [environmentRefresh, setEnvironmentRefresh] = useState(0);
+  const [scoringFocusVersion, setScoringFocusVersion] = useState(0);
   const [sizes, setSizes] = useState<Record<string, number | null>>({});
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflow, setDescriptionOverflow] = useState(false);
@@ -58,7 +60,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const generationInfo = generationSummary(latestGeneration, item, snapshot, latestGeneration ? sizes[latestGeneration.id] : null, forecast?.final_output.expected_bytes);
   const scoringInfo = scoringSummary(latestGeneration, latestEvaluation, item, snapshot);
   const validationInfo = validationSummary(validation, states[0].state === "stale", snapshot.validations[item.id]?.completed_at);
-  const environmentInfo = environmentSummary(health);
+  const environmentInfo = { ...environmentSummary(health), detail: "Exact pack versions and files · expand to inspect" };
   const activeChats = conversations.filter((chat) => chat.active && !chat.needs_attention).length;
   const attentionChats = conversations.filter((chat) => chat.needs_attention).length;
   // Imported bundles carry scenario names rather than item IDs; only link unambiguous names.
@@ -86,13 +88,24 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   }, [api, item.id, sizeKey]);
   useEffect(() => {
     if (target === "overview" || target === "conversations") return;
+    if (target === "scoring" && focusJobId) setScoringFocusVersion((value) => value + 1);
     setExpanded((current) => current.includes(target) ? current : [...current, target]);
     onNavigate("overview", focusJobId);
     requestAnimationFrame(() => list.current?.querySelector(`[data-workspace-section="${target}"]`)?.scrollIntoView?.({ block: "nearest" }));
   }, [target, focusJobId]);
   const toggle = (name: string) => setExpanded((current) => current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]);
   const navigateJob = (job: StudioJob) => onNavigate(job.kind === "evaluation" ? "scoring" : "generation", job.id);
-  const operationDetails = (mode: "generation" | "scoring") => <ScenarioOperations embedded mode={mode} snapshot={snapshot} item={item} jobs={jobs} api={api} onGenerate={onGenerate} generating={busy} dependenciesReady={health?.ready !== false} onError={onError} onChanged={onChanged} focusJobId={focusJobId} onNavigateJob={navigateJob} />;
+  const operationDetails = (mode: "generation" | "scoring") => <ScenarioOperations embedded mode={mode} snapshot={snapshot} item={item} jobs={jobs} api={api} onGenerate={onGenerate} generating={busy} dependenciesReady={health?.ready !== false} onError={onError} onChanged={onChanged} focusJobId={focusJobId} focusVersion={scoringFocusVersion} onNavigateJob={navigateJob} />;
+  async function refreshEnvironment() {
+    if (environmentRefreshing) return;
+    setEnvironmentRefreshing(true);
+    try {
+      await api.request(`/v1/scenarios/${item.id}/dependencies/refresh`, "POST", undefined, 180000);
+      await onChanged();
+      setEnvironmentRefresh((value) => value + 1);
+    } catch (error) { onError(String(error)); }
+    finally { setEnvironmentRefreshing(false); }
+  }
   const conversationList = <ConversationList conversations={conversations} selectedId={selectedConversation} onOpen={onOpenConversation} onRename={onRenameConversation} onDelete={onDeleteConversation} />;
 
   return <div className={`scenario-page scenario-workspace ${chatFocus ? "focused" : ""}`}>
@@ -110,9 +123,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
         {conversations.length ? conversationList : undefined}
       </WorkspaceSection>
       {item.kind === "scenario" && <>
-        <div data-workspace-section="environment"><WorkspaceSection title="Environment" icon={<Layers3 size={19} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={expanded.includes("environment")} onToggle={() => toggle("environment")}>
-          <DependencyPanel itemId={item.id} health={health} api={api} onChanged={onChanged} onImport={onImportPacks} />
-          <EnvironmentView embedded item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario" && !entry.hidden)} dependencyFingerprint={health?.fingerprint} api={api} onPrepare={onPrepare} onError={onError} />
+        <div data-workspace-section="environment"><WorkspaceSection title="Environment" icon={<OperationStatus status={environmentState(health, environmentRefreshing)} focusable={false} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={expanded.includes("environment")} onToggle={() => toggle("environment")} actions={<button className="icon-button" aria-label="Refresh environment" title="Recheck packs, includes, and configuration from disk" disabled={environmentRefreshing} onClick={() => void refreshEnvironment()}><RefreshCw size={16} className={environmentRefreshing ? "spinning" : ""} /></button>}>
+          <EnvironmentView embedded refreshVersion={environmentRefresh} dependencyHealth={health} onImportPacks={onImportPacks} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario" && !entry.hidden)} dependencyFingerprint={health?.fingerprint} api={api} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
         <div data-workspace-section="validation"><WorkspaceSection title="Validation" icon={<OperationStatus status={states[0]} focusable={false} />} summary={<HeaderSummary summary={validationInfo} />} expanded={expanded.includes("validation")} onToggle={() => toggle("validation")} actions={<button className="button-quiet" onClick={onValidate} disabled={busy}><ShieldCheck size={15} /> {busy ? "Working…" : "Validate"}</button>}>
           {validation ? <ValidationPanel result={validation} onFix={onFix} fixing={busy} /> : undefined}
@@ -123,8 +135,8 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
           })}</div>}>
           {operationDetails("generation")}
         </WorkspaceSection></div>
-        <div data-workspace-section="scoring"><WorkspaceSection title="Scoring" icon={<OperationStatus status={latestRunState("Evaluation", latestEvaluation, latestIsCurrent)} focusable={false} />} summary={<HeaderSummary summary={scoringInfo} />} expanded={expanded.includes("scoring")} onToggle={() => toggle("scoring")} actions={<>{savedScore && <button className="button-quiet" onClick={() => onNavigate("scoring", savedScore.id)}>{savedScore.id === latestEvaluation?.id ? "View scorecard" : "Previous scorecard"}</button>}<button className="button-quiet" disabled={!completed.length} onClick={() => onNavigate("scoring", null)}><ClipboardCheck size={15} /> Score a run</button></>}>
-          {completed.length || evaluations.length ? operationDetails("scoring") : undefined}
+        <div data-workspace-section="scoring"><WorkspaceSection title="Scoring" icon={<OperationStatus status={latestRunState("Evaluation", latestEvaluation, latestIsCurrent)} focusable={false} />} summary={<HeaderSummary summary={scoringInfo} />} expanded={expanded.includes("scoring")} onToggle={() => toggle("scoring")} actions={<>{savedScore && <button className="button-quiet" onClick={() => onNavigate("scoring", savedScore.id)}>{savedScore.id === latestEvaluation?.id ? "View scorecard" : "Previous scorecard"}</button>}</>}>
+          {generations.length ? operationDetails("scoring") : undefined}
         </WorkspaceSection></div>
         <WorkspaceSection title="Bundles" icon={<FolderOpen size={19} />} summary={<HeaderSummary summary={bundleSummary(generations, imports, sizes)} />} expanded={expanded.includes("bundles")} onToggle={() => toggle("bundles")} actions={bundleCount > 0 && (completed.length ? <button className="button-quiet" onClick={onExport}><Download size={15} /> {isTauri() ? "Export bundle" : "Download bundle"}</button> : <button className="button-quiet" onClick={() => toggle("bundles")}><FolderOpen size={15} /> View bundles</button>)}>
           {bundleCount ? <div className="job-list">{orderedBundles(generations, imports).map((entry) => entry.kind === "job" ? <JobCard idPrefix="workspace-bundle" key={entry.id} job={entry.job} name={item.name} grouped sizeBytes={sizes[entry.id]} api={api} onError={onError} onChanged={onChanged} /> : <ImportedBundleRow key={entry.id} bundle={entry.bundle} api={api} onError={onError} onChanged={onChanged} />)}</div> : undefined}

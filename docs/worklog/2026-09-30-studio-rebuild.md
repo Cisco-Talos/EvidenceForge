@@ -1367,3 +1367,43 @@ Reviewed disposable UI data at 1280×900 and 712×724, including real validation
   `/private/tmp/eforge-bundle-summaries-compact.jpg`, `/private/tmp/eforge-pack-summaries-compact.jpg`.
   Closed the review tab, reset viewport and stopped disposable helper/frontend. Unrelated existing
   iteration-test source deletions remain excluded. Ready for workspace feedback before advancing.
+
+
+## 2026-10-02 — Direct Environment and run-centered Scoring details
+
+User requested an Environment status icon and header refresh, direct pack rows instead of the
+readiness panel, and a Scoring list centered on generation runs rather than a run selector.
+
+- Environment's header uses the shared operation status: green for available exact pack versions
+  and included files, red for missing/conflicting dependencies, neutral before inspection, and
+  working during refresh. The tooltip identifies dependency failures. The header keeps status and
+  counts; exact pack references/versions appear immediately when expanded, including transitive
+  organization-pack industry dependencies. Refresh rechecks dependencies from disk and reloads
+  the compiled inspection, without expanding the section or requiring a fingerprint change.
+- Removed the workspace readiness panel and nested Selected packs disclosure. Known dependency
+  rows appear while compilation is loading; missing file dependencies remain directly visible and
+  Import packs is available beside missing packs. Healthy supporting file checks and the existing
+  configuration/model/declaration/precedence inspectors remain collapsed.
+- Scoring expands directly to runs in stable original submission order, with a Latest marker,
+  captured-input freshness, latest evaluation status/score/record count, and per-run Evaluate or
+  Re-evaluate. Incomplete generations cannot be evaluated; queued/running/paused evaluations block
+  duplicate requests. Queuing one run leaves other run actions available and errors recover the
+  action. Expanding a scored run opens its scorecard directly, including raw report viewing/export.
+  Older evaluations are available within their generation. Exact report navigation retains the
+  run's latest outcome in its header; generation navigation opens the matching generation row.
+
+Verification: all 166 React tests pass. Added direct pack/error/import coverage, collapsed header
+  refresh success/failure recovery and status updates, direct keyboard scorecard expansion,
+  historical-report, repeated scorecard links and delayed-event navigation, stable row order, incomplete/active evaluation
+  gating, per-run request concurrency and recovery. Generated API types, full Ruff check/format,
+  diff checks, TypeScript/frontend compilation, and the macOS release application build pass.
+  No Python service, CLI, authored schema or skill contract changed.
+
+Reviewed the actual UI using disposable data at 1280×900 and 712×724, including a real package
+  organization and its locked industry dependency, direct pack rows, folded header refresh, two
+  run rows, acceptance-failed scorecard expansion, and keyboard interaction. No horizontal page
+  overflow or browser script errors. Screenshots: `/private/tmp/eforge-direct-workspace.jpg`,
+  `/private/tmp/eforge-direct-scoring.jpg`, `/private/tmp/eforge-direct-scoring-compact.jpg`.
+  Rebuilt the native app for reopening; native runtime and Linux interaction were not rerun for
+  this frontend refinement. Closed the review tab, reset the viewport and stopped only the
+  disposable helper/frontend. Unrelated iteration-test source deletions remain excluded.

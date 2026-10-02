@@ -1,10 +1,18 @@
 import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Tooltip } from "radix-ui";
-import { CatalogItem, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
+import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
 import { chronologicalJobs } from "./jobOrder";
 
 type State = "none" | "stale" | "working" | "success" | "warning" | "error";
 export interface OperationState { label: string; state: State; detail: string }
+
+export function environmentState(health?: DependencyHealth, refreshing = false): OperationState {
+  if (refreshing) return { label: "Environment", state: "working", detail: "Checking current pack versions and included files." };
+  if (!health) return { label: "Environment", state: "none", detail: "Dependencies have not been checked yet." };
+  return { label: "Environment", state: health.ready ? "success" : "error", detail: health.ready
+    ? "All required pack versions and included files are available."
+    : health.rows.filter((row) => ["missing", "conflict"].includes(row.status)).map((row) => `${row.label}: ${row.detail}`).join(" · ") || "Environment dependencies could not be resolved." };
+}
 
 function latest(jobs: StudioJob[]): StudioJob | undefined {
   return chronologicalJobs(jobs).slice(-1)[0];

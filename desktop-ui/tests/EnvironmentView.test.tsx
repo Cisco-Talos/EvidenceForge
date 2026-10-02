@@ -29,11 +29,36 @@ function setup(request = vi.fn(async () => report), onPrepare = vi.fn(async (_pr
 }
 afterEach(() => cleanup());
 
+test("embedded Environment shows dependency rows directly without readiness or pack disclosures", async () => {
+  const request = vi.fn(async () => ({ ...report, valid: false, selected_packs: [], error: "Required pack missing" }));
+  const onImportPacks = vi.fn();
+  const api = { request } as unknown as StudioApi;
+  const health = { ready: false, fingerprint: "missing", changed_at: 0, rows: [
+    { key: "ready", kind: "pack" as const, label: "healthcare@1.0.0", status: "available" as const, detail: "Exact version verified" },
+    { key: "missing", kind: "pack" as const, label: "office@2.0.0", status: "missing" as const, detail: "Import this version" },
+    { key: "include", kind: "include" as const, label: "users.yaml", status: "missing" as const, detail: "Restore included file" },
+  ] };
+  const props = { embedded: true, item, packs, dependencyHealth: health, api, onPrepare: vi.fn(async () => undefined), onError: vi.fn(), onImportPacks };
+  const { rerender } = render(<Tooltip.Provider><EnvironmentView {...props} refreshVersion={0} /></Tooltip.Provider>);
+  expect(screen.getByText("healthcare@1.0.0")).toBeVisible();
+  expect(screen.getByText("office@2.0.0")).toBeVisible();
+  expect(screen.getByText("users.yaml")).toBeVisible();
+  expect(screen.queryByText("Dependencies ready")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Refresh environment" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Selected packs/ })).toBeNull();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Import packs" }));
+  expect(onImportPacks).toHaveBeenCalledOnce();
+  await waitFor(() => expect(screen.queryByText("Resolving environment…")).toBeNull());
+  rerender(<Tooltip.Provider><EnvironmentView {...props} refreshVersion={1} /></Tooltip.Provider>);
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+});
+
 test("folded environment inspection headers expose selected values and composition results", async () => {
   setup();
-  const selected = await screen.findByRole("button", { name: "Selected packs 2 packs" });
-  expect(selected).toHaveAttribute("aria-expanded", "false");
-  expect(selected).toHaveTextContent("office 2.0.0 · healthcare 1.0.0");
+  await screen.findByRole("heading", { name: "Packs 2" });
+  expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
+  expect(screen.getByText("package:evidenceforge:industry:healthcare@1.0.0")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Selected packs/ })).toBeNull();
   expect(screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" })).toHaveTextContent("Workspace: 1 file");
   expect(screen.getByRole("button", { name: "Resolved scenario model scenario-2.0" })).toHaveTextContent("1 user");
   expect(screen.getByRole("button", { name: "Overrides and precedence 1 override" })).toHaveTextContent("users → scenario");
@@ -43,7 +68,7 @@ test("folded environment inspection headers expose selected values and compositi
 test("exact versions and source declarations are searchable and refresh after dependency changes", async () => {
   const { api, props, rerender } = setup();
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "Selected packs 2 packs" }));
+  await screen.findByRole("heading", { name: "Packs 2" });
   expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "Search environment origins" })).not.toBeInTheDocument();
   await user.click(screen.getByText("Source declarations"));
@@ -108,7 +133,7 @@ test("long declared values expand safely without opening the source viewer", asy
 
 test("an exact organization choice prepares a reviewable request with locked dependencies", async () => {
   const { onPrepare } = setup();
-  await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Choose packs" }));
   const dialog = screen.getByRole("dialog", { name: "Choose environment packs" });
@@ -128,7 +153,7 @@ test("an exact organization choice prepares a reviewable request with locked dep
 test("empty industry choices are gated and failed preparation retains the selection", async () => {
   const onPrepare = vi.fn(async (_prompt: string) => { throw new Error("Could not create conversation"); });
   const { onError } = setup(undefined, onPrepare);
-  await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Choose packs" });
   await user.click(trigger);
@@ -151,7 +176,7 @@ test("empty industry choices are gated and failed preparation retains the select
 
 test("overlays use the contained file viewer and authenticated export route", async () => {
   const { api } = setup();
-  await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" }));
   await user.click(screen.getByText(/^View configuration files/));
@@ -169,8 +194,8 @@ test("an old response cannot replace a newly selected scenario", async () => {
   const request = vi.fn().mockReturnValueOnce(old).mockResolvedValueOnce({ ...report, selected_packs: [], source_sha256: "next" });
   const { props, rerender } = setup(request);
   rerender(<Tooltip.Provider><EnvironmentView {...props} item={{ ...item, id: "next", source_sha256: "next" }} /></Tooltip.Provider>);
-  await userEvent.setup().click(await screen.findByRole("button", { name: "Selected packs 0 packs" }));
-  expect(screen.getByText(/inline environment and defaults/)).toBeVisible();
+  await waitFor(() => expect(screen.queryByText("Resolving environment…")).toBeNull());
+  expect(screen.getByText(/inline environment; no packs/)).toBeVisible();
   await act(async () => resolveOld(report));
   expect(screen.queryByText("project:team:organization:office@2.0.0")).not.toBeInTheDocument();
 });
@@ -189,11 +214,11 @@ test("scenario configuration can be toggled and is refreshed before inspection",
 
 test("inspection sections start folded, expose counts, and expand independently by keyboard", async () => {
   setup();
-  const packs = await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  const packs = await screen.findByRole("heading", { name: "Packs 2" });
   const layers = screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" });
   const overrides = screen.getByRole("button", { name: "Overrides and precedence 1 override" });
-  for (const toggle of [packs, layers, overrides]) expect(toggle).toHaveAttribute("aria-expanded", "false");
-  expect(screen.queryByText("project:team:organization:office@2.0.0")).not.toBeInTheDocument();
+  for (const toggle of [layers, overrides]) expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
   expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   expect(screen.queryByText("organization → scenario")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Choose packs" })).toBeVisible();

@@ -167,14 +167,18 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
     expect(screen.getByText(/12,345 records/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "View scorecard" }));
     expect(screen.getByRole("button", { name: "Scoring", exact: true }).getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("89/100 · Pass")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Scoring run job-1" })).getByRole("button", { name: "Run #job-1" })).toHaveAttribute("aria-expanded", "true");
     await waitFor(() => expect(screen.getByRole("region", { name: "Saved scorecard" })).toBeTruthy());
-    expect(container.querySelector("#job-evaluation-1")?.hasAttribute("open")).toBe(true);
+    expect(container.querySelector("#score-run-job-1")).toBeTruthy();
     expect(screen.getByText("Parseability")).toBeTruthy();
     await user.click(screen.getByText("Acceptance checks"));
     expect(screen.getByText("Schema gate")).toBeTruthy();
     await user.click(screen.getByText("Records by source"));
     expect(screen.getByText("zeek_conn")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Run #job-1" }));
+    expect(screen.queryByRole("region", { name: "Saved scorecard" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "View scorecard" }));
+    expect(await screen.findByRole("region", { name: "Saved scorecard" })).toBeVisible();
   } finally {
     snapshot.jobs = originalJobs;
   }
@@ -530,10 +534,10 @@ test("scenario workspace has generation setup and a run-specific scoring action"
     await user.click(within(setup).getByRole("button", { name: "Generate" }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/generations", "POST", { scenario_id: "alpha" });
     await user.click(screen.getByRole("button", { name: "Scoring", exact: true }));
-    expect(screen.getByRole("combobox", { name: "Generated run to evaluate" })).toBeTruthy();
-    expect((screen.getByRole("combobox", { name: "Generated run to evaluate" }) as HTMLSelectElement).value).toBe("job-1");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Generated run to evaluate" }), "older-alpha");
-    await user.click(within(screen.getByRole("region", { name: "Scoring" })).getByRole("button", { name: "Evaluate" }));
+    expect(screen.queryByRole("combobox", { name: "Generated run to evaluate" })).toBeNull();
+    const older = screen.getByRole("region", { name: "Scoring run older-alpha" });
+    expect(within(older).getByRole("button", { name: "Run #older-al" })).toHaveAttribute("aria-expanded", "false");
+    await user.click(within(older).getByRole("button", { name: "Evaluate", exact: true }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/jobs/evaluations", "POST", { generation_id: "older-alpha" });
     expect(screen.queryByText("Bravo")).toBeNull();
   } finally { snapshot.jobs = originalJobs; }
@@ -550,6 +554,7 @@ test("scoring source links reveal the exact generation section and row without c
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "Scoring", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Run #job-1", exact: true }));
     await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
     expect(screen.getByRole("button", { name: "Generation", exact: true }).getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true);
@@ -1687,8 +1692,8 @@ test("workspace has folded sections, inline YAML, and no empty source or validat
   expect(screen.queryByRole("region", { name: "Scenario YAML" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Validation", exact: true })).toBeNull();
   expect(screen.getByRole("button", { name: "Validate", exact: true })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Scoring", exact: true })).toBeNull();
-  expect(screen.getByRole("button", { name: "Score a run" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Score a run" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Scoring", exact: true })).toHaveAttribute("aria-expanded", "false");
   for (const name of ["Conversations", "Environment", "Generation", "Bundles"]) {
     expect(within(screen.getByRole("region", { name, exact: true })).getByRole("button", { name, exact: true })).toHaveAttribute("aria-expanded", "false");
   }
@@ -1777,7 +1782,7 @@ test("collapsed environment and validation report dependency identities, finding
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     const environment = screen.getByRole("region", { name: "Environment", exact: true });
     expect(environment.querySelector("header")).toHaveTextContent("1 dependency error · 1 pack · 1 include");
-    expect(environment.querySelector("header")).toHaveTextContent("team:industry:healthcare@2.0.0");
+    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare@2.0.0/)).toHaveClass("state-error");
     const validation = screen.getByRole("region", { name: "Validation", exact: true });
     expect(validation.querySelector("header")).toHaveTextContent("Needs changes · 1 error · 1 warning");
     expect(validation.querySelector("header")).toHaveTextContent("Out of date");
@@ -1823,4 +1828,57 @@ test("a long workspace description expands inline without creating another secti
     if (height) Object.defineProperty(HTMLParagraphElement.prototype, "clientHeight", height);
     else Reflect.deleteProperty(HTMLParagraphElement.prototype, "clientHeight");
   }
+});
+
+
+test("Environment is green when ready and refreshes dependencies without opening its details", async () => {
+  const original = snapshot.dependencies;
+  const request = vi.mocked(useStudio().api!.request);
+  const implementation = request.getMockImplementation()!;
+  let finish!: () => void;
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "ready", rows: [
+    { key: "pack", kind: "pack", label: "team:industry:healthcare@2.0.0", status: "available", detail: "Exact version verified" },
+  ] } };
+  request.mockImplementation((path, ...args) => path.endsWith("/dependencies/refresh") ? new Promise((resolve) => { finish = () => resolve(snapshot.dependencies!.alpha); }) : implementation(path, ...args));
+  try {
+    const view = await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const environment = screen.getByRole("region", { name: "Environment", exact: true });
+    const toggle = within(environment).getByRole("button", { name: "Environment", exact: true });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("state-success");
+    const refresh = within(environment).getByRole("button", { name: "Refresh environment" });
+    await user.click(refresh);
+    expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/dependencies/refresh", "POST", undefined, 180000);
+    expect(refresh).toBeDisabled();
+    expect(within(environment).getByLabelText(/Environment: Checking current/)).toHaveClass("state-working");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    snapshot.dependencies.alpha = { ready: false, fingerprint: "missing", rows: [
+      { key: "pack", kind: "pack", label: "team:industry:healthcare@2.0.0", status: "missing", detail: "Import the exact version" },
+    ] };
+    await act(async () => finish());
+    view.rerender(<App />);
+    expect(useStudio().reload).toHaveBeenCalled();
+    expect(refresh).toBeEnabled();
+    expect(within(environment).getByLabelText(/Environment: team:industry:healthcare/)).toHaveClass("state-error");
+    expect(request.mock.calls.some(([path]) => path.endsWith("/environment"))).toBe(false);
+  } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
+});
+
+test("Environment refresh failures recover the header action and keep existing status", async () => {
+  const original = snapshot.dependencies;
+  const request = vi.mocked(useStudio().api!.request);
+  const implementation = request.getMockImplementation()!;
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "ready", rows: [] } };
+  request.mockImplementation((path, ...args) => path.endsWith("/dependencies/refresh") ? Promise.reject(new Error("Cannot inspect pack files")) : implementation(path, ...args));
+  try {
+    await renderExpandedApp();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const environment = screen.getByRole("region", { name: "Environment", exact: true });
+    await userEvent.setup().click(within(environment).getByRole("button", { name: "Refresh environment" }));
+    await screen.findByText(/Cannot inspect pack files/);
+    expect(within(environment).getByRole("button", { name: "Refresh environment" })).toBeEnabled();
+    expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("state-success");
+  } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
