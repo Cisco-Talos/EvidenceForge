@@ -30,6 +30,10 @@ class CatalogItem(BaseModel):
     name: str
     description: str = ""
     version: str = ""
+    publisher: str = ""
+    publisher_display_name: str = ""
+    requires_evidenceforge: str = ""
+    pack_source: str = ""
     modified_at: float = 0.0
     source_sha256: str = ""
     users: int = 0
@@ -42,7 +46,7 @@ class CatalogItem(BaseModel):
 
 
 class Project(BaseModel):
-    """A workspace-local group of scenarios, independent of their file paths."""
+    """A workspace-local group of scenarios and packs, independent of file paths."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +116,9 @@ class SavedView(BaseModel):
     project_id: str | None = None
     ungrouped: bool = False
     show_hidden: bool = False
+    publisher: str = Field(default="", max_length=80)
+    version: str = Field(default="", max_length=80)
+    pack_source: Literal["", "bundled", "workspace"] = ""
 
 
 class StudioStore:
@@ -313,6 +320,10 @@ class StudioStore:
                 name=source.name,
                 description=source.description,
                 version=source.version,
+                publisher=source.publisher,
+                publisher_display_name=source.publisher_display_name,
+                requires_evidenceforge=source.requires_evidenceforge,
+                pack_source=source.pack_source,
                 modified_at=source.modified_at,
                 source_sha256=hashlib.sha256(source.path.read_bytes()).hexdigest(),
                 users=source.users,
@@ -450,13 +461,13 @@ class StudioStore:
     def delete_project(
         self, project: Project
     ) -> tuple[list[CatalogItem], list[Conversation], list[SavedView]]:
-        """Delete project metadata and ungroup its scenarios, drafts, and views atomically."""
+        """Delete project metadata and ungroup its items, drafts, and views atomically."""
         changed: list[CatalogItem] = []
         changed_drafts: list[Conversation] = []
         changed_views: list[SavedView] = []
         with self._lock, self._db:
             rows = self._db.execute(
-                "SELECT payload FROM items WHERE workspace=? AND kind='scenario'",
+                "SELECT payload FROM items WHERE workspace=?",
                 (str(project.workspace.resolve()),),
             ).fetchall()
             for row in rows:
@@ -517,6 +528,12 @@ class StudioStore:
                 "name": item.name.casefold(),
                 "description": item.description.casefold(),
                 "yaml": row["content"].casefold(),
+                "author": item.publisher_display_name.casefold(),
+                "publisher": item.publisher.casefold(),
+                "version": item.version.casefold(),
+                "type": item.kind.removesuffix("_pack"),
+                "location": item.pack_source,
+                "compatibility": item.requires_evidenceforge.casefold(),
             }
             for term in terms:
                 scope, separator, value = term.partition(":")

@@ -837,3 +837,54 @@ for the user's real-scenario import and native-picker feedback before advancing 
   verified window and watcher, then terminated the separate native test window after verification,
   as requested. The background helper remains running. Linux native testing is still unavailable
   on this host; real-scenario import review remains the next user feedback gate.
+
+## 2026-10-01 — Selectable pack imports and project-aware pack authoring
+
+- Pack release and source-workspace reviews now show a visible checkbox for every pack,
+  initially selected, with Select all / Deselect all controls. Selecting an organization keeps
+  its exact locked industry dependencies selected and explains the required relationship.
+  Confirmation expands the same closure in the service, rejects empty/unknown selections,
+  rechecks only relevant captured inputs/reservations, and publishes only selected directories.
+  Unselected conflicts do not block a clean subset; existing pack versions are never replaced.
+- Catalog entries expose publisher ID, display name (shown as Author), compatibility, and
+  workspace/bundled location. Search covers these values and YAML, including `author:`,
+  `publisher:`, `version:`, `type:`, `location:`, and `compatibility:` field scopes. A compact
+  filter popover groups type, author, version, location, and hidden-item choices. Saved pack
+  views retain those criteria and the selected project.
+- Packs use the same workspace Project records and rail as scenarios. Rows support project
+  assignment menus and drag targets; creation/import offer the same project dropdown.
+  Clones retain their project. Refresh/restart preserve assignments, legacy pack drafts inherit
+  their project when promoted, and deleting a project ungroups packs as well as scenarios.
+  Removed the remaining pack-only folder controls from the interface; existing metadata and
+  compatibility routes remain readable.
+- New pack actions open a named creation dialog with live canonical-name validation, required
+  description, optional initial prompt, and project selection. It uses `eforge pack init` for
+  the deterministic 0.1.0 scaffold and records a linked authoring conversation immediately.
+  If no publisher is configured, the dialog asks explicitly for Publisher ID and Author display
+  name and saves them at workspace scope. Empty Details opens chat without starting a turn;
+  nonempty Details is submitted once through the normal turn route with the correct first-turn
+  industry/organization skill. Later turns retain automatic skill selection.
+
+Verification: all 112 Python service/import/library/pack-release tests and 101 React interaction
+contracts pass, plus generated API freshness, full Ruff check/format checks, diff checks, and the
+frontend/macOS debug app build. Added coverage for workspace/archive subset selection, exact
+closure retention, unselected source changes and conflicts, project persistence/isolation and
+project deletion, publisher identity, invalid names, CLI scaffold reuse refusal, author search,
+saved criteria, dialog error recovery, and exactly one optional prompt submission. A fake Codex
+server checks first-turn context and skill selection for scenarios and both pack kinds.
+
+Reviewed the actual UI at 712×724 and 1280×800 using an isolated temporary workspace/frontend
+on port 1422. Verified author filtering, live name errors, creating a named pack without a turn,
+assignment via the project menu, initially checked imports, deselect-all gating, and importing
+only one pack into the selected project. All authored/imported QA files were disposable fixtures;
+no pack or conversation was added to the user's workspace. Browser computer-use drag emitted
+source drag-start but did not deliver drag-over/drop to the target, so pointer-driven native
+pack drag acceptance remains a user review check; the React drag/drop interaction contract passes.
+Temporary diagnostics were removed. Screenshots: `/private/tmp/eforge-pack-project-library.jpg`,
+`/private/tmp/eforge-new-pack-form.jpg`, `/private/tmp/eforge-pack-import-selection.jpg`.
+
+Closed the review tab, reset its viewport override, and stopped both verified temporary review
+processes. Restarted the default launchd helper only after an authenticated snapshot showed zero
+active/queued jobs and zero active turns, verifying PID creation time and command identity first.
+It now serves pack author metadata and the new API. The final macOS app is rebuilt for review;
+Linux native verification is unavailable on this host. Pause for native pack workflow feedback.

@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -345,47 +346,59 @@ test("saved views store and restore library search and filters", async () => {
   }
 });
 
-test("pack folders remain available while scenario folders are removed", async () => {
-  const originalFolders = snapshot.folders;
+test("packs use shared projects, author filters, and saved views instead of folders", async () => {
   const originalItems = snapshot.items;
-  snapshot.folders = ["Training"];
-  snapshot.items = [{ ...originalItems[0], kind: "industry_pack", folder: "Training" }, { ...originalItems[1], kind: "industry_pack" }];
+  const originalProjects = snapshot.projects;
+  const originalViews = snapshot.views;
+  snapshot.projects = [{ id: "project", workspace, name: "Training", description: "", updated_at: 1 }];
+  snapshot.items = [{ ...originalItems[0], kind: "industry_pack", project_id: "project", publisher: "talos", publisher_display_name: "Talos", pack_source: "workspace" }, { ...originalItems[1], kind: "industry_pack", publisher: "official", publisher_display_name: "EvidenceForge", pack_source: "bundled" }];
+  snapshot.views = [{ name: "Talos packs", kind: "packs", search: "", folder: null, project_id: "project", ungrouped: false, show_hidden: false, publisher: "talos", version: "", pack_source: "workspace" }];
   try {
     render(<App />);
     const user = userEvent.setup();
-    expect(screen.queryByRole("button", { name: "Filter by folder" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Packs" }));
-    await user.click(screen.getByRole("button", { name: "Filter by folder" }));
-    await user.click(screen.getByRole("menuitem", { name: "Training" }));
+    expect(screen.queryByRole("button", { name: "Filter by folder" })).toBeNull();
+    expect(screen.getByText("By Talos")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Saved views" }));
+    await user.click(screen.getByRole("button", { name: "Apply saved view Talos packs" }));
     expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open Bravo 2.0" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Filter packs" }));
+    expect((screen.getByRole("combobox", { name: "Pack author" }) as HTMLSelectElement).value).toBe("talos");
+    expect((screen.getByRole("combobox", { name: "Pack location" }) as HTMLSelectElement).value).toBe("workspace");
+    await user.click(screen.getByRole("button", { name: "Close pack filters" }));
     await user.click(screen.getByRole("button", { name: "Saved views" }));
     const dialog = screen.getByRole("dialog", { name: "Saved views" });
     await user.type(within(dialog).getByRole("textbox", { name: "Saved view name" }), "Training items");
     await user.click(within(dialog).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
-      "/v1/views", "POST", { name: "Training items", kind: "packs", search: "", folder: "Training",
-        project_id: null, ungrouped: false, show_hidden: false },
+      "/v1/views", "POST", { name: "Training items", kind: "packs", search: "", folder: null,
+        project_id: "project", ungrouped: false, show_hidden: false, publisher: "talos", version: "", pack_source: "workspace" },
     ));
-  } finally {
-    snapshot.folders = originalFolders;
-    snapshot.items = originalItems;
-  }
+  } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.views = originalViews; }
 });
 
-test("a new virtual folder can be created from the library filter", async () => {
-  render(<App />);
-  const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Packs" }));
-  await user.click(screen.getByRole("button", { name: "Filter by folder" }));
-  await user.click(screen.getByRole("menuitem", { name: "New folder…" }));
-  const dialog = screen.getByRole("dialog", { name: "New folder" });
-  await user.type(within(dialog).getByRole("textbox", { name: "Folder Name" }), "Response work");
-  vi.mocked(useStudio().api!.request).mockResolvedValueOnce({ name: "Response work" });
-  await user.click(within(dialog).getByRole("button", { name: "Create folder" }));
-  await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
-    "/v1/folders", "POST", { name: "Response work" },
-  ));
+test("pack rows can move through the project menu and drag into the shared rail", async () => {
+  const originalItems = snapshot.items;
+  const originalProjects = snapshot.projects;
+  snapshot.projects = [{ id: "project", workspace, name: "Training", description: "", updated_at: 1 }];
+  snapshot.items = [{ ...originalItems[0], kind: "industry_pack" }];
+  try {
+    const { container } = render(<App />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Packs" }));
+    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
+    await user.click(screen.getByRole("menuitem", { name: "Training" }));
+    expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "project" });
+    const data = new Map<string, string>();
+    const transfer = { effectAllowed: "", dropEffect: "", types: ["application/x-evidenceforge-item"], setData: (key: string, value: string) => data.set(key, value), getData: (key: string) => data.get(key) || "" };
+    fireEvent.dragStart(container.querySelector(".pack-row")!, { dataTransfer: transfer });
+    const target = screen.getByRole("button", { name: "Open project Training" }).closest(".project-nav-entry")!;
+    fireEvent.dragOver(target, { dataTransfer: transfer });
+    expect(target.className).toContain("drop-target");
+    fireEvent.drop(target, { dataTransfer: transfer });
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledTimes(2));
+  } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; }
 });
 
 test("command menu opens with the keyboard and navigates to a scenario", async () => {
@@ -1161,7 +1174,9 @@ test("Packs combines both types in stable sections, retains filters, and opens t
     const group = container.querySelector(".pack-group") as HTMLDetailsElement;
     await user.click(group.querySelector("summary")!);
     expect(group.open).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Filter packs" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Pack type" }), "organization_pack");
+    await user.click(screen.getByRole("button", { name: "Close pack filters" }));
     expect(screen.queryByRole("button", { name: "Open Sector 1.0.0" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Open Team 2.0.0" }));
     expect(screen.getByRole("heading", { name: "Team" })).toBeTruthy();
@@ -1173,21 +1188,41 @@ test("Packs combines both types in stable sections, retains filters, and opens t
   } finally { snapshot.items = originalItems; }
 });
 
-test("new organization drafts use the correct skill context and remain in the unified library", async () => {
+test("new packs require a name and description, then submit optional details exactly once", async () => {
+  const originalItems = snapshot.items;
   const originalConversations = snapshot.conversations;
   const request = vi.mocked(useStudio().api!.request);
-  const draft = { ...originalConversations[0], id: "org-draft", item_id: null, draft_kind: "organization_pack" as const, title: "New organization pack" };
+  const originalRequest = request.getMockImplementation()!;
+  const pack = { ...originalItems[0], id: "new-pack", kind: "organization_pack" as const, name: "clinic", description: "Healthcare environment", path: `${workspace}/.eforge/packs/talos/organization/clinic/0.1.0/pack.yaml` };
+  const conversation = { ...originalConversations[0], id: "new-chat", item_id: pack.id, thread_id: null };
+  request.mockImplementation(async (path, method, body) => {
+    if (path === "/v1/packs/publisher") return { configured: true, publisher: "talos", publisher_display_name: "Talos", scope: "project" };
+    if (path === "/v1/packs" && method === "POST") {
+      snapshot.items = [...originalItems, pack]; snapshot.conversations = [...originalConversations, conversation];
+      return { item: pack, conversation };
+    }
+    return originalRequest(path, method, body);
+  });
   try {
-    const { rerender } = render(<App />);
+    render(<App />);
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
-    snapshot.conversations = [...originalConversations, draft];
-    request.mockResolvedValueOnce(draft);
     await user.click(screen.getByRole("button", { name: "New organization pack" }));
-    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/conversations", "POST", { draft_kind: "organization_pack", project_id: null }));
-    rerender(<App />);
-    expect(screen.getByText("New organization pack", { selector: ".draft-banner strong" })).toBeTruthy();
-  } finally { snapshot.conversations = originalConversations; }
+    const dialog = screen.getByRole("dialog", { name: "New pack" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Pack Name" }), "Bad Name");
+    expect(within(dialog).getByRole("status").textContent).toMatch(/lowercase/);
+    expect(within(dialog).getByRole("button", { name: "Create pack" })).toBeDisabled();
+    await user.clear(within(dialog).getByRole("textbox", { name: "Pack Name" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Pack Name" }), "clinic");
+    expect(within(dialog).getByRole("button", { name: "Create pack" })).toBeDisabled();
+    await user.type(within(dialog).getByRole("textbox", { name: "Pack description" }), "Healthcare environment");
+    await user.type(within(dialog).getByRole("textbox", { name: "Pack details" }), "Use radiology workstations");
+    await user.click(within(dialog).getByRole("button", { name: "Create pack" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/packs", "POST", { kind: "organization_pack", name: "clinic", description: "Healthcare environment", project_id: null }, 190000));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/conversations/new-chat/turns", "POST", { text: "Use radiology workstations" }, 90000));
+    expect(request.mock.calls.filter(([path]) => path.endsWith("/turns"))).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "clinic" })).toBeTruthy();
+  } finally { request.mockImplementation(originalRequest); snapshot.items = originalItems; snapshot.conversations = originalConversations; }
 });
 
 test("scorecards start with pillar scores, explain failed acceptance, and expose subscores and raw JSON on demand", async () => {

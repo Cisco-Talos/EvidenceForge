@@ -164,6 +164,24 @@ class PackCloneRequest(BaseModel):
     publisher_display_name: str | None = None
 
 
+class PackCreateRequest(PackCloneRequest):
+    """Basic identity and purpose for a new editable draft pack."""
+
+    kind: Literal["industry_pack", "organization_pack"]
+    name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    version: str = Field(default="0.1.0", pattern=r"^\d+\.\d+\.\d+$")
+    description: str = Field(min_length=1, max_length=2000)
+    project_id: str | None = None
+
+
+class PackCreation(BaseModel):
+    """Named local scaffold and its first authoring conversation."""
+
+    model_config = ConfigDict(extra="forbid")
+    item: CatalogItem
+    conversation: Conversation
+
+
 class BundleImportRequest(BaseModel):
     """Local path to a complete generation created outside Studio."""
 
@@ -929,7 +947,7 @@ class StudioService:
             item = by_source.get((conversation.draft_kind, conversation.draft_path.resolve()))
             if item is None:
                 continue
-            if conversation.draft_project_id and item.kind == "scenario":
+            if conversation.draft_project_id:
                 project = self.store.project(conversation.draft_project_id)
                 if project and project.workspace.resolve() == workspace.resolve():
                     item.project_id = project.id
@@ -1138,6 +1156,13 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
     async def preview_pack(
         request: PackImportRequest, studio: StudioService = Depends(authorized)
     ) -> ImportReview:
+        if request.project_id:
+            project = studio.store.project(request.project_id)
+            if (
+                project is None
+                or project.workspace.resolve() != studio.settings.workspace.resolve()
+            ):
+                raise HTTPException(status_code=404, detail="Project not found in this workspace")
         try:
             plan = await asyncio.to_thread(
                 prepare_archive, request, studio.settings.workspace, studio.paths.cache
@@ -1205,7 +1230,10 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     )
             try:
                 path = await asyncio.to_thread(
-                    plan.commit, studio.settings.workspace, request.accepted_publishers
+                    plan.commit,
+                    studio.settings.workspace,
+                    request.accepted_publishers,
+                    request.selected_packs,
                 )
             except FileExistsError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1220,9 +1248,29 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 item.imported = True
                 studio.store.save_item(item)
                 await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
+            selected_keys = (
+                plan.selected_pack_keys(request.selected_packs)
+                if plan.review.kind == "pack"
+                else {row.key for row in plan.review.rows if row.kind == "pack"}
+            )
+            copied_paths = {
+                str(Path(row.destination) / "pack.yaml")
+                for row in plan.review.rows
+                if row.key in selected_keys and row.status == "copy" and row.destination
+            }
+            for imported_pack in items:
+                if str(imported_pack.path) in copied_paths:
+                    imported_pack.imported = True
+                    imported_pack.project_id = plan.project_id
+                    studio.store.save_item(imported_pack)
+                    await studio.emit(
+                        imported_pack.id,
+                        "item.updated",
+                        json.loads(imported_pack.model_dump_json()),
+                    )
             result = ImportResult(
                 item=item,
-                packs=sum(row.kind == "pack" and row.status == "copy" for row in plan.review.rows),
+                packs=len(copied_paths),
             )
             plan.close()
             studio.imports.pop(preview_id)
@@ -1290,8 +1338,6 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             if changes["folder"] not in studio.store.folders(studio.settings.workspace):
                 raise HTTPException(status_code=404, detail="Folder not found in this workspace")
         if "project_id" in changes:
-            if item.kind != "scenario":
-                raise HTTPException(status_code=400, detail="Only scenarios can join a project")
             if changes["project_id"] is not None:
                 project = studio.store.project(changes["project_id"])
                 if project is None or project.workspace.resolve() != item.workspace.resolve():
@@ -1399,6 +1445,100 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             scope=scope,
         )
 
+    @app.post("/v1/packs")
+    async def create_pack(
+        request: PackCreateRequest, studio: StudioService = Depends(authorized)
+    ) -> PackCreation:
+        workspace = studio.settings.workspace
+        description = request.description.strip()
+        if not description:
+            raise HTTPException(status_code=400, detail="Enter a description for this pack")
+        if request.project_id:
+            project = studio.store.project(request.project_id)
+            if project is None or project.workspace.resolve() != workspace.resolve():
+                raise HTTPException(status_code=404, detail="Project not found in this workspace")
+        if bool(request.publisher) != bool(request.publisher_display_name):
+            raise HTTPException(status_code=400, detail="Enter both publisher ID and display name")
+        try:
+            identity, _scope = effective_publisher(workspace)
+            if identity is None:
+                if not request.publisher or not request.publisher_display_name:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Configure a publisher identity before creating a pack",
+                    )
+                identity = PublisherIdentity(
+                    publisher=request.publisher,
+                    publisher_display_name=request.publisher_display_name,
+                )
+                set_publisher(workspace, identity, scope="project", force=False)
+            elif request.publisher and (
+                identity.publisher != request.publisher
+                or identity.publisher_display_name != request.publisher_display_name
+            ):
+                raise HTTPException(
+                    status_code=409, detail="The configured publisher identity changed"
+                )
+        except (PackError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source_kind = "industry" if request.kind == "industry_pack" else "organization"
+
+        def initialize_with_cli() -> Path:
+            completed = subprocess.run(
+                [
+                    *_eforge_command(controller_settings(studio.settings)),
+                    "pack",
+                    "init",
+                    source_kind,
+                    request.name,
+                    "--version",
+                    request.version,
+                    "--project-root",
+                    str(workspace),
+                    "--json",
+                ],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=180,
+            )
+            try:
+                result = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                result = {}
+            if completed.returncode != 0 or not result.get("created"):
+                raise ValueError(
+                    str(result.get("error") or completed.stderr[-1500:] or "Pack creation failed")
+                )
+            path = Path(result["pack"]["location"]) / "pack.yaml"
+            # This is the new CLI-created scaffold, before it has any consumers or locks.
+            manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+            manifest["description"] = description
+            path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+            return path
+
+        try:
+            pack_path = await asyncio.to_thread(initialize_with_cli)
+        except (OSError, subprocess.TimeoutExpired, ValueError, yaml.YAMLError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        source = next(
+            (found for found in discover_packs(workspace, source_kind) if found.path == pack_path),
+            None,
+        )
+        if source is None:
+            raise HTTPException(status_code=500, detail="Created pack could not be indexed")
+        item = studio.store.upsert_item(workspace, request.kind, source)
+        item.project_id = request.project_id
+        studio.store.save_item(item)
+        conversation = Conversation(workspace=workspace, item_id=item.id)
+        studio.store.save_conversation(conversation)
+        await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
+        await studio.emit(
+            conversation.id, "conversation.created", json.loads(conversation.model_dump_json())
+        )
+        return PackCreation(item=item, conversation=conversation)
+
     @app.post("/v1/packs/{item_id}/clone")
     async def clone_pack(
         item_id: str, request: PackCloneRequest, studio: StudioService = Depends(authorized)
@@ -1482,7 +1622,8 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         cloned = studio.store.upsert_item(workspace, item.kind, source)
         if item.folder is not None:
             cloned.folder = item.folder
-            studio.store.save_item(cloned)
+        cloned.project_id = item.project_id
+        studio.store.save_item(cloned)
         await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
         await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
         return cloned
@@ -1624,18 +1765,14 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         ):
             raise HTTPException(status_code=409, detail="A view with this name already exists")
         if request.project_id:
-            if request.kind != "scenario":
-                raise HTTPException(
-                    status_code=400, detail="Only scenario views can select a project"
-                )
             project = studio.store.project(request.project_id)
             if (
                 project is None
                 or project.workspace.resolve() != studio.settings.workspace.resolve()
             ):
                 raise HTTPException(status_code=404, detail="Project not found in this workspace")
-        if request.ungrouped and (request.kind != "scenario" or request.project_id):
-            raise HTTPException(status_code=400, detail="Ungrouped is a scenario-only view")
+        if request.ungrouped and request.project_id:
+            raise HTTPException(status_code=400, detail="Choose a project or Ungrouped, not both")
         if request.folder and request.folder not in studio.store.folders(studio.settings.workspace):
             raise HTTPException(status_code=404, detail="Folder not found in this workspace")
         view = request.model_copy(update={"name": name})
@@ -1745,9 +1882,10 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
                 raise HTTPException(status_code=404, detail="Scenario or pack not found")
         if request.project_id:
-            if request.draft_kind != "scenario":
+            if not request.draft_kind:
                 raise HTTPException(
-                    status_code=400, detail="Only scenario drafts can join projects"
+                    status_code=400,
+                    detail="Use the item to assign an existing conversation's project",
                 )
             project = studio.store.project(request.project_id)
             if (
@@ -1800,9 +1938,9 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             if not changes["draft_name"]:
                 raise HTTPException(status_code=400, detail="Scenario name cannot be blank")
         if "draft_project_id" in changes:
-            if conversation.draft_kind != "scenario":
+            if conversation.draft_kind is None:
                 raise HTTPException(
-                    status_code=400, detail="Only scenario drafts can join projects"
+                    status_code=400, detail="Assign the authored item to a project instead"
                 )
             project_id = changes["draft_project_id"]
             if project_id is not None:

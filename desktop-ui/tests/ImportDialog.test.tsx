@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
@@ -135,4 +136,58 @@ test("dependency panel provides explicit refresh and missing-pack recovery", asy
   expect(onChanged).toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Import packs" }));
   expect(onImport).toHaveBeenCalled();
+});
+
+const selectedReview: ImportReview = {
+  ...review, kind: "pack", can_import: true, documents: [], publishers: ["example"],
+  rows: [
+    { key: "example:industry:healthcare@1.0.0", kind: "pack", label: "Healthcare", status: "copy", detail: "Copy exact version" },
+    { key: "example:industry:finance@2.0.0", kind: "pack", label: "Finance", status: "copy", detail: "Copy exact version" },
+    { key: "example:organization:clinic@1.0.0", kind: "pack", label: "Clinic", status: "copy", detail: "Copy exact version", dependencies: ["example:industry:healthcare@1.0.0"] },
+  ],
+};
+
+async function openPackReview(next = selectedReview, mode = "file") {
+  const state = fixture("pack", next);
+  if (mode === "workspace") await state.user.selectOptions(screen.getByRole("combobox", { name: "Pack import source" }), "workspace");
+  await state.user.selectOptions(screen.getByRole("combobox", { name: "Project for imported packs" }), "project");
+  await state.user.type(screen.getByRole("textbox", { name: mode === "workspace" ? "Source workspace" : "Pack release" }), "/source/input");
+  await state.user.click(screen.getByRole("button", { name: "Review packs" }));
+  await screen.findByRole("heading", { name: "Review import" });
+  return state;
+}
+
+test.each(["file", "workspace"])("%s import defaults to all packs, allows a subset, and assigns the chosen project", async (mode) => {
+  const { user, request } = await openPackReview(selectedReview, mode);
+  for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Import Healthcare" })).toBeDisabled();
+  expect(screen.getByText(/Required by example:organization:clinic/)).toBeTruthy();
+  await user.click(screen.getByRole("checkbox", { name: "Import Finance" }));
+  await user.click(screen.getByRole("button", { name: "Confirm import" }));
+  expect(request).toHaveBeenCalledWith("/v1/imports/pack/preview", "POST", { path: "/source/input", source_workspaces: [], project_id: "project" }, 180000);
+  expect(request).toHaveBeenCalledWith("/v1/imports/review-1/commit", "POST", {
+    accepted_publishers: ["example"], selected_packs: ["example:industry:healthcare@1.0.0", "example:organization:clinic@1.0.0"],
+  }, 180000);
+});
+
+test("select and deselect all controls gate empty imports and restore independent choices", async () => {
+  const { user } = await openPackReview();
+  await user.click(screen.getByRole("button", { name: "Deselect all packs" }));
+  for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "Import Clinic" }));
+  expect(screen.getByRole("checkbox", { name: "Import Healthcare" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Import Healthcare" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "Import Clinic" }));
+  expect(screen.getByRole("checkbox", { name: "Import Healthcare" })).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Select all packs" }));
+  for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeChecked();
+});
+
+test("an unselected conflicting pack no longer blocks a clean subset", async () => {
+  const rows = selectedReview.rows.map((row) => row.label === "Finance" ? { ...row, status: "conflict" as const } : row);
+  const { user } = await openPackReview({ ...selectedReview, rows, can_import: false });
+  expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "Import Finance" }));
+  expect(screen.getByRole("button", { name: "Confirm import" })).toBeEnabled();
 });

@@ -310,6 +310,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Pack */
+        post: operations["create_pack_v1_packs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/packs/{item_id}/clone": {
         parameters: {
             query?: never;
@@ -1245,6 +1262,26 @@ export interface components {
              */
             version: string;
             /**
+             * Publisher
+             * @default
+             */
+            publisher: string;
+            /**
+             * Publisher Display Name
+             * @default
+             */
+            publisher_display_name: string;
+            /**
+             * Requires Evidenceforge
+             * @default
+             */
+            requires_evidenceforge: string;
+            /**
+             * Pack Source
+             * @default
+             */
+            pack_source: string;
+            /**
              * Modified At
              * @default 0
              */
@@ -1474,6 +1511,8 @@ export interface components {
             source_digest?: string | null;
             /** Digest */
             digest?: string | null;
+            /** Dependencies */
+            dependencies?: string[];
         };
         /**
          * EvaluationRequest
@@ -1564,6 +1603,8 @@ export interface components {
         ImportCommitRequest: {
             /** Accepted Publishers */
             accepted_publishers?: string[];
+            /** Selected Packs */
+            selected_packs?: string[] | null;
         };
         /**
          * ImportResult
@@ -1731,6 +1772,40 @@ export interface components {
             publisher_display_name?: string | null;
         };
         /**
+         * PackCreateRequest
+         * @description Basic identity and purpose for a new editable draft pack.
+         */
+        PackCreateRequest: {
+            /** Name */
+            name: string;
+            /**
+             * Version
+             * @default 0.1.0
+             */
+            version: string;
+            /** Publisher */
+            publisher?: string | null;
+            /** Publisher Display Name */
+            publisher_display_name?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "industry_pack" | "organization_pack";
+            /** Description */
+            description: string;
+            /** Project Id */
+            project_id?: string | null;
+        };
+        /**
+         * PackCreation
+         * @description Named local scaffold and its first authoring conversation.
+         */
+        PackCreation: {
+            item: components["schemas"]["CatalogItem"];
+            conversation: components["schemas"]["Conversation"];
+        };
+        /**
          * PackImportRequest
          * @description One received release archive; destination is the active workspace.
          */
@@ -1740,6 +1815,8 @@ export interface components {
              * Format: path
              */
             path: string;
+            /** Project Id */
+            project_id?: string | null;
             /** Source Workspaces */
             source_workspaces?: string[];
         };
@@ -1759,7 +1836,7 @@ export interface components {
         };
         /**
          * Project
-         * @description A workspace-local group of scenarios, independent of their file paths.
+         * @description A workspace-local group of scenarios and packs, independent of file paths.
          */
         Project: {
             /** Id */
@@ -1889,6 +1966,22 @@ export interface components {
              * @default false
              */
             show_hidden: boolean;
+            /**
+             * Publisher
+             * @default
+             */
+            publisher: string;
+            /**
+             * Version
+             * @default
+             */
+            version: string;
+            /**
+             * Pack Source
+             * @default
+             * @enum {string}
+             */
+            pack_source: "" | "bundled" | "workspace";
         };
         /**
          * ScenarioCloneRequest
@@ -2918,6 +3011,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PackPublisherStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_pack_v1_packs_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackCreation"];
                 };
             };
             /** @description Validation Error */

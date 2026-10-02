@@ -52,6 +52,7 @@ class PackImportRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     path: Path
+    project_id: str | None = None
     source_workspaces: list[Path] = Field(default_factory=list, max_length=16)
 
 
@@ -68,6 +69,7 @@ class DependencyRow(BaseModel):
     destination: str | None = None
     source_digest: str | None = None
     digest: str | None = None
+    dependencies: list[str] = Field(default_factory=list)
 
 
 class DependencyHealth(BaseModel):
@@ -99,6 +101,7 @@ class ImportCommitRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     accepted_publishers: list[str] = Field(default_factory=list)
+    selected_packs: list[str] | None = Field(default=None, max_length=256)
 
 
 def pack_key(reference: PackReference, kind: PackType) -> str:
@@ -367,6 +370,7 @@ class PreparedImport:
         self.sources: dict[Path, str] = {}
         self.reservations: dict[Path, str | None] = {}
         self.publish_roots: list[Path] = []
+        self.pack_sources: dict[str, set[Path]] = {}
 
     def close(self) -> None:
         """Remove only this generated temporary snapshot."""
@@ -392,6 +396,10 @@ class PreparedImport:
     def add_pack(self, pack: LoadedPack) -> None:
         """Reuse or prepare one exact pack without overwriting an existing version."""
         key = pack_key(_reference(pack), pack.manifest.type)
+        dependencies = [
+            f"{entry.publisher}:industry:{entry.name}@{entry.version}"
+            for entry in pack.lock.dependencies
+        ]
         if any(row.key == key for row in self.review.rows):
             existing = next(row for row in self.review.rows if row.key == key)
             if existing.source_digest and existing.source_digest != pack.digest:
@@ -407,6 +415,7 @@ class PreparedImport:
                     status="available",
                     detail="Bundled exact version; reused",
                     digest=pack.digest,
+                    dependencies=dependencies,
                 )
             )
             return
@@ -458,6 +467,7 @@ class PreparedImport:
                 destination=str(destination),
                 source_digest=pack.digest,
                 digest=digest,
+                dependencies=dependencies,
             )
         )
         if status != "conflict":
@@ -465,22 +475,75 @@ class PreparedImport:
         self.review.publishers = sorted(set(self.review.publishers) | {pack.manifest.publisher})
         for filename, content in (*pack.semantic_file_bytes, *pack.companion_file_bytes):
             self.sources[pack.root / filename] = hashlib.sha256(content).hexdigest()
+        self.pack_sources[key] = {
+            pack.root / filename
+            for filename, _content in (*pack.semantic_file_bytes, *pack.companion_file_bytes)
+        }
 
-    def commit(self, workspace: Path, accepted_publishers: list[str]) -> Path | None:
+    def selected_pack_keys(self, selection: list[str] | None = None) -> set[str]:
+        """Expand explicitly selected packs to their reviewed, exact locked closure."""
+        rows = {row.key: row for row in self.review.rows if row.kind == "pack"}
+        selected = set(rows) if selection is None else set(selection)
+        if not selected:
+            raise ValueError("Select at least one pack to import")
+        if selected - rows.keys():
+            raise ValueError("A selected pack is not part of this review. Review again")
+        pending = list(selected)
+        while pending:
+            row = rows[pending.pop()]
+            for dependency in row.dependencies:
+                if dependency not in rows:
+                    raise ValueError(f"The reviewed dependency {dependency} is missing")
+                if dependency not in selected:
+                    selected.add(dependency)
+                    pending.append(dependency)
+        return selected
+
+    def commit(
+        self,
+        workspace: Path,
+        accepted_publishers: list[str],
+        selected_packs: list[str] | None = None,
+    ) -> Path | None:
         """Publish only displayed new directories; reject stale or changed reviews."""
         if workspace.resolve() != self.workspace or time.monotonic() - self.created_at > 1800:
             raise FileExistsError(
                 "This import review expired or its workspace changed. Review again"
             )
-        if not self.review.can_import:
+        if self.review.kind != "pack" and selected_packs is not None:
+            raise ValueError("Pack selection is only available for pack imports")
+        selection = self.selected_pack_keys(selected_packs) if self.review.kind == "pack" else None
+        rows = [row for row in self.review.rows if selection is None or row.key in selection]
+        if (
+            self.review.kind == "pack"
+            and any(row.status in {"conflict", "missing"} for row in rows)
+        ) or (self.review.kind != "pack" and not self.review.can_import):
             raise ValueError("Resolve pack conflicts before importing this release")
-        if set(self.review.publishers) - set(accepted_publishers):
+        publishers = (
+            {row.key.split(":", 1)[0] for row in rows} & set(self.review.publishers)
+            if selection is not None
+            else set(self.review.publishers)
+        )
+        if publishers - set(accepted_publishers):
             raise ValueError("Confirm all publisher namespaces shown in the import review")
+        selected_destinations = {row.destination for row in rows}
+        all_pack_sources = set().union(*self.pack_sources.values())
+        selected_sources = set().union(
+            *(
+                paths
+                for key, paths in self.pack_sources.items()
+                if selection is None or key in selection
+            )
+        )
         for path, digest in self.sources.items():
+            if path in all_pack_sources and path not in selected_sources:
+                continue
             if hashlib.sha256(_local_file(path).read_bytes()).hexdigest() != digest:
                 raise FileExistsError("Source files changed after review. Review the import again")
         for relative, expected in self.reservations.items():
             target = workspace / relative
+            if selection is not None and str(target) not in selected_destinations:
+                continue
             if expected is None:
                 if target.exists() or target.is_symlink():
                     raise FileExistsError(f"Destination appeared after review: {target}")
@@ -501,6 +564,8 @@ class PreparedImport:
         try:
             for relative in self.publish_roots:
                 target = workspace / relative
+                if selection is not None and str(target) not in selected_destinations:
+                    continue
                 if any(
                     row.status == "conflict" and row.destination == str(target)
                     for row in self.review.rows
@@ -836,6 +901,7 @@ def prepare_archive(request: PackImportRequest, workspace: Path, cache: Path) ->
             raise ValueError("Select a regular source workspace, not a link")
         repository = PackRepository(candidate)
         plan = PreparedImport(workspace, cache, "pack", candidate.name)
+        plan.project_id = request.project_id
         try:
             packs = [pack for pack in repository.list() if pack.source == "project"]
             if not packs:
@@ -887,6 +953,7 @@ def prepare_archive(request: PackImportRequest, workspace: Path, cache: Path) ->
     source = _local_file(request.path)
     archive = validate_efpack(source)
     plan = PreparedImport(workspace, cache, "pack", archive.root["name"])
+    plan.project_id = request.project_id
     try:
         plan.sources[source] = hashlib.sha256(source.read_bytes()).hexdigest()
         extracted = plan.stage / "received"

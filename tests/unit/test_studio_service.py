@@ -968,18 +968,13 @@ def test_draft_conversation_links_authored_file_and_project(
         client.post("/v1/library/refresh", headers=headers)
         assert client.get("/v1/conversations", headers=headers).json()[0]["item_id"] == item["id"]
         pack_draft = client.post(
-            "/v1/conversations", headers=headers, json={"draft_kind": "industry_pack"}
+            "/v1/conversations",
+            headers=headers,
+            json={"draft_kind": "industry_pack", "project_id": project["id"]},
         ).json()
         pack_path = Path(pack_draft["draft_path"])
         assert pack_path.parent.parent == workspace / ".eforge" / "packs"
-        assert (
-            client.post(
-                "/v1/conversations",
-                headers=headers,
-                json={"draft_kind": "industry_pack", "project_id": project["id"]},
-            ).status_code
-            == 400
-        )
+        assert pack_draft["draft_project_id"] == project["id"]
         pack_path.parent.mkdir(parents=True)
         pack_path.write_text(
             "name: training-industry\ntype: industry\nversion: '1.0'\n",
@@ -992,6 +987,7 @@ def test_draft_conversation_links_authored_file_and_project(
             if entry["path"] == str(pack_path)
         )
         assert pack_item["kind"] == "industry_pack"
+        assert pack_item["project_id"] == project["id"]
         assert (
             next(
                 chat
@@ -1466,11 +1462,23 @@ def test_two_generation_progress_streams_reconcile_independently(
         assert any(event["kind"] == "job.updated" for event in events)
 
 
-def test_codex_turn_uses_scenario_context_and_preserves_fast_completion(
-    tmp_path: Path, monkeypatch: object
+@pytest.mark.parametrize(
+    "kind,skill",
+    [
+        ("scenario", "eforge-scenario"),
+        ("industry_pack", "eforge-industry-pack"),
+        ("organization_pack", "eforge-organization-pack"),
+    ],
+)
+def test_codex_turn_uses_item_context_and_preserves_fast_completion(
+    tmp_path: Path, monkeypatch: object, kind: str, skill: str
 ) -> None:
     workspace = tmp_path / "workspace"
     scenario = _scenario(workspace, "alpha")
+    if kind != "scenario":
+        scenario = workspace / ".eforge/packs/test" / kind / "pack.yaml"
+        scenario.parent.mkdir(parents=True)
+        scenario.write_text(f"name: alpha\ntype: {kind.removesuffix('_pack')}\nversion: 0.1.0\n")
     calls = tmp_path / "codex-calls.jsonl"
     fake = tmp_path / "fake-codex"
     fake.write_text(
@@ -1485,8 +1493,8 @@ def test_codex_turn_uses_scenario_context_and_preserves_fast_completion(
         "    method = request['method']\n"
         "    result = {}\n"
         "    if method == 'skills/list':\n"
-        "        result = {'data': [{'skills': [{'name': 'eforge-scenario', "
-        "'path': '/tmp/skills/eforge-scenario/SKILL.md', 'enabled': True}]}]}\n"
+        f"        result = {{'data': [{{'skills': [{{'name': {skill!r}, "
+        f"'path': '/tmp/skills/{skill}/SKILL.md', 'enabled': True}}]}}]}}\n"
         "    elif method == 'thread/start': result = {'thread': {'id': 'thread-alpha'}}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    elif method == 'model/list': result = {'data': []}\n"
@@ -1507,7 +1515,7 @@ def test_codex_turn_uses_scenario_context_and_preserves_fast_completion(
         item_id = next(
             item["id"]
             for item in client.get("/v1/bootstrap", headers=headers).json()["items"]
-            if item["kind"] == "scenario"
+            if item["path"] == str(scenario)
         )
         chat = client.post("/v1/conversations", headers=headers, json={"item_id": item_id}).json()
         response = client.post(
@@ -1529,7 +1537,7 @@ def test_codex_turn_uses_scenario_context_and_preserves_fast_completion(
     turn = next(record for record in records if record["method"] == "turn/start")
     assert "thread/resume" not in [record["method"] for record in records]
     assert turn["params"]["input"][0] == {"type": "text", "text": "Validate this scenario"}
-    assert turn["params"]["input"][1]["name"] == "eforge-scenario"
+    assert turn["params"]["input"][1]["name"] == skill
     assert turn["params"]["summary"] == "auto"
 
 
@@ -2512,3 +2520,130 @@ def test_rename_scenario_rejects_ambiguous_or_shared_name_nodes(
         rename_scenario(path, "new", sha256(path.read_bytes()).hexdigest())
     assert path.read_text() == contents
     assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("kind", ["industry_pack", "organization_pack"])
+def test_new_pack_identity_description_project_search_and_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    paths = _paths(tmp_path / "private")
+    headers = {"X-EForge-Token": "secret"}
+    payload = {"kind": kind, "name": "care-team", "description": "Clinical systems"}
+    with TestClient(create_app(paths, "secret")) as client:
+        assert client.post("/v1/packs", json=payload).status_code == 401
+        assert client.post("/v1/packs", headers=headers, json=payload).status_code == 409
+        for invalid in ("Uppercase", "with spaces", "../path", "bad_name"):
+            assert (
+                client.post(
+                    "/v1/packs", headers=headers, json={**payload, "name": invalid}
+                ).status_code
+                == 422
+            )
+        assert (
+            client.post(
+                "/v1/packs", headers=headers, json={**payload, "description": " "}
+            ).status_code
+            == 400
+        )
+        project = client.post("/v1/projects", headers=headers, json={"name": "Exercise"}).json()
+        assert (
+            client.post(
+                "/v1/packs", headers=headers, json={**payload, "project_id": "missing"}
+            ).status_code
+            == 404
+        )
+        response = client.post(
+            "/v1/packs",
+            headers=headers,
+            json={
+                **payload,
+                "publisher": "care-lab",
+                "publisher_display_name": "Care Lab",
+                "project_id": project["id"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        item, chat = result["item"], result["conversation"]
+        assert item["name"] == "care-team"
+        assert item["description"] == "Clinical systems"
+        assert item["publisher_display_name"] == "Care Lab"
+        assert item["publisher"] == "care-lab"
+        assert item["version"] == "0.1.0"
+        assert item["project_id"] == project["id"]
+        assert item["pack_source"] == "workspace"
+        assert chat["item_id"] == item["id"]
+        assert chat["thread_id"] is None
+        path = Path(item["path"])
+        assert path.is_relative_to(workspace / ".eforge/packs/care-lab")
+        original = path.read_bytes()
+        assert client.post("/v1/packs", headers=headers, json=payload).status_code == 400
+        assert path.read_bytes() == original
+        for query in (
+            'author:"Care Lab"',
+            "publisher:care-lab",
+            "version:0.1.0 location:workspace",
+            "Care",
+        ):
+            found = client.get(
+                "/v1/items", headers=headers, params={"kind": kind, "search": query}
+            ).json()
+            assert item["id"] in {entry["id"] for entry in found}
+        view = client.post(
+            "/v1/views",
+            headers=headers,
+            json={
+                "name": "My packs",
+                "kind": "packs",
+                "project_id": project["id"],
+                "publisher": "care-lab",
+                "version": "0.1.0",
+                "pack_source": "workspace",
+            },
+        )
+        assert view.status_code == 200
+        client.post("/v1/library/refresh", headers=headers)
+        assert (
+            next(
+                entry
+                for entry in client.get("/v1/bootstrap", headers=headers).json()["items"]
+                if entry["id"] == item["id"]
+            )["project_id"]
+            == project["id"]
+        )
+    with TestClient(create_app(paths, "secret")) as client:
+        snapshot = client.get("/v1/bootstrap", headers=headers).json()
+        assert (
+            next(entry for entry in snapshot["items"] if entry["id"] == item["id"])["project_id"]
+            == project["id"]
+        )
+        assert snapshot["views"][0]["publisher"] == "care-lab"
+        other = tmp_path / "other-workspace"
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(other)})
+        assert (
+            client.post(
+                "/v1/packs", headers=headers, json={**payload, "project_id": project["id"]}
+            ).status_code
+            == 404
+        )
+        assert (
+            client.patch(
+                f"/v1/items/{item['id']}", headers=headers, json={"project_id": None}
+            ).status_code
+            == 404
+        )
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
+        assert (
+            client.patch(
+                f"/v1/items/{item['id']}", headers=headers, json={"project_id": None}
+            ).status_code
+            == 200
+        )
+        client.patch(f"/v1/items/{item['id']}", headers=headers, json={"project_id": project["id"]})
+        assert (
+            client.delete(f"/v1/projects/{project['id']}", headers=headers).json()["ungrouped"] == 1
+        )
+        assert path.read_bytes() == original

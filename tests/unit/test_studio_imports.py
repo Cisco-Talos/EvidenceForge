@@ -613,3 +613,123 @@ def test_schema_findings_do_not_block_import_or_crash_dependency_checks(
         assert isinstance(dependency_health(imported, workspace).ready, bool)
     finally:
         plan.close()
+
+
+@pytest.mark.parametrize("source_kind", ["workspace", "release"])
+def test_pack_subset_keeps_exact_dependencies_and_leaves_other_packs_out(
+    tmp_path: Path, source_kind: str
+) -> None:
+    organization, industries = _multi_source(tmp_path / "sources")
+    workspace = tmp_path / "destination"
+    workspace.mkdir()
+    source = tmp_path / "sources/organization"
+    if source_kind == "release":
+        source = tmp_path / "portable.efpack"
+        build_portable_archive(
+            PackRepository(tmp_path / "sources/organization"), organization, source
+        )
+    plan = prepare_archive(PackImportRequest(path=source), workspace, tmp_path / "cache")
+    healthcare_key = "evidenceforge:industry:healthcare@1.0.0"
+    org_key = "evidenceforge:organization:metrolink-specialty-care@1.0.0"
+    try:
+        assert plan.selected_pack_keys([org_key]) == {
+            healthcare_key,
+            org_key,
+            "evidenceforge:industry:finance@1.0.0",
+        }
+        with pytest.raises(ValueError, match="at least one"):
+            plan.commit(workspace, plan.review.publishers, [])
+        with pytest.raises(ValueError, match="not part"):
+            plan.commit(workspace, plan.review.publishers, ["unknown:industry:pack@1.0.0"])
+        # Changes to unselected workspace inputs must not affect a selected standalone pack.
+        if source_kind == "workspace":
+            (industries[1].root / "pack.yaml").write_text("changed after review")
+        plan.commit(workspace, plan.review.publishers, [healthcare_key])
+        roots = list((workspace / ".eforge/packs").rglob("pack.yaml"))
+        assert len(roots) == 1
+        assert roots[0].parent.parent.name == "healthcare"
+    finally:
+        plan.close()
+
+
+def test_selected_organization_automatically_imports_its_locked_closure(tmp_path: Path) -> None:
+    organization, _industries = _multi_source(tmp_path / "sources")
+    workspace = tmp_path / "destination"
+    workspace.mkdir()
+    plan = prepare_archive(
+        PackImportRequest(path=tmp_path / "sources/organization"), workspace, tmp_path / "cache"
+    )
+    try:
+        key = "evidenceforge:organization:metrolink-specialty-care@1.0.0"
+        plan.commit(workspace, plan.review.publishers, [key])
+        imported = PackRepository(workspace).resolve(
+            PackReference(
+                source="project",
+                publisher="evidenceforge",
+                name=organization.manifest.name,
+                version="1.0.0",
+            ),
+            expected_type="organization",
+        )
+        assert len(PackRepository(workspace).validate_semantics(imported)) == 2
+        assert len(list((workspace / ".eforge/packs").rglob("pack.yaml"))) == 3
+    finally:
+        plan.close()
+
+
+def test_pack_subset_ignores_unselected_conflict_and_assigns_only_new_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    _pack(source, "industry", "healthcare")
+    _pack(source, "industry", "finance")
+    workspace = tmp_path / "destination"
+    existing = _pack(workspace, "industry", "finance")
+    manifest = existing.root / "pack.yaml"
+    manifest.write_text(manifest.read_text() + "\n# local changes\n")
+    original = manifest.read_bytes()
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    paths = _paths(tmp_path / "private")
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(paths, "secret")) as client:
+        project = client.post("/v1/projects", headers=headers, json={"name": "Training"}).json()
+        preview = {"path": str(source), "project_id": project["id"]}
+        assert (
+            client.post(
+                "/v1/imports/pack/preview",
+                headers=headers,
+                json={**preview, "project_id": "missing"},
+            ).status_code
+            == 404
+        )
+        review = client.post("/v1/imports/pack/preview", headers=headers, json=preview).json()
+        assert not review["can_import"]
+        response = client.post(
+            f"/v1/imports/{review['id']}/commit",
+            headers=headers,
+            json={
+                "accepted_publishers": review["publishers"],
+                "selected_packs": ["evidenceforge:industry:healthcare@1.0.0"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["packs"] == 1
+        packs = [
+            item
+            for item in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if Path(item["path"]).is_relative_to(workspace)
+        ]
+        assert (
+            next(item for item in packs if item["name"] == "healthcare")["project_id"]
+            == project["id"]
+        )
+        assert next(item for item in packs if item["name"] == "finance")["project_id"] is None
+        assert manifest.read_bytes() == original
+    with TestClient(create_app(paths, "secret")) as client:
+        imported = next(
+            item
+            for item in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if item["project_id"]
+        )
+        assert imported["name"] == "healthcare"
+        assert imported["imported"]

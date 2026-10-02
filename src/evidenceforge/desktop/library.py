@@ -23,6 +23,10 @@ class LibraryItem(BaseModel):
     description: str = ""
     kind: str = "scenario"
     version: str = ""
+    publisher: str = ""
+    publisher_display_name: str = ""
+    requires_evidenceforge: str = ""
+    pack_source: str = ""
     users: int = 0
     systems: int = 0
     events: int = 0
@@ -222,6 +226,7 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
         for path in root.rglob("pack.yaml"):
             try:
                 data = _read_yaml(path)
+                search_text, modified_at = _scenario_text(path) if data else ("", 0.0)
             except (OSError, UnicodeError, yaml.YAMLError):
                 continue
             if not data or data.get("type") != kind:
@@ -233,7 +238,12 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
                     description=str(data.get("description") or "").strip(),
                     kind=kind,
                     version=str(data.get("version", "")),
-                    modified_at=path.stat().st_mtime,
+                    publisher=str(data.get("publisher") or ""),
+                    publisher_display_name=str(data.get("publisher_display_name") or ""),
+                    requires_evidenceforge=str(data.get("requires_evidenceforge") or ""),
+                    pack_source="bundled" if root == bundled else "workspace",
+                    search_text=search_text,
+                    modified_at=modified_at,
                 )
             )
     return sorted(items, key=lambda item: (item.name.casefold(), item.version))
