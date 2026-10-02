@@ -665,7 +665,6 @@ function App() {
   return <Tooltip.Provider><div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><img className="brand-mini" src="/brand/icon-32.png" alt="" /><small>STUDIO</small></div>
-      <div className="workspace-tag"><span className="workspace-indicator" /><span className="path-value" title={snapshot.settings.workspace}>{shortPath(snapshot.settings.workspace)}</span><CopyPathButton path={snapshot.settings.workspace} label="Copy workspace path" onError={setNotice} /></div>
       <nav className="primary-nav" aria-label="Main navigation">
         <button className={section === "scenarios" ? "selected" : ""} onClick={() => { setSection("scenarios"); setSelectedId(null); setDraftConversationId(null); }}><FileCode2 size={18} /> Scenarios</button>
         <button className={section === "packs" ? "selected" : ""} onClick={() => { setSection("packs"); setSelectedId(null); setDraftConversationId(null); }}><Layers3 size={18} /> Packs</button>

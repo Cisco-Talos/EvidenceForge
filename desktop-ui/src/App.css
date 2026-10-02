@@ -40,14 +40,11 @@ p { line-height: 1.5; }
 .brand-logo { width: 166px; height: 166px; object-fit: contain; }
 .brand-mini { display: none; }
 .brand small { display: block; color: var(--mint); font-size: 9px; font-weight: 800; letter-spacing: .22em; margin-top: -1px; }
-.workspace-tag { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; margin: 0 8px 28px; padding: 8px 10px; color: #a8b9cd; background: #152235; border: 1px solid #23364e; border-radius: 8px; font-size: 11px; }
-.workspace-indicator { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--mint); box-shadow: 0 0 9px #72d9c4aa; }
 .path-with-copy { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
 .path-value { flex: 0 1 auto; min-width: 0; max-width: min(100%, 68ch); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-path-button { display: grid; flex: none; place-items: center; width: 25px; height: 25px; min-height: 25px; padding: 0; border: 1px solid transparent; border-radius: 6px; color: #90abc8; background: transparent; }
 .copy-path-button:hover { border-color: #3c5a79; color: #e1ecfb; background: #263d59; }
 .copy-path-button.copied { color: var(--mint); }
-.workspace-tag .copy-path-button { width: 21px; height: 21px; min-height: 21px; }
 .primary-nav { display: flex; flex-direction: column; gap: 4px; }
 .primary-nav button, .sidebar-bottom button { width: 100%; display: flex; align-items: center; gap: 12px; min-height: 41px; padding: 0 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #a3b2c5; text-align: left; font-weight: 570; }
 .primary-nav button:hover, .sidebar-bottom button:hover { color: var(--text); background: #1a2a3e; }
@@ -657,7 +654,7 @@ select { min-width: 185px; }
   .app-shell { grid-template-columns: 66px minmax(0,1fr); }
   .sidebar { padding-left: 8px; padding-right: 8px; }
   .brand { justify-content: center; padding: 2px 0 18px; }
-  .brand-logo, .brand small, .workspace-tag, .sidebar-bottom > span { display: none; }
+  .brand-logo, .brand small, .sidebar-bottom > span { display: none; }
   .brand-mini { display: block; width: 41px; height: 41px; object-fit: contain; }
   .primary-nav button, .sidebar-bottom button { justify-content: center; font-size: 0; gap: 0; }
   .primary-nav button svg, .sidebar-bottom button svg { flex: none; }
