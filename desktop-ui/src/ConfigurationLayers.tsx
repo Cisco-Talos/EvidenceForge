@@ -3,6 +3,7 @@ import { FileCode2, SquarePen } from "lucide-react";
 import type { CatalogItem, EnvironmentReport, StudioApi } from "./api";
 import { BundleFileBrowser } from "./BundleFileBrowser";
 import { CopyPathButton } from "./CopyPathButton";
+import { InspectionSection } from "./InspectionSection";
 
 export function ConfigurationLayers({ item, report, api, onRefresh, onPrepare, onError }: {
   item: CatalogItem; report: EnvironmentReport; api: StudioApi; onRefresh: () => void;
@@ -20,7 +21,7 @@ export function ConfigurationLayers({ item, report, api, onRefresh, onPrepare, o
     } catch (error) { onError(String(error)); }
     finally { setWorking(false); }
   }
-  return <section className="surface configuration-layers"><div className="surface-heading"><h2>Configuration layers</h2></div>
+  return <>{!configuration && <p className="field-error" role="alert">Configuration could not be inspected. Restore the selected context and directories, then refresh.</p>}<InspectionSection title="Configuration layers" count={configuration ? `${configuration.scopes.filter((scope) => scope.enabled).length} enabled · ${configuration.scopes.length} layers` : "Unavailable"} className="configuration-layers">
     <p className="muted">Applied in order, using each family’s merge rules. Turning a layer off preserves its files. Existing runs keep their captured configuration.</p>
     {configuration ? <>
       <div className="configuration-scope-list">{configuration.scopes.map((scope) => <div className="configuration-scope" key={scope.id}>
@@ -32,5 +33,5 @@ export function ConfigurationLayers({ item, report, api, onRefresh, onPrepare, o
       <details className="configuration-cli"><summary>Use this configuration outside Studio</summary><p>Pass the same selection to info, validate-config, validate, resolve, resources predict, or generate.</p>{configuration.context_path && <div className="path-with-copy"><span className="path-value source-path">{configuration.context_path}</span><CopyPathButton path={configuration.context_path} label="Copy configuration context path" onError={onError} /></div>}<div className="path-with-copy"><code className="path-value">{configuration.cli_command}</code><CopyPathButton path={configuration.cli_command} label="Copy generation command" onError={onError} /></div></details>
     </> : <p className="field-error">Configuration could not be inspected. Restore the selected context and directories, then refresh.</p>}
     {viewer && <BundleFileBrowser kind="environment" jobId={`${item.id}/layers/${viewer.scopeId}`} files={{ root: viewer.root, files: [{ path: viewer.path, size: viewer.size }], truncated: false }} api={api} onClose={() => setViewer(null)} onError={onError} />}
-  </section>;
+  </InspectionSection></>;
 }

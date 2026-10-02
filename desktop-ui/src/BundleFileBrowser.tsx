@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { Download, FileCode2, X } from "lucide-react";
 import type { ExportProgress, StudioApi, TextPreview } from "./api";
@@ -84,8 +84,9 @@ function highlightedLine(line: string, language: string): React.ReactNode {
   return language === "json" || language === "yaml" ? highlightTokens(line, language) : line;
 }
 
-export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = "jobs" }: {
+export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = "jobs", initialLine }: {
   jobId: string; files: BundleFiles; api: StudioApi; kind?: FileKind;
+  initialLine?: number | null;
   onClose: () => void; onError: (message: string) => void;
 }) {
   const first = ["GROUND_TRUTH.md", "RESOLVED_SCENARIO.yaml", "RESOLVED_SCENARIO.yml", "GENERATION_MANIFEST.json"]
@@ -99,6 +100,12 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [savedExport, setSavedExport] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const sourceViewport = useRef<HTMLPreElement>(null);
+  const contextLine = useRef<HTMLDivElement>(null);
+  const targetLine = initialLine && selected === first ? initialLine : null;
+  const selectedSize = files.files.find((file) => file.path === selected)?.size || 0;
+  // Read enough captured YAML to locate late declarations; ordinary log previews stay small.
+  const previewBytes = targetLine ? Math.min(16 * 1024 * 1024 + 1, Math.max(256 * 1024, selectedSize + 1)) : undefined;
 
   async function saveSelectedFile() {
     if (!selected) return;
@@ -121,14 +128,24 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
     setShowSource(false);
     setError(null);
     setLoading(true);
-    void api.readTextPreview(bundleFileUrl(jobId, selected, kind))
+    const url = bundleFileUrl(jobId, selected, kind);
+    void (previewBytes ? api.readTextPreview(url, previewBytes) : api.readTextPreview(url))
       .then((result) => { if (!cancelled) setPreview(result); })
       .catch((reason) => { if (!cancelled) setError(String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [api, jobId, kind, selected]);
+  }, [api, jobId, kind, selected, previewBytes]);
 
-  const lines = preview?.text.split("\n").slice(0, 4000) || [];
+  const allLines = preview?.text.split("\n") || [];
+  const lineAvailable = !!targetLine && targetLine <= allLines.length;
+  const firstLine = lineAvailable && targetLine > 4000 ? targetLine - 4 : 0;
+  const lines = allLines.slice(firstLine, firstLine + 4000);
+  useLayoutEffect(() => {
+    const viewport = sourceViewport.current;
+    const context = contextLine.current;
+    if (!viewport || !context) return;
+    viewport.scrollTop = Math.max(0, context.getBoundingClientRect().top - viewport.getBoundingClientRect().top + viewport.scrollTop - 12);
+  }, [preview, targetLine, showSource]);
   const language = languageFor(selected || "", preview?.text || "");
   const title = kind === "items" ? "Source YAML" : kind === "environment" ? "Configuration overlay" : kind === "declarations" ? "Declaring YAML" : "Bundle files";
   return <div className="modal-backdrop"><div className={`close-modal bundle-browser ${kind === "items" || kind === "declarations" ? "source-file-browser" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
@@ -137,7 +154,7 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
       <div className="bundle-preview"><div className="bundle-preview-heading"><div className="path-with-copy bundle-selected-path"><strong className="path-value" title={selected || undefined}>{selected ? kind === "declarations" ? selected.split("/").slice(1).join("/") : selected : "Choose a file"}</strong>{selected && kind !== "declarations" && <CopyPathButton path={`${files.root.replace(/[\\/]$/, "")}/${selected}`} label="Copy file path" onError={onError} />}</div>{language === "markdown" && <button className="button-quiet" aria-pressed={showSource} onClick={() => setShowSource(!showSource)}>{showSource ? "Rendered view" : "View source"}</button>}{selected && <button className="button-quiet" disabled={exporting} onClick={() => void saveSelectedFile()}><Download size={15} /> {exporting ? "Saving…" : isTauri() ? "Save a copy" : "Download file"}</button>}</div>
         {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
         {savedExport && <div className="path-with-copy bundle-preview-message"><span className="path-value muted" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved file path" onError={onError} /></div>}
-        {loading ? <p className="muted bundle-preview-message">Loading preview…</p> : error ? <p className="error-text bundle-preview-message">{error}</p> : preview?.binary ? <p className="muted bundle-preview-message">This file is binary. {isTauri() ? "Save a copy" : "Download it"} to inspect it.</p> : selected && preview ? <>{language === "markdown" && !showSource ? <article className="bundle-markdown" aria-label={`Preview of ${selected}`}><ChatMarkdown text={lines.join("\n")} /></article> : <pre className={`bundle-source language-${language}`} aria-label={`Preview of ${selected}`}>{lines.map((line, index) => <div className="bundle-source-line" key={index}><span className="line-number" aria-hidden="true">{index + 1}</span><span>{highlightedLine(line, language)}</span></div>)}</pre>}{(preview.truncated || preview.text.split("\n").length > lines.length) && <p className="bundle-preview-limit">Showing the first 256 KB or 4,000 lines. {isTauri() ? "Save a copy" : "Download the file"} for the rest.</p>}</> : <p className="muted bundle-preview-message">Select a file to view it.</p>}
+        {loading ? <p className="muted bundle-preview-message">Loading preview…</p> : error ? <p className="error-text bundle-preview-message">{error}</p> : preview?.binary ? <p className="muted bundle-preview-message">This file is binary. {isTauri() ? "Save a copy" : "Download it"} to inspect it.</p> : selected && preview ? <>{language === "markdown" && !showSource ? <article className="bundle-markdown" aria-label={`Preview of ${selected}`}><ChatMarkdown text={lines.join("\n")} /></article> : <pre ref={sourceViewport} className={`bundle-source language-${language}`} aria-label={`Preview of ${selected}`}>{lines.map((line, index) => <div ref={lineAvailable && index + firstLine + 1 === Math.max(1, targetLine - 3) ? contextLine : undefined} className={`bundle-source-line ${index + firstLine + 1 === targetLine ? "matched-line" : ""}`} aria-label={index + firstLine + 1 === targetLine ? `Matched declaration, line ${targetLine}` : undefined} key={index + firstLine}><span className="line-number" aria-hidden="true">{index + firstLine + 1}</span><span>{highlightedLine(line, language)}</span></div>)}</pre>}{targetLine && <p className="bundle-line-location" role="status">{lineAvailable ? `Declaration at line ${targetLine} · highlighted` : `Line ${targetLine} is outside this preview.`}</p>}{(preview.truncated || allLines.length > lines.length) && <p className="bundle-preview-limit">Showing lines {firstLine + 1}–{firstLine + lines.length}{preview.truncated ? " of a truncated preview" : ` of ${allLines.length}`}. {isTauri() ? "Save a copy" : "Download the file"} for the rest.</p>}</> : <p className="muted bundle-preview-message">Select a file to view it.</p>}
       </div>
     </div>
   </div></div>;

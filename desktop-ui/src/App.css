@@ -527,6 +527,9 @@ p { line-height: 1.5; }
 .bundle-source-line { display: grid; grid-template-columns: 48px minmax(0,1fr); min-width: max-content; white-space: pre; }
 .language-email .bundle-source-line, .language-markdown .bundle-source-line { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .bundle-source-line > span:last-child { padding-right: 16px; }
+.bundle-source-line.matched-line { background: #284463; box-shadow: inset 3px 0 #8ab4ff; }
+.bundle-source-line.matched-line .line-number { color: #d6e4f5; font-weight: 700; }
+.bundle-line-location { margin: 0; padding: 6px 12px; border-top: 1px solid #304a66; color: #a7c7f7; font-size: 11px; }
 .line-number { padding-right: 12px; color: #617b97; text-align: right; user-select: none; }
 .bundle-preview-limit { margin: 0; padding: 8px 12px; border-top: 1px solid #304a66; color: #e4bd7e; background: #2b2a2b; font-size: 11px; }
 .syntax-key, .syntax-heading { color: #8ab4ff; }
@@ -534,6 +537,18 @@ p { line-height: 1.5; }
 .syntax-number { color: #e8ba86; }
 .syntax-keyword, .syntax-list { color: #cba8f6; }
 .syntax-comment { color: #7f9aaf; }
+
+.inspection-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.inspection-heading h2 { flex: 1; min-width: 0; margin: 0; }
+.inspection-toggle { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; padding: 3px 0; background: transparent; color: var(--text); text-align: left; font-size: 15px; font-weight: 600; }
+.inspection-toggle .disclosure-chevron { flex: none; transition: transform .15s ease; }
+.inspection-toggle[aria-expanded="true"] .disclosure-chevron { transform: rotate(90deg); }
+.inspection-toggle small { margin-left: auto; color: var(--muted); font-size: 11px; font-weight: 400; }
+.inspection-content { margin-top: 12px; }
+@media (max-width: 600px) {
+  .inspection-toggle { flex-wrap: wrap; }
+  .inspection-toggle small { width: 100%; margin-left: 26px; }
+}
 
 .settings-layout { display: grid; grid-template-columns: 190px minmax(0,1fr); gap: 24px; }
 .settings-nav { display: flex; flex-direction: column; gap: 4px; }

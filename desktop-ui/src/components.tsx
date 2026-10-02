@@ -1,3 +1,4 @@
+import { InspectionSection } from "./InspectionSection";
 import { useEffect, useState } from "react";
 import { Activity, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, MessageSquareText, Pause, Play, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { DropdownMenu, Tooltip } from "radix-ui";
@@ -144,6 +145,6 @@ export function ValidationPanel({ result, onFix, fixing = false }: { result: Val
   const scenario = report.scenario as Record<string, unknown> | undefined;
   return <div className="validation-panel">
     <div className={`validation-summary ${valid ? (hasWarnings ? "warning" : "valid") : "invalid"}`}><div className="validation-icon">{valid ? (hasWarnings ? <TriangleAlert size={20} /> : <Check size={20} />) : <X size={20} />}</div><div className="validation-summary-copy"><h3>{valid ? (issues.length ? "Valid with findings" : "Scenario is valid") : "Needs changes"}</h3><p>{String(scenario?.name || "Scenario")} · {issues.length} finding{issues.length === 1 ? "" : "s"}</p></div>{issues.length > 0 && onFix && <button className="button-quiet validation-fix" disabled={fixing} onClick={onFix} title="Open a new conversation with a prepared request and the current findings"><MessageSquareText size={16} /> Fix in chat</button>}</div>
-    {issues.length === 0 ? <p className="muted">No validation issues found.</p> : <div className="findings-list">{issues.map((issue, index) => <article className="finding" key={`${index}-${issue.field_path}`}><span className={`severity severity-${issue.severity}`}>{String(issue.severity)}</span><div><h4>{String(issue.field_path || "Scenario")}</h4><p>{String(issue.message || "")}</p>{Boolean(issue.suggestion) && <p className="suggestion">Suggested fix: {String(issue.suggestion)}</p>}</div></article>)}</div>}
+    {issues.length === 0 ? <p className="muted">No validation issues found.</p> : <InspectionSection title="Validation findings" count={`${issues.length} finding${issues.length === 1 ? "" : "s"}`}><div className="findings-list">{issues.map((issue, index) => <article className="finding" key={`${index}-${issue.field_path}`}><span className={`severity severity-${issue.severity}`}>{String(issue.severity)}</span><div><h4>{String(issue.field_path || "Scenario")}</h4><p>{String(issue.message || "")}</p>{Boolean(issue.suggestion) && <p className="suggestion">Suggested fix: {String(issue.suggestion)}</p>}</div></article>)}</div></InspectionSection>}
   </div>;
 }

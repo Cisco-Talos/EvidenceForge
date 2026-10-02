@@ -37,6 +37,7 @@ class SourceDeclaration(BaseModel):
     source: str
     source_key: str | None = None
     source_size: int = Field(default=0, ge=0)
+    line: int | None = Field(default=None, ge=1, description="One-based declaring YAML line")
     value: JsonValue = None
     value_found: bool = False
 
@@ -90,9 +91,50 @@ def _value_at_path(document: Any, path: str) -> tuple[bool, Any]:
     return False, None
 
 
+def _line_at_path(node: yaml.Node | None, path: str) -> int | None:
+    """Locate a declaration structurally, including repeated values and dotted keys."""
+    if node is None:
+        return None
+    if not path:
+        return node.start_mark.line + 1
+    if isinstance(node, yaml.MappingNode):
+        # SafeLoader flattens merge keys; the last occurrence owns an overridden key.
+        entries: dict[str, tuple[yaml.ScalarNode, yaml.Node]] = {}
+        for key, value in node.value:
+            if not isinstance(key, yaml.ScalarNode):
+                continue
+            name = (
+                key.value if key.tag == "tag:yaml.org,2002:str" else str(yaml.safe_load(key.value))
+            )
+            entries[name] = key, value
+        # Match constructed mapping iteration, including ambiguous dotted-key prefixes.
+        for name, (key, value) in entries.items():
+            if path == name:
+                return key.start_mark.line + 1
+            if path.startswith(name + "."):
+                line = _line_at_path(value, path[len(name) + 1 :])
+                if line is not None:
+                    return line
+    if isinstance(node, yaml.SequenceNode):
+        index, _, remainder = path.partition(".")
+        if index.isdecimal() and int(index) < len(node.value):
+            return _line_at_path(node.value[int(index)], remainder)
+    return None
+
+
+def _declaration_document(content: str) -> tuple[Any, yaml.Node | None]:
+    """Retain SafeLoader's source marks alongside the exact constructed input values."""
+    loader = yaml.SafeLoader(content)
+    try:
+        node = loader.get_single_node()
+        return (loader.construct_document(node) if node is not None else None), node
+    finally:
+        loader.dispose()
+
+
 def _populate_declarations(report: EnvironmentReport, captured: dict[str, str]) -> None:
     """Use captured source bytes rather than guessing effective values after overrides."""
-    parsed: dict[str, Any] = {}
+    parsed: dict[str, tuple[Any, yaml.Node | None]] = {}
     groups = (
         ("Scenario", report.field_origins),
         ("Organization", report.organization_model_origins),
@@ -128,10 +170,13 @@ def _populate_declarations(report: EnvironmentReport, captured: dict[str, str]) 
                     lookup_path = ".".join(parts)
             content = captured.get(key)
             found, value = False, None
+            line = None
             if content is not None:
                 if key not in parsed:
-                    parsed[key] = yaml.safe_load(content)
-                found, value = _value_at_path(parsed[key], lookup_path)
+                    parsed[key] = _declaration_document(content)
+                document, node = parsed[key]
+                found, value = _value_at_path(document, lookup_path)
+                line = _line_at_path(node, lookup_path) if found else None
                 report._declaration_contents[key] = content
             report.declarations.append(
                 SourceDeclaration(
@@ -140,6 +185,7 @@ def _populate_declarations(report: EnvironmentReport, captured: dict[str, str]) 
                     source=re.sub(r"^sources/[0-9a-f]{16}-", "", key),
                     source_key=key if content is not None else None,
                     source_size=len(content.encode("utf-8")) if content is not None else 0,
+                    line=line,
                     value=json.loads(json.dumps(value, default=str)),
                     value_found=found,
                 )

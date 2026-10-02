@@ -1205,3 +1205,39 @@ unchanged durable settings, project/chat/job/bundle identities and job associati
 native app; reopen Studio to review the revised inspector. Closed the disposable browser tab,
 reset its viewport, and stopped its helper/frontend. Existing unrelated scenario deletions remain
 excluded. This addresses feedback within the configuration tranche; no later workflow was begun.
+
+## 2026-10-02 — Declaration line navigation and folded inspection details
+
+Follow-up feedback: source clicks should locate the exact declaring line with preceding context
+and a visible highlight; similar inspection lists should start collapsed.
+
+- Source-declaration metadata now includes one-based YAML locations from SafeLoader's retained
+  node marks. Structural traversal follows the same mapping/list/dotted-key lookup as declared
+  values, including duplicate text, multiline values, repeated keys, aliases, and merge keys.
+  Included scenario and pack files keep their own locations; compiled CLI inputs are unchanged.
+- Declaration links show `file:line` and open the captured YAML with three preceding lines and
+  a blue highlighted declaration. Only the file viewport scrolls. The initial jump does not
+  override later manual scrolling. Late declarations use bounded source reads and a 4,000-line
+  rendering window with absolute line numbers; unavailable lines are reported explicitly.
+- Added a keyboard-accessible counted inspection section. Selected packs, configuration layers,
+  the resolved model, override details, validation findings, and dependency checks now start
+  collapsed. Status/error summaries and Choose packs/Fix in chat remain visible. Primary
+  scenario/pack/bundle catalogs and job progress lists retain their existing visible behavior;
+  scorecard, completed chat activity, and job detail disclosures were already folded.
+
+Verification: all 129 React tests and 11 Python environment/API/CLI contracts pass. Tests include
+  exact include/pack lines, dotted-key ambiguity, duplicate values/keys, multiline declarations,
+  sequence entries, inherited/overridden/aliased YAML, initial scrolling and subsequent manual
+  scrolling, late bounded previews, unavailable-line feedback, and keyboard folding/repair.
+  Generated API types are fresh; full Ruff check/format, diff checks, and macOS release build pass.
+  Linux native builds were not run on this host. Browser review at 1280×900 and 712×724 verified
+  collapsed counts and modal sizing; declaration 109 had line 106 as its first fully visible
+  context line. Screenshots: `/private/tmp/eforge-declaration-line-jump.jpg`,
+  `/private/tmp/eforge-declaration-line-compact.jpg`, `/private/tmp/eforge-inspection-collapsed.jpg`,
+  and `/private/tmp/eforge-inspection-compact.jpg`.
+
+Refreshed the normal idle helper after authenticating and verifying its PID/create-time/launchd
+  identity. Durable settings and project/chat/job/bundle identities and job associations remained
+  unchanged; the updated API returns declaration lines. Native app rebuilt. Closed the disposable
+  review tab, reset viewport overrides, and stopped its preview/helper. Existing unrelated scenario
+  deletions remain excluded. Reopen Studio to review this configuration-tranche refinement.

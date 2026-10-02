@@ -2903,6 +2903,11 @@ export interface components {
              * @default 0
              */
             source_size: number;
+            /**
+             * Line
+             * @description One-based declaring YAML line
+             */
+            line?: number | null;
             value?: components["schemas"]["JsonValue"];
             /**
              * Value Found

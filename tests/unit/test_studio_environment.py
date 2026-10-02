@@ -15,7 +15,12 @@ from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import app
 from evidenceforge.studio import environment as environment_module
-from evidenceforge.studio.environment import inspect_environment, overlay_files
+from evidenceforge.studio.environment import (
+    EnvironmentReport,
+    _populate_declarations,
+    inspect_environment,
+    overlay_files,
+)
 from evidenceforge.studio.service import create_app
 from evidenceforge.studio.settings import StudioSettings
 from tests.unit.test_studio_service import _paths
@@ -49,7 +54,7 @@ def test_environment_resolves_real_exact_pack_and_include_origins_without_writin
     }
     description = data.pop("description")
     include = source.parent / "description.yaml"
-    include.write_text(yaml.safe_dump({"description": description}))
+    include.write_text("# Included description\n\n" + yaml.safe_dump({"description": description}))
     data["includes"] = [include.name]
     source.write_text(yaml.safe_dump(data, sort_keys=False))
     before = {path: path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
@@ -69,11 +74,12 @@ def test_environment_resolves_real_exact_pack_and_include_origins_without_writin
     assert declaration.value_found
     assert declaration.value == description
     assert declaration.source == "description.yaml"
+    assert declaration.line == 3
     assert declaration.source_key
     assert report.declaration_content(declaration.source_key) == include.read_text()
     catalogs = [entry for entry in report.declarations if entry.layer == "Pack catalog"]
     assert catalogs
-    assert all(entry.value_found and entry.source_key for entry in catalogs)
+    assert all(entry.value_found and entry.source_key and entry.line for entry in catalogs)
     assert "_declaration_contents" not in report.model_dump()
     assert not (workspace / ".eforge").exists()
     assert before == {path: path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
@@ -98,6 +104,66 @@ def test_source_declarations_keep_organization_input_values_before_scenario_over
     assert scenario.value == report.effective_scenario["environment"]["description"]
     assert organization.source_key and organization.source_key.startswith("packs/")
     assert organization.source_key.endswith("model/environment.yaml")
+    assert organization.line and scenario.line
+    for entry in (organization, scenario):
+        assert entry.source_key and entry.line
+        content = report.declaration_content(entry.source_key)
+        assert content and "description:" in content.splitlines()[entry.line - 1]
+
+
+def test_declaration_lines_follow_structure_instead_of_searching_repeated_text(
+    tmp_path: Path,
+) -> None:
+    content = (
+        "# Header\n"
+        "defaults: &defaults\n"
+        "  inherited: repeated\n"
+        "  overridden: old\n"
+        "first: repeated\n"
+        "nested:\n"
+        "  description: |\n"
+        "    repeated\n"
+        "    multiline\n"
+        "  users:\n"
+        "    - name: repeated\n"
+        "    - name: repeated\n"
+        "      ip.address: 192.0.2.10\n"
+        "  list: [same, same]\n"
+        "  <<: *defaults\n"
+        "  overridden: new\n"
+        "  alias: *defaults\n"
+        "duplicate: first\n"
+        "duplicate: last\n"
+        "a:\n"
+        "  b: nested\n"
+        "a.b: dotted\n"
+    )
+    expected = {
+        "first": 5,
+        "nested.description": 7,
+        "nested.users.0.name": 11,
+        "nested.users.1.name": 12,
+        "nested.users.1.ip.address": 13,
+        "nested.list.1": 14,
+        "nested.inherited": 3,
+        "nested.overridden": 16,
+        "nested.alias": 17,
+        "nested.alias.inherited": 3,
+        "duplicate": 19,
+        "a.b": 21,
+    }
+    report = EnvironmentReport(
+        source_sha256="source",
+        project_root=tmp_path,
+        overlay_root=tmp_path,
+        field_origins=dict.fromkeys([*expected, "missing.field"], "sources/test.yaml"),
+    )
+    _populate_declarations(report, {"sources/test.yaml": content})
+    for entry in report.declarations:
+        assert entry.line == expected.get(entry.path)
+    assert report.declarations[-1].value_found is False
+    assert next(entry for entry in report.declarations if entry.path == "duplicate").value == "last"
+    assert next(entry for entry in report.declarations if entry.path == "a.b").value == "nested"
 
 
 def test_declaration_viewing_requires_auth_exact_revision_and_known_captured_file(
@@ -120,6 +186,7 @@ def test_declaration_viewing_requires_auth_exact_revision_and_known_captured_fil
         )
         report = client.get(f"/v1/scenarios/{item['id']}/environment", headers=headers).json()
         entry = next(entry for entry in report["declarations"] if entry["path"] == "description")
+        assert entry["line"] == 1
         base = f"/v1/environment/{item['id']}/declarations/files/{report['compiled_sha256']}/"
         endpoint = base + entry["source_key"]
         assert client.get(endpoint).status_code == 401

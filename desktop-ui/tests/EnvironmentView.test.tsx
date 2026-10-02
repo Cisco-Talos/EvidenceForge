@@ -11,7 +11,7 @@ const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
   selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "/workspace/office" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "/package" }],
   effective_scenario: { environment: { users: [{ name: "alice" }] } }, field_origins: { description: "sources/brief.yaml" }, organization_model_origins: { "network.segments": "office/pack.yaml" }, catalog_origins: {}, catalog_field_origins: { "personas.analyst": "healthcare/pack.yaml" }, merge_decisions: [{ path: "users", action: "replace", lower_layer: "organization", higher_layer: "scenario", winner: "scenario" }],
-  declarations: [{ path: "description", layer: "Scenario", source: "brief.yaml", source_key: "sources/brief.yaml", source_size: 70, value: "Clinic exercise", value_found: true }, { path: "environment.network.segments", layer: "Organization", source: "office/pack.yaml", source_key: "packs/office/pack.yaml", value: [], value_found: true }, { path: "persona_catalog.analyst", layer: "Pack catalog", source: "healthcare/pack.yaml", source_key: "packs/healthcare/pack.yaml", value: false, value_found: true }],
+  declarations: [{ path: "description", layer: "Scenario", source: "brief.yaml", source_key: "sources/brief.yaml", source_size: 70, line: 5, value: "Clinic exercise", value_found: true }, { path: "environment.network.segments", layer: "Organization", source: "office/pack.yaml", source_key: "packs/office/pack.yaml", value: [], value_found: true }, { path: "persona_catalog.analyst", layer: "Pack catalog", source: "healthcare/pack.yaml", source_key: "packs/healthcare/pack.yaml", value: false, value_found: true }],
   configuration: { context_path: null, cli_command: "eforge generate /workspace/scenario.yaml --project-root /workspace", scopes: [{ id: "workspace", name: "Workspace", root: "/workspace/.eforge/config", enabled: true, files: [{ path: "activity/dns_registry.yaml", size: 20 }] }, { id: "scenario", name: "Scenario", root: "/workspace/scenario-config", enabled: false, files: [] }] },
   overlay_root: "/workspace/.eforge/config", overlay_files: [{ path: "activity/dns_registry.yaml", size: 20 }], overlays_truncated: false,
 };
@@ -21,7 +21,7 @@ const packs = [
   { kind: "industry_pack", name: "healthcare", version: "1.0.0", publisher: "evidenceforge", publisher_display_name: "EvidenceForge", pack_source: "bundled" },
 ] as CatalogItem[];
 function setup(request = vi.fn(async () => report), onPrepare = vi.fn(async (_prompt: string) => undefined)) {
-  const api = { request, readTextPreview: vi.fn(async () => ({ text: "domains: []", truncated: false, binary: false })), download: vi.fn(async () => ({ status: "browser" })) } as unknown as StudioApi;
+  const api = { request, readTextPreview: vi.fn(async () => ({ text: "# Header\n# Context\n\ndomains: []\ndescription: Clinic exercise\n", truncated: false, binary: false })), download: vi.fn(async () => ({ status: "browser" })) } as unknown as StudioApi;
   const onError = vi.fn();
   const props = { item, packs, api, onPrepare, onError, dependencyFingerprint: "deps-1" };
   const view = render(<Tooltip.Provider><EnvironmentView {...props} /></Tooltip.Provider>);
@@ -31,12 +31,13 @@ afterEach(() => cleanup());
 
 test("exact versions and source declarations are searchable and refresh after dependency changes", async () => {
   const { api, props, rerender } = setup();
-  expect(await screen.findByText("project:team:organization:office@2.0.0")).toBeVisible();
   const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Selected packs 2 packs" }));
+  expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "Search environment origins" })).not.toBeInTheDocument();
   await user.click(screen.getByText("Source declarations"));
   await user.type(screen.getByRole("textbox", { name: "Search environment origins" }), "brief.yaml");
-  expect(screen.getByText("brief.yaml")).toBeVisible();
+  expect(screen.getByText("brief.yaml:5")).toBeVisible();
   expect(screen.getByText("Clinic exercise")).toBeVisible();
   expect(screen.queryByText("office/pack.yaml")).not.toBeInTheDocument();
   rerender(<Tooltip.Provider><EnvironmentView {...props} dependencyFingerprint="deps-2" /></Tooltip.Provider>);
@@ -55,8 +56,9 @@ test("declaring YAML opens from a field by keyboard with its inspected revision"
   field.focus();
   await user.keyboard("{Enter}");
   const viewer = screen.getByRole("dialog", { name: "Declaring YAML" });
-  await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/declarations/files/compiled/sources/brief.yaml"));
+  await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/declarations/files/compiled/sources/brief.yaml", 256 * 1024));
   expect(await within(viewer).findByLabelText("Preview of compiled/sources/brief.yaml")).toHaveTextContent("domains: []");
+  expect(within(viewer).getByLabelText("Matched declaration, line 5")).toHaveTextContent("description: Clinic exercise");
   expect(within(viewer).queryByRole("button", { name: "Copy file path" })).not.toBeInTheDocument();
   await user.click(within(viewer).getByRole("button", { name: "Download file" }));
   expect(api.download).toHaveBeenCalledWith("/v1/environment/scenario/declarations/files/compiled/sources/brief.yaml", "brief.yaml", expect.any(Function));
@@ -95,7 +97,7 @@ test("long declared values expand safely without opening the source viewer", asy
 
 test("an exact organization choice prepares a reviewable request with locked dependencies", async () => {
   const { onPrepare } = setup();
-  await screen.findByText("Selected packs");
+  await screen.findByRole("button", { name: "Selected packs 2 packs" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Choose packs" }));
   const dialog = screen.getByRole("dialog", { name: "Choose environment packs" });
@@ -115,7 +117,7 @@ test("an exact organization choice prepares a reviewable request with locked dep
 test("empty industry choices are gated and failed preparation retains the selection", async () => {
   const onPrepare = vi.fn(async (_prompt: string) => { throw new Error("Could not create conversation"); });
   const { onError } = setup(undefined, onPrepare);
-  await screen.findByText("Selected packs");
+  await screen.findByRole("button", { name: "Selected packs 2 packs" });
   const user = userEvent.setup();
   const trigger = screen.getByRole("button", { name: "Choose packs" });
   await user.click(trigger);
@@ -138,8 +140,9 @@ test("empty industry choices are gated and failed preparation retains the select
 
 test("overlays use the contained file viewer and authenticated export route", async () => {
   const { api } = setup();
-  await screen.findByText("Selected packs");
+  await screen.findByRole("button", { name: "Selected packs 2 packs" });
   const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" }));
   await user.click(screen.getByText("View configuration files"));
   await user.click(screen.getByRole("button", { name: "activity/dns_registry.yaml" }));
   const viewer = screen.getByRole("dialog", { name: "Configuration overlay" });
@@ -155,7 +158,8 @@ test("an old response cannot replace a newly selected scenario", async () => {
   const request = vi.fn().mockReturnValueOnce(old).mockResolvedValueOnce({ ...report, selected_packs: [], source_sha256: "next" });
   const { props, rerender } = setup(request);
   rerender(<Tooltip.Provider><EnvironmentView {...props} item={{ ...item, id: "next", source_sha256: "next" }} /></Tooltip.Provider>);
-  expect(await screen.findByText(/inline environment and defaults/)).toBeVisible();
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Selected packs 0 packs" }));
+  expect(screen.getByText(/inline environment and defaults/)).toBeVisible();
   await act(async () => resolveOld(report));
   expect(screen.queryByText("project:team:organization:office@2.0.0")).not.toBeInTheDocument();
 });
@@ -163,9 +167,28 @@ test("an old response cannot replace a newly selected scenario", async () => {
 
 test("scenario configuration can be toggled and is refreshed before inspection", async () => {
   const { api } = setup();
-  const checkbox = await screen.findByRole("checkbox", { name: "Use Scenario configuration" });
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Configuration layers 1 enabled · 2 layers" }));
+  const checkbox = screen.getByRole("checkbox", { name: "Use Scenario configuration" });
   expect(checkbox).not.toBeChecked();
   await userEvent.setup().click(checkbox);
   await waitFor(() => expect(api.request).toHaveBeenCalledWith("/v1/scenarios/scenario/configuration", "POST", { scenario_enabled: true }));
   await waitFor(() => expect(api.request).toHaveBeenCalledTimes(3));
+});
+
+
+test("inspection sections start folded, expose counts, and expand independently by keyboard", async () => {
+  setup();
+  const packs = await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  const layers = screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" });
+  const overrides = screen.getByRole("button", { name: "Overrides and precedence 1 override" });
+  for (const toggle of [packs, layers, overrides]) expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("project:team:organization:office@2.0.0")).not.toBeInTheDocument();
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(screen.queryByText("organization → scenario")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Choose packs" })).toBeVisible();
+  overrides.focus();
+  await userEvent.setup().keyboard("{Enter}");
+  expect(overrides).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("organization → scenario")).toBeVisible();
+  expect(layers).toHaveAttribute("aria-expanded", "false");
 });

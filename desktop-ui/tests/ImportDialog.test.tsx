@@ -143,7 +143,12 @@ test("dependency panel provides explicit refresh and missing-pack recovery", asy
   const onChanged = vi.fn(async () => undefined);
   const onImport = vi.fn();
   render(<DependencyPanel itemId="scenario" api={{ request } as unknown as StudioApi} health={{ ready: false, fingerprint: "hash", rows: review.rows, changed_at: 0 }} onChanged={onChanged} onImport={onImport} />);
+  expect(screen.getByText("Dependency errors")).toBeVisible();
+  const details = document.querySelector(".dependency-panel details")!;
+  expect(details).not.toHaveAttribute("open");
   const user = userEvent.setup();
+  await user.click(details.querySelector("summary")!);
+  expect(details).toHaveAttribute("open");
   await user.click(screen.getByRole("button", { name: "Refresh dependencies" }));
   expect(request).toHaveBeenCalledWith("/v1/scenarios/scenario/dependencies/refresh", "POST", undefined, 180000);
   expect(onChanged).toHaveBeenCalled();
