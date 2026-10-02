@@ -17,7 +17,8 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and completed-phase details
 **EvidenceForge Studio core replacement.** Accepted the Tauri/React scenario workspace app
 on October 2, 2026; `eforge-desktop` now launches Studio and the Qt UI/dependency is retired.
 Queued generations capture immutable resolved inputs. The seven workflow stages remain active;
-see the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+start with the [current Studio handoff](docs/worklog/2026-10-02-studio-handoff.md), then
+consult the [detailed rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
 
 **2.0.1 cleanup and correctness.** Simplified generation ownership and shared infrastructure,
 corrected foreground lifecycle, resolver selection, and Kerberos timing, and repaired long-run
@@ -498,13 +499,19 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   acceptance for the 2.0 release candidates and final release.
 - [ ] Complete the seven Studio workflow stages after accepted core parity. Find/resume has
   project-aware lists, saved views, contextual search, and a command menu. Environment inspection
-  and exact pack choices are available; advanced editing, project/scenario overlays, isolated
-  authoring revisions, deeper preflight, resource-aware scheduling, evaluation comparisons, and
-  delivery presets remain. Review each stage with the user before advancing. See the
+  and exact pack choices are available; optional portable project/scenario overlay contexts are
+  implemented. Guided editing, complete effective-value origins, isolated authoring revisions,
+  deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
   [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
   All CLI/skill changes must preserve traditional command-line and native-harness workflows.
   New configuration scopes must be optional, file-based, independently usable without Studio,
   and preserve existing root selection and family-specific merge contracts.
+- [ ] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
+  Agreed delivery: universal macOS app/DMG (initially two private runtimes), Linux x64 AppImage,
+  then optional Windows x64 setup EXE. Codex remains separately installed. Use native platform CI
+  builds and clean-machine acceptance; signing/notarization and helper replacement are pending.
+  See the [current Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) for decisions,
+  remaining workflow stages, implementation order and verification boundaries.
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;

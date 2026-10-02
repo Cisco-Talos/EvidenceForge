@@ -1,5 +1,8 @@
 # EvidenceForge Studio rebuild
 
+**Current handoff:** Read [the October 2 consolidated state and packaging decisions](2026-10-02-studio-handoff.md)
+first. Entries below preserve chronological history and may describe superseded UI/contracts.
+
 The user approved replacing the Qt Widgets prototype with a Tauri, React, and Python service desktop app. Keep the Qt prototype available until the new app reaches core parity and passes review. There is no requirement to migrate prototype metadata; authored YAML and generated bundles remain authoritative.
 
 ## Agreed delivery order

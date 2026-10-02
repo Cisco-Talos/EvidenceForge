@@ -19,7 +19,8 @@ only to loopback on an ephemeral port and requires a private per-launch token. C
 applies the configured job and authoring-turn quit policies; it does not stop a generation that
 has been configured to continue in the background. Reopen Studio to reconnect to that work.
 The source checkout, Python environment, Node.js, and Rust build tools are required for this
-development release. A bundled standalone app is planned later.
+development release. Standalone packaging is planned but not implemented; see the
+[current handoff and distribution decisions](worklog/2026-10-02-studio-handoff.md).
 
 On macOS, the helper runs as a transient user launchd service, independently of the window.
 Its private `service-agent.plist` lives in Studio's state directory; the registration lasts for
@@ -86,14 +87,16 @@ references. Native mode uses the Save dialog; browser preview uses a download.
 The scenario and pack libraries share projects. Scenario rows show their project, operation
 status, and current bundle size or a clearly marked estimate. Search can find YAML content and
 show matching excerpts; sorting and filters are remembered independently per workspace unless
-you disable library recall in Settings. Each scenario workspace contains Overview, Environment,
-Conversations, Validation, Generation, and Scoring views.
+you disable library recall in Settings. Each scenario workspace has collapsed Conversations, Environment, Validation and Runs sections
+with summary information; conversations open a dedicated chat view.
 
 Environment resolves the current files through `eforge resolve`, showing exact pack versions and
 digests, declaring files, merge decisions, and the composed scenario model. **Choose packs**
 prepares a request in a new conversation for you to review and send; it does not directly rewrite
-the YAML. Workspace overlays can be inspected in the built-in viewer. Project grouping currently
-does not change overlay scope: `.eforge/config` applies throughout the workspace.
+the YAML. Workspace overlays can be inspected in the built-in viewer. Optional project-shared and
+scenario-private patches are selected explicitly through portable configuration contexts, disabled
+by default. CLI `--context` selects the same layers; ordinary CWD/`--project-root` behavior and
+the workspace's `.eforge/config` remain unchanged when extra scopes are not selected.
 
 Studio calculates a resource forecast through `eforge resources predict` after scenario,
 include, pack, overlay, output-parent, or checkpoint-setting changes. Predictions run one at a
@@ -121,9 +124,9 @@ imported bundle from Studio removes its index entry and leaves its files in plac
 clone scenarios and packs into the workspace; their existing conversations and runs stay linked
 to the original. Native exports and file copies use Save dialogs.
 
-This release is still in core-parity review. The planned workflow stages, including richer pack
-editing, authoring diffs, resource-aware scheduling, generation setup, evaluation drill-down,
-and delivery controls, follow after that review. Incomplete bundles from external CLI runs are
+Core replacement is accepted. Remaining workflow stages include guided pack/config editing,
+authoring diffs, resource-aware scheduling, richer generation setup, evaluation drill-down,
+and delivery presets. The current handoff distinguishes delivered foundations from remaining work. Incomplete bundles from external CLI runs are
 not yet importable; incomplete Studio-owned jobs already appear in the Bundles page.
 
 ## Queued inputs and search excerpts
