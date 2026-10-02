@@ -1007,3 +1007,11 @@ refresh. Screenshots: `/private/tmp/eforge-resource-forecast-review.png`,
 Native interaction and Linux review remain pending; the Qt prototype is still available until
 core-parity acceptance. Advanced environment editors, project/scenario overlay layering, isolated
 authoring revisions, and the remaining workflow stages are not claimed complete.
+
+Handoff: restarted the normal launchd helper after an authenticated idle check and exact PID /
+creation-time / command verification. It now serves the current API; settings, projects,
+conversations, and job identities match the pre-restart snapshot. The native release app is
+rebuilt. Closed the agent's temporary browser tab, reset viewport sizing, and stopped the verified
+disposable helper/Vite processes. The user's browser tab and authored files were left intact.
+Next review: native scenario rows/project drag, Environment pack selection, and resource forecasts
+with the user's actual scenarios before wider workflow expansion or Qt cutover.
