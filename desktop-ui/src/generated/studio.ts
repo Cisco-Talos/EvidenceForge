@@ -208,6 +208,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/environment/{item_id}/declarations/files/{compiled_sha256}/{source_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Declaration File */
+        get: operations["declaration_file_v1_environment__item_id__declarations_files__compiled_sha256___source_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/environment/{item_id}/layers/{scope_id}/files/{relative_path}": {
         parameters: {
             query?: never;
@@ -1765,6 +1782,8 @@ export interface components {
             merge_decisions?: {
                 [key: string]: string;
             }[];
+            /** Declarations */
+            declarations?: components["schemas"]["SourceDeclaration"][];
             configuration?: components["schemas"]["ConfigurationState"] | null;
             /**
              * Overlay Root
@@ -2047,6 +2066,7 @@ export interface components {
             compiled_sha256?: string | null;
             scorecard?: components["schemas"]["JobScorecard"] | null;
         };
+        JsonValue: unknown;
         /**
          * LibraryPreferences
          * @description Workspace-specific recall preference and independent library selections.
@@ -2863,6 +2883,34 @@ export interface components {
             agent: string;
         };
         /**
+         * SourceDeclaration
+         * @description One input value and its exact captured declaring YAML.
+         */
+        SourceDeclaration: {
+            /** Path */
+            path: string;
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "Scenario" | "Organization" | "Pack catalog";
+            /** Source */
+            source: string;
+            /** Source Key */
+            source_key?: string | null;
+            /**
+             * Source Size
+             * @default 0
+             */
+            source_size: number;
+            value?: components["schemas"]["JsonValue"];
+            /**
+             * Value Found
+             * @default false
+             */
+            value_found: boolean;
+        };
+        /**
          * SourceFile
          * @description Filename and byte size of an authorized catalog source.
          */
@@ -3558,6 +3606,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigurationState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declaration_file_v1_environment__item_id__declarations_files__compiled_sha256___source_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+                compiled_sha256: string;
+                source_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

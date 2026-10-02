@@ -2351,6 +2351,11 @@ def resolve_cmd(
         "--include-effective-scenario",
         help="Include the compiled effective scenario in JSON composition explanations.",
     ),
+    include_declaration_sources: bool = typer.Option(
+        False,
+        "--include-declaration-sources",
+        help="Include captured scenario and pack YAML for inspecting declared field values.",
+    ),
     project_root: Path | None = typer.Option(
         None,
         "--project-root",
@@ -2377,6 +2382,13 @@ def resolve_cmd(
 
     if include_effective_scenario and not (explain_composition and json_output):
         message = "--include-effective-scenario requires --explain-composition --json"
+        if json_output:
+            print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            console.print(f"[bold red]Error:[/bold red] {message}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+    if include_declaration_sources and not (explain_composition and json_output):
+        message = "--include-declaration-sources requires --explain-composition --json"
         if json_output:
             print(json.dumps({"valid": False, "error": message}, indent=2, sort_keys=True))
         else:
@@ -2439,6 +2451,12 @@ def resolve_cmd(
         payload["composition"] = compiled.provenance
     if include_effective_scenario:
         payload["effective_scenario"] = compiled.scenario.model_dump(mode="json")
+    if include_declaration_sources:
+        payload["declaration_sources"] = {
+            key: content
+            for key, content in compiled.assets.items()
+            if key.startswith(("sources/", "packs/")) and key.endswith((".yaml", ".yml"))
+        }
     if json_output:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:

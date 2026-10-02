@@ -4,6 +4,7 @@ import { Dialog } from "radix-ui";
 import type { CatalogItem, EnvironmentReport, SelectedPack, StudioApi } from "./api";
 import { ConfigurationLayers } from "./ConfigurationLayers";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { SourceDeclarations } from "./SourceDeclarations";
 
 export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
   return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
@@ -60,7 +61,6 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, api, onPre
   const [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
   const pickerTrigger = useRef<HTMLButtonElement>(null);
   const [picker, setPicker] = useState(false);
   useEffect(() => {
@@ -69,17 +69,12 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, api, onPre
     void api.request<EnvironmentReport>(`/v1/scenarios/${item.id}/environment`, "GET", undefined, 180000).then((value) => { if (!cancelled) setReport(value); }).catch((failure) => { if (!cancelled) setError(String(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [api, item.id, item.source_sha256, dependencyFingerprint, refresh]);
-  const sources = report ? [
-    ...Object.entries(report.field_origins).map(([path, source]) => ({ path, source, layer: "Scenario" })),
-    ...Object.entries(report.organization_model_origins).map(([path, source]) => ({ path, source, layer: "Organization" })),
-    ...Object.entries(report.catalog_field_origins).map(([path, source]) => ({ path, source, layer: "Pack catalog" })),
-  ].filter((entry) => `${entry.path} ${entry.source} ${entry.layer}`.toLowerCase().includes(query.toLowerCase())) : [];
   return <div className="workspace-content environment-view"><div className="section-heading"><div><h2>Environment</h2><p>Inspect exact pack versions, source declarations, and the resolved model before generating.</p></div><button className="icon-button" aria-label="Refresh environment" title="Read current scenario, packs, and overlays" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button></div>
     {loading && <p role="status" className="muted">Resolving environment…</p>}{error && <p role="alert" className="field-error">{error}</p>}
     {report && <><section className="surface"><div className="surface-heading"><h2><Layers3 size={17} /> Selected packs</h2><button ref={pickerTrigger} className="button-quiet" onClick={() => setPicker(true)}><SquarePen size={15} /> Choose packs</button></div>{!report.valid && <p role="alert" className="field-error">{report.error} Use Validation to review findings, or prepare a repair in chat.</p>}{report.source_sha256 !== item.source_sha256 && <p className="run-revision-note">The source changed during inspection. Refresh the library to load this revision.</p>}{report.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span><strong>{pack.name} <small>{pack.version}</small></strong><code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>)}</ul> : <p className="muted">{report.valid ? "This scenario uses its inline environment and defaults; no packs are required." : "Selected packs could not be resolved."}</p>}</section>
     <ConfigurationLayers item={item} report={report} api={api} onRefresh={() => setRefresh((value) => value + 1)} onPrepare={onPrepare} onError={onError} />
     {report.valid && <><section className="surface"><div className="surface-heading"><h2>Resolved scenario model</h2><span className="eyebrow">{report.authored_kind}</span></div><p className="muted">Scenario fields after pack composition. Runtime catalogs also use the overlays listed below.</p><details className="environment-model"><summary>Inspect effective environment and baseline</summary><ChatMarkdown text={`\`\`\`json\n${JSON.stringify({ environment: report.effective_scenario.environment, baseline_activity: report.effective_scenario.baseline_activity }, null, 2)}\n\`\`\``} /></details></section>
-    <section className="surface"><div className="surface-heading"><h2>Source declarations</h2><span className="eyebrow">TRACE VALUES</span></div><p className="muted">The files declaring scenario, organization, and pack fields. Overrides are explained below.</p><div className="search-box"><Search size={15} /><input aria-label="Search environment origins" placeholder="Search a field or declaring file…" value={query} onChange={(event) => setQuery(event.target.value)} /></div><div className="environment-origins"><table><thead><tr><th>Field</th><th>Layer</th><th>Declaring file</th></tr></thead><tbody>{sources.slice(0, 200).map((entry) => <tr key={`${entry.layer}:${entry.path}`}><td><code title={entry.path}>{entry.path}</code></td><td><span className="origin-layer">{entry.layer}</span></td><td><code title={entry.source}>{entry.source}</code></td></tr>)}</tbody></table>{!sources.length && <p className="muted">No matching declarations.</p>}{sources.length > 200 && <p className="muted">Showing 200 of {sources.length} declarations. Narrow the search to find a field.</p>}</div></section>
+    <SourceDeclarations key={item.id} item={item} report={report} api={api} onError={onError} />
     <section className="surface"><div className="surface-heading"><h2>Overrides and precedence</h2></div><p className="environment-precedence">Defaults → industries → organization → workspace overlay{report.configuration?.scopes.filter((scope) => scope.id !== "workspace" && scope.enabled).map((scope) => ` → ${scope.name}`).join("")} → scenario fields</p>{report.merge_decisions.length ? <ul className="merge-decisions">{report.merge_decisions.map((decision, index) => <li key={index}><code>{decision.path}</code><span>{decision.action} · {decision.winner || decision.higher_layer}</span><small>{decision.lower_layer} → {decision.higher_layer}</small></li>)}</ul> : <p className="muted">No explicit overrides reported by the compiler.</p>}</section></>}
     {picker && <PackPicker report={report} packs={packs} onClose={() => setPicker(false)} onPrepare={onPrepare} onError={onError} onReturnFocus={() => pickerTrigger.current?.focus()} />}
 </>}

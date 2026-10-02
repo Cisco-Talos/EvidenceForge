@@ -11,6 +11,7 @@ const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
   selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "/workspace/office" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "/package" }],
   effective_scenario: { environment: { users: [{ name: "alice" }] } }, field_origins: { description: "sources/brief.yaml" }, organization_model_origins: { "network.segments": "office/pack.yaml" }, catalog_origins: {}, catalog_field_origins: { "personas.analyst": "healthcare/pack.yaml" }, merge_decisions: [{ path: "users", action: "replace", lower_layer: "organization", higher_layer: "scenario", winner: "scenario" }],
+  declarations: [{ path: "description", layer: "Scenario", source: "brief.yaml", source_key: "sources/brief.yaml", source_size: 70, value: "Clinic exercise", value_found: true }, { path: "environment.network.segments", layer: "Organization", source: "office/pack.yaml", source_key: "packs/office/pack.yaml", value: [], value_found: true }, { path: "persona_catalog.analyst", layer: "Pack catalog", source: "healthcare/pack.yaml", source_key: "packs/healthcare/pack.yaml", value: false, value_found: true }],
   configuration: { context_path: null, cli_command: "eforge generate /workspace/scenario.yaml --project-root /workspace", scopes: [{ id: "workspace", name: "Workspace", root: "/workspace/.eforge/config", enabled: true, files: [{ path: "activity/dns_registry.yaml", size: 20 }] }, { id: "scenario", name: "Scenario", root: "/workspace/scenario-config", enabled: false, files: [] }] },
   overlay_root: "/workspace/.eforge/config", overlay_files: [{ path: "activity/dns_registry.yaml", size: 20 }], overlays_truncated: false,
 };
@@ -32,14 +33,64 @@ test("exact versions and source declarations are searchable and refresh after de
   const { api, props, rerender } = setup();
   expect(await screen.findByText("project:team:organization:office@2.0.0")).toBeVisible();
   const user = userEvent.setup();
+  expect(screen.queryByRole("textbox", { name: "Search environment origins" })).not.toBeInTheDocument();
+  await user.click(screen.getByText("Source declarations"));
   await user.type(screen.getByRole("textbox", { name: "Search environment origins" }), "brief.yaml");
-  expect(screen.getByText("sources/brief.yaml")).toBeVisible();
+  expect(screen.getByText("brief.yaml")).toBeVisible();
+  expect(screen.getByText("Clinic exercise")).toBeVisible();
   expect(screen.queryByText("office/pack.yaml")).not.toBeInTheDocument();
   rerender(<Tooltip.Provider><EnvironmentView {...props} dependencyFingerprint="deps-2" /></Tooltip.Provider>);
   await waitFor(() => expect(api.request).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh environment" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Refresh environment" }));
   await waitFor(() => expect(api.request).toHaveBeenCalledTimes(3));
+});
+
+test("declaring YAML opens from a field by keyboard with its inspected revision", async () => {
+  const { api } = setup();
+  await screen.findByText("Source declarations");
+  const user = userEvent.setup();
+  await user.click(screen.getByText("Source declarations"));
+  const field = screen.getByRole("button", { name: "View declaring YAML for description" });
+  field.focus();
+  await user.keyboard("{Enter}");
+  const viewer = screen.getByRole("dialog", { name: "Declaring YAML" });
+  await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/declarations/files/compiled/sources/brief.yaml"));
+  expect(await within(viewer).findByLabelText("Preview of compiled/sources/brief.yaml")).toHaveTextContent("domains: []");
+  expect(within(viewer).queryByRole("button", { name: "Copy file path" })).not.toBeInTheDocument();
+  await user.click(within(viewer).getByRole("button", { name: "Download file" }));
+  expect(api.download).toHaveBeenCalledWith("/v1/environment/scenario/declarations/files/compiled/sources/brief.yaml", "brief.yaml", expect.any(Function));
+});
+
+test("declarations page through bounded rows and search values without hiding false or empty values", async () => {
+  const declarations = Array.from({ length: 23 }, (_, index) => ({ path: `field.${index}`, layer: "Scenario" as const, source: "scenario.yaml", source_key: "sources/scenario.yaml", value: index === 0 ? false : index === 1 ? 0 : index === 2 ? "" : index === 3 ? null : `value-${index}`, value_found: true }));
+  setup(vi.fn(async () => ({ ...report, declarations })));
+  await screen.findByText("Source declarations");
+  const user = userEvent.setup();
+  await user.click(screen.getByText("Source declarations"));
+  expect(screen.getAllByRole("row")).toHaveLength(11);
+  for (const value of ["false", "0", '""', "null"]) expect(screen.getByText(value, { exact: true })).toBeVisible();
+  expect(screen.getByText("1–10 of 23 fields")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Next declarations" }));
+  expect(screen.getByText("11–20 of 23 fields")).toBeVisible();
+  await user.type(screen.getByRole("textbox", { name: "Search environment origins" }), "value-22");
+  expect(screen.getByText("1–1 of 1 fields")).toBeVisible();
+  expect(screen.getByText("field.22")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Next declarations" })).toBeDisabled();
+  await user.click(screen.getByText("value-22"));
+  expect(screen.getByRole("dialog", { name: "Declaring YAML" })).toBeVisible();
+});
+
+test("long declared values expand safely without opening the source viewer", async () => {
+  const value = "<script>display text only</script> " + "extended context ".repeat(12);
+  setup(vi.fn(async () => ({ ...report, declarations: [{ ...report.declarations[0], value }] })));
+  await screen.findByText("Source declarations");
+  const user = userEvent.setup();
+  await user.click(screen.getByText("Source declarations"));
+  await user.click(screen.getByText(/<script>display text only<\/script>.*…/));
+  expect(screen.getByText(value.trim(), { selector: "pre" })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(document.querySelector("script")).toBeNull();
 });
 
 test("an exact organization choice prepares a reviewable request with locked dependencies", async () => {

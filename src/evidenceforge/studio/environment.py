@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, PrivateAttr, ValidationError
 
 from evidenceforge.composition.models import SelectedPack
 from evidenceforge.desktop.jobs import _eforge_command
@@ -24,6 +26,19 @@ class OverlayFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str
     size: int = Field(ge=0)
+
+
+class SourceDeclaration(BaseModel):
+    """One input value and its exact captured declaring YAML."""
+
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    layer: Literal["Scenario", "Organization", "Pack catalog"]
+    source: str
+    source_key: str | None = None
+    source_size: int = Field(default=0, ge=0)
+    value: JsonValue = None
+    value_found: bool = False
 
 
 class EnvironmentReport(BaseModel):
@@ -43,10 +58,92 @@ class EnvironmentReport(BaseModel):
     catalog_origins: dict[str, str] = Field(default_factory=dict)
     catalog_field_origins: dict[str, str] = Field(default_factory=dict)
     merge_decisions: list[dict[str, str]] = Field(default_factory=list)
+    declarations: list[SourceDeclaration] = Field(default_factory=list)
     configuration: ConfigurationState | None = None
     overlay_root: Path
     overlay_files: list[OverlayFile] = Field(default_factory=list)
     overlays_truncated: bool = False
+    _declaration_contents: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    def declaration_content(self, key: str) -> str | None:
+        """Return only YAML belonging to an inspected declaration."""
+        return self._declaration_contents.get(key)
+
+
+def _value_at_path(document: Any, path: str) -> tuple[bool, Any]:
+    """Read list indices and mapping keys, preserving keys that contain dots."""
+    if not path:
+        return True, document
+    if isinstance(document, dict):
+        for key, value in document.items():
+            name = str(key)
+            if path == name:
+                return True, value
+            if path.startswith(name + "."):
+                found, result = _value_at_path(value, path[len(name) + 1 :])
+                if found:
+                    return found, result
+    if isinstance(document, list):
+        index, _, remainder = path.partition(".")
+        if index.isdecimal() and int(index) < len(document):
+            return _value_at_path(document[int(index)], remainder)
+    return False, None
+
+
+def _populate_declarations(report: EnvironmentReport, captured: dict[str, str]) -> None:
+    """Use captured source bytes rather than guessing effective values after overrides."""
+    parsed: dict[str, Any] = {}
+    groups = (
+        ("Scenario", report.field_origins),
+        ("Organization", report.organization_model_origins),
+        ("Pack catalog", report.catalog_field_origins),
+    )
+    for layer, origins in groups:
+        for path, source in origins.items():
+            key = source
+            lookup_path = path
+            if layer != "Scenario":
+                parts = path.split(".", 2)
+                owner = (
+                    parts[1].split(":", 1)[0]
+                    if layer == "Pack catalog" and len(parts) > 1
+                    else None
+                )
+                pack = next(
+                    (
+                        pack
+                        for pack in report.selected_packs
+                        if (
+                            pack.type == "organization"
+                            if layer == "Organization"
+                            else f"{pack.publisher}/{pack.name}" == owner
+                        )
+                    ),
+                    None,
+                )
+                if pack is not None:
+                    key = f"packs/{pack.publisher}/{pack.type}/{pack.name}/{pack.version}/{source}"
+                if layer == "Pack catalog" and len(parts) > 1:
+                    parts[1] = parts[1].split(":", 1)[-1]
+                    lookup_path = ".".join(parts)
+            content = captured.get(key)
+            found, value = False, None
+            if content is not None:
+                if key not in parsed:
+                    parsed[key] = yaml.safe_load(content)
+                found, value = _value_at_path(parsed[key], lookup_path)
+                report._declaration_contents[key] = content
+            report.declarations.append(
+                SourceDeclaration(
+                    path=path,
+                    layer=layer,
+                    source=re.sub(r"^sources/[0-9a-f]{16}-", "", key),
+                    source_key=key if content is not None else None,
+                    source_size=len(content.encode("utf-8")) if content is not None else 0,
+                    value=json.loads(json.dumps(value, default=str)),
+                    value_found=found,
+                )
+            )
 
 
 def overlay_files(workspace: Path) -> tuple[Path, list[OverlayFile], bool]:
@@ -113,6 +210,7 @@ def inspect_environment(
                 *context_arguments(source, workspace),
                 "--explain-composition",
                 "--include-effective-scenario",
+                "--include-declaration-sources",
                 "--json",
             ],
             cwd=workspace,
@@ -145,7 +243,7 @@ def inspect_environment(
         )
         return report
     try:
-        return EnvironmentReport.model_validate(
+        inspected = EnvironmentReport.model_validate(
             {
                 **report.model_dump(),
                 "valid": True,
@@ -165,7 +263,15 @@ def inspect_environment(
                 },
             }
         )
-    except ValidationError:
+        captured = payload.get("declaration_sources", {})
+        if not isinstance(captured, dict) or any(
+            not isinstance(key, str) or not isinstance(content, str)
+            for key, content in captured.items()
+        ):
+            raise ValueError("The CLI returned invalid declaration sources")
+        _populate_declarations(inspected, captured)
+        return inspected
+    except (ValidationError, ValueError, yaml.YAMLError):
         report.error = (
             "The CLI returned invalid composition details. Refresh after checking eforge."
         )

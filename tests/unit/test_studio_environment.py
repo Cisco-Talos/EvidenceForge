@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from typer.testing import CliRunner
 
+from evidenceforge.cli.commands import app
 from evidenceforge.studio import environment as environment_module
 from evidenceforge.studio.environment import inspect_environment, overlay_files
 from evidenceforge.studio.service import create_app
@@ -63,8 +65,103 @@ def test_environment_resolves_real_exact_pack_and_include_origins_without_writin
     assert report.field_origins["description"].endswith("-description.yaml")
     assert report.catalog_origins
     assert report.effective_scenario["environment"]["users"]
+    declaration = next(entry for entry in report.declarations if entry.path == "description")
+    assert declaration.value_found
+    assert declaration.value == description
+    assert declaration.source == "description.yaml"
+    assert declaration.source_key
+    assert report.declaration_content(declaration.source_key) == include.read_text()
+    catalogs = [entry for entry in report.declarations if entry.layer == "Pack catalog"]
+    assert catalogs
+    assert all(entry.value_found and entry.source_key for entry in catalogs)
+    assert "_declaration_contents" not in report.model_dump()
     assert not (workspace / ".eforge").exists()
     assert before == {path: path.read_bytes() for path in workspace.rglob("*") if path.is_file()}
+
+
+def test_source_declarations_keep_organization_input_values_before_scenario_overrides(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = _source(workspace)
+    fixture = Path(__file__).resolve().parents[1] / "fixtures/scenarios/northstar-health-pack.yaml"
+    data = yaml.safe_load(fixture.read_text())
+    data.setdefault("environment", {})["description"] = "Scenario-specific environment"
+    source.write_text(yaml.safe_dump(data, sort_keys=False))
+    report = inspect_environment(StudioSettings(workspace=workspace), source, workspace)
+    assert report.valid, report.error
+    entries = [entry for entry in report.declarations if entry.path == "environment.description"]
+    organization = next(entry for entry in entries if entry.layer == "Organization")
+    scenario = next(entry for entry in entries if entry.layer == "Scenario")
+    assert organization.value_found and scenario.value_found
+    assert organization.value != scenario.value
+    assert scenario.value == report.effective_scenario["environment"]["description"]
+    assert organization.source_key and organization.source_key.startswith("packs/")
+    assert organization.source_key.endswith("model/environment.yaml")
+
+
+def test_declaration_viewing_requires_auth_exact_revision_and_known_captured_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    source = _source(workspace)
+    include = source.parent / "description.yaml"
+    data = yaml.safe_load(source.read_text())
+    include.write_text(yaml.safe_dump({"description": data.pop("description")}))
+    data["includes"] = [include.name]
+    source.write_text(yaml.safe_dump(data))
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "app"), "secret")) as client:
+        item = next(
+            entry
+            for entry in client.get("/v1/bootstrap", headers=headers).json()["items"]
+            if entry["path"] == str(source)
+        )
+        report = client.get(f"/v1/scenarios/{item['id']}/environment", headers=headers).json()
+        entry = next(entry for entry in report["declarations"] if entry["path"] == "description")
+        base = f"/v1/environment/{item['id']}/declarations/files/{report['compiled_sha256']}/"
+        endpoint = base + entry["source_key"]
+        assert client.get(endpoint).status_code == 401
+        assert client.get(endpoint, headers=headers).text == include.read_text()
+        assert client.get(base + "sources/unknown.yaml", headers=headers).status_code == 404
+        assert client.get(base + "%2e%2e/outside.yaml", headers=headers).status_code == 404
+        assert client.get(base + "%2Fetc%2Fpasswd", headers=headers).status_code == 404
+        include.write_text("description: A changed source\n")
+        assert client.get(endpoint, headers=headers).status_code == 409
+        client.post(
+            "/v1/workspaces/select", headers=headers, json={"path": str(tmp_path / "other")}
+        )
+        assert client.get(endpoint, headers=headers).status_code == 404
+
+
+def test_resolve_declaration_sources_are_optional_and_do_not_change_compiled_identity(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    runner = CliRunner()
+    command = [
+        "resolve",
+        str(source),
+        "--project-root",
+        str(tmp_path),
+        "--explain-composition",
+        "--json",
+    ]
+    original = runner.invoke(app, command)
+    inspected = runner.invoke(app, [*command, "--include-declaration-sources"])
+    assert original.exit_code == inspected.exit_code == 0
+    original_payload = json.loads(original.stdout)
+    inspected_payload = json.loads(inspected.stdout)
+    assert "declaration_sources" not in original_payload
+    sources = inspected_payload.pop("declaration_sources")
+    assert inspected_payload == original_payload
+    assert source.read_text() in sources.values()
+    rejected = runner.invoke(
+        app, ["resolve", str(source), "--include-declaration-sources", "--json"]
+    )
+    assert rejected.exit_code != 0
+    assert "requires --explain-composition --json" in json.loads(rejected.stdout)["error"]
 
 
 def test_environment_routes_require_auth_and_active_workspace_and_only_known_overlay_files(

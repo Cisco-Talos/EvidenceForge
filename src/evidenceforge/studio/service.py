@@ -22,7 +22,7 @@ from typing import Any, Literal
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 
@@ -1458,6 +1458,36 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         await studio.refresh_dependencies([item])
         await studio.emit(item.id, "configuration.updated", state.model_dump(mode="json"))
         return state
+
+    @app.get("/v1/environment/{item_id}/declarations/files/{compiled_sha256}/{source_key:path}")
+    async def declaration_file(
+        item_id: str,
+        compiled_sha256: str,
+        source_key: str,
+        studio: StudioService = Depends(authorized),
+    ) -> Response:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        try:
+            report = await asyncio.to_thread(
+                inspect_environment,
+                studio.settings,
+                item.path,
+                item.workspace,
+                studio.store.project(item.project_id) if item.project_id else None,
+            )
+        except (OSError, ValueError, ConfigurationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not report.valid or report.compiled_sha256 != compiled_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail="Inputs changed. Refresh Environment before viewing a declaration.",
+            )
+        content = report.declaration_content(source_key)
+        if content is None:
+            raise HTTPException(status_code=404, detail="Declaring YAML not found")
+        return Response(content, media_type="text/yaml")
 
     @app.get("/v1/environment/{item_id}/layers/{scope_id}/files/{relative_path:path}")
     def configuration_file(

@@ -1165,3 +1165,43 @@ implementation commit. Do not restore or include them without establishing the u
 Handoff: review project/scenario configuration in Studio and its portable public CLI contract.
 Pause for feedback here. Structured configuration editing, complete runtime value-origin views,
 isolated authoring revisions, and later workflow stages remain subsequent slices.
+
+## 2026-10-02 — Make source declarations usable
+
+User feedback: the source-declarations table lacked values or row actions and its long inner
+scroll area intercepted page scrolling. Its purpose is to trace an authored input value to its
+declaring file, rather than to list field names for their own sake.
+
+- Replaced the always-expanded listing with a collapsed, counted inspector. It shows ten rows
+  per page, has no internal vertical scrolling, and searches fields, declared values, layers,
+  and files. Scalars preserve false, zero, empty strings, and null; long/structured values can
+  expand inline. Fields and source links are keyboard-accessible; clicking a row opens YAML.
+- Values come from the exact captured declaring source, not guesses from the final effective
+  model. Organization declarations therefore keep their original values after scenario overrides.
+  The inspector explains that distinction. Added an optional public read-only
+  `eforge resolve --include-declaration-sources --explain-composition --json` flag; ordinary
+  resolution output and compiled identities remain unchanged.
+- The built-in viewer opens captured scenario/include/pack YAML, with a readable file name and
+  an explicit read-only snapshot label. Only known declaring files are served, with authentication,
+  active-workspace checks, and an exact compiled-revision check. Source changes require refreshing
+  Environment before viewing. Snapshot contents are private to the service's inspection result,
+  not duplicated into the REST report or misrepresented as filesystem paths.
+
+Verification: ten Python environment/API/CLI contracts pass, including included-file values,
+  qualified pack catalogs, overridden organization values, optional CLI output compatibility,
+  authorization, traversal/unknown-file rejection, and stale revisions. React's complete run
+  passed 123 tests and exposed one test-only trailing-whitespace matcher issue; after fixing that
+  assertion, all nine Environment interaction tests pass (124 unique React tests verified).
+  Frontend/type generation freshness, full Ruff checks/formatting, diff checks, and the macOS
+  release app build pass. Browser review at 1280×900 and 712×724 verified collapsed defaults,
+  value search, pagination, actual YAML viewing, and that table scroll height equals client height
+  with vertical overflow visible. Screenshots: `/private/tmp/eforge-source-declarations-review.jpg`,
+  `/private/tmp/eforge-source-declarations-compact.jpg`,
+  `/private/tmp/eforge-source-declarations-collapsed.jpg`, and
+  `/private/tmp/eforge-declaring-yaml-review.jpg`.
+
+Handoff: refreshed the normal helper after an authenticated idle/ownership check and verified
+unchanged durable settings, project/chat/job/bundle identities and job associations. Rebuilt the
+native app; reopen Studio to review the revised inspector. Closed the disposable browser tab,
+reset its viewport, and stopped its helper/frontend. Existing unrelated scenario deletions remain
+excluded. This addresses feedback within the configuration tranche; no later workflow was begun.
