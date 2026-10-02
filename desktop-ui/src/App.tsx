@@ -1,5 +1,5 @@
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Check, ClipboardCheck, Copy, Download, FileCode2, Filter, Folder, FolderOpen, GripVertical, Layers3, MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
+import { Activity, ArrowLeft, ArrowUpRight, Bookmark, ClipboardCheck, Copy, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2, ShieldCheck, SquarePen, Trash2, X } from "lucide-react";
 import { DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -13,9 +13,11 @@ import { SettingsView } from "./SettingsView";
 import { ChatView } from "./ChatView";
 import { ScenarioOperations } from "./ScenarioOperations";
 import { scenarioNameError } from "./scenarioName";
-import { ScenarioStates } from "./ScenarioStates";
+import { ScenarioStates, scenarioStates } from "./ScenarioStates";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { PackLibrary } from "./PackLibrary";
+import { ScenarioLibrary, type ScenarioSort } from "./ScenarioLibrary";
+import { useLibraryRecall } from "./useLibraryRecall";
 import { NewPackDialog } from "./NewPackDialog";
 import { PackFilters, emptyPackFilters } from "./PackFilters";
 import { ScenarioTitle } from "./ScenarioTitle";
@@ -45,6 +47,7 @@ function App() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [scenarioSort, setScenarioSort] = useState<ScenarioSort>("name");
   const [packFilter, setPackFilter] = useState<"packs" | "industry_pack" | "organization_pack">("packs");
   const [packCriteria, setPackCriteria] = useState(emptyPackFilters);
   const [newPackKind, setNewPackKind] = useState<"industry_pack" | "organization_pack" | null>(null);
@@ -53,7 +56,7 @@ function App() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
-  const [searchResult, setSearchResult] = useState<{ key: string; ids: Set<string> } | null>(null);
+  const [searchResult, setSearchResult] = useState<{ key: string; ids: Set<string>; hits: Map<string, CatalogItem> } | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectForm, setProjectForm] = useState<{ id: string | null; name: string; description: string; assignItemId: string | null } | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
@@ -86,6 +89,16 @@ function App() {
   const [showReconnect, setShowReconnect] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
 
+  useLibraryRecall(api, snapshot?.settings.workspace, section, {
+    search, project_id: selectedProjectId, show_hidden: showHidden, sort: scenarioSort,
+    pack_kind: packFilter, publisher: packCriteria.publisher, version: packCriteria.version,
+    pack_source: packCriteria.source as "" | "bundled" | "workspace",
+  }, (view) => {
+    setSearch(view.search); setShowHidden(view.show_hidden); setScenarioSort(view.sort);
+    setSelectedProjectId(view.project_id === "ungrouped" || snapshot?.projects.some((project) => project.id === view.project_id) ? view.project_id : null);
+    setPackFilter(view.pack_kind); setPackCriteria({ publisher: view.publisher, version: view.version, source: view.pack_source });
+  }, setNotice);
+
   const kind = section === "scenarios" ? "scenario" : section === "packs" ? packFilter : section;
   const selectedProject = snapshot?.projects.find((project) => project.id === selectedProjectId) || null;
   const projectName = selectedProjectId === "ungrouped" ? "Ungrouped" : selectedProject?.name;
@@ -100,9 +113,12 @@ function App() {
     (kind === "scenario" || ((!packCriteria.publisher || entry.publisher === packCriteria.publisher) && (!packCriteria.version || entry.version === packCriteria.version) && (!packCriteria.source || entry.pack_source === packCriteria.source))) &&
     (!search.trim() || (searchResult?.key === searchKey
       ? searchResult.ids.has(entry.id)
-      : `${entry.name} ${entry.description} ${entry.publisher || ""} ${entry.publisher_display_name || ""} ${entry.version} ${entry.requires_evidenceforge || ""} ${entry.pack_source || ""}`.toLowerCase().includes(search.toLowerCase())))) || [],
+      : `${entry.name} ${entry.description} ${entry.publisher || ""} ${entry.publisher_display_name || ""} ${entry.version} ${entry.requires_evidenceforge || ""} ${entry.pack_source || ""}`.toLowerCase().includes(search.toLowerCase())))).map((entry) => search.trim() && searchResult?.key === searchKey ? searchResult.hits.get(entry.id) || entry : entry) || [],
     [snapshot, kind, search, searchKey, searchResult, selectedProjectId, packCriteria, showHidden]);
   const item = snapshot?.items.find((entry) => entry.id === selectedId) || null;
+  const projectScenarios = snapshot?.items.filter((entry) => entry.kind === "scenario" && !entry.hidden && (selectedProjectId === "ungrouped" ? !entry.project_id : entry.project_id === selectedProjectId)) || [];
+  const projectAttention = snapshot ? projectScenarios.filter((entry) => scenarioStates(entry, snapshot).some((state) => ["error", "warning"].includes(state.state))).length : 0;
+  const projectActiveRuns = snapshot?.jobs.filter((job) => job.kind === "generation" && ["queued", "running", "paused"].includes(job.status) && projectScenarios.some((entry) => entry.path === job.scenario)).length || 0;
   const draftConversation = snapshot?.conversations.find((chat) => chat.id === draftConversationId) || null;
   const drafts = snapshot?.conversations.filter((chat) =>
     !chat.item_id && (chat.draft_kind === kind || (kind === "packs" && !!chat.draft_kind && chat.draft_kind !== "scenario")) &&
@@ -136,6 +152,12 @@ function App() {
 
 
   const commands = [
+    { id: "new:scenario", label: "New scenario", detail: "Create or import YAML", run: () => { setSection("scenarios"); setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" }); } },
+    ...(item?.kind === "scenario" ? [
+      { id: "action:validate", label: `Validate ${item.name}`, detail: "Current scenario", run: () => void validateItem() },
+      { id: "action:generate", label: `Generate ${item.name}`, detail: "Current scenario", run: () => { setTab("generation"); } },
+      { id: "action:author", label: `Author ${item.name}`, detail: "Conversations", run: () => { setTab("conversations"); } },
+    ] : []),
     ...(["scenarios", "packs", "bundles", "jobs", "settings"] as Section[]).map((target) => ({
       id: `section:${target}`, label: sectionTitles[target], detail: "Navigate", run: () => {
         setSection(target); setSelectedId(null); setDraftConversationId(null);
@@ -262,6 +284,7 @@ function App() {
       setPackFilter(view.kind);
       setPackCriteria({ publisher: view.publisher || "", version: view.version || "", source: view.pack_source || "" });
     }
+    setScenarioSort(view.sort || "name");
     setSearch(view.search);
     setShowHidden(view.show_hidden);
     const projectId = view.project_id && snapshot?.projects.some((project) => project.id === view.project_id)
@@ -278,7 +301,7 @@ function App() {
         name: viewName.trim(), kind, search: search.trim(), folder: null,
         project_id: selectedProjectId !== "ungrouped" ? selectedProjectId : null,
         ungrouped: selectedProjectId === "ungrouped",
-        show_hidden: showHidden,
+        show_hidden: showHidden, sort: scenarioSort,
         ...(section === "packs" ? { publisher: packCriteria.publisher, version: packCriteria.version, pack_source: packCriteria.source } : {}),
       });
       setViewName("");
@@ -560,12 +583,8 @@ function App() {
   }, [tab, selectedConversation, conversations]);
 
   useEffect(() => {
-    setSelectedProjectId(null);
     setSelectedId(null);
     setDraftConversationId(null);
-    setShowHidden(false);
-    setPackFilter("packs");
-    setPackCriteria(emptyPackFilters);
     setNewPackKind(null);
   }, [snapshot?.settings.workspace]);
 
@@ -579,7 +598,7 @@ function App() {
       const kinds = kind === "packs" ? ["industry_pack", "organization_pack"] : [kind];
       void Promise.all(kinds.map((entryKind) => api.request<CatalogItem[]>(`/v1/items?kind=${encodeURIComponent(entryKind)}&search=${encodeURIComponent(search.trim())}`)))
         .then((results) => results.flat())
-        .then((found) => { if (!cancelled) setSearchResult({ key: searchKey, ids: new Set(found.map((entry) => entry.id)) }); })
+        .then((found) => { if (!cancelled) setSearchResult({ key: searchKey, ids: new Set(found.map((entry) => entry.id)), hits: new Map(found.map((entry) => [entry.id, entry])) }); })
         .catch((error) => { if (!cancelled) setNotice(`Search failed: ${String(error)}`); });
     }, 180);
     return () => { cancelled = true; window.clearTimeout(timer); };
@@ -686,30 +705,19 @@ function App() {
             <button className={`project-nav-row ${selectedProjectId === "ungrouped" ? "active" : ""} ${dropTargetId === "ungrouped" ? "drop-target" : ""}`} aria-label="Ungrouped" onClick={() => setSelectedProjectId("ungrouped")} onDragOver={(event) => allowProjectDrop(event, null)} onDragLeave={leaveProjectDrop} onDrop={(event) => dropIntoProject(event, null)}><FolderOpen size={16} /><span>Ungrouped</span><small>{ungroupedCount}</small></button>
           </aside>}
           <div className="project-library">
-            {selectedProjectId !== null && <div className="project-overview"><div><span className="eyebrow">{selectedProject ? "PROJECT" : "SCENARIOS"}</span><h2>{projectName || "Project"}</h2><p>{selectedProject ? selectedProject.description || `Your ${section} grouped for this work.` : `${section === "packs" ? "Packs" : "Scenarios"} that have not been assigned to a project.`}</p></div><span className="project-total">{library.length + drafts.length} {section === "packs" ? library.length + drafts.length === 1 ? "pack" : "packs" : library.length + drafts.length === 1 ? "scenario" : "scenarios"}</span></div>}
+            {selectedProjectId !== null && <div className="project-overview"><div><span className="eyebrow">{selectedProject ? "PROJECT" : "SCENARIOS"}</span><h2>{projectName || "Project"}</h2><p>{selectedProject ? selectedProject.description || `Your ${section} grouped for this work.` : `${section === "packs" ? "Packs" : "Scenarios"} that have not been assigned to a project.`}</p></div><div className="project-overview-stats">{section === "scenarios" && <><span>{projectAttention} need attention</span><span>{projectActiveRuns} active runs</span></>}<span className="project-total">{library.length + drafts.length} {section === "packs" ? library.length + drafts.length === 1 ? "pack" : "packs" : library.length + drafts.length === 1 ? "scenario" : "scenarios"}</span></div></div>}
             <div className="library-toolbar">
 
               <div className="search-box"><Search size={17} /><input placeholder={section === "packs" ? "Search name, author, version, or YAML…" : "Search scenarios…"} value={search} onChange={(event) => setSearch(event.target.value)} aria-label={`Search ${sectionTitles[section].toLowerCase()}`} /></div>
               {section === "packs" && <PackFilters items={snapshot.items.filter((entry) => entry.kind !== "scenario")} kind={packFilter} values={packCriteria} showHidden={showHidden} onKind={setPackFilter} onChange={setPackCriteria} onHidden={setShowHidden} onReset={() => { setPackFilter("packs"); setPackCriteria(emptyPackFilters); setShowHidden(false); }} />}
 
+              {section === "scenarios" && <select className="library-sort" aria-label="Sort scenarios" value={scenarioSort} onChange={(event) => setScenarioSort(event.target.value as ScenarioSort)}><option value="name">Name A–Z</option><option value="updated">Recently updated</option><option value="project">Project A–Z</option></select>}
               {section === "scenarios" && hiddenCount > 0 && <button className={`hidden-filter ${showHidden ? "active" : ""}`} aria-label={showHidden ? "Hide hidden items" : "Show hidden items"} title={showHidden ? "Hide hidden items again" : "Include hidden items in this library"} onClick={() => setShowHidden(!showHidden)}><Filter size={15} /> {showHidden ? "Showing hidden" : `Hidden (${hiddenCount})`}</button>}
               <button className={`icon-button saved-views-toggle ${savedViews.length ? "has-views" : ""}`} aria-label="Saved views" title="Saved views" onClick={() => setShowViews(true)}><Bookmark size={17} /></button>
               <span className="result-count">{library.length + drafts.length} {library.length + drafts.length === 1 ? "item" : "items"}</span>
             </div>
             {section === "packs" ? <PackLibrary items={library} drafts={drafts} projects={snapshot.projects} busy={busy} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onNew={setNewPackKind} onClone={(entry) => void beginPackClone(entry)} onExport={(entry) => void exportPack(entry)} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draft.draft_name || draft.title); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} /> : <>
-            {library.length + drafts.length ? <div className="library-grid">
-              {drafts.map((draft) => <div className="library-card scenario-card draft-card draggable-card" key={draft.id} draggable={draft.draft_kind === "scenario"} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draft.draft_name || "New scenario"); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag}>
-                <button className="card-open" onClick={() => setDraftConversationId(draft.id)}><span className="card-symbol"><SquarePen size={20} /></span><span className="card-body"><strong>{draft.draft_name || draft.title}</strong><span className="card-description">{draft.active ? "Authoring in progress" : "Ready to author"}</span><span className="card-meta">Not authored yet <span>·</span> Updated {formatTime(draft.updated_at)}{selectedProjectId === null && <><span>·</span>{snapshot.projects.find((project) => project.id === draft.draft_project_id)?.name || "Ungrouped"}</>}</span></span></button>
-                <div className="card-quick-actions"><span className="draft-chip">Draft</span>{draft.draft_kind === "scenario" && <DropdownMenu.Root><DropdownMenu.Trigger className="card-project-trigger" aria-label={`Move ${draft.draft_name || draft.title} to project`} title="Move to project"><Folder size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu project-assignment-menu" sideOffset={4}><DropdownMenu.Item onSelect={() => void assignDraftProject(draft, null)}>{!draft.draft_project_id && <Check size={14} />} Ungrouped</DropdownMenu.Item>{snapshot.projects.map((project) => <DropdownMenu.Item key={project.id} onSelect={() => void assignDraftProject(draft, project.id)}>{draft.draft_project_id === project.id && <Check size={14} />} {project.name}</DropdownMenu.Item>)}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}<DropdownMenu.Root><DropdownMenu.Trigger className="card-project-trigger" aria-label={`Options for ${draft.draft_name || draft.title}`}><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4}><DropdownMenu.Item onSelect={() => { setRenamingDraft(draft); setDraftName(draft.draft_name || draft.title); }}>Rename scenario</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setDeletingConversation(draft)}>Delete draft</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>
-              </div>)}
-              {library.map((entry) => <div className={`library-card ${entry.kind === "scenario" ? "scenario-card draggable-card" : "pack-card"} ${entry.hidden ? "hidden-card" : ""}`} key={entry.id} draggable={entry.kind === "scenario"} onDragStart={(event) => entry.kind === "scenario" && beginScenarioDrag(event, entry)} onDragEnd={endScenarioDrag}>
-              {entry.kind === "scenario" && <span className="card-drag-handle" draggable title={`Drag ${entry.name} to a project`} aria-hidden="true" onDragStart={(event) => { event.stopPropagation(); beginScenarioDrag(event, entry); }}><GripVertical size={15} /></span>}
-              <button className="card-open" onClick={() => openItem(entry)}><span className="card-symbol">{entry.kind === "scenario" ? <FileCode2 size={20} /> : <Layers3 size={20} />}</span><span className="card-body"><strong>{entry.name}</strong><span className="card-description">{entry.description || "No description yet"}</span><span className="card-meta">{entry.version || "YAML"} <span>·</span> Updated {formatTime(entry.modified_at)}{entry.kind === "scenario" && selectedProjectId === null && <><span>·</span>{snapshot.projects.find((project) => project.id === entry.project_id)?.name || "Ungrouped"}</>}{entry.kind !== "scenario" && entry.folder && <><span>·</span>{entry.folder}</>}{entry.hidden && <><span>·</span>Hidden</>}</span></span></button>
-              <div className="card-quick-actions">
-                {entry.kind === "scenario" && <><ScenarioStates item={entry} snapshot={snapshot} compact /><DropdownMenu.Root><DropdownMenu.Trigger className="card-project-trigger" aria-label={`Move ${entry.name} to project`} title="Move to project"><Folder size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu project-assignment-menu" sideOffset={4}><DropdownMenu.Label>Move to project</DropdownMenu.Label><DropdownMenu.Item onSelect={() => void assignProject(entry, null)}>{!entry.project_id && <Check size={14} />} Ungrouped</DropdownMenu.Item>{snapshot.projects.map((project) => <DropdownMenu.Item key={project.id} onSelect={() => void assignProject(entry, project.id)}>{entry.project_id === project.id && <Check size={14} />} {project.name}</DropdownMenu.Item>)}<DropdownMenu.Separator /><DropdownMenu.Item onSelect={() => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })}><Plus size={14} /> New project…</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root><button className={`card-download-icon ${completedRuns(entry).length ? "" : "unavailable"}`} aria-label={`${isTauri() ? "Export" : "Download"} bundle for ${entry.name}`} title={completedRuns(entry).length ? `${isTauri() ? "Export" : "Download"} a completed run` : "Generate a run before exporting"} onClick={() => completedRuns(entry).length ? openExport(entry) : showNotice("Generate a run before exporting its bundle.")}><Download size={16} /></button></>}
-                <DropdownMenu.Root><DropdownMenu.Trigger className="card-project-trigger" aria-label={`Options for ${entry.name}`} title="More options"><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4}>{entry.kind === "scenario" ? <DropdownMenu.Item onSelect={() => beginScenarioClone(entry)}><Copy size={14} /> Clone scenario…</DropdownMenu.Item> : <DropdownMenu.Item onSelect={() => void beginPackClone(entry)}><Copy size={14} /> Clone pack…</DropdownMenu.Item>}<DropdownMenu.Item onSelect={() => void setItemHidden(entry, !entry.hidden)}>{entry.hidden ? "Unhide" : "Hide"}</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
-              </div>
-            </div>)}</div> : <div className="empty-panel tall"><FolderOpen size={30} /><h3>{search ? "No matches" : selectedProject ? "No scenarios in this project" : "Nothing here yet"}</h3><p>{search ? "Try another search." : selectedProject ? "Drag a scenario here or use its project menu." : "Add or import a scenario to start building your library."}</p></div>}
+            {library.length + drafts.length ? <ScenarioLibrary items={library} drafts={drafts} snapshot={snapshot} api={api} sort={scenarioSort} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onClone={beginScenarioClone} onExport={openExport} onUnavailableExport={() => showNotice("Generate a run before exporting its bundle.")} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onRenameDraft={(draft) => { setRenamingDraft(draft); setDraftName(draft.draft_name || draft.title); }} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draft.draft_name || draft.title); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} /> : <div className="empty-panel tall"><FolderOpen size={30} /><h3>{search ? "No matches" : selectedProject ? "No scenarios in this project" : "Nothing here yet"}</h3><p>{search ? "Try another search." : selectedProject ? "Drag a scenario here or use its project menu." : "Add or import a scenario to start building your library."}</p></div>}
             </>}
           </div>
         </div>

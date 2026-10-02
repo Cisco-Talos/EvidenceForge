@@ -2647,3 +2647,85 @@ def test_new_pack_identity_description_project_search_and_persistence(
             client.delete(f"/v1/projects/{project['id']}", headers=headers).json()["ungrouped"] == 1
         )
         assert path.read_bytes() == original
+
+
+def test_library_recall_persists_and_refuses_cross_workspace_updates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    other = tmp_path / "other"
+    paths = _paths(tmp_path / "private")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    view = {"search": "yaml:alice", "project_id": "ungrouped", "sort": "updated"}
+    with TestClient(create_app(paths, "secret")) as client:
+        assert client.get("/v1/library/preferences").status_code == 401
+        assert client.get("/v1/library/preferences", headers=headers).json()["remember_view"]
+        assert (
+            client.put("/v1/library/view/scenarios", headers=headers, json=view).status_code == 200
+        )
+        assert (
+            client.put(
+                "/v1/library/view/packs", headers=headers, json={"publisher": "talos"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                "/v1/library/preferences", headers=headers, json={"remember_view": False}
+            ).status_code
+            == 200
+        )
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(other)})
+        prefs = client.get("/v1/library/preferences", headers=headers).json()
+        assert prefs["remember_view"]
+        assert prefs["scenarios"]["search"] == ""
+        assert (
+            client.put(
+                "/v1/library/view/scenarios",
+                params={"workspace": str(workspace)},
+                headers=headers,
+                json=view,
+            ).status_code
+            == 409
+        )
+        assert (
+            client.put(
+                "/v1/library/preferences",
+                params={"workspace": str(workspace)},
+                headers=headers,
+                json={"remember_view": False},
+            ).status_code
+            == 409
+        )
+        assert (
+            client.put(
+                "/v1/library/view/scenarios", headers=headers, json={"project_id": "missing"}
+            ).status_code
+            == 404
+        )
+        client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
+    with TestClient(create_app(paths, "secret")) as client:
+        prefs = client.get("/v1/library/preferences", headers=headers).json()
+        assert not prefs["remember_view"]
+        assert prefs["scenarios"]["search"] == "yaml:alice"
+        assert prefs["scenarios"]["sort"] == "updated"
+        assert prefs["packs"]["publisher"] == "talos"
+
+
+def test_library_search_returns_a_bounded_yaml_excerpt_without_persisting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    path = _scenario(workspace, "searchable")
+    path.write_text(path.read_text() + "# Assigned user: Alice, hostname: workstation-17\n")
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(create_app(_paths(tmp_path / "private"), "secret")) as client:
+        result = client.get("/v1/items", params={"search": "yaml:alice"}, headers=headers).json()
+        assert len(result) == 1
+        assert result[0]["search_field"] == "YAML"
+        assert "Alice" in result[0]["search_excerpt"]
+        assert len(result[0]["search_excerpt"]) <= 162
+        stored = client.get("/v1/bootstrap", headers=headers).json()["items"][0]
+        assert stored["search_excerpt"] == ""

@@ -43,6 +43,8 @@ class CatalogItem(BaseModel):
     project_id: str | None = None
     hidden: bool = False
     imported: bool = False
+    search_excerpt: str = ""
+    search_field: str = ""
 
 
 class Project(BaseModel):
@@ -119,6 +121,32 @@ class SavedView(BaseModel):
     publisher: str = Field(default="", max_length=80)
     version: str = Field(default="", max_length=80)
     pack_source: Literal["", "bundled", "workspace"] = ""
+    sort: Literal["name", "updated", "project"] = "name"
+
+
+class LibraryView(BaseModel):
+    """Last selected library controls, independent of authored content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    search: str = Field(default="", max_length=256)
+    project_id: str | None = None
+    show_hidden: bool = False
+    sort: Literal["name", "updated", "project"] = "name"
+    pack_kind: Literal["packs", "industry_pack", "organization_pack"] = "packs"
+    publisher: str = Field(default="", max_length=80)
+    version: str = Field(default="", max_length=80)
+    pack_source: Literal["", "bundled", "workspace"] = ""
+
+
+class LibraryPreferences(BaseModel):
+    """Workspace-specific recall preference and independent library selections."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remember_view: bool = True
+    scenarios: LibraryView = Field(default_factory=LibraryView)
+    packs: LibraryView = Field(default_factory=LibraryView)
 
 
 class StudioStore:
@@ -197,6 +225,10 @@ class StudioStore:
                 workspace TEXT PRIMARY KEY,
                 export_directory TEXT
             );
+            CREATE TABLE IF NOT EXISTS library_preferences (
+                workspace TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 entity_id TEXT NOT NULL,
@@ -246,6 +278,46 @@ class StudioStore:
                 "ON CONFLICT(workspace) DO UPDATE SET export_directory = excluded.export_directory",
                 (str(workspace.resolve()), str(directory.resolve())),
             )
+
+    def library_preferences(self, workspace: Path) -> LibraryPreferences:
+        """Read library recall settings for exactly one workspace."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM library_preferences WHERE workspace=?",
+                (str(workspace.resolve()),),
+            ).fetchone()
+        return (
+            LibraryPreferences.model_validate_json(row["payload"]) if row else LibraryPreferences()
+        )
+
+    def save_library_preferences(self, workspace: Path, preferences: LibraryPreferences) -> None:
+        """Save GUI library preferences without changing export location or files."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO library_preferences(workspace, payload) VALUES (?, ?) "
+                "ON CONFLICT(workspace) DO UPDATE SET payload=excluded.payload",
+                (str(workspace.resolve()), preferences.model_dump_json()),
+            )
+
+    def set_library_recall(self, workspace: Path, remember_view: bool) -> LibraryPreferences:
+        """Change recall without overwriting a concurrently saved library view."""
+        with self._lock:
+            preferences = self.library_preferences(workspace)
+            preferences.remember_view = remember_view
+            self.save_library_preferences(workspace, preferences)
+            return preferences
+
+    def save_library_view(
+        self, workspace: Path, kind: Literal["scenarios", "packs"], view: LibraryView
+    ) -> None:
+        """Save one library's controls while preserving the other library and recall flag."""
+        with self._lock:
+            preferences = self.library_preferences(workspace)
+            if kind == "scenarios":
+                preferences.scenarios = view
+            else:
+                preferences.packs = view
+            self.save_library_preferences(workspace, preferences)
 
     def publish(self, entity_id: str, kind: str, payload: dict[str, Any]) -> StudioEvent:
         """Save one event before it is sent to connected clients."""
@@ -543,7 +615,33 @@ class StudioStore:
                 elif not any(term in text for text in fields.values()):
                     break
             else:
-                found.append(item)
+                excerpt = ""
+                field = ""
+                for term in terms:
+                    scope, separator, value = term.partition(":")
+                    needle = value if separator and scope in fields else term
+                    if (scope == "yaml" and separator) or (
+                        needle in fields["yaml"]
+                        and needle not in fields["name"]
+                        and needle not in fields["description"]
+                    ):
+                        for line in row["content"].splitlines():
+                            line = line.strip()
+                            offset = line.casefold().find(needle)
+                            if offset >= 0:
+                                start = max(0, offset - 55)
+                                excerpt = line.strip()[start : start + 160]
+                                if start:
+                                    excerpt = "…" + excerpt
+                                if len(line.strip()) > start + 160:
+                                    excerpt += "…"
+                                field = "YAML"
+                                break
+                    if excerpt:
+                        break
+                found.append(
+                    item.model_copy(update={"search_excerpt": excerpt, "search_field": field})
+                )
                 if len(found) == 200:
                     break
         return sorted(found, key=lambda item: item.name.casefold())

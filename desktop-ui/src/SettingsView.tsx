@@ -27,7 +27,21 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
   const [loginPending, setLoginPending] = useState(false);
   const [installMessage, setInstallMessage] = useState("");
-  const dirty = JSON.stringify(draft) !== JSON.stringify(savedSettings);
+  const [rememberView, setRememberView] = useState(true);
+  const [savedRememberView, setSavedRememberView] = useState(true);
+  const [libraryReady, setLibraryReady] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedSettings) || rememberView !== savedRememberView;
+  useEffect(() => {
+    let cancelled = false;
+    setLibraryReady(false);
+    void api.libraryPreferences(settings.workspace).then((preferences) => {
+      if (cancelled) return;
+      setRememberView(preferences.remember_view !== false);
+      setSavedRememberView(preferences.remember_view !== false);
+      setLibraryReady(true);
+    }).catch((error) => { if (!cancelled) onError(String(error)); });
+    return () => { cancelled = true; };
+  }, [api, settings.workspace, onError]);
   useEffect(() => {
     const incoming = JSON.stringify(settings);
     if (incoming === lastIncomingSettings.current) return;
@@ -76,6 +90,10 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
         ...draft,
         max_concurrent_generations: Math.min(16, Math.max(1, draft.max_concurrent_generations)),
       });
+      if (rememberView !== savedRememberView) {
+        await api.request(`/v1/library/preferences?workspace=${encodeURIComponent(settings.workspace)}`, "PUT", { remember_view: rememberView });
+        setSavedRememberView(rememberView);
+      }
       setSavedSettings(saved);
       setDraft(saved);
       await onSaved();
@@ -147,6 +165,7 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
     <div className="settings-main">
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Remember library views</strong><Help text="Restore the last project, search, filters, and sorting for scenarios and packs in this workspace. Turning this off opens each library with its default view." /></div><input className="visible-check" type="checkbox" aria-label="Remember library views" disabled={!libraryReady} checked={rememberView} onChange={(event) => setRememberView(event.target.checked)} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored YAML and bundles stay in your workspace." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openLocalFolder(paths.data)}><ArrowUpRight size={16} /></button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openLocalFolder(paths.logs)}><ArrowUpRight size={16} /></button></div></div>

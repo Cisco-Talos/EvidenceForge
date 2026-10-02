@@ -6,7 +6,7 @@ import { formatTime } from "./components";
 
 type PackKind = "industry_pack" | "organization_pack";
 
-function ProjectPicker({ name, projectId, projects, onMove, onNewProject }: {
+export function ProjectPicker({ name, projectId, projects, onMove, onNewProject }: {
   name: string; projectId: string | null; projects: Project[];
   onMove: (projectId: string | null) => void; onNewProject?: () => void;
 }) {

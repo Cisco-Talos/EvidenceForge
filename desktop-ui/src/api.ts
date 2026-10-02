@@ -5,11 +5,11 @@ import type { components } from "./generated/studio";
 type Schema = components["schemas"];
 export type ItemKind = Schema["CatalogItem"]["kind"];
 // The service serializes every model field in snapshots, including fields with defaults.
-type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source";
+type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source" | "search_excerpt" | "search_field";
 export type CatalogItem = Omit<Required<Schema["CatalogItem"]>, PackMetadata> & Pick<Schema["CatalogItem"], PackMetadata>;
 export type ImportedBundle = Required<Schema["ImportedBundle"]>;
 export type Project = Required<Schema["Project"]>;
-type PackViewFilters = "publisher" | "version" | "pack_source";
+type PackViewFilters = "publisher" | "version" | "pack_source" | "sort";
 export type SavedView = Omit<Required<Schema["SavedView"]>, PackViewFilters> & Pick<Schema["SavedView"], PackViewFilters>;
 export type Conversation = Required<Schema["Conversation"]>;
 export type TurnSubmission = Required<Schema["TurnSubmission"]>;
@@ -21,6 +21,8 @@ export type StudioJob = Schema["JobSummary"];
 export type ScorecardDetail = Schema["ScorecardDetail"];
 export type PackPublisherStatus = Schema["PackPublisherStatus"];
 export type PackCreation = { item: CatalogItem; conversation: Conversation };
+export type LibraryView = Required<Schema["LibraryView"]>;
+export type LibraryPreferences = Schema["LibraryPreferences"];
 export type ImportReview = Omit<Schema["ImportReview"], "rows"> & { rows: DependencyRow[] };
 export type DependencyRow = Schema["DependencyRow"];
 export type DependencyHealth = Schema["DependencyHealth"];
@@ -74,6 +76,18 @@ export class StudioApi {
   constructor(connection: Connection) {
     this.url = connection.url;
     this.token = connection.token;
+  }
+
+  async libraryPreferences(workspace: string): Promise<LibraryPreferences> {
+    return this.request(`/v1/library/preferences?workspace=${encodeURIComponent(workspace)}`);
+  }
+
+  async saveLibraryView(workspace: string, kind: "scenarios" | "packs", view: LibraryView): Promise<LibraryView> {
+    return this.request(`/v1/library/view/${kind}?workspace=${encodeURIComponent(workspace)}`, "PUT", view);
+  }
+
+  async bundleSizes(): Promise<Record<string, number | null>> {
+    return this.request("/v1/jobs/bundle-sizes");
   }
 
   async request<T>(path: string, method = "GET", body?: unknown, timeoutMs = 15000): Promise<T> {

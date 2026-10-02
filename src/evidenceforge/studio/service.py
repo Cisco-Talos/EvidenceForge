@@ -79,6 +79,8 @@ from evidenceforge.studio.store import (
     CatalogItem,
     Conversation,
     ImportedBundle,
+    LibraryPreferences,
+    LibraryView,
     Project,
     SavedView,
     StudioEvent,
@@ -97,6 +99,14 @@ class ExportLocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     directory: Path | None = None
+
+
+class LibraryRecallRequest(BaseModel):
+    """Change only the workspace's library recall preference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    remember_view: bool
 
 
 def _bundle_contents_size(root: Path) -> int | None:
@@ -1804,6 +1814,43 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
     @app.get("/v1/settings")
     def settings(studio: StudioService = Depends(authorized)) -> StudioSettings:
         return studio.settings
+
+    @app.get("/v1/library/preferences")
+    def library_preferences(
+        workspace: Path | None = None, studio: StudioService = Depends(authorized)
+    ) -> LibraryPreferences:
+        if workspace and workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=409, detail="The active workspace has changed")
+        return studio.store.library_preferences(studio.settings.workspace)
+
+    @app.put("/v1/library/preferences")
+    def update_library_recall(
+        request: LibraryRecallRequest,
+        workspace: Path | None = None,
+        studio: StudioService = Depends(authorized),
+    ) -> LibraryPreferences:
+        if workspace and workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=409, detail="The active workspace has changed")
+        return studio.store.set_library_recall(studio.settings.workspace, request.remember_view)
+
+    @app.put("/v1/library/view/{kind}")
+    def update_library_view(
+        kind: Literal["scenarios", "packs"],
+        request: LibraryView,
+        workspace: Path | None = None,
+        studio: StudioService = Depends(authorized),
+    ) -> LibraryView:
+        if workspace and workspace.resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(status_code=409, detail="The active workspace has changed")
+        if request.project_id and request.project_id != "ungrouped":
+            project = studio.store.project(request.project_id)
+            if (
+                project is None
+                or project.workspace.resolve() != studio.settings.workspace.resolve()
+            ):
+                raise HTTPException(status_code=404, detail="Project not found in this workspace")
+        studio.store.save_library_view(studio.settings.workspace, kind, request)
+        return request
 
     @app.get("/v1/export-location")
     def export_location(studio: StudioService = Depends(authorized)) -> ExportLocation:

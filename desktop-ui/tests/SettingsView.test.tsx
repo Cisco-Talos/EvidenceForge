@@ -37,7 +37,7 @@ test("Codex sign-in shows pending state and discovers the completed account", as
   const open = vi.spyOn(window, "open").mockImplementation(() => null);
   render(<Tooltip.Provider><SettingsView
     settings={settings} paths={{ data: "/tmp/data", logs: "/tmp/logs" }}
-    api={{ request } as unknown as StudioApi} onSaved={async () => undefined}
+    api={{ request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi} onSaved={async () => undefined}
     onError={vi.fn()}
   /></Tooltip.Provider>);
   await userEvent.setup().click(screen.getByRole("button", { name: "Authoring & tools" }));

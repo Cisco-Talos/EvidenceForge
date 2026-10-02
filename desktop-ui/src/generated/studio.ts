@@ -486,6 +486,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/library/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Library Preferences */
+        get: operations["library_preferences_v1_library_preferences_get"];
+        /** Update Library Recall */
+        put: operations["update_library_recall_v1_library_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/library/view/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Library View */
+        put: operations["update_library_view_v1_library_view__kind__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/export-location": {
         parameters: {
             query?: never;
@@ -1320,6 +1355,16 @@ export interface components {
              * @default false
              */
             imported: boolean;
+            /**
+             * Search Excerpt
+             * @default
+             */
+            search_excerpt: string;
+            /**
+             * Search Field
+             * @default
+             */
+            search_field: string;
         };
         /**
          * ClearCompletedRequest
@@ -1758,6 +1803,73 @@ export interface components {
             scorecard?: components["schemas"]["JobScorecard"] | null;
         };
         /**
+         * LibraryPreferences
+         * @description Workspace-specific recall preference and independent library selections.
+         */
+        LibraryPreferences: {
+            /**
+             * Remember View
+             * @default true
+             */
+            remember_view: boolean;
+            scenarios?: components["schemas"]["LibraryView"];
+            packs?: components["schemas"]["LibraryView"];
+        };
+        /**
+         * LibraryRecallRequest
+         * @description Change only the workspace's library recall preference.
+         */
+        LibraryRecallRequest: {
+            /** Remember View */
+            remember_view: boolean;
+        };
+        /**
+         * LibraryView
+         * @description Last selected library controls, independent of authored content.
+         */
+        LibraryView: {
+            /**
+             * Search
+             * @default
+             */
+            search: string;
+            /** Project Id */
+            project_id?: string | null;
+            /**
+             * Show Hidden
+             * @default false
+             */
+            show_hidden: boolean;
+            /**
+             * Sort
+             * @default name
+             * @enum {string}
+             */
+            sort: "name" | "updated" | "project";
+            /**
+             * Pack Kind
+             * @default packs
+             * @enum {string}
+             */
+            pack_kind: "packs" | "industry_pack" | "organization_pack";
+            /**
+             * Publisher
+             * @default
+             */
+            publisher: string;
+            /**
+             * Version
+             * @default
+             */
+            version: string;
+            /**
+             * Pack Source
+             * @default
+             * @enum {string}
+             */
+            pack_source: "" | "bundled" | "workspace";
+        };
+        /**
          * PackCloneRequest
          * @description Requested exact identity for a new editable local pack.
          */
@@ -1982,6 +2094,12 @@ export interface components {
              * @enum {string}
              */
             pack_source: "" | "bundled" | "workspace";
+            /**
+             * Sort
+             * @default name
+             * @enum {string}
+             */
+            sort: "name" | "updated" | "project";
         };
         /**
          * ScenarioCloneRequest
@@ -3567,6 +3685,115 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StudioSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    library_preferences_v1_library_preferences_get: {
+        parameters: {
+            query?: {
+                workspace?: string | null;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPreferences"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_library_recall_v1_library_preferences_put: {
+        parameters: {
+            query?: {
+                workspace?: string | null;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryRecallRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryPreferences"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_library_view_v1_library_view__kind__put: {
+        parameters: {
+            query?: {
+                workspace?: string | null;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                kind: "scenarios" | "packs";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LibraryView"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryView"];
                 };
             };
             /** @description Validation Error */

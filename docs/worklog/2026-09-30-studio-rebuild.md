@@ -888,3 +888,38 @@ processes. Restarted the default launchd helper only after an authenticated snap
 active/queued jobs and zero active turns, verifying PID creation time and command identity first.
 It now serves pack author metadata and the new API. The final macOS app is rebuilt for review;
 Linux native verification is unavailable on this host. Pause for native pack workflow feedback.
+
+## 2026-10-01 — Scenario lists and find/resume preferences
+
+The user approved replacing scenario cards with rows and explicitly authorized continuing into
+additional agreed workflow slices while they are away. Native review may wait for an unlocked
+Mac; that does not prevent implementation and automated/browser checks.
+
+- Scenarios and legacy drafts now share an accessible, consistently sorted list. Each row shows
+  its project beside the name, description, operation icons, version/update time, bundle size,
+  and compact assignment/export/options controls. The existing project menus and drag contracts
+  remain available. Name, updated-time, and project sorting also belong to saved views.
+- Current completed runs show measured bundle size; otherwise a current validation forecast
+  supplies a clearly marked estimate. Missing forecasts remain explicit. Automatic prediction
+  for unvalidated changes is still a later resource-preflight slice.
+- Search results carry bounded matching YAML excerpts, including indexed include content; these
+  snippets are transient search results rather than catalog metadata. Project overviews add
+  counts for scenarios needing attention and active generation work. The command menu offers
+  New scenario and contextual author/validate/generate navigation.
+- Workspace-specific library recall is on by default, configurable in Workspace Settings, and
+  persists scenario and pack selections independently in SQLite. Writes preserve the other
+  library and recall preference atomically. Workspace-bound requests reject stale writes after
+  a switch. Delayed hydration preserves controls edited while preferences load.
+
+Verification: 105 React tests, all 82 service/library tests, the final focused recall/search
+contracts, generated API freshness, full Ruff check/format, diff checks, and frontend/macOS
+native release builds passed. Browser review at 1280×720 and 712×724 verified project labels,
+compact controls, YAML snippets, sorting, and restoring search/sort after reload. Screenshots:
+`/private/tmp/eforge-scenario-list-review.png` and
+`/private/tmp/eforge-scenario-list-review-compact.png`. All visual fixtures use a temporary
+workspace; no user's scenarios or settings were changed. Linux native review remains unavailable.
+
+The existing healthcare generation failure reproduced with the real CLI in disposable output
+at `/private/tmp/eforge-healthcare-repro-20261001`. It raises the same deferred process/transport
+endpoint error through the typed SSH handler. Owning-layer diagnosis is the next reliability task;
+the separate iteration-scenario temporal-integrity investigation remains deferred by the user.

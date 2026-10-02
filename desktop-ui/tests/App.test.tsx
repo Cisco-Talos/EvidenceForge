@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -55,7 +55,7 @@ const snapshot: StudioSnapshot = {
 
 vi.mock("../src/useStudio", () => ({
   useStudio: (() => {
-    const api = { download: vi.fn(async () => ({ status: "browser" })), readTextPreview: vi.fn(async () => ({ text: "preview", truncated: false, binary: false })), request: vi.fn(async (path: string, method?: string, body?: unknown) => {
+    const api = { bundleSizes: vi.fn(async () => ({ "job-1": 1536 })), libraryPreferences: vi.fn(async () => ({ remember_view: true })), saveLibraryView: vi.fn(async (_workspace: string, _kind: string, view: unknown) => view), download: vi.fn(async () => ({ status: "browser" })), readTextPreview: vi.fn(async () => ({ text: "preview", truncated: false, binary: false })), request: vi.fn(async (path: string, method?: string, body?: unknown) => {
       if (path.endsWith("/history")) return { thread: { turns: [] } };
       if (path === "/v1/codex/pending") return [];
       if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
@@ -104,7 +104,7 @@ test("path controls copy the complete path even when the label is shortened", as
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   try {
     const { container } = render(<App />);
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "Copy scenario path" }));
     expect(writeText).toHaveBeenCalledWith(snapshot.items[0].path);
     expect(screen.getByRole("button", { name: "Path copied" })).toBeTruthy();
@@ -145,7 +145,7 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
   try {
     const { container } = render(<App />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     expect(await screen.findByText("89/100")).toBeTruthy();
     expect(screen.getByText("12,345 records")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "View scorecard" }));
@@ -163,9 +163,9 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
   }
 });
 
-test("library cards keep operation icons beside the title without a redundant service label", () => {
+test("library rows keep operation icons beside the title without a redundant service label", () => {
   render(<App />);
-  const card = screen.getByRole("button", { name: /AlphaA first scenario/ }).closest(".library-card");
+  const card = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row");
   expect(card).not.toBeNull();
   expect(card?.querySelectorAll(".scenario-states.compact .state-icon")).toHaveLength(3);
   expect(card?.querySelector(".card-footer")).toBeNull();
@@ -229,7 +229,7 @@ test("a pack clone requests a workspace publisher when one is not configured", a
   }
 });
 
-test("projects filter scenarios and accept card drops, with Ungrouped as a destination", async () => {
+test("projects filter scenarios and accept row drops, with Ungrouped as a destination", async () => {
   const originalProjects = snapshot.projects;
   const originalItems = snapshot.items;
   snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "Training cases", updated_at: 1 }];
@@ -239,14 +239,14 @@ test("projects filter scenarios and accept card drops, with Ungrouped as a desti
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open project Casework" }));
     expect(screen.getByText("Training cases")).toBeTruthy();
-    expect(screen.getByText("Alpha", { selector: ".card-body strong" })).toBeTruthy();
-    expect(screen.queryByText("Bravo", { selector: ".card-body strong" })).toBeNull();
+    expect(screen.getByText("Alpha", { selector: ".scenario-row-title strong" })).toBeTruthy();
+    expect(screen.queryByText("Bravo", { selector: ".scenario-row-title strong" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "All scenarios" }));
-    const bravo = screen.getByText("Bravo", { selector: ".card-body strong" }).closest(".library-card");
+    const bravo = screen.getByText("Bravo", { selector: ".scenario-row-title strong" }).closest(".scenario-row");
     const target = screen.getByRole("button", { name: "Open project Casework" }).closest(".project-nav-entry");
     const transfer = { effectAllowed: "", dropEffect: "", setData: vi.fn(), getData: vi.fn(() => "bravo") };
-    fireEvent.dragStart(bravo?.querySelector(".card-drag-handle") as HTMLElement, { dataTransfer: transfer });
+    fireEvent.dragStart(bravo?.querySelector(".scenario-drag-handle") as HTMLElement, { dataTransfer: transfer });
     expect(transfer.setData).toHaveBeenCalledWith("application/x-evidenceforge-scenario", "bravo");
     fireEvent.dragOver(target as HTMLElement, { dataTransfer: transfer });
     expect(target?.classList.contains("drop-target")).toBe(true);
@@ -255,9 +255,9 @@ test("projects filter scenarios and accept card drops, with Ungrouped as a desti
       "/v1/items/bravo", "PATCH", { project_id: "project-1" },
     ));
 
-    const alpha = screen.getByText("Alpha", { selector: ".card-body strong" }).closest(".library-card");
+    const alpha = screen.getByText("Alpha", { selector: ".scenario-row-title strong" }).closest(".scenario-row");
     transfer.getData = vi.fn(() => "alpha");
-    fireEvent.dragStart(alpha?.querySelector(".card-drag-handle") as HTMLElement, { dataTransfer: transfer });
+    fireEvent.dragStart(alpha?.querySelector(".scenario-drag-handle") as HTMLElement, { dataTransfer: transfer });
     fireEvent.dragOver(screen.getByRole("button", { name: "Ungrouped" }), { dataTransfer: transfer });
     fireEvent.drop(screen.getByRole("button", { name: "Ungrouped" }), { dataTransfer: transfer });
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -290,8 +290,8 @@ test("library search includes indexed scenario YAML content", async () => {
   await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
     "/v1/items?kind=scenario&search=yaml%3Arare-host",
   ));
-  await waitFor(() => expect(screen.getByText("Bravo", { selector: ".card-body strong" })).toBeTruthy());
-  expect(screen.queryByText("Alpha", { selector: ".card-body strong" })).toBeNull();
+  await waitFor(() => expect(screen.getByText("Bravo", { selector: ".scenario-row-title strong" })).toBeTruthy());
+  expect(screen.queryByText("Alpha", { selector: ".scenario-row-title strong" })).toBeNull();
 });
 
 test("hidden items can be revealed and unhidden from the library", async () => {
@@ -300,9 +300,9 @@ test("hidden items can be revealed and unhidden from the library", async () => {
   try {
     render(<App />);
     const user = userEvent.setup();
-    expect(screen.queryByText("Bravo", { selector: ".card-body strong" })).toBeNull();
+    expect(screen.queryByText("Bravo", { selector: ".scenario-row-title strong" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Show hidden items" }));
-    expect(screen.getByText("Bravo", { selector: ".card-body strong" })).toBeTruthy();
+    expect(screen.getByText("Bravo", { selector: ".scenario-row-title strong" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Options for Bravo" }));
     await user.click(screen.getByRole("menuitem", { name: "Unhide" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -334,7 +334,7 @@ test("saved views store and restore library search and filters", async () => {
     await user.click(within(reopened).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/views", "POST", { name: "Review set", kind: "scenario", search: "Alpha", folder: null,
-        project_id: null, ungrouped: true, show_hidden: true },
+        project_id: null, ungrouped: true, show_hidden: true, sort: "name" },
     ));
     await user.click(within(reopened).getByRole("button", { name: "Delete saved view Ungrouped review" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -373,7 +373,7 @@ test("packs use shared projects, author filters, and saved views instead of fold
     await user.click(within(dialog).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/views", "POST", { name: "Training items", kind: "packs", search: "", folder: null,
-        project_id: "project", ungrouped: false, show_hidden: false, publisher: "talos", version: "", pack_source: "workspace" },
+        project_id: "project", ungrouped: false, show_hidden: false, sort: "name", publisher: "talos", version: "", pack_source: "workspace" },
     ));
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.views = originalViews; }
 });
@@ -441,8 +441,8 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
       "/v1/conversations", "POST", { draft_kind: "scenario", project_id: null, name: "Short-scenario" },
     );
     await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Scenarios" }));
-    expect(screen.getByRole("button", { name: /^Short-scenario/ })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /^Short-scenario/ }));
+    expect(screen.getByRole("button", { name: "Open scenario Short-scenario" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Open scenario Short-scenario" }));
     expect(screen.getByRole("textbox", { name: "Message to Codex" })).toBeTruthy();
     snapshot.items = [...originalItems, { ...originalItems[0], id: "authored-1", path: draft.draft_path, name: "New authored" }];
     snapshot.conversations = [{ ...draft, item_id: "authored-1", draft_kind: null, draft_project_id: null }, ...originalConversations];
@@ -480,7 +480,7 @@ test("scenario workspace has generation setup and a run-specific scoring action"
   try {
     render(<App />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "Generate", exact: true }));
     expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
     const setup = screen.getByRole("heading", { name: "Generate this scenario" }).closest("section")!;
@@ -506,7 +506,7 @@ test("scoring source links navigate back to the exact generation tab and row", a
   try {
     const { container } = render(<App />);
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("tab", { name: "Scoring" }));
     await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
     expect(screen.getByRole("tab", { name: "Generation" }).getAttribute("aria-selected")).toBe("true");
@@ -559,7 +559,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
   request.mockResolvedValueOnce(created);
   try {
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("tab", { name: "Validation" }));
     await user.click(screen.getByRole("button", { name: "Fix in chat" }));
     expect(request).toHaveBeenCalledWith("/v1/conversations", "POST", { item_id: "alpha" });
@@ -604,7 +604,7 @@ test("job center counts working chats separately from chats awaiting input", asy
 test("scenario workspace opens the correct persistent conversations", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   expect(screen.getAllByText("Initial design").length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Open Revise timeline" }));
@@ -615,7 +615,7 @@ test("scenario workspace opens the correct persistent conversations", async () =
 test("conversation menu exposes rename and delete actions", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
   await user.click(screen.getByRole("menuitem", { name: "Rename" }));
@@ -919,7 +919,7 @@ test("a stopped run without a checkpoint preserves its bar and cannot be resumed
 test("Enter submits a turn while Shift+Enter inserts a newline", async () => {
   const user = userEvent.setup();
   render(<App />);
-  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   const input = screen.getByRole("textbox", { name: "Message to Codex" });
   await user.type(input, "check{shift>}{enter}{/shift}this{enter}");
@@ -1031,7 +1031,7 @@ test("Job center removes finished history entries while preserving scenario runs
     await user.click(screen.getByRole("button", { name: /^Bundles/ }));
     expect(container.querySelector("#job-job-1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Scenarios/ }));
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("tab", { name: "Generation" }));
     expect(container.querySelector("#job-job-1")).toBeTruthy();
   } finally { snapshot.jobs = originalJobs; }
@@ -1072,7 +1072,7 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
   try {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "View YAML" }));
     const viewer = await screen.findByRole("dialog", { name: "Source YAML" });
     await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
@@ -1110,7 +1110,7 @@ test("library and workspace show a failed evaluation even with a high overall sc
   try {
     render(<App />);
     expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
-    await userEvent.setup().click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
     expect(scenarioStates({ ...snapshot.items[0], source_sha256: "new-revision" }, snapshot)[2].state).toBe("stale");
   } finally { snapshot.jobs = originalJobs; }
@@ -1337,7 +1337,7 @@ test("scenario workspace title validates names, cancels, saves the displayed rev
   render(<App />);
   const user = userEvent.setup();
   const request = vi.mocked(useStudio().api!.request);
-  await user.click(screen.getByRole("button", { name: /AlphaA first scenario/ }));
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("button", { name: "Rename scenario Alpha" }));
   const input = screen.getByRole("textbox", { name: "Scenario Name" });
   expect(document.activeElement).toBe(input);
@@ -1384,7 +1384,7 @@ test("draft scenarios can be dragged into a project and renamed from their works
   try {
     render(<App />);
     const user = userEvent.setup();
-    const card = screen.getByText("Draft_name", { selector: ".card-body strong" }).closest(".library-card")!;
+    const card = screen.getByText("Draft_name", { selector: ".scenario-row-title strong" }).closest(".scenario-row")!;
     const data: Record<string, string> = {};
     const transfer = { effectAllowed: "", dropEffect: "", setData: (key: string, value: string) => { data[key] = value; }, getData: (key: string) => data[key] || "" };
     fireEvent.dragStart(card, { dataTransfer: transfer });
@@ -1392,11 +1392,84 @@ test("draft scenarios can be dragged into a project and renamed from their works
     fireEvent.dragOver(target, { dataTransfer: transfer });
     fireEvent.drop(target, { dataTransfer: transfer });
     await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_project_id: "project-1" }));
-    await user.click(within(card).getByRole("button", { name: /Draft_nameReady to author/ }));
+    await user.click(within(card).getByRole("button", { name: "Open scenario Draft_name" }));
     await user.click(screen.getByRole("button", { name: "Rename scenario Draft_name" }));
     await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
     await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Named_draft");
     await user.click(screen.getByRole("button", { name: "Save scenario name" }));
     await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_name: "Named_draft" }));
   } finally { snapshot.projects = originalProjects; snapshot.conversations = originalConversations; }
+});
+
+
+test("scenario rows show their project on the title line and retain explicit sorting during progress updates", async () => {
+  const originalItems = snapshot.items;
+  const originalProjects = snapshot.projects;
+  const originalJobs = snapshot.jobs;
+  snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
+  snapshot.items = [{ ...originalItems[0], project_id: "case", modified_at: 2 }, { ...originalItems[1], modified_at: 3 }];
+  try {
+    const { container, rerender } = render(<App />);
+    const user = userEvent.setup();
+    const order = () => Array.from(container.querySelectorAll(".scenario-row-title strong")).map((node) => node.textContent);
+    await waitFor(() => expect(useStudio().api!.libraryPreferences).toHaveBeenCalled());
+    const row = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row")!;
+    expect(row.querySelector(".scenario-row-title .scenario-project")?.textContent).toBe("Casework");
+    expect(order()).toEqual(["Alpha", "Bravo"]);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sort scenarios" }), "updated");
+    expect(order()).toEqual(["Bravo", "Alpha"]);
+    await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ sort: "updated" })));
+    snapshot.jobs = originalJobs.map((job) => ({ ...job, progress: { ...job.progress!, completed_hours: 7 } }));
+    rerender(<App />);
+    expect(order()).toEqual(["Bravo", "Alpha"]);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Sort scenarios" }), "project");
+    expect(order()).toEqual(["Alpha", "Bravo"]);
+  } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.jobs = originalJobs; }
+});
+
+test("library restores workspace view and can disable recall in Settings", async () => {
+  const preferences = vi.mocked(useStudio().api!.libraryPreferences);
+  preferences.mockResolvedValueOnce({ remember_view: true, scenarios: { search: "Alpha", sort: "updated", project_id: "ungrouped", show_hidden: true } });
+  render(<App />);
+  const user = userEvent.setup();
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Search scenarios" })).toHaveValue("Alpha"));
+  expect(screen.getByRole("combobox", { name: "Sort scenarios" })).toHaveValue("updated");
+  expect(screen.getByRole("button", { name: "Ungrouped" }).classList.contains("active")).toBe(true);
+  await user.click(screen.getByRole("button", { name: "Settings" }));
+  const checkbox = screen.getByRole("checkbox", { name: "Remember library views" });
+  await waitFor(() => expect(checkbox).toBeEnabled());
+  expect(checkbox).toBeChecked();
+  await user.click(checkbox);
+  await user.click(screen.getByRole("button", { name: "Save settings" }));
+  expect(useStudio().api!.request).toHaveBeenCalledWith(`/v1/library/preferences?workspace=${encodeURIComponent(workspace)}`, "PUT", { remember_view: false });
+});
+
+test("delayed library recall preserves a search typed while loading preferences", async () => {
+  const preferences = vi.mocked(useStudio().api!.libraryPreferences);
+  let resolve!: (value: Awaited<ReturnType<typeof preferences>>) => void;
+  preferences.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  render(<App />);
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: "Search scenarios" }), "Bravo");
+  await act(async () => resolve({ remember_view: true, scenarios: { search: "Alpha", sort: "updated" } }));
+  expect(screen.getByRole("textbox", { name: "Search scenarios" })).toHaveValue("Bravo");
+  expect(screen.getByRole("combobox", { name: "Sort scenarios" })).toHaveValue("updated");
+  await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ search: "Bravo", sort: "updated" })));
+});
+
+
+test("scenario rows show measured size for fresh bundles and current forecast for older runs", async () => {
+  const originalJobs = snapshot.jobs;
+  const originalValidations = snapshot.validations;
+  snapshot.jobs = [{ ...originalJobs[0], status: "completed", source_sha256: "sha-alpha" }];
+  snapshot.validations = { alpha: { source_sha256: "sha-alpha", completed_at: 1, result: {
+    exit_code: 0, error: "", report: { resource_forecast: { final_output: { expected_bytes: 3 * 1024 ** 2 } } },
+  } } };
+  try {
+    const { container, rerender } = render(<App />);
+    await waitFor(() => expect(container.querySelector(".scenario-row-size")?.textContent).toBe("1.5 KB"));
+    snapshot.jobs = [{ ...snapshot.jobs[0], source_sha256: "old" }];
+    rerender(<App />);
+    expect(container.querySelector(".scenario-row-size")?.textContent).toBe("3.0 MBEstimated");
+  } finally { snapshot.jobs = originalJobs; snapshot.validations = originalValidations; }
 });
