@@ -823,6 +823,7 @@ def test_saved_views_are_scoped_to_workspace_and_can_be_recalled(
         project = client.post("/v1/projects", headers=headers, json={"name": "Training"}).json()
         view = {
             "name": "Active exercises",
+            "expanded_groups": [project["id"], "ungrouped"],
             "kind": "scenario",
             "search": "yaml:domain-controller",
             "project_id": project["id"],
@@ -832,6 +833,7 @@ def test_saved_views_are_scoped_to_workspace_and_can_be_recalled(
         created = client.post("/v1/views", headers=headers, json=view)
         assert created.status_code == 200
         assert created.json()["project_id"] == project["id"]
+        assert created.json()["expanded_groups"] == [project["id"], "ungrouped"]
         assert client.get("/v1/bootstrap", headers=headers).json()["views"] == [created.json()]
         assert (
             client.post(
@@ -852,6 +854,7 @@ def test_saved_views_are_scoped_to_workspace_and_can_be_recalled(
         )
         assert pack_view.status_code == 200
         assert pack_view.json()["kind"] == "packs"
+        assert pack_view.json()["expanded_groups"] == []
         assert client.delete("/v1/views/All%20environments", headers=headers).status_code == 200
         other_workspace = tmp_path / "other-workspace"
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(other_workspace)})
@@ -2686,7 +2689,12 @@ def test_library_recall_persists_and_refuses_cross_workspace_updates(
     paths = _paths(tmp_path / "private")
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     headers = {"X-EForge-Token": "secret"}
-    view = {"search": "yaml:alice", "project_id": "ungrouped", "sort": "updated"}
+    view = {
+        "search": "yaml:alice",
+        "project_id": "ungrouped",
+        "sort": "updated",
+        "expanded_groups": ["ungrouped"],
+    }
     with TestClient(create_app(paths, "secret")) as client:
         assert client.get("/v1/library/preferences").status_code == 401
         assert client.get("/v1/library/preferences", headers=headers).json()["remember_view"]
@@ -2695,7 +2703,9 @@ def test_library_recall_persists_and_refuses_cross_workspace_updates(
         )
         assert (
             client.put(
-                "/v1/library/view/packs", headers=headers, json={"publisher": "talos"}
+                "/v1/library/view/packs",
+                headers=headers,
+                json={"publisher": "talos", "expanded_groups": ["industry_pack"]},
             ).status_code
             == 200
         )
@@ -2709,6 +2719,8 @@ def test_library_recall_persists_and_refuses_cross_workspace_updates(
         prefs = client.get("/v1/library/preferences", headers=headers).json()
         assert prefs["remember_view"]
         assert prefs["scenarios"]["search"] == ""
+        assert prefs["scenarios"]["expanded_groups"] == []
+        assert prefs["packs"]["expanded_groups"] == []
         assert (
             client.put(
                 "/v1/library/view/scenarios",
@@ -2740,6 +2752,8 @@ def test_library_recall_persists_and_refuses_cross_workspace_updates(
         assert prefs["scenarios"]["search"] == "yaml:alice"
         assert prefs["scenarios"]["sort"] == "updated"
         assert prefs["packs"]["publisher"] == "talos"
+        assert prefs["scenarios"]["expanded_groups"] == ["ungrouped"]
+        assert prefs["packs"]["expanded_groups"] == ["industry_pack"]
 
 
 def test_library_search_returns_a_bounded_yaml_excerpt_without_persisting_it(

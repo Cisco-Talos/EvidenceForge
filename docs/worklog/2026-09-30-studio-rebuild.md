@@ -1241,3 +1241,42 @@ Refreshed the normal idle helper after authenticating and verifying its PID/crea
   unchanged; the updated API returns declaration lines. Native app rebuilt. Closed the disposable
   review tab, reset viewport overrides, and stopped its preview/helper. Existing unrelated scenario
   deletions remain excluded. Reopen Studio to review this configuration-tranche refinement.
+
+## 2026-10-02 — Collapsed project libraries and workspace design review
+
+User requested numbered source pagination, collapsed Packs/Bundles groups, scenario groups by
+project with saved expansion states, and workspace mockups before deciding on another layout.
+
+- Source declarations now have First/Previous, numbered jumps, ellipses, Next/Last, a visible
+  current page, and disabled boundary actions. Filtering resets to the first page; controls wrap
+  in compact windows and the inspector retains its bounded ten-row pages.
+- Scenarios now group matching authored scenarios and drafts beneath their project or Ungrouped.
+  Groups start collapsed, show counts, retain the project picker and row actions, and accept drops
+  on collapsed project headers. Group identities use project IDs, so renames preserve open state.
+- Packs' industry/organization sections and Bundles' scenario groups start collapsed. Their counts,
+  import/create controls, and filters remain available. Scenario/pack saved views record expanded
+  groups along with existing search/filters/sort. Workspace library recall stores these choices
+  separately for each library; older records default to collapsed without a database migration.
+- Prepared three interactive workspace alternatives: Unified lists (inline chat), Focused detail
+  (section list beside a detail pane), and Chat focus (collapsed overview plus a dedicated
+  conversation view within the scenario). Status and actions stay in section headers, generation
+  progress remains visible when folded, and single-source information uses a plain header row.
+  Recommended Chat focus to preserve chat space while replacing the workspace subtabs and duplicate
+  top-level action cluster. No workspace layout replacement was made pending user review.
+  Inline preview: `/Users/dabianco/.codex/visualizations/2026/09/24/01a0d54a-050d-7fe3-87d5-90b9746d7cfa/studio-workspace-options.html`.
+
+Verification: all 133 React tests and all 79 Python service tests pass. New contracts cover
+  numbered/last/first pagination, collapsed defaults, independent expansion, saved-view restoration,
+  recalled expansion persistence across service restart/workspace changes, and drops into collapsed
+  project groups. Generated API types are fresh; full Ruff check/format, diff checks, and the macOS
+  release build pass. Browser review verified native Enter disclosure behavior, saved layout
+  restoration, collapsed pack/bundle defaults, and pagination at 1280×900 and 712×724. Mockups were
+  inspected with the carousel, conversation switching, and compact layouts including 320px; no
+  browser script errors were reported. Linux native build was not run on this macOS host.
+  Screenshots: `/private/tmp/eforge-project-groups-review.jpg`,
+  `/private/tmp/eforge-project-groups-compact.jpg`, `/private/tmp/eforge-pagination-compact.jpg`.
+
+Refreshed the authenticated idle helper after checking process and launchd identity; settings,
+  project/conversation/job/imported-bundle IDs and job associations remained unchanged. Closed
+  review tabs, reset the viewport, and stopped disposable services. The native app is rebuilt for
+  reopening. Existing unrelated iteration-test scenario deletions remain excluded from this work.

@@ -2133,6 +2133,8 @@ export interface components {
              * @enum {string}
              */
             pack_source: "" | "bundled" | "workspace";
+            /** Expanded Groups */
+            expanded_groups?: string[];
         };
         /**
          * OverlayFile
@@ -2688,6 +2690,8 @@ export interface components {
              * @enum {string}
              */
             sort: "name" | "updated" | "project";
+            /** Expanded Groups */
+            expanded_groups?: string[];
         };
         /**
          * ScenarioCloneRequest

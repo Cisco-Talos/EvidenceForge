@@ -127,6 +127,7 @@ class SavedView(BaseModel):
     version: str = Field(default="", max_length=80)
     pack_source: Literal["", "bundled", "workspace"] = ""
     sort: Literal["name", "updated", "project"] = "name"
+    expanded_groups: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class LibraryView(BaseModel):
@@ -142,6 +143,7 @@ class LibraryView(BaseModel):
     publisher: str = Field(default="", max_length=80)
     version: str = Field(default="", max_length=80)
     pack_source: Literal["", "bundled", "workspace"] = ""
+    expanded_groups: list[str] = Field(default_factory=list, max_length=1000)
 
 
 class LibraryPreferences(BaseModel):

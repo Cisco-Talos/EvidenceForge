@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { LibraryView, StudioApi } from "./api";
 
 export const emptyLibraryView: LibraryView = { search: "", project_id: null, show_hidden: false,
-  sort: "name", pack_kind: "packs", publisher: "", version: "", pack_source: "" };
+  sort: "name", expanded_groups: [], pack_kind: "packs", publisher: "", version: "", pack_source: "" };
 
 export function useLibraryRecall(api: StudioApi | null, workspace: string | undefined,
   section: string, view: LibraryView, restore: (view: LibraryView) => void,

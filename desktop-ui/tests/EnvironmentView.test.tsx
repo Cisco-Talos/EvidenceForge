@@ -192,3 +192,30 @@ test("inspection sections start folded, expose counts, and expand independently 
   expect(screen.getByText("organization → scenario")).toBeVisible();
   expect(layers).toHaveAttribute("aria-expanded", "false");
 });
+
+test("source pages provide first, last, numbered jumps and accessible current-page state", async () => {
+  const declarations = Array.from({ length: 120 }, (_, index) => ({ ...report.declarations[0], path: `field.${index}`, value: `value-${index}` }));
+  setup(vi.fn(async () => ({ ...report, declarations })));
+  const user = userEvent.setup();
+  await user.click(await screen.findByText("Source declarations"));
+  const pages = screen.getByRole("navigation", { name: "Source declaration pages" });
+  expect(within(pages).getByRole("button", { name: "First declarations page" })).toBeDisabled();
+  expect(within(pages).getByRole("button", { name: "Declarations page 1" })).toHaveAttribute("aria-current", "page");
+  expect(within(pages).getByText("…")).toBeVisible();
+  await user.click(within(pages).getByRole("button", { name: "Last declarations page" }));
+  expect(screen.getByText("111–120 of 120 fields")).toBeVisible();
+  expect(within(pages).getByRole("button", { name: "Last declarations page" })).toBeDisabled();
+  const tenth = within(pages).getByRole("button", { name: "Declarations page 10" });
+  tenth.focus();
+  await user.keyboard("{Enter}");
+  expect(screen.getByText("91–100 of 120 fields")).toBeVisible();
+  expect(tenth).toHaveAttribute("aria-current", "page");
+  await user.click(within(pages).getByRole("button", { name: "Previous declarations" }));
+  expect(screen.getByText("81–90 of 120 fields")).toBeVisible();
+  await user.click(within(pages).getByRole("button", { name: "First declarations page" }));
+  expect(screen.getByText("1–10 of 120 fields")).toBeVisible();
+  await user.type(screen.getByRole("textbox", { name: "Search environment origins" }), "value-119");
+  expect(screen.getByText("1–1 of 1 fields")).toBeVisible();
+  expect(within(pages).getAllByRole("button", { name: /^Declarations page/ })).toHaveLength(1);
+  expect(within(pages).getByRole("button", { name: "Last declarations page" })).toBeDisabled();
+});

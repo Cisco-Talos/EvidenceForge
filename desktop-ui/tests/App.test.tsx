@@ -98,13 +98,28 @@ vi.mock("@tauri-apps/api/window", () => {
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
+async function expandLibraryGroups(selector = ".scenario-group") {
+  for (const group of document.querySelectorAll<HTMLDetailsElement>(selector)) {
+    if (!group.open) await userEvent.setup().click(group.querySelector("summary")!);
+  }
+}
+
+async function renderExpandedApp() {
+  const view = render(<App />);
+  await act(async () => {});
+  await expandLibraryGroups();
+  return view;
+}
+
+
 test("path controls copy the complete path even when the label is shortened", async () => {
   const writeText = vi.fn(async (_value: string) => undefined);
   const user = userEvent.setup();
   const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "Copy scenario path" }));
     expect(writeText).toHaveBeenCalledWith(snapshot.items[0].path);
@@ -144,7 +159,7 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
       scorecard: { overall_score: 89.4, acceptance_passed: true, total_records: 12345, evaluated_at: "2026-09-30T16:00:00Z" } },
   ];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     expect(await screen.findByText("89/100")).toBeTruthy();
@@ -164,8 +179,8 @@ test("a saved evaluation scorecard stays visible on the scenario and run", async
   }
 });
 
-test("library rows keep operation icons beside the title without a redundant service label", () => {
-  render(<App />);
+test("library rows keep operation icons beside the title without a redundant service label", async () => {
+  await renderExpandedApp();
   const card = screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row");
   expect(card).not.toBeNull();
   expect(card?.querySelectorAll(".scenario-states.compact .state-icon")).toHaveLength(3);
@@ -179,7 +194,7 @@ test("a scenario can be cloned from its library menu with a new name", async () 
   const request = vi.mocked(useStudio().api!.request);
   const originalItems = snapshot.items;
   try {
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
     await user.click(screen.getByRole("menuitem", { name: "Clone scenario…" }));
     expect(screen.getByRole("dialog", { name: "Clone scenario" })).toBeTruthy();
@@ -208,8 +223,9 @@ test("a pack clone requests a workspace publisher when one is not configured", a
   const clone = { ...pack, id: "pack-2", name: "finance-copy", path: `${workspace}/packs/industry/finance-copy/pack.yaml` };
   snapshot.items = [...originalItems, pack];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "Options for finance 1.0.0" }));
     await user.click(screen.getByRole("menuitem", { name: "Clone pack…" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Publisher ID" })).toBeTruthy());
@@ -236,7 +252,7 @@ test("projects filter scenarios and accept row drops, with Ungrouped as a destin
   snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "Training cases", updated_at: 1 }];
   snapshot.items = [{ ...originalItems[0], project_id: "project-1" }, originalItems[1]];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open project Casework" }));
     expect(screen.getByText("Training cases")).toBeTruthy();
@@ -271,7 +287,7 @@ test("projects filter scenarios and accept row drops, with Ungrouped as a destin
 });
 
 test("project creation is available in the project rail", async () => {
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "New project" }));
   const dialog = screen.getByRole("dialog", { name: "New project" });
@@ -290,7 +306,7 @@ test("a move into configured projects waits for confirmation and supports Escape
   try {
     const user = userEvent.setup();
     const request = vi.mocked(useStudio().api!.request);
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
     await user.click(screen.getByRole("menuitem", { name: "Clinic" }));
     const dialog = screen.getByRole("dialog", { name: "Move Alpha?" });
@@ -308,7 +324,7 @@ test("a move into configured projects waits for confirmation and supports Escape
 
 test("library search includes indexed scenario YAML content", async () => {
   vi.mocked(useStudio().api!.request).mockResolvedValueOnce([snapshot.items[1]]);
-  render(<App />);
+  await renderExpandedApp();
   await userEvent.setup().type(screen.getByRole("textbox", { name: "Search scenarios" }), "yaml:rare-host");
   await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
     "/v1/items?kind=scenario&search=yaml%3Arare-host",
@@ -321,7 +337,7 @@ test("hidden items can be revealed and unhidden from the library", async () => {
   const originalItems = snapshot.items;
   snapshot.items = [originalItems[0], { ...originalItems[1], hidden: true }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     expect(screen.queryByText("Bravo", { selector: ".scenario-row-title strong" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Show hidden items" }));
@@ -343,7 +359,7 @@ test("saved views store and restore library search and filters", async () => {
   snapshot.views = [{ name: "Ungrouped review", kind: "scenario", search: "Alpha", folder: null,
     project_id: null, ungrouped: true, show_hidden: true }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Saved views" }));
     const dialog = screen.getByRole("dialog", { name: "Saved views" });
@@ -357,7 +373,7 @@ test("saved views store and restore library search and filters", async () => {
     await user.click(within(reopened).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/views", "POST", { name: "Review set", kind: "scenario", search: "Alpha", folder: null,
-        project_id: null, ungrouped: true, show_hidden: true, sort: "name" },
+        project_id: null, ungrouped: true, show_hidden: true, sort: "name", expanded_groups: [] },
     ));
     await user.click(within(reopened).getByRole("button", { name: "Delete saved view Ungrouped review" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -375,11 +391,12 @@ test("packs use shared projects, author filters, and saved views instead of fold
   const originalViews = snapshot.views;
   snapshot.projects = [{ id: "project", workspace, name: "Training", description: "", updated_at: 1 }];
   snapshot.items = [{ ...originalItems[0], kind: "industry_pack", project_id: "project", publisher: "talos", publisher_display_name: "Talos", pack_source: "workspace" }, { ...originalItems[1], kind: "industry_pack", publisher: "official", publisher_display_name: "EvidenceForge", pack_source: "bundled" }];
-  snapshot.views = [{ name: "Talos packs", kind: "packs", search: "", folder: null, project_id: "project", ungrouped: false, show_hidden: false, publisher: "talos", version: "", pack_source: "workspace" }];
+  snapshot.views = [{ name: "Talos packs", kind: "packs", search: "", folder: null, project_id: "project", ungrouped: false, show_hidden: false, publisher: "talos", version: "", pack_source: "workspace", expanded_groups: ["industry_pack"] }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     expect(screen.queryByRole("button", { name: "Filter by folder" })).toBeNull();
     expect(screen.getByText("By Talos")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Saved views" }));
@@ -396,7 +413,7 @@ test("packs use shared projects, author filters, and saved views instead of fold
     await user.click(within(dialog).getByRole("button", { name: "Save view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/views", "POST", { name: "Training items", kind: "packs", search: "", folder: null,
-        project_id: "project", ungrouped: false, show_hidden: false, sort: "name", publisher: "talos", version: "", pack_source: "workspace" },
+        project_id: "project", ungrouped: false, show_hidden: false, sort: "name", publisher: "talos", version: "", pack_source: "workspace", expanded_groups: ["industry_pack"] },
     ));
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.views = originalViews; }
 });
@@ -407,9 +424,10 @@ test("pack rows can move through the project menu and drag into the shared rail"
   snapshot.projects = [{ id: "project", workspace, name: "Training", description: "", updated_at: 1 }];
   snapshot.items = [{ ...originalItems[0], kind: "industry_pack" }];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
     await user.click(screen.getByRole("menuitem", { name: "Training" }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "project" });
@@ -425,7 +443,7 @@ test("pack rows can move through the project menu and drag into the shared rail"
 });
 
 test("command menu opens with the keyboard and navigates to a scenario", async () => {
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   await user.keyboard("{Control>}k{/Control}");
   const dialog = screen.getByRole("dialog", { name: "Command menu" });
@@ -453,7 +471,7 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
       snapshot.conversations = [draft, ...originalConversations];
       return draft;
     });
-    const view = render(<App />);
+    const view = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "New scenario" }));
     await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Short-scenario");
@@ -479,7 +497,7 @@ test("new scenario opens a persistent draft conversation that can be resumed", a
 });
 
 test("scenario names show live errors and block invalid creation", async () => {
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "New scenario" }));
   const input = screen.getByRole("textbox", { name: "Scenario Name" });
@@ -501,7 +519,7 @@ test("scenario workspace has generation setup and a run-specific scoring action"
   snapshot.jobs = [{ ...originalJobs[0], status: "completed", started_at: 1800000010 }, originalJobs[1],
     { ...originalJobs[0], id: "older-alpha", status: "completed", started_at: 1800000000 }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "Generate", exact: true }));
@@ -527,7 +545,7 @@ test("scoring source links navigate back to the exact generation tab and row", a
     generation_id: "job-1", output_root: originalJobs[0].output_root,
   }];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("tab", { name: "Scoring" }));
@@ -546,7 +564,7 @@ test("Codex status dot explains a stalled connection and reconnects with active-
   snapshot.codex_health = { state: "stalled", detail: "Codex did not answer a health probe" };
   snapshot.conversations = [{ ...originalConversations[0], active: true }, originalConversations[1]];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const dot = screen.getByRole("button", { name: /Codex stalled: Codex did not answer/ });
     expect(dot.querySelector(".codex-indicator-dot")).toBeTruthy();
     await user.hover(dot);
@@ -581,7 +599,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
   const request = vi.mocked(useStudio().api!.request);
   request.mockResolvedValueOnce(created);
   try {
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("tab", { name: "Validation" }));
     await user.click(screen.getByRole("button", { name: "Fix in chat" }));
@@ -612,7 +630,7 @@ test("job center counts working chats separately from chats awaiting input", asy
     { ...original[1], active: true, needs_attention: true },
   ];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: /Job center/ }));
     expect(screen.getByLabelText("1 active chats")).toBeTruthy();
     expect(screen.getByLabelText("1 chats need input")).toBeTruthy();
@@ -626,7 +644,7 @@ test("job center counts working chats separately from chats awaiting input", asy
 
 test("scenario workspace opens the correct persistent conversations", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   expect(screen.getAllByText("Initial design").length).toBeGreaterThan(0);
@@ -637,7 +655,7 @@ test("scenario workspace opens the correct persistent conversations", async () =
 
 test("conversation menu exposes rename and delete actions", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
@@ -664,7 +682,7 @@ test("bundle picker downloads the selected completed run", async () => {
     { id: "run-2", kind: "generation", status: "completed", status_message: "", scenario: snapshot.items[0].path, source_sha256: "sha-alpha", output_root: "/tmp/run-two", started_at: 1800000002 },
   ];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Download bundle for Alpha" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Run to download" }), "run-1");
     await user.click(screen.getByRole("button", { name: "Download ZIP" }));
@@ -678,7 +696,7 @@ test("bundle picker downloads the selected completed run", async () => {
 
 test("generation capacity and checkpoint interval are editable in Jobs settings", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Settings" }));
   await user.click(screen.getByRole("button", { name: "Jobs" }));
   const save = screen.getByRole("button", { name: "Save settings" }) as HTMLButtonElement;
@@ -700,7 +718,7 @@ test("generation capacity and checkpoint interval are editable in Jobs settings"
 
 test("browser preview explains native folder actions without a Tauri invoke error", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Settings" }));
   await user.click(screen.getByRole("button", { name: "Open workspace folder" }));
   expect(screen.getByText(/Folder opening is available in the native app/)).toBeTruthy();
@@ -755,7 +773,7 @@ test("completed run exposes ZIP export and removes its bundle after confirmation
 
 test("job center renders independent progress bars for simultaneous generations", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: /Job center/ }));
   const bars = screen.getAllByRole("progressbar");
   expect(bars).toHaveLength(2);
@@ -770,7 +788,7 @@ test("job rows stay in submission order and sections can collapse", async () => 
     { id: "eval-1", kind: "evaluation", status: "completed", status_message: "", generation_id: "job-1", output_root: originalJobs[0].output_root, created_at: 30 },
   ];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
     expect([...container.querySelectorAll(".job-group")].map((entry) => entry.querySelector("summary strong")?.textContent)).toEqual(["Generations", "Evaluations"]);
     expect([...container.querySelectorAll(".job-group:first-child .job-row-name strong")].map((entry) => entry.textContent)).toEqual(["Alpha", "Bravo"]);
@@ -802,9 +820,10 @@ test("bundle library groups runs by scenario and filters their status", async ()
     originalJobs[0],
   ];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Bundles" }));
+    await expandLibraryGroups(".bundle-group");
     expect(screen.getByRole("heading", { name: "Bundles" })).toBeTruthy();
     expect([...container.querySelectorAll(".bundle-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Alpha", "Bravo"]);
     await user.selectOptions(screen.getByRole("combobox", { name: "Filter bundles by status" }), "complete");
@@ -827,8 +846,9 @@ test("imported bundles appear beside Studio runs with read-only management", asy
   try {
     const user = userEvent.setup();
     const request = vi.mocked(useStudio().api!.request);
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Bundles" }));
+    await expandLibraryGroups(".bundle-group");
     expect(screen.getByText("cli-output")).toBeTruthy();
     expect(screen.getByText("3.0 MB", { selector: ".bundle-size" })).toBeTruthy();
     await user.click(screen.getByText("cli-output"));
@@ -846,8 +866,9 @@ test("imported bundles appear beside Studio runs with read-only management", asy
 test("bundle import accepts a folder and discovery checks workspace runs", async () => {
   const user = userEvent.setup();
   const request = vi.mocked(useStudio().api!.request);
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Bundles" }));
+    await expandLibraryGroups(".bundle-group");
   await user.click(screen.getByRole("button", { name: "Import bundle" }));
   await user.type(screen.getByRole("textbox", { name: "Bundle folder" }), "/tmp/cli-output");
   await user.click(within(screen.getByRole("dialog", { name: "Import bundle" })).getByRole("button", { name: "Import bundle" }));
@@ -897,7 +918,7 @@ test("generation and evaluation cards use the authored scenario name", async () 
     { id: "new-evaluation", kind: "evaluation", status: "completed", status_message: "", generation_id: "new-run", output_root: "/tmp/run", created_at: 1800000050 },
   ];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
     expect(screen.getAllByText("LumenForge beacon", { selector: ".job-row-name strong" })).toHaveLength(2);
     expect(screen.getByRole("progressbar", { name: "LumenForge beacon generation progress" })).toBeTruthy();
@@ -914,7 +935,7 @@ test("paused and queued runs keep their saved progress and show their actual sta
     { ...originalJobs[1], status: "queued", progress: { ...originalJobs[1].progress!, completed_hours: 3, total_hours: 8 } },
   ];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
     expect(screen.getAllByRole("progressbar").map((bar) => bar.getAttribute("aria-valuenow"))).toEqual(["50", "38"]);
     expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(0);
@@ -928,7 +949,7 @@ test("a stopped run without a checkpoint preserves its bar and cannot be resumed
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [{ ...originalJobs[0], status: "stopped", can_resume: false }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     await userEvent.setup().click(screen.getByRole("button", { name: /Job center/ }));
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("25");
     expect(screen.getByText("No checkpoint to resume")).toBeTruthy();
@@ -941,7 +962,7 @@ test("a stopped run without a checkpoint preserves its bar and cannot be resumed
 
 test("Enter submits a turn while Shift+Enter inserts a newline", async () => {
   const user = userEvent.setup();
-  render(<App />);
+  await renderExpandedApp();
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("tab", { name: /Conversations/ }));
   const input = screen.getByRole("textbox", { name: "Message to Codex" });
@@ -954,7 +975,7 @@ test("Enter submits a turn while Shift+Enter inserts a newline", async () => {
 
 test("the close button hands off quit actions and exits the native window", async () => {
   Object.assign(window, { __TAURI_INTERNALS__: {} });
-  render(<App />);
+  await renderExpandedApp();
   const current = getCurrentWindow() as unknown as {
     closeHandler: ((event: { preventDefault: () => void }) => Promise<void>) | null;
   };
@@ -971,7 +992,7 @@ test("the close button hands off quit actions and exits the native window", asyn
 
 test("closing with a checkpoint-disabled run requires an explicit per-job choice", async () => {
   Object.assign(window, { __TAURI_INTERNALS__: {} });
-  render(<App />);
+  await renderExpandedApp();
   const current = getCurrentWindow() as unknown as {
     closeHandler: ((event: { preventDefault: () => void }) => Promise<void>) | null;
   };
@@ -996,7 +1017,7 @@ test("closing with a checkpoint-disabled run requires an explicit per-job choice
 
 test("canceling a checkpoint wait restores the open controller intent", async () => {
   Object.assign(window, { __TAURI_INTERNALS__: {} });
-  render(<App />);
+  await renderExpandedApp();
   const current = getCurrentWindow() as unknown as {
     closeHandler: ((event: { preventDefault: () => void }) => Promise<void>) | null;
   };
@@ -1040,7 +1061,7 @@ test("Job center removes finished history entries while preserving scenario runs
   const request = vi.mocked(useStudio().api!.request);
   snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, { ...originalJobs[1], status: "paused" }];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Job center/ }));
     const finished = container.querySelector("#job-job-1")!;
@@ -1052,6 +1073,7 @@ test("Job center removes finished history entries while preserving scenario runs
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /^Bundles/ }));
+    await expandLibraryGroups(".bundle-group");
     expect(container.querySelector("#job-job-1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Scenarios/ }));
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
@@ -1069,7 +1091,7 @@ test("Clear Completed targets one job type and removed source runs can still be 
   snapshot.removed_job_ids = ["job-1"];
   const request = vi.mocked(useStudio().api!.request);
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /Job center/ }));
     expect(container.querySelector("#job-job-1")).toBeNull();
@@ -1094,7 +1116,7 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
   readTextPreview.mockResolvedValueOnce({ text: "name: Alpha\nversion: 2.0", truncated: false, binary: false });
   try {
     const user = userEvent.setup();
-    render(<App />);
+    await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     await user.click(screen.getByRole("button", { name: "View YAML" }));
     const viewer = await screen.findByRole("dialog", { name: "Source YAML" });
@@ -1131,7 +1153,7 @@ test("library and workspace show a failed evaluation even with a high overall sc
     { id: "evaluation-1", kind: "evaluation", status: "completed", generation_id: "job-1", output_root: "/tmp/run", scorecard: { overall_score: 92.3, acceptance_passed: false } },
   ];
   try {
-    render(<App />);
+    await renderExpandedApp();
     expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
     await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
     expect(screen.getByLabelText(/Evaluation: Failed acceptance · 92\/100/).classList.contains("state-error")).toBe(true);
@@ -1186,11 +1208,12 @@ test("Packs combines both types in stable sections, retains filters, and opens t
   const org = { ...pack, id: "org", kind: "organization_pack" as const, name: "Team", description: "Organization environment", version: "2.0.0" };
   snapshot.items = [...originalItems, org, pack];
   try {
-    const { container } = render(<App />);
+    const { container } = await renderExpandedApp();
     const user = userEvent.setup();
     const nav = screen.getByRole("navigation", { name: "Main navigation" });
     expect(within(nav).queryByRole("button", { name: "Industry packs" })).toBeNull();
     await user.click(within(nav).getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     expect([...container.querySelectorAll(".pack-group > summary strong")].map((entry) => entry.textContent)).toEqual(["Industry packs", "Organization packs"]);
     expect(screen.getByRole("button", { name: "Open Sector 1.0.0" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Team 2.0.0" })).toBeTruthy();
@@ -1205,6 +1228,7 @@ test("Packs combines both types in stable sections, retains filters, and opens t
     expect(screen.getByRole("heading", { name: "Team" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Conversations" })).toBeTruthy();
     await user.click(within(nav).getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "New pack" }));
     expect(screen.getByRole("menuitem", { name: "Industry pack" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Organization pack" })).toBeTruthy();
@@ -1227,9 +1251,10 @@ test("new packs require a name and description, then submit optional details exa
     return originalRequest(path, method, body);
   });
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "New organization pack" }));
     const dialog = screen.getByRole("dialog", { name: "New pack" });
     await user.type(within(dialog).getByRole("textbox", { name: "Pack Name" }), "Bad Name");
@@ -1292,9 +1317,10 @@ test("Packs search includes YAML content from both pack types", async () => {
   const org = { ...originalItems[1], id: "team", kind: "organization_pack" as const, name: "Team" };
   snapshot.items = [...originalItems, industry, org];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
+    await expandLibraryGroups(".pack-group");
     request.mockResolvedValueOnce([industry]).mockResolvedValueOnce([org]);
     await user.type(screen.getByRole("textbox", { name: "Search packs" }), "yaml:persona");
     await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/items?kind=industry_pack&search=yaml%3Apersona"));
@@ -1336,7 +1362,7 @@ test("project drop targets use drag types, ignore child transitions, and clear a
   const originalProjects = snapshot.projects;
   snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "", updated_at: 1 }];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const target = screen.getByRole("button", { name: "Open project Casework" }).closest(".project-nav-entry")!;
     const transfer = { types: ["application/x-evidenceforge-scenario"], dropEffect: "", getData: vi.fn(() => "alpha") };
     expect(fireEvent.dragOver(target, { dataTransfer: transfer })).toBe(false);
@@ -1357,7 +1383,7 @@ test("project drop targets use drag types, ignore child transitions, and clear a
 });
 
 test("scenario workspace title validates names, cancels, saves the displayed revision, and retains errors", async () => {
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   const request = vi.mocked(useStudio().api!.request);
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
@@ -1405,7 +1431,7 @@ test("draft scenarios can be dragged into a project and renamed from their works
   snapshot.projects = [{ id: "project-1", workspace, name: "Casework", description: "", updated_at: 1 }];
   snapshot.conversations = [...originalConversations, draft];
   try {
-    render(<App />);
+    await renderExpandedApp();
     const user = userEvent.setup();
     const card = screen.getByText("Draft_name", { selector: ".scenario-row-title strong" }).closest(".scenario-row")!;
     const data: Record<string, string> = {};
@@ -1432,7 +1458,7 @@ test("scenario rows show their project on the title line and retain explicit sor
   snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
   snapshot.items = [{ ...originalItems[0], project_id: "case", modified_at: 2 }, { ...originalItems[1], modified_at: 3 }];
   try {
-    const { container, rerender } = render(<App />);
+    const { container, rerender } = await renderExpandedApp();
     const user = userEvent.setup();
     const order = () => Array.from(container.querySelectorAll(".scenario-row-title strong")).map((node) => node.textContent);
     await waitFor(() => expect(useStudio().api!.libraryPreferences).toHaveBeenCalled());
@@ -1453,7 +1479,7 @@ test("scenario rows show their project on the title line and retain explicit sor
 test("library restores workspace view and can disable recall in Settings", async () => {
   const preferences = vi.mocked(useStudio().api!.libraryPreferences);
   preferences.mockResolvedValueOnce({ remember_view: true, scenarios: { search: "Alpha", sort: "updated", project_id: "ungrouped", show_hidden: true } });
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Search scenarios" })).toHaveValue("Alpha"));
   expect(screen.getByRole("combobox", { name: "Sort scenarios" })).toHaveValue("updated");
@@ -1471,7 +1497,7 @@ test("delayed library recall preserves a search typed while loading preferences"
   const preferences = vi.mocked(useStudio().api!.libraryPreferences);
   let resolve!: (value: Awaited<ReturnType<typeof preferences>>) => void;
   preferences.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
-  render(<App />);
+  await renderExpandedApp();
   const user = userEvent.setup();
   await user.type(screen.getByRole("textbox", { name: "Search scenarios" }), "Bravo");
   await act(async () => resolve({ remember_view: true, scenarios: { search: "Alpha", sort: "updated" } }));
@@ -1489,7 +1515,7 @@ test("scenario rows show measured size for fresh bundles and current forecast fo
     exit_code: 0, error: "", report: { resource_forecast: { final_output: { expected_bytes: 3 * 1024 ** 2 } } },
   } } };
   try {
-    const { container, rerender } = render(<App />);
+    const { container, rerender } = await renderExpandedApp();
     await waitFor(() => expect(container.querySelector(".scenario-row-size")?.textContent).toBe("1.5 KB"));
     snapshot.jobs = [{ ...snapshot.jobs[0], source_sha256: "old" }];
     rerender(<App />);
@@ -1506,7 +1532,7 @@ test("scenario rows use automatic predictions without validation and prefer fres
     result: { available: true, destination: `${workspace}/runs`, checkpoint_hours: 24, forecast: { final_output: { expected_bytes: 4 * 1024 ** 2 } } },
   } };
   try {
-    const { container, rerender } = render(<App />);
+    const { container, rerender } = await renderExpandedApp();
     expect(container.querySelector(".scenario-row-size")?.textContent).toBe("4.0 MBEstimated");
     snapshot.jobs = [{ ...original.jobs[0], status: "completed", source_sha256: "sha-alpha" }];
     rerender(<App />);
@@ -1528,4 +1554,86 @@ test("queued run freshness uses captured dependency identity, not its later star
   expect(scenarioStates(item, base)[1].state).toBe("stale");
   base.jobs[0].dependency_sha256 = "new-dependencies";
   expect(scenarioStates(item, base)[1].state).toBe("success");
+});
+
+test("scenario projects start collapsed and a saved view restores their independent open states", async () => {
+  const originalItems = snapshot.items;
+  const originalProjects = snapshot.projects;
+  const originalViews = snapshot.views;
+  snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
+  snapshot.items = [{ ...originalItems[0], project_id: "case" }, originalItems[1]];
+  snapshot.views = [{ name: "Casework open", kind: "scenario", search: "", folder: null, project_id: null, ungrouped: false, show_hidden: false, expanded_groups: ["case"] }];
+  try {
+    const { container } = render(<App />);
+    await act(async () => {});
+    const user = userEvent.setup();
+    const groups = () => [...container.querySelectorAll<HTMLDetailsElement>(".scenario-group")];
+    expect(groups()).toHaveLength(2);
+    expect(groups().every((group) => !group.open)).toBe(true);
+    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).not.toBeVisible();
+    const ungrouped = container.querySelector<HTMLDetailsElement>(".scenario-group:last-child")!;
+    await user.click(ungrouped.querySelector("summary")!);
+    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Saved views" }));
+    await user.click(screen.getByRole("button", { name: "Apply saved view Casework open" }));
+    expect(groups().map((group) => group.open)).toEqual([true, false]);
+    expect(screen.getByRole("button", { name: "Open scenario Alpha" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open scenario Bravo" })).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Saved views" }));
+    await user.type(screen.getByRole("textbox", { name: "Saved view name" }), "Project layout");
+    await user.click(screen.getByRole("button", { name: "Save view" }));
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/views", "POST", expect.objectContaining({ expanded_groups: ["case"] })));
+    await waitFor(() => expect(useStudio().api!.saveLibraryView).toHaveBeenCalledWith(workspace, "scenarios", expect.objectContaining({ expanded_groups: ["case"] })));
+  } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; snapshot.views = originalViews; }
+});
+
+test("a collapsed project header accepts a scenario drop without opening it", async () => {
+  const originalItems = snapshot.items;
+  const originalProjects = snapshot.projects;
+  snapshot.projects = [{ id: "case", workspace, name: "Casework", description: "", updated_at: 1 }];
+  snapshot.items = [originalItems[0], { ...originalItems[1], project_id: "case" }];
+  try {
+    const { container } = render(<App />);
+    await act(async () => {});
+    const user = userEvent.setup();
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>(".scenario-group")];
+    await user.click(groups[1].querySelector("summary")!);
+    const values = new Map<string, string>();
+    const transfer = { types: ["application/x-evidenceforge-item"], effectAllowed: "", dropEffect: "", setData: (key: string, value: string) => values.set(key, value), getData: (key: string) => values.get(key) || "" };
+    fireEvent.dragStart(screen.getByRole("button", { name: "Open scenario Alpha" }).closest(".scenario-row")!, { dataTransfer: transfer });
+    const target = groups[0].querySelector("summary")!;
+    fireEvent.dragOver(target, { dataTransfer: transfer });
+    expect(groups[0]).toHaveClass("drop-target");
+    expect(groups[0].open).toBe(false);
+    fireEvent.drop(target, { dataTransfer: transfer });
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "case" }));
+    expect(groups[0].open).toBe(false);
+  } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; }
+});
+
+test("pack and bundle groups begin collapsed with visible counts and independent toggles", async () => {
+  const originalItems = snapshot.items;
+  snapshot.items = [...originalItems, { ...originalItems[0], id: "pack", kind: "industry_pack" }, { ...originalItems[1], id: "org", kind: "organization_pack" }];
+  try {
+    const { container } = render(<App />);
+    await act(async () => {});
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Packs" }));
+    const packs = [...container.querySelectorAll<HTMLDetailsElement>(".pack-group")];
+    expect(packs).toHaveLength(2);
+    expect(packs.every((group) => !group.open)).toBe(true);
+    expect(packs[0].querySelector("summary")).toHaveTextContent("Industry packs1");
+    expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).not.toBeVisible();
+    await user.click(packs[0].querySelector("summary")!);
+    expect(screen.getByRole("button", { name: "Open Alpha 2.0" })).toBeVisible();
+    expect(packs[1].open).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Bundles" }));
+    const bundles = [...container.querySelectorAll<HTMLDetailsElement>(".bundle-group")];
+    expect(bundles).toHaveLength(2);
+    expect(bundles.every((group) => !group.open)).toBe(true);
+    expect(bundles[0].querySelector("summary")).toHaveTextContent("Alpha1");
+    await user.click(bundles[0].querySelector("summary")!);
+    expect(bundles[0].open).toBe(true);
+    expect(bundles[1].open).toBe(false);
+  } finally { snapshot.items = originalItems; }
 });
