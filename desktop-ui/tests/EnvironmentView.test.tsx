@@ -29,6 +29,17 @@ function setup(request = vi.fn(async () => report), onPrepare = vi.fn(async (_pr
 }
 afterEach(() => cleanup());
 
+test("folded environment inspection headers expose selected values and composition results", async () => {
+  setup();
+  const selected = await screen.findByRole("button", { name: "Selected packs 2 packs" });
+  expect(selected).toHaveAttribute("aria-expanded", "false");
+  expect(selected).toHaveTextContent("office 2.0.0 · healthcare 1.0.0");
+  expect(screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" })).toHaveTextContent("Workspace: 1 file");
+  expect(screen.getByRole("button", { name: "Resolved scenario model scenario-2.0" })).toHaveTextContent("1 user");
+  expect(screen.getByRole("button", { name: "Overrides and precedence 1 override" })).toHaveTextContent("users → scenario");
+  expect(screen.getByText("3 fields · 3 files · 3 layers")).toBeVisible();
+});
+
 test("exact versions and source declarations are searchable and refresh after dependency changes", async () => {
   const { api, props, rerender } = setup();
   const user = userEvent.setup();
@@ -143,7 +154,7 @@ test("overlays use the contained file viewer and authenticated export route", as
   await screen.findByRole("button", { name: "Selected packs 2 packs" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Configuration layers 1 enabled · 2 layers" }));
-  await user.click(screen.getByText("View configuration files"));
+  await user.click(screen.getByText(/^View configuration files/));
   await user.click(screen.getByRole("button", { name: "activity/dns_registry.yaml" }));
   const viewer = screen.getByRole("dialog", { name: "Configuration overlay" });
   await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/layers/workspace/files/activity/dns_registry.yaml"));

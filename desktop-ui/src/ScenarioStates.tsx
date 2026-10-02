@@ -1,15 +1,16 @@
 import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import { CatalogItem, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
+import { chronologicalJobs } from "./jobOrder";
 
 type State = "none" | "stale" | "working" | "success" | "warning" | "error";
-interface OperationState { label: string; state: State; detail: string }
+export interface OperationState { label: string; state: State; detail: string }
 
 function latest(jobs: StudioJob[]): StudioJob | undefined {
-  return [...jobs].sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
+  return chronologicalJobs(jobs).slice(-1)[0];
 }
 
-function jobState(label: string, job: StudioJob | undefined, stale: boolean): OperationState {
+export function jobState(label: string, job: StudioJob | undefined, stale: boolean): OperationState {
   if (!job) return { label, state: stale ? "stale" : "none", detail: stale ? `${label} was completed for an older scenario revision.` : `${label} has not been run.` };
   if (job.status === "queued" || job.status === "running" || job.status === "paused") {
     return { label, state: "working", detail: `${label} is ${job.status}.` };
@@ -59,10 +60,15 @@ export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): Ope
   const allIds = new Set(generations.map((job) => job.id));
   const evaluations = snapshot.jobs.filter((job) => job.kind === "evaluation" && !!job.generation_id && allIds.has(job.generation_id));
   const currentEvaluations = evaluations.filter((job) => !!job.generation_id && currentIds.has(job.generation_id));
+  const evaluation = latest(currentEvaluations.filter((job) => job.generation_id === generation?.id));
+  const evaluationStatus = jobState("Evaluation", evaluation, evaluations.some((job) => job.status === "completed"));
+  if (generation && !evaluation && evaluations.some((job) => job.status === "completed")) {
+    evaluationStatus.detail = `Evaluation belongs to an earlier run. Latest run #${generation.id.slice(0, 8)} has not been evaluated.`;
+  }
   return [
     validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt),
     jobState("Generation", generation, generations.some((job) => job.status === "completed")),
-    jobState("Evaluation", latest(currentEvaluations), evaluations.some((job) => job.status === "completed")),
+    evaluationStatus,
   ];
 }
 

@@ -31,7 +31,7 @@ export function SourceDeclarations({ item, report, api, onError }: {
   }
   return <>
     <details className="surface source-declarations" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ChevronRight size={17} className="disclosure-chevron" /><h2>Source declarations</h2><span className="muted">{all.length} fields</span></summary>
+      <summary><ChevronRight size={17} className="disclosure-chevron" /><h2>Source declarations</h2><span className="muted">{all.length} fields · {new Set(all.map((entry) => entry.source)).size} files · {new Set(all.map((entry) => entry.layer)).size} layers</span></summary>
       {expanded && <div className="declarations-content">
         <p className="muted">Find the value an input file declared and open its YAML. These are input values; later composition or configuration can change the effective value.</p>
         <div className="search-box"><Search size={15} /><input aria-label="Search environment origins" placeholder="Search fields, values, layers, or files…" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} /></div>

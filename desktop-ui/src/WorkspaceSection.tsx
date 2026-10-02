@@ -1,5 +1,10 @@
 import { useId, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import type { SectionSummary } from "./workspaceSummaries";
+
+export function HeaderSummary({ summary }: { summary: SectionSummary }) {
+  return <span className="header-summary"><span className="summary-outcome">{summary.headline}</span><span className="summary-context" title={summary.detail}>{summary.detail}</span></span>;
+}
 
 /** Workspace headers remain useful even when their optional details are folded. */
 export function WorkspaceSection({ title, summary, icon, actions, expanded, onToggle, children, footer }: {

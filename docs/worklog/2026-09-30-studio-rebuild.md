@@ -1327,3 +1327,43 @@ Reviewed the actual browser UI at 1280×900 and 712×724, including keyboard exp
 The native app is rebuilt for reopening. Disposable review tabs/services are closed; the existing
   helper remains available. This is a workspace-design refinement in the configuration tranche;
   later workflow stages await feedback. Unrelated iteration-test source deletions remain excluded.
+
+## 2026-10-02 — Useful collapsed headers and direct YAML viewing
+
+User requested a clickable YAML name/path in place of the separate View YAML action, and useful
+at-a-glance summaries throughout the app, with generation/scoring/bundles following the latest run.
+
+- The workspace YAML path now opens the built-in source viewer directly, with underline, hover,
+  and keyboard focus feedback. The copy icon stays immediately adjacent; the scenario title keeps
+  its existing rename interaction. Both browser and native modes use the same source-view endpoint.
+- Collapsed workspace headers show conversation activity and the Continue target, dependency
+  identities and errors, validation findings/freshness/date, latest generation status/progress/size,
+  the latest generation's linked evaluation outcome/records, and the newest owned/imported bundle.
+  Summaries distinguish measured partial/completed data, estimates, and changed scenario/dependency
+  inputs. Every live generation still has an independent progress bar while folded.
+- Latest means original submission order, with stable ID ties. Resuming an older run cannot make
+  it the summary target. An older score cannot imply that a newer run was evaluated: its action
+  is labeled Previous scorecard, while the newest run's saved report takes priority when available.
+  Library evaluation icons also identify scores belonging to earlier runs rather than remaining
+  green for a newer unevaluated generation.
+- Project groups summarize relevant scenario activity/review needs; pack groups show availability,
+  drafts, authors and updates; job groups show separate status counts and their latest job; bundle
+  groups show newest status, size, date and completeness. Summaries respect matching/visible rows.
+  Environment inspection headers expose selected pack versions, enabled layer/file counts,
+  resolved entity counts, precedence examples, and source file/layer counts. Existing individual
+  job, bundle, pack, scenario, activity and score rows retain their useful collapsed details.
+
+Verification: all 154 React tests pass, including submission/resume ordering, latest-run score
+  association, live summary changes, paused progress/partial size, imported bundle ordering, stale
+  validation/dependencies, acceptance failure despite a high score, and keyboard YAML viewing in
+  browser/native modes. Generated API types are fresh; full Ruff check/format and diff checks pass.
+  The macOS release app builds successfully. No CLI, skill, authored schema or service contract
+  changed. Linux/native runtime interaction was not rerun for this frontend refinement.
+
+Reviewed disposable UI data at 1280×900 and 712×724, including real validation, keyboard opening of
+  source YAML, collapsed workspace/project/pack/bundle headers and job status summaries. Compact
+  layout has no horizontal page overflow; the browser reported no script errors. Screenshots:
+  `/private/tmp/eforge-workspace-summaries.jpg`, `/private/tmp/eforge-workspace-summaries-compact.jpg`,
+  `/private/tmp/eforge-bundle-summaries-compact.jpg`, `/private/tmp/eforge-pack-summaries-compact.jpg`.
+  Closed the review tab, reset viewport and stopped disposable helper/frontend. Unrelated existing
+  iteration-test source deletions remain excluded. Ready for workspace feedback before advancing.

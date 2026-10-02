@@ -1120,7 +1120,11 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
     const user = userEvent.setup();
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-    await user.click(screen.getByRole("button", { name: "View YAML" }));
+    const sourceLink = screen.getByRole("button", { name: "View scenario YAML" });
+    expect(sourceLink).toHaveTextContent(snapshot.items[0].path);
+    expect(screen.queryByRole("button", { name: "View YAML", exact: true })).toBeNull();
+    sourceLink.focus();
+    await user.keyboard("{Enter}");
     const viewer = await screen.findByRole("dialog", { name: "Source YAML" });
     await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
     expect(readTextPreview).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml");
@@ -1726,6 +1730,60 @@ test("collapsed Generation shows every live progress stream and retains progress
     await user.click(within(generation).getByRole("button", { name: /Run #job-2/ }));
     await waitFor(() => expect(view.container.querySelector("#job-job-2")).toHaveAttribute("open"));
   } finally { snapshot.jobs = original; }
+});
+
+test("folded workspace headers track the newest run and its evaluation as jobs update", async () => {
+  const original = snapshot.jobs;
+  const request = vi.mocked(useStudio().api!.request);
+  snapshot.jobs = [
+    { ...original[0], source_sha256: "sha-alpha", status: "completed", submitted_at: 100, started_at: 900 },
+    { id: "evaluation-1", kind: "evaluation", status: "completed", generation_id: "job-1", output_root: "/tmp/run", scorecard: { overall_score: 98, acceptance_passed: true }, created_at: 950 },
+    { ...original[0], id: "new-run", status: "queued", submitted_at: 200, started_at: null, source_sha256: "sha-alpha", progress: null },
+  ];
+  try {
+    const user = userEvent.setup();
+    const view = await renderExpandedApp();
+    expect(screen.getByLabelText(/Evaluation: Evaluation belongs to an earlier run/)).toHaveClass("state-stale");
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const generation = screen.getByRole("region", { name: "Generation", exact: true });
+    const scoring = screen.getByRole("region", { name: "Scoring", exact: true });
+    const bundles = screen.getByRole("region", { name: "Bundles", exact: true });
+    for (const title of ["Generation", "Scoring", "Bundles"]) expect(within(screen.getByRole("region", { name: title, exact: true })).getByRole("button", { name: title, exact: true })).toHaveAttribute("aria-expanded", "false");
+    expect(generation.querySelector("header")).toHaveTextContent("Queued");
+    expect(scoring.querySelector("header")).toHaveTextContent("Not evaluated");
+    expect(scoring.querySelector("header")).toHaveTextContent("Latest run #new-run");
+    expect(bundles.querySelector("header")).toHaveTextContent("Queued · Bundle pending");
+    expect(within(scoring).getByRole("button", { name: "Previous scorecard" })).toBeVisible();
+    expect(request.mock.calls.some(([path]) => path.endsWith("/scorecard"))).toBe(false);
+    snapshot.jobs = [...snapshot.jobs.slice(0, 2), { ...snapshot.jobs[2], status: "completed" },
+      { ...snapshot.jobs[1], id: "new-eval", generation_id: "new-run", created_at: 300, scorecard: { overall_score: 92, acceptance_passed: false, total_records: 2000 } }];
+    view.rerender(<App />);
+    expect(scoring.querySelector("header")).toHaveTextContent("92/100 · Failed · 2,000 records");
+    expect(within(scoring).getByLabelText(/Failed acceptance · 92\/100/)).toHaveClass("state-error");
+    expect(within(scoring).getByRole("button", { name: "View scorecard" })).toBeVisible();
+  } finally { snapshot.jobs = original; }
+});
+
+test("collapsed environment and validation report dependency identities, findings and freshness", async () => {
+  const originalDependencies = snapshot.dependencies;
+  const originalValidations = snapshot.validations;
+  snapshot.dependencies = { alpha: { ready: false, fingerprint: "packs", changed_at: 100, rows: [
+    { key: "pack", kind: "pack", label: "team:industry:healthcare@2.0.0", status: "missing", detail: "Import required version" },
+    { key: "include", kind: "include", label: "users.yaml", status: "available", detail: "Available" },
+  ] } };
+  snapshot.validations = { alpha: { source_sha256: "old", dependency_sha256: "old-packs", completed_at: 10, result: { exit_code: 1, error: "", report: { valid: false, issues: [{ severity: "error" }, { severity: "warning" }] } } } };
+  try {
+    await renderExpandedApp();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const environment = screen.getByRole("region", { name: "Environment", exact: true });
+    expect(environment.querySelector("header")).toHaveTextContent("1 dependency error · 1 pack · 1 include");
+    expect(environment.querySelector("header")).toHaveTextContent("team:industry:healthcare@2.0.0");
+    const validation = screen.getByRole("region", { name: "Validation", exact: true });
+    expect(validation.querySelector("header")).toHaveTextContent("Needs changes · 1 error · 1 warning");
+    expect(validation.querySelector("header")).toHaveTextContent("Out of date");
+    expect(within(validation).getByRole("button", { name: "Validation", exact: true })).toHaveAttribute("aria-expanded", "false");
+    expect(within(screen.getByRole("region", { name: "Generation", exact: true })).getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
+  } finally { snapshot.dependencies = originalDependencies; snapshot.validations = originalValidations; }
 });
 
 test("bundles and generation details can open together with unique row identities", async () => {

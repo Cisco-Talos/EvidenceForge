@@ -10,6 +10,8 @@ import { ScenarioStates, scenarioStates } from "./ScenarioStates";
 import { SearchExcerpts } from "./SearchExcerpts";
 import { generationIsCurrent } from "./ScenarioStates";
 import { currentPrediction } from "./ResourceForecastPanel";
+import { countLabel } from "./workspaceSummaries";
+import { HeaderSummary } from "./WorkspaceSection";
 
 export type ScenarioSort = "name" | "updated" | "project";
 
@@ -84,8 +86,16 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     grouped.set(row.groupId, group);
   }
   const groups = [...grouped.values()].sort((a, b) => (sort === "updated" ? b.updated - a.updated : 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+  function groupSummary(group: typeof groups[number]) {
+    const paths = new Set(group.rows.flatMap((row) => row.item ? [row.item.path] : []));
+    const ids = new Set(group.rows.map((row) => row.id));
+    const working = snapshot.jobs.filter((job) => job.kind === "generation" && paths.has(job.scenario || "") && ["running", "queued", "paused"].includes(job.status));
+    const attention = group.rows.filter((row) => row.item && (snapshot.dependencies?.[row.id]?.ready === false || scenarioStates(row.item, snapshot).some((state) => ["error", "warning"].includes(state.state))));
+    const chats = snapshot.conversations.filter((chat) => (ids.has(chat.item_id || "") || ids.has(chat.id)) && chat.active);
+    return { headline: [countLabel(group.rows.length, "scenario"), working.length && `${countLabel(working.length, "generation")} active or queued`, chats.length && countLabel(chats.length, "active chat"), attention.length && `${attention.length} need review`].filter(Boolean).join(" · "), detail: `Updated ${formatTime(group.updated)}` };
+  }
   return <div className="scenario-groups" aria-label="Scenario library">{groups.map((group) => <details className={`job-group scenario-group ${dropTargetId === group.id ? "drop-target" : ""}`} key={group.id} open={expandedGroups.includes(group.id)} onToggle={(event) => onToggleGroup(group.id, event.currentTarget.open)} onDragOver={(event) => onProjectDragOver(event, group.id === "ungrouped" ? null : group.id)} onDragLeave={onProjectDragLeave} onDrop={(event) => onProjectDrop(event, group.id === "ungrouped" ? null : group.id)}>
-    <summary aria-label={`${group.name} · ${group.rows.length} scenario${group.rows.length === 1 ? "" : "s"}`}><ChevronRight size={17} className="disclosure-chevron" /><Folder size={16} /><strong>{group.name}</strong><span>{group.rows.length}</span></summary>
+    <summary aria-label={`${group.name} · ${group.rows.length} scenario${group.rows.length === 1 ? "" : "s"}`}><ChevronRight size={17} className="disclosure-chevron" /><Folder size={16} /><strong>{group.name}</strong><span>{group.rows.length}</span><small className="group-summary"><HeaderSummary summary={groupSummary(group)} /></small></summary>
     <ul className="scenario-list" aria-label={`Scenarios in ${group.name}`}>{group.rows.map(renderRow)}</ul>
   </details>)}</div>;
 }
