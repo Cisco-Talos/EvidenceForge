@@ -1089,9 +1089,79 @@ one, `.eforge/config` supplies one overlay, and resolved inputs are self-contain
 search or Studio database lookup may become necessary for traditional use. Preserve the existing
 family-specific merges and policy ownership; later scope does not mean universal replacement.
 
-The user accepted project assignment selecting a project's configured overlay; the implementation
-design is still under discussion. Proposed direction: optional generic file-based configuration
-contexts/ordered overlays in the shared CLI/compiler, native-harness skills using those same
-public contracts, then Studio integration. No new flags, manifests, or layering behavior have
-been implemented or approved as a final schema. Require unchanged legacy behavior and matching
-effective configuration/provenance across CLI, skills, and Studio before accepting that feature.
+The user accepted project assignment selecting a project's configured overlay and subsequently
+approved the optional file-based context design. The implementation below supersedes the earlier
+design discussion. Preserve unchanged legacy behavior and the same explicit selection across CLI,
+skills, and Studio as an acceptance boundary.
+
+## 2026-10-02 — Portable configuration contexts and Studio scopes
+
+Approved scope: implement the shared optional foundation and its Studio integration, then pause
+for review before expanding into another workflow tranche.
+
+- Added an explicit versioned YAML context with a declared project root and ordered, named overlay
+  directories. Paths resolve relative to that file. `--context` is available for `info`,
+  `validate-config`, `validate`, `resolve`, `resources predict`, and `generate`. No ancestor search,
+  implicit scenario-location selection, or Studio database dependency was introduced. Ordinary
+  CWD/`--project-root` use retains its existing behavior. Broken selections fail with actionable
+  errors instead of silently falling back. Links, duplicates, unknown fields, unsupported paths,
+  and excessive input sizes are rejected.
+- Retained each configuration family's existing merge rules, including specialized persona and
+  public-identity loading. Extra layer documents and identities are captured in resolved inputs
+  and checkpoints. Empty extra-layer fields are omitted to preserve legacy serialization.
+  Generation behavior revision 156 records an opt-in input change with no legacy rendering impact.
+  Layer/file digests and composition decisions are available; full leaf-level origin tracking
+  across all runtime configuration families is not claimed complete.
+- Studio projects now have an optional shared configuration directory; scenarios have an optional
+  private directory. Both are disabled by default. The Environment tab shows the actual order,
+  paths, file inspection, chat editing, and a public copyable CLI command. Disabling or deleting a
+  virtual project preserves its files. Configured project moves require confirmation. Scenario
+  clones copy private patches, including disabled patches, while project patches remain shared.
+  Stable keys use workspace-relative scenario paths so workspace relocation preserves selection.
+- Validation, resource forecasts, dependency freshness, Codex first/resumed turns, and generation
+  snapshots use the same explicit context. Queue publication freezes the selected inputs; existing
+  runs retain their own captured configuration. Updating a context refreshes instructions for an
+  existing Codex thread without adding hidden text to the user's visible message.
+- Scenario import can explicitly select a source context. Review stages independent copies of its
+  base and additional layers and searches its declared root for exact packs. Source changes after
+  review require review again. Optional staged validation includes destination base/project layers.
+  Bundle export includes portable current authored context/layers when available, separately from
+  the selected run's authoritative resolved input. Missing current configuration is reported in
+  the archive rather than substituted. Canonical config skill/reference instructions document the
+  public contract; refreshed workspace and global installs for both agent harnesses with the
+  installer. The existing unmanaged legacy assess skill remains untouched.
+
+Verification: initial related Python gate passed 180 tests; final focused shared/config/skill gate
+passed 122 tests, and final Studio context/import/service gate passed 108 tests. All 121 React
+tests, generated type freshness, full Ruff checks/formatting, diff checks, generation behavior
+manifest validation, and the macOS native release build pass. Linux native builds were not run
+on this host. New tests cover sequential family merges, declaring-file diagnostics, CLI errors,
+no writes/fallback, serialization compatibility, runtime cache isolation, confirmed project moves,
+private clone behavior, relocation, frozen queue inputs, import review invalidation, independent
+export/import copies, and resumed Codex context changes.
+
+Two disposable real CLI experiments passed: (1) validation, prediction, generation, JSONL progress,
+safe checkpoint suspension, recovery after deleting the original context/layer, and evaluation;
+(2) the same legacy fixture compiled/rendered with the previous commit and current code produced
+identical compiled inputs and identical bytes for its two evidence files. These narrow contracts
+do not claim an exhaustive all-format comparison. Logs are in
+`/private/tmp/eforge-context-real-cli.log` and
+`/private/tmp/eforge-legacy-context-comparison.log`.
+
+Browser review at 1280×900 and 712×724 verified scope toggles, built-in YAML viewing, the public
+CLI disclosure, and the configured-move dialog's placement/Escape cancellation. Screenshots:
+`/private/tmp/eforge-configuration-layers-review.jpg`,
+`/private/tmp/eforge-configuration-layers-compact.jpg`, and
+`/private/tmp/eforge-configuration-move-review.jpg`. Closed the disposable review tab, reset its
+viewport, and stopped its helper/frontend. The normal helper had already exited; started the
+updated launchd service and verified the configuration API plus unchanged saved settings and
+identities for one project and three conversations. The service reports one job and no active
+chats. The native release app is rebuilt; reopen Studio for review.
+
+Three tracked deletions appeared during this work under `scenarios/iteration-test-1_0/`; their
+origin is unconfirmed. They were not part of the approved changes and are excluded from the
+implementation commit. Do not restore or include them without establishing the user's intent.
+
+Handoff: review project/scenario configuration in Studio and its portable public CLI contract.
+Pause for feedback here. Structured configuration editing, complete runtime value-origin views,
+isolated authoring revisions, and later workflow stages remain subsequent slices.

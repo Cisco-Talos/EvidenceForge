@@ -191,6 +191,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/configuration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Configuration */
+        post: operations["set_configuration_v1_scenarios__item_id__configuration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/environment/{item_id}/layers/{scope_id}/files/{relative_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Configuration File */
+        get: operations["configuration_file_v1_environment__item_id__layers__scope_id__files__relative_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/scenarios/{item_id}/resources/predict": {
         parameters: {
             query?: never;
@@ -1496,6 +1530,60 @@ export interface components {
             };
         };
         /**
+         * ConfigurationScope
+         * @description One explicitly selected or available editable overlay scope.
+         */
+        ConfigurationScope: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Root
+             * Format: path
+             */
+            root: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Files */
+            files?: components["schemas"]["ContextFile"][];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * ConfigurationState
+         * @description Current portable selection and its reproducible CLI invocation.
+         */
+        ConfigurationState: {
+            /** Context Path */
+            context_path?: string | null;
+            /** Cli Command */
+            cli_command: string;
+            /** Scopes */
+            scopes: components["schemas"]["ConfigurationScope"][];
+        };
+        /**
+         * ConfigurationUpdate
+         * @description Enable or disable the private scenario overlay explicitly.
+         */
+        ConfigurationUpdate: {
+            /** Scenario Enabled */
+            scenario_enabled: boolean;
+        };
+        /**
+         * ContextFile
+         * @description One safe relative file shown in the configuration viewer.
+         */
+        ContextFile: {
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+        };
+        /**
          * Conversation
          * @description One Codex thread associated with a scenario, pack, or draft.
          */
@@ -1677,6 +1765,7 @@ export interface components {
             merge_decisions?: {
                 [key: string]: string;
             }[];
+            configuration?: components["schemas"]["ConfigurationState"] | null;
             /**
              * Overlay Root
              * Format: path
@@ -1874,6 +1963,11 @@ export interface components {
             folder?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /**
+             * Confirm Configuration Change
+             * @default false
+             */
+            confirm_configuration_change: boolean;
         };
         /**
          * JobHistoryChange
@@ -2141,6 +2235,11 @@ export interface components {
              * @default
              */
             description: string;
+            /**
+             * Overlay Enabled
+             * @default false
+             */
+            overlay_enabled: boolean;
             /** Updated At */
             updated_at?: number;
         };
@@ -2156,6 +2255,11 @@ export interface components {
              * @default
              */
             description: string;
+            /**
+             * Overlay Enabled
+             * @default false
+             */
+            overlay_enabled: boolean;
         };
         /**
          * ProjectUpdate
@@ -2166,6 +2270,8 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+            /** Overlay Enabled */
+            overlay_enabled?: boolean | null;
         };
         /**
          * QuitSettings
@@ -2593,6 +2699,8 @@ export interface components {
             };
             /** Documents */
             documents?: string[] | null;
+            /** Configuration Context */
+            configuration_context?: string | null;
         };
         /**
          * ScenarioRenameRequest
@@ -3413,6 +3521,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_configuration_v1_scenarios__item_id__configuration_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigurationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    configuration_file_v1_environment__item_id__layers__scope_id__files__relative_path__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+                scope_id: string;
+                relative_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

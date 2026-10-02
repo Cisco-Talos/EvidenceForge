@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from evidenceforge import __version__
 from evidenceforge.desktop.jobs import _eforge_command
 from evidenceforge.resources import ResourcePrediction
+from evidenceforge.studio.contexts import context_arguments
 from evidenceforge.studio.jobs import controller_settings
 from evidenceforge.studio.settings import StudioSettings
 from evidenceforge.studio.store import CatalogItem
@@ -79,8 +80,7 @@ def run_prediction(
                 "resources",
                 "predict",
                 str(item.path),
-                "--project-root",
-                str(item.workspace),
+                *context_arguments(item.path, item.workspace),
                 "--destination",
                 str(destination),
                 "--checkpoint-hours",

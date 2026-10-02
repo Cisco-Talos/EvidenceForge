@@ -55,6 +55,9 @@ _OVERLAY_PROJECT_ROOT: ContextVar[Path | None] = ContextVar(
     "evidenceforge_overlay_project_root",
     default=None,
 )
+_ADDITIONAL_OVERLAY_DIRS: ContextVar[tuple[Path, ...]] = ContextVar(
+    "evidenceforge_additional_overlay_dirs", default=()
+)
 _RETIRED_OVERLAYS = {
     "activity/smb_file_transfers.yaml": (
         "This overlay was removed in EvidenceForge 2.0 because generic TCP/445 "
@@ -66,13 +69,17 @@ _RETIRED_OVERLAYS = {
 
 
 @contextmanager
-def overlay_project_root_scope(project_root: Path) -> Iterator[None]:
+def overlay_project_root_scope(
+    project_root: Path, additional_overlays: tuple[Path, ...] = ()
+) -> Iterator[None]:
     """Temporarily bind ambient overlay discovery to one explicit project root."""
 
     token = _OVERLAY_PROJECT_ROOT.set(project_root.resolve())
+    layers_token = _ADDITIONAL_OVERLAY_DIRS.set(additional_overlays)
     try:
         yield
     finally:
+        _ADDITIONAL_OVERLAY_DIRS.reset(layers_token)
         _OVERLAY_PROJECT_ROOT.reset(token)
 
 
@@ -109,7 +116,11 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
 
     effective = current_effective_config()
     if overlay_dir is None and effective is not None and not uses_ambient_overlay_compat():
-        return sorted(effective.project_overlays)
+        return sorted(
+            set(effective.project_overlays).union(
+                *(layer.files for layer in getattr(effective, "overlay_layers", ()))
+            )
+        )
     if overlay_dir is None:
         overlay_dir = get_overlay_directory()
     if overlay_dir is None or not overlay_dir.is_dir():
@@ -117,6 +128,12 @@ def list_overlay_files(overlay_dir: Path | None = None) -> list[str]:
     return sorted(
         logical_path(p.relative_to(overlay_dir)) for p in overlay_dir.rglob("*.yaml") if p.is_file()
     )
+
+
+def get_overlay_directories() -> tuple[Path, ...]:
+    """Return explicitly selected raw directories for authoring/config validation."""
+    base = get_overlay_directory()
+    return (*((base,) if base is not None else ()), *_ADDITIONAL_OVERLAY_DIRS.get())
 
 
 def retired_overlay_errors(overlay_dir: Path | None = None) -> list[tuple[str, str]]:
@@ -129,7 +146,7 @@ def retired_overlay_errors(overlay_dir: Path | None = None) -> list[tuple[str, s
         return [
             (relative_path, message)
             for relative_path, message in _RETIRED_OVERLAYS.items()
-            if relative_path in effective.project_overlays
+            if relative_path in list_overlay_files()
         ]
     if overlay_dir is None:
         overlay_dir = get_overlay_directory()
@@ -166,7 +183,7 @@ def load_with_overlay(
     from evidenceforge.config.provider import (
         current_effective_config,
         pack_overlay_document,
-        project_overlay_document,
+        project_overlay_documents,
         uses_ambient_overlay_compat,
     )
 
@@ -174,8 +191,7 @@ def load_with_overlay(
         pack_overlay = pack_overlay_document(overlay_subpath)
         if pack_overlay is not None:
             data = merge_fn(data, pack_overlay)
-        project_overlay = project_overlay_document(overlay_subpath)
-        if project_overlay is not None:
+        for project_overlay in project_overlay_documents(overlay_subpath):
             data = merge_fn(data, project_overlay)
         return data
 

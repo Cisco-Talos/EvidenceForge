@@ -60,6 +60,7 @@ class Project(BaseModel):
     workspace: Path
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=240)
+    overlay_enabled: bool = False
     updated_at: float = Field(default_factory=time.time)
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
+from evidenceforge.config.context import ConfigurationContextError, select_context
 from evidenceforge.resources import predict_resources
 
 resources_app = typer.Typer(help="Predict generation memory and disk requirements without a run.")
@@ -31,14 +32,28 @@ def predict(
     json_output: bool = typer.Option(
         False, "--json", help="Emit the versioned prediction contract."
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Estimate resource ranges. Run validate separately to check correctness and safety."""
-    root = project_root.expanduser().resolve() if project_root else Path.cwd()
+    try:
+        root = select_context(project_root, context).project_root
+    except ConfigurationContextError as exc:
+        from evidenceforge.resources import ResourcePrediction
+
+        result = ResourcePrediction(destination=destination or Path.cwd() / "runs", error=str(exc))
+        if json_output:
+            print(result.model_dump_json(indent=2))
+        else:
+            console.print(f"[red]Prediction unavailable:[/red] {result.error}")
+        raise typer.Exit(1) from exc
     result = predict_resources(
         scenario_file,
         destination or root / "runs",
         project_root=project_root,
         checkpoint_hours=checkpoint_hours,
+        context=context,
     )
     if json_output:
         print(result.model_dump_json(indent=2))

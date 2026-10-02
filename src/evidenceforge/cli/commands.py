@@ -82,6 +82,7 @@ from evidenceforge.composition.artifacts import (
     write_resolved_scenario,
 )
 from evidenceforge.composition.sidecars import SIDECAR_REGISTRY
+from evidenceforge.config.context import ConfigurationContextError, select_context
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.generation.checkpoints import IncrementalCheckpointStore
 from evidenceforge.generation.checkpoints.errors import CheckpointError
@@ -1189,7 +1190,13 @@ def _legacy_public_identity_deprecation_issues(
     }
 
     def consumed(path: str) -> bool:
-        document = compiled.effective_config.project_overlays.get(path)
+        documents = [
+            compiled.effective_config.project_overlays,
+            *(layer.files for layer in compiled.effective_config.overlay_layers),
+        ]
+        return any(consumed_document(path, files.get(path)) for files in documents)
+
+    def consumed_document(path: str, document: Any) -> bool:
         if not isinstance(document, dict):
             return False
         if path.endswith("external_actor_profiles.yaml"):
@@ -1393,6 +1400,7 @@ def _load_generation_scenario(
     oob_hosts: tuple[str, ...],
     verbose: bool,
     debug: bool,
+    context: Path | None = None,
 ) -> "tuple[CompiledScenario, CompiledScenario | None, list[ValidationIssue]]":
     """Compile the input and report ordered cross-reference diagnostics with their existing exits."""
     # Load and validate scenario
@@ -1417,6 +1425,7 @@ def _load_generation_scenario(
                 scenario_file,
                 project_root=project_root,
                 generation_seed=seed,
+                **({"context": context} if context is not None else {}),
             )
         elif checkpoint_compiled is not None:
             compiled = checkpoint_compiled
@@ -1425,6 +1434,7 @@ def _load_generation_scenario(
                 scenario_file,
                 project_root=project_root,
                 generation_seed=seed,
+                **({"context": context} if context is not None else {}),
             )
         scenario = compiled.scenario
         console.print(f"[green]✓[/green] Loaded scenario: {scenario.name}")
@@ -1840,6 +1850,9 @@ def generate(
         "--progress-jsonl",
         help="Write versioned progress events as JSON lines for an external UI.",
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -1863,6 +1876,11 @@ def generate(
     )
 
     scenario_was_explicit = scenario_file is not None
+    if resume and not scenario_was_explicit and context is not None:
+        console.print(
+            "[red]Resume uses captured configuration; omit --context or explicitly supply an authored scenario for compatibility checking.[/red]"
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
     scenario_file, checkpoint_scenario_file, preliminary_recovery, stored_run_options = (
         _recover_generation_input(scenario_file=scenario_file, output=output, resume=resume)
     )
@@ -1903,6 +1921,7 @@ def generate(
         oob_hosts=oob_hosts,
         verbose=verbose,
         debug=debug,
+        **({"context": context} if context is not None else {}),
     )
     scenario = compiled.scenario
 
@@ -2342,6 +2361,9 @@ def resolve_cmd(
         "--oob-host",
         help="Fresh literal OOB authorization, matching validate/generate semantics.",
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Compile a scenario into a self-contained authoritative YAML document."""
 
@@ -2370,7 +2392,7 @@ def resolve_cmd(
 
     oob_hosts = _normalize_oob_hosts(oob_host, json_output=json_output)
     try:
-        compiled = compile_scenario(scenario_file, project_root=project_root)
+        compiled = compile_scenario(scenario_file, project_root=project_root, context=context)
         validator, issues = _validate_compiled_scenario(
             compiled,
             oob_hosts,
@@ -2473,6 +2495,9 @@ def validate(
         min=0,
         help="Forecast checkpoints every N simulated hours (default: 24); 0 disables them",
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Validate a scenario file for schema correctness and cross-reference integrity.
 
@@ -2486,7 +2511,6 @@ def validate(
     - 1: YAML parse error, file I/O error, or invalid --oob-host
     - 2: Schema validation or cross-reference error
     """
-    from evidenceforge.composition.compiler import resolve_project_root
 
     fallback_project_root = (
         project_root.resolve() if project_root is not None else Path.cwd().resolve()
@@ -2524,9 +2548,15 @@ def validate(
         raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
     try:
-        compiled = compile_scenario(scenario_file, project_root=project_root)
+        compiled = compile_scenario(scenario_file, project_root=project_root, context=context)
         scenario = compiled.scenario
-    except (ScenarioIncludeError, PackError, SchemaValidationError, ValidationError) as exc:
+    except (
+        ScenarioIncludeError,
+        PackError,
+        SchemaValidationError,
+        ValidationError,
+        ConfigurationContextError,
+    ) as exc:
         if json_output:
             diagnostic_kind = getattr(exc, "diagnostic_input_kind", "unknown")
             input_kind = diagnostic_kind if isinstance(diagnostic_kind, str) else "unknown"
@@ -2560,7 +2590,7 @@ def validate(
     resolved_project_root = (
         None
         if compiled.authored_kind == "resolved"
-        else resolve_project_root(scenario_file, project_root)
+        else select_context(project_root, context).project_root
     )
     if not json_output:
         console.print(f"[green]✓[/green] Schema valid: {scenario.name}")
@@ -3146,6 +3176,9 @@ def info(
         "--project-root",
         help="Override the current working directory for optional .eforge/config and .eforge/packs.",
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Show EvidenceForge installation info: version, config paths, available data.
 
@@ -3179,7 +3212,11 @@ def info(
         raise typer.Exit(EXIT_INPUT_ERROR)
 
     try:
-        data = gather_info(field=field, project_root=project_root)
+        data = gather_info(
+            field=field,
+            project_root=project_root,
+            **({"context": context} if context is not None else {}),
+        )
     except (EvidenceForgeError, OSError, UnicodeError, yaml.YAMLError, ValueError) as e:
         if json_output:
             print(
@@ -3293,6 +3330,9 @@ def validate_config_cmd(
         "--project-root",
         help="Override the current working directory for optional .eforge/config.",
     ),
+    context: Path | None = typer.Option(
+        None, "--context", help="Explicit configuration context YAML."
+    ),
 ) -> None:
     """Validate config files for integrity and cross-reference consistency.
 
@@ -3325,10 +3365,14 @@ def validate_config_cmd(
     resolved_project_root = resolve_management_project_root(project_root)
 
     try:
-        with overlay_project_root_scope(resolved_project_root):
+        selection = select_context(project_root, context)
+        resolved_project_root = selection.project_root
+        with overlay_project_root_scope(
+            resolved_project_root, tuple(layer.path for layer in selection.overlays)
+        ):
             result = validate_config(
                 merged_scope_factory=lambda: effective_config_scope(
-                    build_management_effective_config(resolved_project_root),
+                    build_management_effective_config(resolved_project_root, context=context),
                     refresh_legacy_globals=False,
                 )
             )

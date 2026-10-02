@@ -125,7 +125,7 @@ export function BundleFileBrowser({ jobId, files, api, onClose, onError, kind = 
 
   const lines = preview?.text.split("\n").slice(0, 4000) || [];
   const language = languageFor(selected || "", preview?.text || "");
-  const title = kind === "items" ? "Source YAML" : kind === "environment" ? "Workspace overlay" : "Bundle files";
+  const title = kind === "items" ? "Source YAML" : kind === "environment" ? "Configuration overlay" : "Bundle files";
   return <div className="modal-backdrop"><div className={`close-modal bundle-browser ${kind === "items" ? "source-file-browser" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
     <div className="bundle-browser-heading"><div><h2>{title}</h2><div className="path-with-copy"><span className="path-value source-path" title={files.root}>{files.root}</span><CopyPathButton path={files.root} label={kind === "items" ? "Copy source folder path" : "Copy bundle path"} onError={onError} /></div></div><button className="icon-button" aria-label={`Close ${title.toLowerCase()}`} onClick={onClose}><X size={18} /></button></div>
     <div className="bundle-browser-layout"><nav className="bundle-file-list" aria-label="Bundle file list">{files.files.length ? files.files.map((file) => <button key={file.path} className={`bundle-file-row ${selected === file.path ? "selected" : ""}`} onClick={() => setSelected(file.path)}><FileCode2 size={15} /><span title={file.path}>{file.path}</span><small>{file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}</small></button>) : <p className="muted">This bundle has no files yet.</p>}{files.truncated && <p className="muted">Showing the first 500 files.</p>}</nav>

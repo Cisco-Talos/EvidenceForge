@@ -26,7 +26,7 @@ import logging
 from pathlib import Path
 
 from evidenceforge.config import get_personas_directory
-from evidenceforge.config.overlay import get_overlay_directory
+from evidenceforge.config.overlay import get_overlay_directories
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
 logger = logging.getLogger(__name__)
@@ -65,9 +65,8 @@ def load_builtin_personas() -> list[dict]:
                 logger.warning(f"Failed to load persona {path.name}: {e}")
 
     # -- 2. Overlay personas -------------------------------------------------
-    overlay_dir = get_overlay_directory()
     overlay_personas: list[dict] = []
-    if overlay_dir is not None:
+    for overlay_dir in get_overlay_directories():
         overlay_personas_dir = overlay_dir / "personas"
         if overlay_personas_dir.is_dir():
             for path in sorted(overlay_personas_dir.glob("*.yaml")):
@@ -90,7 +89,10 @@ def load_builtin_personas() -> list[dict]:
     if overlay_personas:
         from evidenceforge.config.overlay import deep_merge_dict
 
-        overlay_by_name = {p["name"]: p for p in overlay_personas}
+        overlay_by_name: dict[str, dict] = {}
+        for persona in overlay_personas:
+            name = persona["name"]
+            overlay_by_name[name] = deep_merge_dict(overlay_by_name.get(name, {}), persona)
         merged: list[dict] = []
         for persona in package_personas:
             name = persona["name"]

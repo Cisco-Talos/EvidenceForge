@@ -33,6 +33,7 @@ from evidenceforge.composition.publisher import (
     effective_publisher,
     set_publisher,
 )
+from evidenceforge.config.context import OverlayReference, SelectedContext
 from evidenceforge.desktop.controller import _delete_owned_complete, _delete_owned_incomplete
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import _eforge_command
@@ -53,6 +54,17 @@ from evidenceforge.studio.codex import (
     CodexThreadNotReadyError,
     CodexTimeoutError,
     CodexUnavailableError,
+)
+from evidenceforge.studio.contexts import (
+    ConfigurationState,
+    capture_overlays,
+    configuration_state,
+    configure_project_scenarios,
+    configure_scenario,
+    context_arguments,
+    copy_scenario_configuration,
+    export_configuration,
+    project_overlay_root,
 )
 from evidenceforge.studio.environment import EnvironmentReport, inspect_environment, overlay_files
 from evidenceforge.studio.forecasts import PredictionRecord, prediction_key, run_prediction
@@ -307,6 +319,14 @@ class ItemUpdate(BaseModel):
     hidden: bool | None = None
     folder: str | None = None
     project_id: str | None = None
+    confirm_configuration_change: bool = False
+
+
+class ConfigurationUpdate(BaseModel):
+    """Enable or disable the private scenario overlay explicitly."""
+
+    model_config = ConfigDict(extra="forbid")
+    scenario_enabled: bool
 
 
 class ScenarioRenameRequest(BaseModel):
@@ -362,6 +382,7 @@ class ProjectRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=240)
+    overlay_enabled: bool = False
 
 
 class ProjectUpdate(BaseModel):
@@ -371,6 +392,7 @@ class ProjectUpdate(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=240)
+    overlay_enabled: bool | None = None
 
 
 class ValidationRequest(BaseModel):
@@ -407,8 +429,7 @@ def _validate_source(settings: StudioSettings, source: Path, workspace: Path) ->
                 *_eforge_command(controller_settings(settings)),
                 "validate",
                 str(source),
-                "--project-root",
-                str(workspace),
+                *context_arguments(source, workspace),
                 "--json",
             ],
             cwd=workspace,
@@ -980,6 +1001,7 @@ class StudioService:
             if conversation.draft_project_id:
                 project = self.store.project(conversation.draft_project_id)
                 if project and project.workspace.resolve() == workspace.resolve():
+                    configure_scenario(item.path, workspace, project)
                     item.project_id = project.id
                     self.store.save_item(item)
                     await self.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
@@ -1288,10 +1310,35 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                             "Workspace overlays exceed the bounded preview limit or contain links"
                         )
                     shutil.copytree(config, target)
+                project = studio.store.project(plan.project_id) if plan.project_id else None
+                if project is not None and project.overlay_enabled:
+                    stage_project = project.model_copy(update={"workspace": plan.stage})
+                    layer_root = project_overlay_root(project)
+                    if not layer_root.is_dir():
+                        raise ValueError(
+                            "Selected project configuration is missing; restore it before validation"
+                        )
+                    target_root = project_overlay_root(stage_project)
+                    if target_root.exists():
+                        shutil.rmtree(target_root)
+                    target_root.mkdir(parents=True)
+                    if layer_root.exists() or layer_root.is_symlink():
+                        captures = capture_overlays(
+                            SelectedContext(
+                                project_root=project.workspace,
+                                overlays=[OverlayReference(name="Project", path=layer_root)],
+                            )
+                        )
+                        captured = next(layer for layer in captures if layer.root == layer_root)
+                        for relative, content in captured.files.items():
+                            target_file = target_root / relative
+                            target_file.parent.mkdir(parents=True, exist_ok=True)
+                            target_file.write_bytes(content)
+                    configure_scenario(plan.stage / plan.target, plan.stage, stage_project)
                 return await asyncio.to_thread(
                     _validate_source, studio.settings, plan.stage / plan.target, plan.stage
                 )
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, ConfigurationError) as exc:
                 return ValidationResult(exit_code=-1, error=str(exc))
 
     @app.post("/v1/imports/{preview_id}/commit")
@@ -1325,6 +1372,12 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             if path and item is None:
                 raise HTTPException(status_code=500, detail="Imported YAML could not be indexed")
             if item:
+                if item.kind == "scenario":
+                    configure_scenario(
+                        item.path,
+                        item.workspace,
+                        studio.store.project(plan.project_id) if plan.project_id else None,
+                    )
                 item.project_id = plan.project_id
                 item.imported = True
                 studio.store.save_item(item)
@@ -1378,10 +1431,53 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             raise HTTPException(status_code=400, detail="Choose a scenario")
         try:
             return await asyncio.to_thread(
-                inspect_environment, studio.settings, item.path, studio.settings.workspace
+                inspect_environment,
+                studio.settings,
+                item.path,
+                studio.settings.workspace,
+                studio.store.project(item.project_id) if item.project_id else None,
             )
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, ConfigurationError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/scenarios/{item_id}/configuration")
+    async def set_configuration(
+        item_id: str, request: ConfigurationUpdate, studio: StudioService = Depends(authorized)
+    ) -> ConfigurationState:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        project = studio.store.project(item.project_id) if item.project_id else None
+        try:
+            configure_scenario(
+                item.path, item.workspace, project, scenario_enabled=request.scenario_enabled
+            )
+            state = configuration_state(item.path, item.workspace, project)
+        except (OSError, ValueError, ConfigurationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await studio.refresh_dependencies([item])
+        await studio.emit(item.id, "configuration.updated", state.model_dump(mode="json"))
+        return state
+
+    @app.get("/v1/environment/{item_id}/layers/{scope_id}/files/{relative_path:path}")
+    def configuration_file(
+        item_id: str, scope_id: str, relative_path: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        try:
+            state = configuration_state(
+                item.path,
+                item.workspace,
+                studio.store.project(item.project_id) if item.project_id else None,
+            )
+        except (OSError, ValueError, ConfigurationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        scope = next((scope for scope in state.scopes if scope.id == scope_id), None)
+        if scope is None or relative_path not in {file.path for file in scope.files}:
+            raise HTTPException(status_code=404, detail="Configuration file not found")
+        return FileResponse(scope.root / relative_path, filename=Path(relative_path).name)
 
     @app.post("/v1/scenarios/{item_id}/resources/predict")
     async def predict_scenario_resources(
@@ -1464,7 +1560,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         item = studio.store.item(item_id)
         if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
             raise HTTPException(status_code=404, detail="Item not found")
-        changes = update.model_dump(exclude_unset=True)
+        changes = update.model_dump(exclude_unset=True, exclude={"confirm_configuration_change"})
         if "folder" in changes and changes["folder"] is not None:
             if changes["folder"] not in studio.store.folders(studio.settings.workspace):
                 raise HTTPException(status_code=404, detail="Folder not found in this workspace")
@@ -1475,8 +1571,28 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     raise HTTPException(
                         status_code=404, detail="Project not found in this workspace"
                     )
+        if (
+            item.kind == "scenario"
+            and "project_id" in changes
+            and changes["project_id"] != item.project_id
+        ):
+            previous = studio.store.project(item.project_id) if item.project_id else None
+            project = studio.store.project(changes["project_id"]) if changes["project_id"] else None
+            if (
+                previous and previous.overlay_enabled or project and project.overlay_enabled
+            ) and not update.confirm_configuration_change:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This move changes the scenario's project configuration. Confirm the move; existing runs remain unchanged.",
+                )
+            try:
+                configure_scenario(item.path, item.workspace, project)
+            except (OSError, ValueError, ConfigurationError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         item = item.model_copy(update=changes)
         studio.store.save_item(item)
+        if item.kind == "scenario":
+            await studio.refresh_dependencies([item])
         await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
         return item
 
@@ -1548,6 +1664,16 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         except FileExistsError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (OSError, UnicodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            copy_scenario_configuration(
+                item.path,
+                cloned_path,
+                workspace,
+                studio.store.project(item.project_id) if item.project_id else None,
+            )
+        except (OSError, ValueError, ConfigurationError) as exc:
+            shutil.rmtree(cloned_path.parent)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         source = next(
             (found for found in discover_scenarios(workspace, []) if found.path == cloned_path),
@@ -1822,6 +1948,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             workspace=studio.settings.workspace,
             name=name,
             description=request.description.strip(),
+            overlay_enabled=request.overlay_enabled,
         )
         try:
             studio.store.save_project(project)
@@ -1846,13 +1973,31 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             changes["name"] = changes["name"].strip()
         if "description" in changes:
             changes["description"] = (changes["description"] or "").strip()
-        project = project.model_copy(update={**changes, "updated_at": time.time()})
-        try:
-            studio.store.save_project(project)
-        except sqlite3.IntegrityError as error:
+        if "overlay_enabled" in changes and changes["overlay_enabled"] is None:
             raise HTTPException(
-                status_code=409, detail="A project with this name already exists"
-            ) from error
+                status_code=400, detail="Choose whether project configuration is enabled"
+            )
+        if any(
+            other.id != project.id
+            and other.name.casefold() == changes.get("name", project.name).casefold()
+            for other in studio.store.projects(project.workspace)
+        ):
+            raise HTTPException(status_code=409, detail="A project with this name already exists")
+        updated = project.model_copy(update={**changes, "updated_at": time.time()})
+        affected = [
+            item
+            for item in studio.store.items(project.workspace, "scenario")
+            if item.project_id == project.id
+        ]
+        try:
+            configure_project_scenarios(
+                [item.path for item in affected], project.workspace, updated
+            )
+            studio.store.save_project(updated)
+        except (OSError, ValueError, ConfigurationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        project = updated
+        await studio.refresh_dependencies(affected)
         await studio.emit(project.id, "project.updated", json.loads(project.model_dump_json()))
         return project
 
@@ -1863,7 +2008,17 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         project = studio.store.project(project_id)
         if project is None or project.workspace.resolve() != studio.settings.workspace.resolve():
             raise HTTPException(status_code=404, detail="Project not found")
+        affected = [
+            item
+            for item in studio.store.items(project.workspace, "scenario")
+            if item.project_id == project.id
+        ]
+        try:
+            configure_project_scenarios([item.path for item in affected], project.workspace, None)
+        except (OSError, ValueError, ConfigurationError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         changed, changed_drafts, changed_views = studio.store.delete_project(project)
+        await studio.refresh_dependencies(affected)
         for item in changed:
             await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
         for conversation in changed_drafts:
@@ -2169,6 +2324,8 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             return result
         except CodexThreadNotReadyError:
             return {"thread": {"turns": []}, "history_pending": True}
+        except (OSError, ValueError, ConfigurationError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         except CodexTimeoutError as error:
             await studio.set_codex_health("stalled", str(error))
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -2328,6 +2485,28 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                         detail=f"{skill_name} is unavailable. Install EvidenceForge skills in Settings.",
                     )
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
+            configuration_instructions = ""
+            context_source = (
+                item.path
+                if item is not None and item.kind == "scenario"
+                else conversation.draft_path
+                if conversation.draft_kind == "scenario"
+                else None
+            )
+            if context_source is not None:
+                project_id = item.project_id if item is not None else conversation.draft_project_id
+                project = studio.store.project(project_id) if project_id else None
+                if item is None:
+                    configure_scenario(context_source, conversation.workspace, project)
+                arguments = context_arguments(context_source, conversation.workspace)
+                configuration_instructions = (
+                    " For authored scenario inspection, validation, resolution, resource forecasting, and generation, "
+                    f"use this explicitly selected configuration: {arguments[0]} {arguments[1]!r}. "
+                    "Use eforge info configuration_context --json with that selection to inspect named layers. "
+                    "Pack management continues to use --project-root for this workspace. "
+                    "Do not apply the context to authoritative resolved inputs; their configuration is embedded. "
+                    "Config edits must target the scope requested by the user, preserving the existing family merge rules."
+                )
             if first_turn:
                 context_kind = item.kind if item is not None else conversation.draft_kind
                 target = (
@@ -2351,6 +2530,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                         f"{draft_name_context}"
                         "Treat that path as context for the user's requests. Wait for a user "
                         "request before editing files. Keep deterministic generation in eforge."
+                        + configuration_instructions
                     ),
                 }
                 if conversation.model_id:
@@ -2359,7 +2539,14 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 conversation.thread_id = str(started["thread"]["id"])
                 conversation.title = " ".join(request.text.strip().split()[:7])[:80]
             else:
-                await studio.codex.call("thread/resume", {"threadId": conversation.thread_id})
+                await studio.codex.call(
+                    "thread/resume",
+                    {
+                        "threadId": conversation.thread_id,
+                        "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. Keep deterministic generation in eforge. Follow user requests and the EvidenceForge skills."
+                        + configuration_instructions,
+                    },
+                )
             parameters = {"threadId": conversation.thread_id, "input": inputs, "summary": "auto"}
             if conversation.model_id:
                 parameters["model"] = conversation.model_id
@@ -3019,6 +3206,18 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                         note = item.path.parent / name
                         if note.is_file() and not note.is_symlink():
                             output.write(note, "authored/" + name)
+                    try:
+                        for filename, content in export_configuration(
+                            item.path, item.workspace
+                        ).items():
+                            output.writestr("authored/" + filename, content)
+                    except (OSError, ValueError, ConfigurationError) as exc:
+                        output.writestr(
+                            "authored/CONFIGURATION_UNAVAILABLE.txt",
+                            "Current authored configuration could not be exported: "
+                            + str(exc)
+                            + "\nThe run/RESOLVED_SCENARIO.yaml still contains the authoritative frozen configuration.\n",
+                        )
                     for evaluation in studio.jobs.load_evaluations():
                         if (
                             evaluation.generation_id == generation.id
@@ -3033,6 +3232,8 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                         "run/ contains the selected completed generation. Its RESOLVED_SCENARIO.yaml "
                         "is the authoritative input for that run. authored/ contains the current "
                         "scenario file and companion notes, which may have changed since generation. "
+                        "authored/configuration/context.yaml, when present, selects the copied current overlays. "
+                        "Pack dependencies still require exact versions; import with a dependency review. "
                         "evaluations/ contains saved reports for this run.\n",
                     )
             except (OSError, ValueError):

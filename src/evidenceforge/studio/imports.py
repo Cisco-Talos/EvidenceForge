@@ -24,7 +24,15 @@ from evidenceforge.composition.releases import (
     EFPACK_MANIFEST,
     validate_efpack,
 )
+from evidenceforge.config.context import (
+    ConfigurationContext,
+    OverlayReference,
+    SelectedContext,
+    context_fingerprint,
+    select_context,
+)
 from evidenceforge.models.exceptions import ConfigurationError, PackError, PathSafetyError
+from evidenceforge.studio.contexts import capture_overlays, context_path, scenario_context_path
 from evidenceforge.studio.environment import overlay_fingerprint
 from evidenceforge.studio.lifecycle import rename_scenario
 from evidenceforge.utils import LoadedSourceGraph, load_scenario_source_graph
@@ -46,6 +54,7 @@ class ScenarioImportRequest(BaseModel):
     source_workspaces: list[Path] = Field(default_factory=list, max_length=16)
     pack_locations: dict[str, Path] = Field(default_factory=dict, max_length=64)
     documents: list[str] | None = None
+    configuration_context: Path | None = None
 
 
 class PackImportRequest(BaseModel):
@@ -221,8 +230,20 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
     fingerprints: list[str] = []
     try:
         fingerprints.append(overlay_fingerprint(workspace))
-    except (OSError, ValueError) as exc:
+        fingerprints.append(
+            context_fingerprint(select_context(workspace, context_path(path, workspace)))
+        )
+    except (OSError, ValueError, ConfigurationError) as exc:
         fingerprints.append(f"overlay: {exc}")
+        rows.append(
+            DependencyRow(
+                key="configuration",
+                kind="overlay",
+                label="Configuration context",
+                status="missing",
+                detail=str(exc),
+            )
+        )
     repository = PackRepository(workspace)
     try:
         graph = load_scenario_source_graph(path)
@@ -376,6 +397,8 @@ class PreparedImport:
         self.reservations: dict[Path, str | None] = {}
         self.publish_roots: list[Path] = []
         self.pack_sources: dict[str, set[Path]] = {}
+        self.configuration_source: SelectedContext | None = None
+        self.configuration_fingerprint: str | None = None
 
     def close(self) -> None:
         """Remove only this generated temporary snapshot."""
@@ -565,6 +588,13 @@ class PreparedImport:
                 )
                 if pack.digest != expected:
                     raise FileExistsError("A destination pack changed after review. Review again")
+        if (
+            self.configuration_source is not None
+            and self.configuration_fingerprint
+            != context_fingerprint(self.configuration_source)
+            + overlay_fingerprint(self.configuration_source.project_root)
+        ):
+            raise FileExistsError("Source configuration changed after review. Review again")
         published: list[Path] = []
         try:
             for relative in self.publish_roots:
@@ -583,12 +613,18 @@ class PreparedImport:
                         raise ValueError("Import destination must not contain links")
                     current.mkdir(exist_ok=True)
                 # Reserve without overwriting even an empty directory created concurrently.
-                target.mkdir()
+                if (self.stage / relative).is_file():
+                    target.touch(exist_ok=False)
+                else:
+                    target.mkdir()
                 published.append(target)
                 os.replace(self.stage / relative, target)
         except (OSError, ValueError):
             for target in reversed(published):
-                shutil.rmtree(target)
+                if target.is_file():
+                    target.unlink()
+                else:
+                    shutil.rmtree(target)
             raise
         return workspace / self.target if self.target else None
 
@@ -646,6 +682,15 @@ def prepare_scenario(
     source = _local_file(request.path)
     if source.suffix.lower() not in {".yaml", ".yml"}:
         raise ValueError("Choose a .yaml or .yml scenario file")
+    selection = (
+        select_context(context=request.configuration_context)
+        if request.configuration_context is not None
+        else None
+    )
+    if selection is not None and selection.project_root not in request.source_workspaces:
+        request = request.model_copy(
+            update={"source_workspaces": [*request.source_workspaces, selection.project_root]}
+        )
     graph = load_scenario_source_graph(source)
     if graph.data.get("kind") == "evidenceforge.resolved-scenario" or not (
         "name" in graph.data
@@ -868,7 +913,9 @@ def prepare_scenario(
                 kind="overlay",
                 label="Workspace configuration",
                 status="warning",
-                detail="Use destination workspace overlays. Source-workspace overlays are not copied.",
+                detail="Destination workspace configuration applies first. Explicitly selected source configuration is copied into private layers."
+                if selection
+                else "Use destination workspace overlays. Source-workspace overlays are not copied; select a configuration context to include them.",
             )
         )
         for root in request.source_workspaces:
@@ -884,6 +931,57 @@ def prepare_scenario(
                 )
         plan.publish_roots.remove(destination)
         plan.publish_roots.append(destination)
+        if selection is not None:
+            plan.configuration_source = selection
+            plan.configuration_fingerprint = context_fingerprint(selection) + overlay_fingerprint(
+                selection.project_root
+            )
+            layers: list[OverlayReference] = []
+            for index, captured in enumerate(capture_overlays(selection)):
+                relative = destination / "configuration" / str(index)
+                (plan.stage / relative).mkdir(parents=True, exist_ok=True)
+                plan.add_files(relative, captured.files)
+                layers.append(
+                    OverlayReference(
+                        name=f"Imported {index + 1}: {captured.name}"[:80], path=relative
+                    )
+                )
+                for filename, content in captured.files.items():
+                    plan.sources[captured.root / filename] = hashlib.sha256(content).hexdigest()
+                plan.review.rows.append(
+                    DependencyRow(
+                        key=f"configuration-{index}",
+                        kind="overlay",
+                        label=captured.name,
+                        status="copy",
+                        detail=f"Copy {len(captured.files)} files as a private layer after destination workspace and project configuration",
+                        source=str(captured.root),
+                        destination=str(workspace / relative),
+                    )
+                )
+            context_file = scenario_context_path(workspace / plan.target, workspace).relative_to(
+                workspace
+            )
+            document = ConfigurationContext(
+                project_root=Path(os.path.relpath(Path("."), context_file.parent)),
+                overlays=[
+                    layer.model_copy(
+                        update={"path": Path(os.path.relpath(layer.path, context_file.parent))}
+                    )
+                    for layer in layers
+                ],
+            )
+            plan.add_files(
+                context_file.parent,
+                {
+                    context_file.name: yaml.safe_dump(
+                        document.model_dump(mode="json"), sort_keys=False
+                    ).encode()
+                },
+            )
+            plan.reservations[context_file] = None
+            plan.publish_roots.append(context_file)
+            plan.sources[selection.path] = hashlib.sha256(selection.path.read_bytes()).hexdigest()
         return plan
     except (
         OSError,

@@ -1534,11 +1534,37 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
             client.get(f"/v1/conversations/{chat['id']}/history", headers=headers).status_code
             == 200
         )
+        if kind == "scenario":
+            # The next turn must receive a changed selection, without adding it to
+            # the user's visible message or restarting the conversation.
+            configured = client.post(
+                f"/v1/scenarios/{item_id}/configuration",
+                headers=headers,
+                json={"scenario_enabled": True},
+            )
+            assert configured.status_code == 200, configured.text
+            selected_context = configured.json()["context_path"]
+            follow_up = client.post(
+                f"/v1/conversations/{chat['id']}/turns",
+                headers=headers,
+                json={"text": "Check the updated configuration"},
+            )
+            assert follow_up.status_code == 200, follow_up.text
     records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     started = next(record for record in records if record["method"] == "thread/start")
     assert str(scenario) in started["params"]["developerInstructions"]
     turn = next(record for record in records if record["method"] == "turn/start")
-    assert "thread/resume" not in [record["method"] for record in records]
+    if kind == "scenario":
+        resumed = next(record for record in records if record["method"] == "thread/resume")
+        assert resumed["params"]["threadId"] == "thread-alpha"
+        assert "--context" in resumed["params"]["developerInstructions"]
+        assert selected_context in resumed["params"]["developerInstructions"]
+        turns = [record for record in records if record["method"] == "turn/start"]
+        assert turns[-1]["params"]["input"] == [
+            {"type": "text", "text": "Check the updated configuration"}
+        ]
+    else:
+        assert "thread/resume" not in [record["method"] for record in records]
     assert turn["params"]["input"][0] == {"type": "text", "text": "Validate this scenario"}
     assert turn["params"]["input"][1]["name"] == skill
     assert turn["params"]["summary"] == "auto"

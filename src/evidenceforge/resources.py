@@ -33,7 +33,12 @@ class ResourcePrediction(BaseModel):
 
 
 def predict_resources(
-    source: Path, destination: Path, *, project_root: Path | None = None, checkpoint_hours: int = 24
+    source: Path,
+    destination: Path,
+    *,
+    project_root: Path | None = None,
+    checkpoint_hours: int = 24,
+    context: Path | None = None,
 ) -> ResourcePrediction:
     """Compile and estimate inputs without generating logs or creating output directories."""
     source = source.expanduser().resolve()
@@ -43,7 +48,7 @@ def predict_resources(
         if source.stat().st_size > 8 * 1024**2:
             raise ValueError("Choose a scenario YAML file smaller than 8 MiB")
         source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
-        compiled = compile_scenario(source, project_root=project_root)
+        compiled = compile_scenario(source, project_root=project_root, context=context)
         with effective_config_scope(compiled.effective_config):
             estimate = estimate_workload(compiled.scenario, scenario_root=source.parent)
             forecast = build_resource_forecast(

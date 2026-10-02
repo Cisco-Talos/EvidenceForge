@@ -103,6 +103,19 @@ test("multiple source workspaces and document choices are retained in a fresh re
   }, 180000);
 });
 
+test("source configuration is explicit and changing it discards the previous review", async () => {
+  const { user, request } = await openReview();
+  await user.click(screen.getByText("Source configuration (optional)"));
+  await user.type(screen.getByRole("textbox", { name: "Configuration context" }), "/source/configuration/context.yaml");
+  expect(screen.queryByRole("heading", { name: "Review import" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Import scenario" }));
+  await screen.findByRole("heading", { name: "Review import" });
+  expect(request).toHaveBeenLastCalledWith("/v1/imports/scenario/preview", "POST", {
+    path: "/source/scenario.yaml", name: "imported", project_id: null,
+    source_workspaces: [], documents: ["ENVIRONMENT.md", "NOTES.md"], configuration_context: "/source/configuration/context.yaml",
+  }, 180000);
+});
+
 test("pack conflicts disable import while preserving review and cancellation", async () => {
   const { user, request, onClose } = fixture("pack", { ...review, kind: "pack", can_import: false, documents: [], publishers: ["example"], rows: [{ key: "conflict", kind: "pack", label: "example:industry:healthcare@1.0.0", status: "conflict", detail: "Existing version has different contents" }] });
   await user.type(screen.getByRole("textbox", { name: "Pack release" }), "/source/release.efpack");

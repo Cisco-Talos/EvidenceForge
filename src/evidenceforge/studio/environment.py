@@ -12,7 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.composition.models import SelectedPack
 from evidenceforge.desktop.jobs import _eforge_command
+from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.studio.contexts import ConfigurationState, configuration_state, context_arguments
 from evidenceforge.studio.settings import StudioSettings, controller_settings
+from evidenceforge.studio.store import Project
 
 
 class OverlayFile(BaseModel):
@@ -40,6 +43,7 @@ class EnvironmentReport(BaseModel):
     catalog_origins: dict[str, str] = Field(default_factory=dict)
     catalog_field_origins: dict[str, str] = Field(default_factory=dict)
     merge_decisions: list[dict[str, str]] = Field(default_factory=list)
+    configuration: ConfigurationState | None = None
     overlay_root: Path
     overlay_files: list[OverlayFile] = Field(default_factory=list)
     overlays_truncated: bool = False
@@ -86,7 +90,7 @@ def overlay_fingerprint(workspace: Path) -> str:
 
 
 def inspect_environment(
-    settings: StudioSettings, source: Path, workspace: Path
+    settings: StudioSettings, source: Path, workspace: Path, project: Project | None = None
 ) -> EnvironmentReport:
     """Resolve in a fresh process so pack and overlay edits cannot leave cached values."""
     root, files, truncated = overlay_files(workspace)
@@ -100,13 +104,13 @@ def inspect_environment(
         overlays_truncated=truncated,
     )
     try:
+        report.configuration = configuration_state(source, workspace, project)
         completed = subprocess.run(
             [
                 *_eforge_command(controller_settings(settings)),
                 "resolve",
                 str(source),
-                "--project-root",
-                str(workspace),
+                *context_arguments(source, workspace),
                 "--explain-composition",
                 "--include-effective-scenario",
                 "--json",
@@ -118,7 +122,13 @@ def inspect_environment(
             timeout=180,
         )
         payload = json.loads(completed.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        ValueError,
+        ConfigurationError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ) as exc:
         report.error = f"Environment inspection could not finish: {exc}"
         return report
     if not isinstance(payload, dict) or completed.returncode or payload.get("valid") is not True:

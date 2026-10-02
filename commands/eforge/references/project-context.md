@@ -39,3 +39,35 @@ Non-default override example:
 ```bash
 eforge pack list --json --project-root /explicitly/selected/project
 ```
+
+## Optional named configuration contexts
+
+Only when the user or calling application explicitly supplies a context, use `--context FILE`
+instead of `--project-root`. No context is discovered automatically. Ordinary CWD usage stays the
+same. A context is plain YAML, independent of Studio or its database:
+
+```yaml
+context_version: "1.0"
+project_root: ..
+overlays:
+  - name: Clinic project
+    path: ../project-config
+  - name: One scenario
+    path: ../scenario-config
+```
+
+Paths resolve relative to the context file, not CWD or the scenario. The declared root selects
+`.eforge/packs` and the base `.eforge/config`. Additional directories contain the same supported
+package-relative configuration paths. Apply the base first, then additional layers in listed order;
+retain each family's existing merge rules, including appended lists, keyed `_replace`, and complete
+section replacement. A later layer is not a universal replacement for every field or list.
+
+Repeat the selection for `info`, `validate-config`, `validate`, `resolve`, `resources predict`, and
+`generate`. Inspect it with `eforge info configuration_context --context FILE --json`. Pack
+management uses its existing `--project-root`, with the context's declared root. Never search for
+another root or silently fall back if a selected file or directory is missing.
+
+A resolved scenario embeds its selected configuration, including ordered layers. Omit `--context`
+when reproducing it or resuming a captured run. Contexts do not authorize editing package defaults,
+engine policy, unrelated layers, or authored content. Import/export must carry selected layer files
+or explicitly disclose missing dependencies; a display project name alone is not configuration.

@@ -448,6 +448,26 @@ def project_overlay_document(relative_path: str) -> dict[str, Any] | None:
     return copy.deepcopy(value) if isinstance(value, dict) else None
 
 
+def project_overlay_documents(relative_path: str) -> list[dict[str, Any]]:
+    """Return ordered base/additional patches without flattening merge directives."""
+    effective = current_effective_config()
+    if effective is None:
+        return []
+    documents: list[dict[str, Any]] = []
+    for files in [
+        effective.project_overlays,
+        *(layer.files for layer in getattr(effective, "overlay_layers", ())),
+    ]:
+        value = files.get(relative_path)
+        if isinstance(value, dict):
+            documents.append(
+                _copy_timing_profile_document(value)
+                if relative_path == _TIMING_PROFILE_PATH
+                else copy.deepcopy(value)
+            )
+    return documents
+
+
 def packaged_default_document(path: Any) -> tuple[bool, Any]:
     """Return an inlined packaged YAML document for a compiled run when available."""
 

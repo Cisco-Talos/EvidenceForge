@@ -11,6 +11,7 @@ const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
   selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "/workspace/office" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "/package" }],
   effective_scenario: { environment: { users: [{ name: "alice" }] } }, field_origins: { description: "sources/brief.yaml" }, organization_model_origins: { "network.segments": "office/pack.yaml" }, catalog_origins: {}, catalog_field_origins: { "personas.analyst": "healthcare/pack.yaml" }, merge_decisions: [{ path: "users", action: "replace", lower_layer: "organization", higher_layer: "scenario", winner: "scenario" }],
+  configuration: { context_path: null, cli_command: "eforge generate /workspace/scenario.yaml --project-root /workspace", scopes: [{ id: "workspace", name: "Workspace", root: "/workspace/.eforge/config", enabled: true, files: [{ path: "activity/dns_registry.yaml", size: 20 }] }, { id: "scenario", name: "Scenario", root: "/workspace/scenario-config", enabled: false, files: [] }] },
   overlay_root: "/workspace/.eforge/config", overlay_files: [{ path: "activity/dns_registry.yaml", size: 20 }], overlays_truncated: false,
 };
 const packs = [
@@ -88,12 +89,13 @@ test("overlays use the contained file viewer and authenticated export route", as
   const { api } = setup();
   await screen.findByText("Selected packs");
   const user = userEvent.setup();
+  await user.click(screen.getByText("View configuration files"));
   await user.click(screen.getByRole("button", { name: "activity/dns_registry.yaml" }));
-  const viewer = screen.getByRole("dialog", { name: "Workspace overlay" });
-  await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/files/activity/dns_registry.yaml"));
+  const viewer = screen.getByRole("dialog", { name: "Configuration overlay" });
+  await waitFor(() => expect(api.readTextPreview).toHaveBeenCalledWith("/v1/environment/scenario/layers/workspace/files/activity/dns_registry.yaml"));
   expect(await within(viewer).findByLabelText("Preview of activity/dns_registry.yaml")).toHaveTextContent("domains: []");
   await user.click(within(viewer).getByRole("button", { name: "Download file" }));
-  expect(api.download).toHaveBeenCalledWith("/v1/environment/scenario/files/activity/dns_registry.yaml", "dns_registry.yaml", expect.any(Function));
+  expect(api.download).toHaveBeenCalledWith("/v1/environment/scenario/layers/workspace/files/activity/dns_registry.yaml", "dns_registry.yaml", expect.any(Function));
 });
 
 test("an old response cannot replace a newly selected scenario", async () => {
@@ -105,4 +107,14 @@ test("an old response cannot replace a newly selected scenario", async () => {
   expect(await screen.findByText(/inline environment and defaults/)).toBeVisible();
   await act(async () => resolveOld(report));
   expect(screen.queryByText("project:team:organization:office@2.0.0")).not.toBeInTheDocument();
+});
+
+
+test("scenario configuration can be toggled and is refreshed before inspection", async () => {
+  const { api } = setup();
+  const checkbox = await screen.findByRole("checkbox", { name: "Use Scenario configuration" });
+  expect(checkbox).not.toBeChecked();
+  await userEvent.setup().click(checkbox);
+  await waitFor(() => expect(api.request).toHaveBeenCalledWith("/v1/scenarios/scenario/configuration", "POST", { scenario_enabled: true }));
+  await waitFor(() => expect(api.request).toHaveBeenCalledTimes(3));
 });

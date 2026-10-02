@@ -21,6 +21,7 @@ from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
 from evidenceforge.models.exceptions import EvidenceForgeError
+from evidenceforge.studio.contexts import context_path
 from evidenceforge.studio.imports import dependency_health
 from evidenceforge.studio.settings import StudioSettings, controller_settings
 from evidenceforge.studio.store import StudioStore
@@ -71,7 +72,9 @@ def queue_studio_generation(
     before = dependency_health(scenario, workspace)
     if not before.ready:
         raise ValueError("Resolve the scenario's missing or conflicting dependencies first")
-    compiled = compile_scenario(scenario, project_root=workspace)
+    compiled = compile_scenario(
+        scenario, project_root=workspace, context=context_path(scenario, workspace)
+    )
     after = dependency_health(scenario, workspace)
     if (
         not after.ready

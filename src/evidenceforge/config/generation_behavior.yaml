@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 155
+current_revision: 156
 history_start_revision: 1
-behavior_surface_sha256: e799b090406c2072cc54d6f70c5b34dec4cee99b2573afa8bef90909be9f3968
+behavior_surface_sha256: 8f73e597d5ac62d4b558606af16d98e8327f7194fb5a8d9a6dcc84b10e344131
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1571,3 +1571,11 @@ changes:
       - windows_event_security
       - windows_event_sysmon
     summary: Resolve a deferred process to one distinct canonical host and address when a modeled session uses the same endpoint for both transport roles, retaining strict foreign-endpoint rejection.
+  - revision: 156
+    id: explicit-portable-configuration-contexts
+    impact: none
+    domains:
+      - configuration-context
+      - effective-config-snapshot
+    formats: []
+    summary: Add explicitly selected ordered overlay inputs while preserving existing default rendering, serialized legacy inputs, and per-family merge semantics. Opt-in layer changes are captured as input drift rather than a default behavior change.

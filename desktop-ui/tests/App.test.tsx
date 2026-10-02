@@ -284,6 +284,28 @@ test("project creation is available in the project rail", async () => {
   ));
 });
 
+test("a move into configured projects waits for confirmation and supports Escape", async () => {
+  const originalProjects = snapshot.projects;
+  snapshot.projects = [{ id: "clinic", workspace, name: "Clinic", description: "", updated_at: 1, overlay_enabled: true }];
+  try {
+    const user = userEvent.setup();
+    const request = vi.mocked(useStudio().api!.request);
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clinic" }));
+    const dialog = screen.getByRole("dialog", { name: "Move Alpha?" });
+    expect(within(dialog).getByText(/Existing runs keep their captured inputs/)).toBeTruthy();
+    expect(request.mock.calls.some(([path]) => path === "/v1/items/alpha")).toBe(false);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Move Alpha?" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clinic" }));
+    await user.click(screen.getByRole("button", { name: "Move scenario" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "clinic", confirm_configuration_change: true }));
+    expect(screen.queryByRole("dialog", { name: "Move Alpha?" })).toBeNull();
+  } finally { snapshot.projects = originalProjects; }
+});
+
 test("library search includes indexed scenario YAML content", async () => {
   vi.mocked(useStudio().api!.request).mockResolvedValueOnce([snapshot.items[1]]);
   render(<App />);

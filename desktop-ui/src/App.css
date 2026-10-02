@@ -874,3 +874,15 @@ select { min-width: 185px; }
 .search-excerpts .scenario-search-excerpt { flex-direction: row; align-items: baseline; gap: 10px; }
 .search-excerpts .scenario-search-excerpt code { order: 0; flex: 1 1 45%; min-width: 0; }
 .search-excerpts .search-match-origin { order: 1; flex: 0 1 55%; }
+
+.configuration-scope-list { display: grid; gap: 12px; }
+.configuration-scope { border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.configuration-scope-heading, .configuration-scope-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.configuration-scope-heading label, .configuration-toggle span { display: flex; align-items: center; gap: 8px; }
+.configuration-scope-actions { margin: 10px 0; }
+.configuration-scope .path-with-copy { margin-top: 8px; }
+.configuration-cli { margin-top: 16px; }
+.configuration-cli .path-with-copy code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.configuration-scope small, .configuration-toggle small { color: var(--muted); }
+
+.configuration-move-modal { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); overflow: auto; }
