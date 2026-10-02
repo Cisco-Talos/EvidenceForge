@@ -923,3 +923,21 @@ The existing healthcare generation failure reproduced with the real CLI in dispo
 at `/private/tmp/eforge-healthcare-repro-20261001`. It raises the same deferred process/transport
 endpoint error through the typed SSH handler. Owning-layer diagnosis is the next reliability task;
 the separate iteration-scenario temporal-integrity investigation remains deferred by the user.
+
+## 2026-10-01 — Healthcare deferred-session endpoint fix
+
+- Reproduced the hour-nine failure with the real CLI and narrowed it to same-host SSH. The
+  network planner counted source and destination roles as two different candidate hosts, and
+  the publication preseal repeated that assumption. Both now require one distinct physical
+  endpoint; ambiguity across different hosts remains rejected. Scenario files were not edited.
+- Added routine real-caller regressions for synchronous and threaded publication, exact SSH
+  session/process output, no artificial network-sensor flow for local traffic, dispatcher cleanup,
+  and rejection before state/output mutation when process ownership names another host.
+- Declared localized generation behavior revision 155 with its updated surface digest.
+
+Verification: 26 loopback/behavior tests, 276 network/session contract tests, and five selected
+slow real SSH/RDP caller contracts pass. The original 14-hour healthcare scenario now completes
+in disposable output at `/private/tmp/eforge-healthcare-fixed-20261001b`; the authoritative
+manifest and all referenced bundle hashes verify. Output is about 295.2 MiB. Full Ruff checks
+and formatting pass. The separate iteration-scenario temporal-integrity investigation remains
+deferred as requested. No existing user bundle was replaced or repaired.

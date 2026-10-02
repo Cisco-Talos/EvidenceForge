@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 154
+current_revision: 155
 history_start_revision: 1
-behavior_surface_sha256: 429907e7b0207b6c11f34ecdf363b60838bb6ecad1cf46bf7d42c22b85397d59
+behavior_surface_sha256: e799b090406c2072cc54d6f70c5b34dec4cee99b2573afa8bef90909be9f3968
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1558,3 +1558,16 @@ changes:
       - bash-history-journal
     formats: []
     summary: Preserve full native file identities in durable Bash history export plans without changing rendered evidence.
+  - revision: 155
+    id: canonical-loopback-deferred-session-process-endpoints
+    impact: localized
+    domains:
+      - network-connection
+      - session-lifecycle
+      - process-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Resolve a deferred process to one distinct canonical host and address when a modeled session uses the same endpoint for both transport roles, retaining strict foreign-endpoint rejection.

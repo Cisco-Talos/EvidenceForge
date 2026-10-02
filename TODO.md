@@ -58,7 +58,7 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Reproduce and fix the `apt-healthcare-breach` preview generation failure at
+- [x] **P1** Reproduce and fix the `apt-healthcare-breach` preview generation failure at
   collection hour 9 (`Deferred session process projection has no unique transport endpoint`).
   Diagnose the owning network/session planner contract and add a focused regression; the run
   stopped before its first checkpoint. See the
