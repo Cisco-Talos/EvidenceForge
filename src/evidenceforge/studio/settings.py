@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from evidenceforge.studio.paths import StudioPaths, default_workspace
 
@@ -41,6 +41,15 @@ class StudioSettings(BaseModel):
     skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
     codex_path: Path | None = None
     eforge_path: Path | None = None
+
+    @field_validator("output_parents")
+    @classmethod
+    def resolve_output_parents(cls, value: dict[str, Path]) -> dict[str, Path]:
+        """Use canonical paths for both actual run destinations and cached forecasts."""
+        return {
+            str(Path(workspace).expanduser().resolve()): parent.expanduser().resolve()
+            for workspace, parent in value.items()
+        }
 
 
 class SettingsStore:

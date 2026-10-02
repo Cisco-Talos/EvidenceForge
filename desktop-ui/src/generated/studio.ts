@@ -191,6 +191,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/resources/predict": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Predict Scenario Resources */
+        post: operations["predict_scenario_resources_v1_scenarios__item_id__resources_predict_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/environment/{item_id}/files/{relative_path}": {
         parameters: {
             query?: never;
@@ -1686,6 +1703,18 @@ export interface components {
             name: string;
         };
         /**
+         * ForecastRange
+         * @description Lower, expected, and upper resource projections in bytes.
+         */
+        ForecastRange: {
+            /** Lower Bytes */
+            lower_bytes: number;
+            /** Expected Bytes */
+            expected_bytes: number;
+            /** Upper Bytes */
+            upper_bytes: number;
+        };
+        /**
          * GenerationProgress
          * @description Latest display state of a generation job.
          */
@@ -2059,6 +2088,21 @@ export interface components {
             scope?: ("user" | "project") | null;
         };
         /**
+         * PredictionRecord
+         * @description A cached projection tied to its input files and generation preferences.
+         */
+        PredictionRecord: {
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Dependency Fingerprint */
+            dependency_fingerprint: string;
+            /** Input Fingerprint */
+            input_fingerprint: string;
+            /** Completed At */
+            completed_at: number;
+            result: components["schemas"]["ResourcePrediction"];
+        };
+        /**
          * Project
          * @description A workspace-local group of scenarios and packs, independent of file paths.
          */
@@ -2151,12 +2195,298 @@ export interface components {
             authoring_turns: "stop" | "finish";
         };
         /**
+         * RegistryCostProjection
+         * @description Measured operation-cost projection for one registry workload.
+         */
+        RegistryCostProjection: {
+            /** Load Seconds */
+            load_seconds: number;
+            /** Mutation Seconds */
+            mutation_seconds: number;
+            /** Expiry Seconds */
+            expiry_seconds: number;
+            /** Lookup P95 Microseconds */
+            lookup_p95_microseconds?: number | null;
+            /** Lookup Operations */
+            lookup_operations: number;
+            /** Mutation Operations */
+            mutation_operations: number;
+            /** Expiry Operations */
+            expiry_operations: number;
+        };
+        /**
+         * RegistryEntryProjection
+         * @description Bounded logical and backing cardinalities for one registry.
+         */
+        RegistryEntryProjection: {
+            /** Created Entries */
+            created_entries: number;
+            /** Live Entries */
+            live_entries: number;
+            /** Retained Entries */
+            retained_entries: number;
+            /** Leased Entries */
+            leased_entries: number;
+            /** Stale Entries */
+            stale_entries: number;
+            /** Expired Entries */
+            expired_entries: number;
+            /** Backing Entries */
+            backing_entries: number;
+            /** High Water Entries */
+            high_water_entries: number;
+        };
+        /**
+         * RegistryForecastReport
+         * @description Registry working-set floor and its explicit non-registry exclusions.
+         */
+        RegistryForecastReport: {
+            /** Registries */
+            registries: components["schemas"]["RegistryResourceProjection"][];
+            total_registry_memory: components["schemas"]["ForecastRange"];
+            /** Total Structural Bytes */
+            total_structural_bytes: number;
+            /** Total Created Entries */
+            total_created_entries: number;
+            /** Total Live Entries */
+            total_live_entries: number;
+            /** Total Retained Entries */
+            total_retained_entries: number;
+            /** Total Leased Entries */
+            total_leased_entries: number;
+            /** Total Stale Entries */
+            total_stale_entries: number;
+            /** Emitter Payload Excluded Bytes */
+            emitter_payload_excluded_bytes: number;
+            /** Modeled Peak Floor Bytes */
+            modeled_peak_floor_bytes: number;
+            /** Legacy Calibrated Peak Bytes */
+            legacy_calibrated_peak_bytes: number;
+            /**
+             * Peak Memory Combination
+             * @default maximum_not_sum
+             * @constant
+             */
+            peak_memory_combination: "maximum_not_sum";
+            /** Excluded Components */
+            excluded_components: string[];
+            /** Retained State Family Coverage */
+            retained_state_family_coverage: components["schemas"]["RetainedStateFamilyCoverage"][];
+        };
+        /**
+         * RegistryResourceProjection
+         * @description Per-registry memory, cardinality, plateau, and measured cost report.
+         */
+        RegistryResourceProjection: {
+            /**
+             * Registry
+             * @enum {string}
+             */
+            registry: "lifecycle" | "application_channels" | "local_artifacts" | "collection_deployment" | "deployment_content";
+            input: components["schemas"]["RegistryWorkloadInput"];
+            entries: components["schemas"]["RegistryEntryProjection"];
+            memory: components["schemas"]["ForecastRange"];
+            /** Structural Bytes */
+            structural_bytes: number;
+            /** Plateau Horizon Seconds */
+            plateau_horizon_seconds: number;
+            /** Plateau Reached After Seconds */
+            plateau_reached_after_seconds?: number | null;
+            /** Maximum Lookup Candidates */
+            maximum_lookup_candidates?: number | null;
+            /** Heap Segment Amplification */
+            heap_segment_amplification?: number | null;
+            /** Compaction Budget Entries */
+            compaction_budget_entries: number;
+            /** Measured Profile */
+            measured_profile: string;
+            /** Operation Profile */
+            operation_profile?: string | null;
+            /**
+             * Measurement Status
+             * @enum {string}
+             */
+            measurement_status: "measured" | "provisional" | "unavailable";
+            /**
+             * Measurement Unit
+             * @enum {string}
+             */
+            measurement_unit: "live_entry" | "source" | "path_binding_equivalent";
+            /** Measured Entries */
+            measured_entries: number;
+            costs: components["schemas"]["RegistryCostProjection"];
+        };
+        /**
+         * RegistryWorkloadInput
+         * @description Scenario-derived input drivers for one bounded registry forecast.
+         *
+         *     Counts here are workload drivers, not retained-row predictions. The
+         *     resource calibration owns conversion from effects and source-channel
+         *     observations into created, live, retained, and leased registry rows.
+         */
+        RegistryWorkloadInput: {
+            /**
+             * Registry
+             * @enum {string}
+             */
+            registry: "lifecycle" | "application_channels" | "local_artifacts" | "collection_deployment" | "deployment_content";
+            /** Scenario Seconds */
+            scenario_seconds: number;
+            /** Base Occurrences */
+            base_occurrences: number;
+            /** Effect Occurrences */
+            effect_occurrences: number;
+            /** Channel Observations */
+            channel_observations: number;
+            /** Static Entries */
+            static_entries: number;
+            /**
+             * Scenario Override Entries
+             * @default 0
+             */
+            scenario_override_entries: number;
+            /** Effect Fanout */
+            effect_fanout: number;
+            /** Channel Fanout */
+            channel_fanout: number;
+        };
+        /**
+         * ResourceForecast
+         * @description Scenario projection compared with a live machine resource snapshot.
+         */
+        ResourceForecast: {
+            /** Calibration Version */
+            calibration_version: number;
+            /** Calibration Label */
+            calibration_label: string;
+            memory: components["schemas"]["ForecastRange"];
+            final_output: components["schemas"]["ForecastRange"];
+            checkpoint_workspace?: components["schemas"]["ForecastRange"];
+            disk: components["schemas"]["ForecastRange"];
+            snapshot: components["schemas"]["ResourceSnapshot"];
+            registry_report?: components["schemas"]["RegistryForecastReport"] | null;
+            /**
+             * Pressures
+             * @default []
+             */
+            pressures: components["schemas"]["ResourcePressure"][];
+        };
+        /**
+         * ResourcePrediction
+         * @description Informational projection; availability does not certify scenario validation.
+         */
+        ResourcePrediction: {
+            /**
+             * Schema Version
+             * @default 1.0
+             */
+            schema_version: string;
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /**
+             * Scenario Name
+             * @default
+             */
+            scenario_name: string;
+            /**
+             * Source Sha256
+             * @default
+             */
+            source_sha256: string;
+            /**
+             * Destination
+             * Format: path
+             */
+            destination: string;
+            /**
+             * Checkpoint Hours
+             * @default 24
+             */
+            checkpoint_hours: number;
+            forecast?: components["schemas"]["ResourceForecast"] | null;
+        };
+        /**
+         * ResourcePressure
+         * @description One machine-capacity warning produced by a forecast.
+         */
+        ResourcePressure: {
+            /**
+             * Resource
+             * @enum {string}
+             */
+            resource: "memory" | "disk";
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "low" | "medium" | "high";
+            /** Projected Bytes */
+            projected_bytes: number;
+            /** Usable Bytes */
+            usable_bytes: number;
+            /** Ratio */
+            ratio: number;
+        };
+        /**
+         * ResourceSnapshot
+         * @description Resources available to this process at forecast time.
+         */
+        ResourceSnapshot: {
+            /** Total Memory Bytes */
+            total_memory_bytes: number;
+            /** Available Memory Bytes */
+            available_memory_bytes: number;
+            /** Free Swap Bytes */
+            free_swap_bytes: number;
+            /** Free Disk Bytes */
+            free_disk_bytes: number;
+            /** Disk Path */
+            disk_path: string;
+            /** Memory Limit Bytes */
+            memory_limit_bytes?: number | null;
+        };
+        /**
          * ResumeRequest
          * @description Resume all paused jobs or one selected generation.
          */
         ResumeRequest: {
             /** Generation Id */
             generation_id?: string | null;
+        };
+        /**
+         * RetainedStateFamilyCoverage
+         * @description Declare how one retained-state family contributes to the memory forecast.
+         */
+        RetainedStateFamilyCoverage: {
+            /**
+             * Family
+             * @enum {string}
+             */
+            family: "lifecycle" | "application_channels" | "local_artifacts" | "collection_deployment" | "deployment_content" | "process_runtime" | "timing_runtime" | "http" | "proxy" | "smb" | "rdp" | "ssh";
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "modeled_registry" | "legacy_calibrated_peak";
+            /** Registry */
+            registry?: ("lifecycle" | "application_channels" | "local_artifacts" | "collection_deployment" | "deployment_content") | null;
+            /** Rationale */
+            rationale: string;
+            /**
+             * Calibration Evidence Kind
+             * @enum {string}
+             */
+            calibration_evidence_kind: "scenario_forecast" | "historical_calibration";
+            /** Calibration Evidence Id */
+            calibration_evidence_id: string;
         };
         /**
          * SavedView
@@ -2517,6 +2847,10 @@ export interface components {
             /** Dependencies */
             dependencies?: {
                 [key: string]: components["schemas"]["DependencyHealth"];
+            };
+            /** Forecasts */
+            forecasts?: {
+                [key: string]: components["schemas"]["PredictionRecord"];
             };
             /** Conversations */
             conversations: components["schemas"]["Conversation"][];
@@ -3024,6 +3358,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    predict_scenario_resources_v1_scenarios__item_id__resources_predict_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PredictionRecord"];
                 };
             };
             /** @description Validation Error */

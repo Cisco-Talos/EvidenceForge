@@ -66,6 +66,26 @@ def overlay_files(workspace: Path) -> tuple[Path, list[OverlayFile], bool]:
     return root, files, False
 
 
+def overlay_fingerprint(workspace: Path) -> str:
+    """Hash overlay names and bytes with bounded memory, including files beyond the UI list."""
+    root = workspace / ".eforge" / "config"
+    if any(part.is_symlink() for part in (root, *root.parents)):
+        raise ValueError("Workspace overlays must not be symbolic links")
+    entries: list[tuple[str, str]] = []
+    if root.is_dir():
+        for path in sorted(root.rglob("*")):
+            if path.suffix.lower() not in {".yaml", ".yml"} or not path.is_file():
+                continue
+            if any(part.is_symlink() for part in (path, *path.parents)):
+                raise ValueError("Workspace overlays must not be symbolic links")
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(65536):
+                    digest.update(chunk)
+            entries.append((path.relative_to(root).as_posix(), digest.hexdigest()))
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
 def inspect_environment(
     settings: StudioSettings, source: Path, workspace: Path
 ) -> EnvironmentReport:

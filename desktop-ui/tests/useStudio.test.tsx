@@ -56,6 +56,11 @@ test("live service connection and Codex health update independently", async () =
   act(() => onEvent?.({ seq: 5, entity_id: "scenario", kind: "scenario.dependencies", payload: { ready: true, fingerprint: "fresh-pack-digest", rows: [], changed_at: 123 } }));
   expect(result.current.snapshot?.dependencies?.scenario.fingerprint).toBe("fresh-pack-digest");
   expect(result.current.snapshot?.dependencies?.scenario.ready).toBe(true);
+  act(() => onEvent?.({ seq: 6, entity_id: "scenario", kind: "scenario.forecast", payload: {
+    source_sha256: "sha", dependency_fingerprint: "fresh-pack-digest", input_fingerprint: "key", completed_at: 124,
+    result: { available: false, error: "Missing exact pack", destination: "/workspace/runs", checkpoint_hours: 24 },
+  } }));
+  expect(result.current.snapshot?.forecasts?.scenario.result.error).toBe("Missing exact pack");
   unsubscribe();
   act(() => onDisconnect?.());
   expect(result.current.liveState).toBe("disconnected");

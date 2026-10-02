@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { ClipboardCheck, Play } from "lucide-react";
-import type { CatalogItem, StudioApi, StudioJob } from "./api";
+import type { CatalogItem, StudioApi, StudioJob, StudioSnapshot } from "./api";
 import { formatTime } from "./components";
 import { chronologicalJobs } from "./jobOrder";
+import { ResourceForecastPanel } from "./ResourceForecastPanel";
 import { JobSections } from "./JobSections";
 
-export function ScenarioOperations({ mode, item, jobs, api, onGenerate, generating, dependenciesReady = true, onError, onChanged, focusJobId, onNavigateJob }: {
-  mode: "generation" | "scoring"; item: CatalogItem; jobs: StudioJob[]; api: StudioApi;
+export function ScenarioOperations({ mode, item, jobs, api, snapshot, onGenerate, generating, dependenciesReady = true, onError, onChanged, focusJobId, onNavigateJob }: {
+  snapshot: StudioSnapshot; mode: "generation" | "scoring"; item: CatalogItem; jobs: StudioJob[]; api: StudioApi;
   onGenerate: () => Promise<void>; generating: boolean; dependenciesReady?: boolean; onError: (error: string) => void;
   onChanged: () => Promise<void>; focusJobId: string | null; onNavigateJob: (job: StudioJob) => void;
 }) {
@@ -25,6 +26,7 @@ export function ScenarioOperations({ mode, item, jobs, api, onGenerate, generati
     finally { setEvaluating(false); }
   }
   return <div className="workspace-content">
+    {mode === "generation" && <ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} />}
     <section className="run-setup surface">
       <div><h2>{mode === "generation" ? "Generate this scenario" : "Score a generated run"}</h2><p>{mode === "generation" ? "Each generation creates a separate bundle in the output folder configured in Settings." : "Evaluate the logs from a completed run and keep its scorecard with this scenario."}</p></div>
       {mode === "generation" ? <div className="run-controls"><button className="button-primary" onClick={() => void onGenerate()} disabled={generating || !dependenciesReady} title={!dependenciesReady ? "Resolve dependency errors first" : undefined}><Play size={16} /> {generating ? "Queuing…" : "Generate"}</button></div> : completed.length ? <><label className="run-setup-label" htmlFor="scoring-run">Generated run</label><div className="run-controls"><select id="scoring-run" aria-label="Generated run to evaluate" value={selected?.id || ""} onChange={(event) => setSelectedRun(event.target.value)}>{completed.map((job) => <option key={job.id} value={job.id}>{formatTime(job.started_at || job.created_at || 0)} · Run #{job.id.slice(0, 8)}</option>)}</select><button className="button-primary" onClick={() => void evaluate()} disabled={evaluating || !!scoringActive}><ClipboardCheck size={16} /> {evaluating ? "Queuing…" : scoringActive ? "Evaluation in progress" : "Evaluate"}</button></div>{selected?.source_sha256 && selected.source_sha256 !== item.source_sha256 && <p className="run-revision-note">This run uses an earlier scenario revision.</p>}</> : <p className="muted">Complete a generation to enable evaluation.</p>}

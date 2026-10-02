@@ -50,6 +50,7 @@ from evidenceforge.studio.codex import (
     CodexUnavailableError,
 )
 from evidenceforge.studio.environment import EnvironmentReport, inspect_environment, overlay_files
+from evidenceforge.studio.forecasts import PredictionRecord, prediction_key, run_prediction
 from evidenceforge.studio.imports import (
     DependencyHealth,
     ImportCommitRequest,
@@ -608,6 +609,7 @@ class StudioSnapshot(BaseModel):
     views: list[SavedView]
     validations: dict[str, ValidationRecord]
     dependencies: dict[str, DependencyHealth] = Field(default_factory=dict)
+    forecasts: dict[str, PredictionRecord] = Field(default_factory=dict)
     conversations: list[Conversation]
     codex_health: CodexHealth
     jobs: list[JobSummary]
@@ -655,6 +657,10 @@ class StudioService:
         self._progress_signatures: dict[str, tuple[tuple[str, int, int], ...]] = {}
         self.imports: dict[str, PreparedImport] = {}
         self.import_lock = asyncio.Lock()
+        self.prediction_task: asyncio.Task[None] | None = None
+        self.prediction_lock = asyncio.Lock()
+        self.prediction_pending: dict[str, tuple[CatalogItem, str, StudioSettings]] = {}
+        self.prediction_wakeup = asyncio.Event()
 
     async def start(self) -> None:
         """Index the selected workspace and start durable job reconciliation."""
@@ -662,11 +668,15 @@ class StudioService:
             "Studio restarted before this Codex turn finished. Review its history before continuing."
         )
         await self.scan()
+        self.prediction_task = asyncio.create_task(self._prediction_loop())
         self.job_task = asyncio.create_task(self._job_loop())
         self.codex_task = asyncio.create_task(self._monitor_codex())
 
     async def stop(self) -> None:
         """Stop service polling without touching detached CLI processes."""
+        if self.prediction_task is not None:
+            self.prediction_task.cancel()
+            await asyncio.gather(self.prediction_task, return_exceptions=True)
         if self.authoring_stop_task is not None:
             self.authoring_stop_task.cancel()
             await asyncio.gather(self.authoring_stop_task, return_exceptions=True)
@@ -1005,7 +1015,57 @@ class StudioService:
                 await self.emit(
                     item.id, "scenario.dependencies", json.loads(health.model_dump_json())
                 )
+        cached = self.store.resource_predictions([item.id for item in selected])
+        for item in selected:
+            key = prediction_key(item, results[item.id].fingerprint, self.settings)
+            if cached.get(item.id, {}).get("input_fingerprint") != key:
+                self.prediction_pending[item.id] = (
+                    item,
+                    results[item.id].fingerprint,
+                    self.settings.model_copy(deep=True),
+                )
+                self.prediction_wakeup.set()
         return results
+
+    async def _prediction_loop(self) -> None:
+        """Process one cheap forecast at a time without delaying jobs or chat events."""
+        while True:
+            await self.prediction_wakeup.wait()
+            self.prediction_wakeup.clear()
+            while self.prediction_pending:
+                item_id = next(iter(self.prediction_pending))
+                item, dependencies, settings = self.prediction_pending.pop(item_id)
+                await self.predict_item(item, dependencies, settings)
+
+    async def predict_item(
+        self, item: CatalogItem, dependencies: str, settings: StudioSettings, *, force: bool = False
+    ) -> PredictionRecord | None:
+        """Publish only while the inspected workspace, files, and preferences remain current."""
+        async with self.prediction_lock:
+            if item.workspace.resolve() != self.settings.workspace.resolve():
+                return None
+            key = prediction_key(item, dependencies, settings)
+            cached = self.store.resource_predictions([item.id]).get(item.id)
+            if not force and cached and cached["input_fingerprint"] == key:
+                return PredictionRecord.model_validate(cached)
+            record = await asyncio.to_thread(run_prediction, item, dependencies, settings)
+            current = self.store.item(item.id)
+            health = await asyncio.to_thread(dependency_health, item.path, item.workspace)
+            try:
+                current_source = hashlib.sha256(item.path.read_bytes()).hexdigest()
+            except OSError:
+                return None
+            if (
+                current is None
+                or item.workspace.resolve() != self.settings.workspace.resolve()
+                or current_source != item.source_sha256
+                or prediction_key(current, health.fingerprint, self.settings) != key
+                or (record.result.available and record.result.source_sha256 != current_source)
+            ):
+                return None
+            self.store.save_resource_prediction(item.id, record)
+            await self.emit(item.id, "scenario.forecast", json.loads(record.model_dump_json()))
+            return record
 
     def snapshot(self) -> dict[str, Any]:
         """Return a coherent view for first load and reconnection."""
@@ -1023,6 +1083,7 @@ class StudioService:
             "views": [json.loads(view.model_dump_json()) for view in self.store.views(workspace)],
             "validations": self.store.validations([item.id for item in items]),
             "dependencies": self.store.dependency_health([item.id for item in items]),
+            "forecasts": self.store.resource_predictions([item.id for item in items]),
             "conversations": [
                 json.loads(chat.model_dump_json()) for chat in self.store.conversations(workspace)
             ],
@@ -1312,6 +1373,25 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/scenarios/{item_id}/resources/predict")
+    async def predict_scenario_resources(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> PredictionRecord:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        await studio.scan()
+        item = catalog_source(item_id, studio)
+        dependencies = studio.store.dependency_health([item.id])[item.id]["fingerprint"]
+        result = await studio.predict_item(
+            item, dependencies, studio.settings.model_copy(deep=True), force=True
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=409, detail="Scenario inputs changed; refresh and retry"
+            )
+        return result
 
     @app.get("/v1/environment/{item_id}/files/{relative_path:path}")
     def environment_file(
@@ -1913,6 +1993,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         await studio.emit(
             "settings", "settings.updated", json.loads(new_settings.model_dump_json())
         )
+        await studio.refresh_dependencies()
         return new_settings
 
     @app.post("/v1/validate")

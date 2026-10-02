@@ -844,3 +844,22 @@ select { min-width: 185px; }
 .pack-choice-list small { color: #8ea8c6; font-size: 11px; }
 .pack-choice-list code { color: #aac8ec; font-size: 10px; overflow-wrap: anywhere; }
 .environment-picker footer { display: flex; gap: 10px; justify-content: flex-end; position: sticky; bottom: -22px; background: #111e30; padding: 16px 0 0; margin-top: 12px; }
+
+.resource-forecast { margin-bottom: 18px; }
+.overview-grid .resource-forecast { margin-bottom: 0; }
+.forecast-note { font-size: 11px; margin: 8px 0 14px; }
+.forecast-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.forecast-metrics > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; background: #102033; border: 1px solid #2d445f; border-radius: 8px; }
+.forecast-metrics span { display: inline-flex; align-items: center; gap: 6px; color: #9eb6d1; font-size: 11px; }
+.forecast-metrics strong { color: #dfeaff; font-size: 19px; white-space: nowrap; }
+.forecast-metrics small { color: #7f9bb9; font-size: 10px; }
+.forecast-pressure { display: flex; gap: 8px; align-items: start; color: #efc77c; font-size: 12px; margin: 14px 0 0; }
+.forecast-pressure.high { color: #f49ba7; }
+.forecast-pressure svg { flex: none; }
+.forecast-details { font-size: 11px; color: #92abc6; margin-top: 16px; }
+.forecast-details summary { cursor: pointer; color: #b9cfee; }
+.forecast-details p { margin: 9px 0; line-height: 1.6; }
+.resource-forecast.compact .forecast-metrics { gap: 7px; }
+.resource-forecast.compact .forecast-metrics > div { padding: 9px; }
+.resource-forecast.compact .forecast-metrics strong { font-size: 16px; }
+@media (max-width: 600px) { .forecast-metrics { gap: 7px; } .forecast-metrics > div { padding: 9px; } .forecast-metrics strong { font-size: 16px; } }

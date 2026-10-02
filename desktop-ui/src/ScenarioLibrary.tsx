@@ -7,6 +7,8 @@ import { formatBundleSize, formatTime } from "./components";
 import { ProjectPicker } from "./PackLibrary";
 import { ScenarioStates, scenarioStates } from "./ScenarioStates";
 
+import { currentPrediction } from "./ResourceForecastPanel";
+
 export type ScenarioSort = "name" | "updated" | "project";
 
 export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, onOpenDraft, onClone,
@@ -43,7 +45,8 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     const actualSize = freshRun ? sizes[freshRun.id] : null;
     const validation = item && snapshot.validations[item.id];
     const forecast = validation && item && !["none", "stale"].includes(scenarioStates(item, snapshot)[0].state) ? validation.result.report?.resource_forecast as { final_output?: { expected_bytes?: number } } | undefined : undefined;
-    const estimatedSize = forecast?.final_output?.expected_bytes;
+    const prediction = item ? currentPrediction(item, snapshot) : undefined;
+    const estimatedSize = prediction?.result.forecast?.final_output.expected_bytes ?? forecast?.final_output?.expected_bytes;
     const drag = (event: DragEvent<HTMLElement>) => item ? onDragStart(event, item) : onDraftDragStart(event, draft!);
     return <li className={`scenario-row ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
       <span className="scenario-drag-handle" aria-hidden="true" title={`Drag ${name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); drag(event); }}><GripVertical size={14} /></span>

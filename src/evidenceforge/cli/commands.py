@@ -65,6 +65,7 @@ from evidenceforge.cli.checkpoint_commands import checkpoint_app
 from evidenceforge.cli.generation_interrupt import GenerationInterruptController
 from evidenceforge.cli.pack_commands import pack_app
 from evidenceforge.cli.progress_jsonl import ProgressJSONLWriter
+from evidenceforge.cli.resource_commands import resources_app
 from evidenceforge.composition import (
     CompiledScenario,
     compile_scenario,
@@ -338,6 +339,7 @@ app = typer.Typer(
 )
 app.add_typer(pack_app, name="pack")
 app.add_typer(checkpoint_app, name="checkpoint")
+app.add_typer(resources_app, name="resources")
 console = Console()
 
 _STORAGE_SAMPLE_SIZE = 3

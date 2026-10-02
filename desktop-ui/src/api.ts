@@ -24,6 +24,7 @@ export type PackCreation = { item: CatalogItem; conversation: Conversation };
 export type LibraryView = Required<Schema["LibraryView"]>;
 export type LibraryPreferences = Schema["LibraryPreferences"];
 export type EnvironmentReport = Required<Schema["EnvironmentReport"]>;
+export type PredictionRecord = Required<Schema["PredictionRecord"]>;
 export type SelectedPack = Schema["SelectedPack"];
 export type ImportReview = Omit<Schema["ImportReview"], "rows"> & { rows: DependencyRow[] };
 export type DependencyRow = Schema["DependencyRow"];

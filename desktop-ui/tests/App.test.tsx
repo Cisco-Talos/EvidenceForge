@@ -1473,3 +1473,24 @@ test("scenario rows show measured size for fresh bundles and current forecast fo
     expect(container.querySelector(".scenario-row-size")?.textContent).toBe("3.0 MBEstimated");
   } finally { snapshot.jobs = originalJobs; snapshot.validations = originalValidations; }
 });
+
+test("scenario rows use automatic predictions without validation and prefer fresh measured bundles", async () => {
+  const original = { jobs: snapshot.jobs, validations: snapshot.validations, dependencies: snapshot.dependencies, forecasts: snapshot.forecasts };
+  snapshot.jobs = [];
+  snapshot.validations = {};
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "dependencies", rows: [] } };
+  snapshot.forecasts = { alpha: { source_sha256: "sha-alpha", dependency_fingerprint: "dependencies", input_fingerprint: "key", completed_at: 123,
+    result: { available: true, destination: `${workspace}/runs`, checkpoint_hours: 24, forecast: { final_output: { expected_bytes: 4 * 1024 ** 2 } } },
+  } };
+  try {
+    const { container, rerender } = render(<App />);
+    expect(container.querySelector(".scenario-row-size")?.textContent).toBe("4.0 MBEstimated");
+    snapshot.jobs = [{ ...original.jobs[0], status: "completed", source_sha256: "sha-alpha" }];
+    rerender(<App />);
+    await waitFor(() => expect(container.querySelector(".scenario-row-size")?.textContent).toBe("1.5 KB"));
+    snapshot.jobs = [];
+    snapshot.dependencies.alpha.fingerprint = "changed-pack";
+    rerender(<App />);
+    expect(container.querySelector(".scenario-row-size")?.textContent).toBe("—");
+  } finally { Object.assign(snapshot, original); }
+});

@@ -215,6 +215,10 @@ class StudioStore:
                 item_id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS resource_predictions (
+                item_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS views (
                 workspace TEXT NOT NULL,
                 name TEXT NOT NULL,
@@ -903,6 +907,27 @@ class StudioStore:
         with self._lock:
             rows = self._db.execute(
                 "SELECT * FROM dependency_health WHERE item_id IN ("
+                + ",".join("?" for _ in item_ids)
+                + ")",
+                item_ids,
+            ).fetchall()
+        return {row["item_id"]: json.loads(row["payload"]) for row in rows}
+
+    def save_resource_prediction(self, item_id: str, payload: BaseModel) -> None:
+        """Persist a revision-bound prediction independently of validation."""
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO resource_predictions(item_id, payload) VALUES (?, ?) ON CONFLICT(item_id) DO UPDATE SET payload=excluded.payload",
+                (item_id, payload.model_dump_json()),
+            )
+
+    def resource_predictions(self, item_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Read only the predictions belonging to these catalog identities."""
+        if not item_ids:
+            return {}
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM resource_predictions WHERE item_id IN ("
                 + ",".join("?" for _ in item_ids)
                 + ")",
                 item_ids,

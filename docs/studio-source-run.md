@@ -94,16 +94,24 @@ prepares a request in a new conversation for you to review and send; it does not
 the YAML. Workspace overlays can be inspected in the built-in viewer. Project grouping currently
 does not change overlay scope: `.eforge/config` applies throughout the workspace.
 
-Generation uses the configured output parent and automatically constructs each run directory; Scoring lets you choose a completed
-run to evaluate and view its saved scores. The job center shows all generation and evaluation rows
-in stable order with independent
-progress. The Bundles page groups Studio runs and read-only imported complete CLI bundles by
+Studio calculates a resource forecast through `eforge resources predict` after scenario,
+include, pack, overlay, output-parent, or checkpoint-setting changes. Predictions run one at a
+time in the background and are cached across restarts. Scenario rows show a clearly marked data
+estimate before generation; a fresh completed run takes precedence with its measured bundle size.
+Overview shows a compact forecast, while Generation adds ranges, peak memory and disk,
+capacity warnings, and a manual refresh icon. Refresh before a large run to recheck current
+machine capacity. Predictions do not replace validation or reserve capacity for other jobs.
+
+Generation uses the configured output parent and automatically constructs each run directory.
+Scoring lets you choose a completed run to evaluate and view its saved scores. The job center
+shows all generation and evaluation rows in stable order with independent progress. The Bundles
+page groups Studio runs and read-only imported complete CLI bundles by
 scenario. A bundle can be inspected with the file viewer or exported as a ZIP. Removing an
 imported bundle from Studio removes its index entry and leaves its files in place. Studio can
 clone scenarios and packs into the workspace; their existing conversations and runs stay linked
 to the original. Native exports and file copies use Save dialogs.
 
 This release is still in core-parity review. The planned workflow stages, including richer pack
-editing, authoring diffs, preflight resource forecasts, generation setup, evaluation drill-down,
+editing, authoring diffs, resource-aware scheduling, generation setup, evaluation drill-down,
 and delivery controls, follow after that review. Incomplete bundles from external CLI runs are
 not yet importable; incomplete Studio-owned jobs already appear in the Bundles page.

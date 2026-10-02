@@ -971,3 +971,39 @@ checkboxes, author/version search, empty-selection gating, and overlay preview. 
 disposable; no user's scenario, pack, overlay, or conversation was changed. Native/Linux
 interaction review is still pending. Continuing into resource prediction under the user's
 authorization to complete additional slices while they are away.
+
+## 2026-10-01 — Read-only resource prediction and automatic Studio forecasts
+
+- Added `eforge resources predict SCENARIO` with `--project-root`, `--destination`,
+  `--checkpoint-hours` (24 by default), and versioned `--json` output. It compiles current
+  inputs and reuses the calibrated workload/resource model without generating logs, performing
+  full validation, creating output directories, or changing authored files. Typed failures are
+  inspectable. Validation remains the correctness and safety check.
+- Studio predicts through a fresh deterministic CLI process, one request at a time outside the
+  UI/event loop. SQLite caches reports across helper restarts. Keys cover scenario and include
+  bytes, exact pack/digest health, workspace overlays, output parent, checkpoint cadence,
+  EvidenceForge/tool identity, and resource-model calibration. In-flight results are discarded
+  if files, workspace, or preferences change. Errors do not launch or block generation.
+- Overlay bytes now participate in dependency freshness, invalidating old validation/run status
+  when workspace configuration changes. Output-parent paths normalize `~` and dot segments so
+  generation and predictions refer to the same directory. Existing user files stay untouched.
+- Scenario rows use a marked data estimate even before validation; a fresh completed bundle
+  still wins with measured size. Overview adds compact metrics; Generation shows estimate ranges,
+  peak memory/disk, capacity warnings, expandable machine/model details, and a refresh icon.
+  Predictions do not reserve resources or implement resource-aware queue scheduling yet.
+- Malformed CLI reports and timeouts produce short actionable messages without raw CLI output.
+  API refresh is authenticated and limited to the active workspace. Stream events update
+  forecasts independently of job progress and Codex health.
+
+Verification: all 124 service/import/library/environment/prediction tests, 114 React tests,
+and 13 relevant CLI contracts pass, alongside API type freshness, full Ruff checks/formatting,
+diff checks, and the frontend/macOS native release build. Real CLI prediction took about
+1.6 seconds for both the minimal fixture and healthcare scenario, including process startup,
+and created no destination directory. Browser review at 1280×720 and 712×724 verified
+automatic estimates without validation, all three metrics/ranges, capacity details, and manual
+refresh. Screenshots: `/private/tmp/eforge-resource-forecast-review.png`,
+`/private/tmp/eforge-resource-forecast-compact.png`, and
+`/private/tmp/eforge-scenario-predictions-review.png`. All review fixtures were disposable.
+Native interaction and Linux review remain pending; the Qt prototype is still available until
+core-parity acceptance. Advanced environment editors, project/scenario overlay layering, isolated
+authoring revisions, and the remaining workflow stages are not claimed complete.

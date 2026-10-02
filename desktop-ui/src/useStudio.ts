@@ -76,6 +76,8 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
     };
   } else if (event.kind === "scenario.dependencies") {
     next.dependencies = { ...snapshot.dependencies, [event.entity_id]: event.payload as unknown as NonNullable<StudioSnapshot["dependencies"]>[string] };
+  } else if (event.kind === "scenario.forecast") {
+    next.forecasts = { ...snapshot.forecasts, [event.entity_id]: event.payload as unknown as NonNullable<StudioSnapshot["forecasts"]>[string] };
   } else if (event.kind === "codex.health") {
     next.codex_health = event.payload as unknown as CodexHealth;
   }

@@ -25,6 +25,7 @@ from evidenceforge.composition.releases import (
     validate_efpack,
 )
 from evidenceforge.models.exceptions import ConfigurationError, PackError, PathSafetyError
+from evidenceforge.studio.environment import overlay_fingerprint
 from evidenceforge.studio.lifecycle import rename_scenario
 from evidenceforge.utils import LoadedSourceGraph, load_scenario_source_graph
 from evidenceforge.utils.assets import EMAIL_CORPUS_MAX_SOURCE_BYTES
@@ -218,6 +219,10 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
     """Read actual scenario and pack files, including locked digest checks."""
     rows: list[DependencyRow] = []
     fingerprints: list[str] = []
+    try:
+        fingerprints.append(overlay_fingerprint(workspace))
+    except (OSError, ValueError) as exc:
+        fingerprints.append(f"overlay: {exc}")
     repository = PackRepository(workspace)
     try:
         graph = load_scenario_source_graph(path)
