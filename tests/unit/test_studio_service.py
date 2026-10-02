@@ -1071,6 +1071,38 @@ def test_completed_evaluation_summary_restores_saved_scorecard(tmp_path: Path) -
     assert job_summary(json.loads(job.model_dump_json()))["scorecard"]["error"]
 
 
+def test_evaluation_api_rejects_duplicate_active_and_foreign_workspace_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace, "evaluation", valid=True)
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
+    app = create_app(_paths(tmp_path / "private"), "secret")
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        studio = app.state.studio
+        generation = queue_studio_generation(studio.jobs, scenario, workspace, studio.settings)
+        generation.status = "completed"
+        studio.jobs.save_generation(generation)
+        first = client.post(
+            "/v1/jobs/evaluations", headers=headers, json={"generation_id": generation.id}
+        )
+        assert first.status_code == 200
+        second = client.post(
+            "/v1/jobs/evaluations", headers=headers, json={"generation_id": generation.id}
+        )
+        assert second.status_code == 409
+        assert "already queued" in second.json()["detail"]
+        assert len(studio.jobs.load_evaluations()) == 1
+        generation.workspace = tmp_path / "foreign"
+        studio.jobs.save_generation(generation)
+        foreign = client.post(
+            "/v1/jobs/evaluations", headers=headers, json={"generation_id": generation.id}
+        )
+        assert foreign.status_code == 400
+
+
 def test_scorecard_detail_reads_only_saved_workspace_evaluation(
     tmp_path: Path, monkeypatch: object
 ) -> None:

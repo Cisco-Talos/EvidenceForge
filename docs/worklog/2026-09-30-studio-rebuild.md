@@ -1442,3 +1442,52 @@ Discussed workspace bundle redundancy: recommend one Runs section combining owne
   for workspace-wide management. This structural proposal awaits user feedback; no bundle sections
   have been removed. The native app is rebuilt. Disposable review services/tabs are closed and the
   viewport reset; unrelated iteration-test source deletions remain excluded.
+
+## 2026-10-02 — Unified Runs with the latest saved score
+
+User accepted merging workspace Generation/Scoring/Bundles into Runs, keeping the global Bundles
+page, and retaining only the latest evaluation scores per run. Clarified that an unfinished or
+crashed evaluation preserves the previous report; a completed report failing quality standards
+replaces it normally.
+
+- Runs expands directly to one chronological row per owned generation or imported bundle. Owned
+  rows combine the original submission date, measured size, generation status/progress, latest
+  linked evaluation outcome, and separate input-freshness notice. Resuming an older run cannot
+  change row order or the Latest marker. The header summarizes the latest owned run's generation
+  and evaluation outcomes with independent icons, plus run/import/activity counts. All live
+  generations retain independent progress bars when the section is folded.
+- Expanding an owned run exposes its bundle viewer/export/delete and generation controls, its
+  Evaluate/Re-evaluate action, and the saved scorecard directly. Pillars expand to subscores, and
+  raw report viewing/export remains available. Failed/interrupted retries keep the previous saved
+  card until a new valid report completes. No older-report picker remains. Imported bundle rows
+  retain existing read-only source management. Global Bundles and Job center remain available.
+- Forecast is an accessible dialog beside Generate, so expanded Runs opens immediately to runs.
+  Existing generation/scorecard navigation now resolves the exact row in Runs, including repeated
+  opens and delayed event arrival. Routine updates preserve manual row collapse. Scorecards load
+  only after their run is expanded; one run's queued evaluation does not disable other runs.
+- Studio now rejects duplicate queued/running/paused evaluations of the same run. After a newer
+  completed, validated report is durable, it removes older terminal evaluation records and only
+  their verified Studio-owned report/log files. A completed report with failed required checks
+  replaces an older passing report; malformed or incomplete output cannot remove it. Active
+  attempts, generated data, imported files, external paths, and symlink targets are protected.
+  This retention policy is limited to Studio; CLI/skill evaluator behavior is unchanged.
+
+Verification: all 176 React tests and 94 focused Python tests pass. The explicit Python regression
+  confirms a completed quality-failed report replaces passing scores, while crashed/interrupted
+  retries retain them. Coverage includes direct score/bundle actions, owned/imported order, latest
+  association, per-run queuing and recovery, exact navigation/manual collapse, partial export and
+  confirmed deletion identity, duplicate API requests, report cleanup/retry and deletion boundaries.
+  Generated API types, TypeScript/frontend compilation, full Ruff check/format, diff checks, and
+  the macOS release app build pass. CLI schemas, skills and generation/controller contracts are
+  unchanged. Linux/native runtime interaction was not rerun on this macOS host.
+
+Reviewed the actual UI at 1280×900 and 712×724, including native Enter disclosure behavior,
+  direct saved-score expansion, acceptance-failed icons, and Forecast/Escape/focus return. No
+  horizontal overflow or browser script errors. Screenshots: `/private/tmp/eforge-unified-run-score.jpg`,
+  `/private/tmp/eforge-unified-runs-compact.jpg`, `/private/tmp/eforge-unified-runs-final.png`.
+  Refreshed the authenticated idle helper after verifying process creation time, command and
+  launchd identity and checking all workspaces for active chats/jobs. Settings, projects, chats,
+  scenario IDs, generation associations and imported-bundle identities remained unchanged.
+  Native app rebuilt for reopening. Closed the review tab, reset the viewport, and stopped the
+  disposable services. Unrelated existing scenario deletions remain excluded. Ready for workspace
+  feedback before advancing to later workflow stages.

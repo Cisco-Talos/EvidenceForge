@@ -89,6 +89,7 @@ from evidenceforge.studio.jobs import (
     queue_studio_evaluation,
     queue_studio_generation,
     reconcile_jobs,
+    retain_latest_evaluations,
     suspend_generation,
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
@@ -931,6 +932,9 @@ class StudioService:
         while True:
             intent = self.intent
             changed = await asyncio.to_thread(reconcile_jobs, self.jobs, intent)
+            removed = await asyncio.to_thread(retain_latest_evaluations, self.jobs)
+            for job_id in removed:
+                await self.emit(job_id, "job.deleted", {"id": job_id})
             if intent.action == "resume" and self.intent.id == intent.id:
                 self.set_intent(
                     ControlIntent(action="open", settings=controller_settings(self.settings))
@@ -3395,9 +3399,16 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             ),
             None,
         )
-        if generation is None or generation.status != "completed":
+        if (
+            generation is None
+            or generation.workspace != studio.settings.workspace
+            or generation.status != "completed"
+        ):
             raise HTTPException(status_code=400, detail="Choose a completed generation")
-        job = queue_studio_evaluation(studio.jobs, generation, studio.settings)
+        try:
+            job = queue_studio_evaluation(studio.jobs, generation, studio.settings)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         summary = job_summary(json.loads(job.model_dump_json()))
         await studio.emit(job.id, "job.created", summary)
         return summary

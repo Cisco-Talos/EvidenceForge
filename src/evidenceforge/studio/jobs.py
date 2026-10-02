@@ -114,9 +114,83 @@ def queue_studio_evaluation(
     job_store: StudioJobStore, generation: GenerationJob, settings: StudioSettings
 ) -> EvaluationJob:
     """Persist an evaluation linked to its generation."""
+    if any(
+        job.generation_id == generation.id and job.status in {"queued", "running", "paused"}
+        for job in job_store.load_evaluations()
+    ):
+        raise ValueError("An evaluation for this run is already queued, running, or paused")
     job = queue_evaluation(generation, job_store.directory, settings=controller_settings(settings))
     job_store.save_evaluation(job)
     return job
+
+
+def retain_latest_evaluations(job_store: StudioJobStore) -> list[str]:
+    """Replace older terminal evaluations only after a newer valid report is durable.
+
+    A crashed or interrupted retry leaves the previous score available. A completed
+    report replaces it even when required quality checks fail. Cleanup is limited
+    to verified Studio report/log paths; generated and imported data are never
+    removed here. Active evaluations remain owned by the controller.
+    """
+    evaluations = job_store.load_evaluations()
+    terminal = {"completed", "failed", "stopped", "cancelled"}
+    by_run: dict[str, list[EvaluationJob]] = {}
+    for job in evaluations:
+        by_run.setdefault(job.generation_id, []).append(job)
+    newest: dict[str, EvaluationJob] = {}
+    for job in sorted(evaluations, key=lambda entry: (entry.created_at, entry.id), reverse=True):
+        if job.generation_id in newest or job.status != "completed":
+            continue
+        if not any(
+            older.generation_id == job.generation_id
+            and older.workspace == job.workspace
+            and older.status in terminal
+            and (older.created_at, older.id) < (job.created_at, job.id)
+            for older in by_run[job.generation_id]
+        ):
+            continue
+        expected = job_store.directory / "jobs" / f"{job.id}.json"
+        if (
+            job.result_file != expected
+            or expected.is_symlink()
+            or expected.parent.is_symlink()
+            or not expected.resolve().is_relative_to(job_store.directory.resolve())
+            or not expected.is_file()
+        ):
+            continue
+        try:
+            if expected.stat().st_size > 32 * 1024 * 1024:
+                continue
+            QualityReport.model_validate_json(expected.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            continue
+        newest[job.generation_id] = job
+    removed: list[str] = []
+    for job in evaluations:
+        latest = newest.get(job.generation_id)
+        if (
+            latest is None
+            or latest.workspace != job.workspace
+            or (job.created_at, job.id) >= (latest.created_at, latest.id)
+            or job.status not in terminal
+        ):
+            continue
+        try:
+            for path, suffix in ((job.result_file, "json"), (job.log_file, "log")):
+                expected = job_store.directory / "jobs" / f"{job.id}.{suffix}"
+                if (
+                    path == expected
+                    and not path.is_symlink()
+                    and not path.parent.is_symlink()
+                    and path.resolve().is_relative_to(job_store.directory.resolve())
+                ):
+                    path.unlink(missing_ok=True)
+        except OSError:
+            # Retry cleanup on the next controller tick without losing its record.
+            continue
+        job_store.store.delete_job(job.id)
+        removed.append(job.id)
+    return removed
 
 
 def reconcile_jobs(job_store: StudioJobStore, intent: ControlIntent) -> list[dict[str, Any]]:

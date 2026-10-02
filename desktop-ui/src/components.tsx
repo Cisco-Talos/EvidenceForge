@@ -1,5 +1,5 @@
 import { InspectionSection } from "./InspectionSection";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Activity, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, MessageSquareText, Pause, Play, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
 import { DropdownMenu, Tooltip } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
@@ -36,11 +36,12 @@ export function StatusBadge({ status }: { status: string }) {
   return <span className={`status status-${status.toLowerCase().replace(/ /g, "-")}`}><span className="status-dot" />{status}</span>;
 }
 
-export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged, idPrefix = "job" }: {
+export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, highlighted = false, focusScorecard = false, onShowSource, onDeleteHistory, api, onError, onChanged, idPrefix = "job", summaryExtra, detailsExtra, evaluateAction, latest = false }: {
   job: StudioJob; name?: string; grouped?: boolean; sizeBytes?: number | null; highlighted?: boolean; focusScorecard?: boolean;
   onShowSource?: (generationId: string) => void; api: StudioApi;
   onDeleteHistory?: () => Promise<void>;
   onError: (message: string) => void; onChanged: () => Promise<void>; idPrefix?: string;
+  summaryExtra?: ReactNode; detailsExtra?: ReactNode; evaluateAction?: ReactNode; latest?: boolean;
 }) {
   const [files, setFiles] = useState<BundleFiles | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -49,6 +50,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [savedExport, setSavedExport] = useState<string | null>(null);
   const [showScorecard, setShowScorecard] = useState(focusScorecard);
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => { if (focusScorecard) setShowScorecard(true); }, [focusScorecard]);
   async function openBundle() {
     try {
@@ -104,8 +106,8 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   const result = job.scorecard?.error || (job.scorecard
     ? `${job.scorecard.overall_score == null ? "N/A" : `${job.scorecard.overall_score.toFixed(0)}/100`} · ${job.scorecard.acceptance_passed === true ? "Pass" : job.scorecard.acceptance_passed === false ? "Fail" : "Indeterminate"}`
     : job.status === "running" ? "Evaluating…" : job.status_message || "Waiting");
-  return <details className={`job-row ${highlighted ? "source-highlight" : ""}`} id={`${idPrefix}-${job.id}`}>
-    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong>{grouped ? `Run #${job.id.slice(0, 8)}` : name}</strong>{grouped && sizeBytes != null && <span className="bundle-size" title="Size of bundle contents on disk; ZIP size may differ">{formatBundleSize(sizeBytes)}</span>}</span><small>{job.kind === "evaluation" ? `Evaluates run #${job.generation_id?.slice(0, 8) || "unknown"}` : grouped ? "Generation" : `Run #${job.id.slice(0, 8)}`}</small></span><time className="job-row-time" title={submitted ? new Date(submitted * 1000).toLocaleString() : undefined}>{submitted ? formatTime(submitted) : "Time unknown"}</time><StatusBadge status={job.status} /><span className="job-row-result">{job.kind === "generation" ? <><span>{phase} · {percent === null ? "Preparing" : `${percent}%`}</span><span className="progress-track" role="progressbar" aria-valuenow={percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${name} generation progress`}><span style={{ width: `${percent ?? 0}%` }} /></span></> : result}</span><ChevronDown size={16} className="job-row-chevron" /></summary>
+  return <details className={`job-row ${summaryExtra ? "workspace-run" : ""} ${highlighted ? "source-highlight" : ""}`} id={`${idPrefix}-${job.id}`} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong>{grouped ? `Run #${job.id.slice(0, 8)}` : name}</strong>{latest && <span className="run-latest">Latest</span>}{grouped && sizeBytes != null && <span className="bundle-size" title="Size of bundle contents on disk; ZIP size may differ">{formatBundleSize(sizeBytes)}</span>}</span><small>{job.kind === "evaluation" ? `Evaluates run #${job.generation_id?.slice(0, 8) || "unknown"}` : grouped ? "Generation" : `Run #${job.id.slice(0, 8)}`}</small></span><time className="job-row-time" title={submitted ? new Date(submitted * 1000).toLocaleString() : undefined}>{submitted ? formatTime(submitted) : "Time unknown"}</time><StatusBadge status={job.status} /><span className="job-row-result">{job.kind === "generation" ? <><span>{phase} · {percent === null ? "Preparing" : `${percent}%`}</span><span className="progress-track" role="progressbar" aria-valuenow={percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${name} generation progress`}><span style={{ width: `${percent ?? 0}%` }} /></span></> : result}</span>{summaryExtra}<ChevronDown size={16} className="job-row-chevron" /></summary>
     <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div>
       {job.kind === "generation" && <>{job.input_snapshot && <p className="muted small" title="Includes, exact packs, overlays, and embedded data were captured before this run was queued. Subsequent edits apply to new runs.">Inputs captured {formatTime(submitted)}</p>}<p className="muted small">{detail}</p>{!!progress?.storyline_total && <p className="muted small">Storyline {progress.storyline_event} of {progress.storyline_total}</p>}</>}
       {job.kind === "evaluation" && job.scorecard && !job.scorecard.error && <p className="muted small">{(job.scorecard.total_records || 0).toLocaleString()} records evaluated</p>}
@@ -117,7 +119,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
       <button className="button-quiet" onClick={() => void openBundle()}><FolderOpen size={16} /> View files</button>
       {job.kind === "generation" && !["running", "queued"].includes(job.status) && <button className="button-quiet" disabled={exporting} onClick={() => void exportBundle()}><Download size={16} /> {exporting ? "Exporting…" : job.status === "completed" ? (isTauri() ? "Export ZIP" : "Download ZIP") : (isTauri() ? "Export partial ZIP" : "Download partial ZIP")}</button>}
       {job.kind === "generation" && job.status === "running" && <button className="button-quiet" onClick={() => void api.request(`/v1/jobs/${job.id}/suspend`, "POST").catch((error) => onError(String(error)))}><Pause size={16} /> Suspend</button>}
-      {job.kind === "generation" && job.status === "completed" && <button className="button-quiet" onClick={() => void api.request("/v1/jobs/evaluations", "POST", { generation_id: job.id }).catch((error) => onError(String(error)))}><ClipboardCheck size={16} /> Evaluate</button>}
+      {evaluateAction ?? (job.kind === "generation" && job.status === "completed" && <button className="button-quiet" onClick={() => void api.request("/v1/jobs/evaluations", "POST", { generation_id: job.id }).catch((error) => onError(String(error)))}><ClipboardCheck size={16} /> Evaluate</button>)}
       {job.kind === "generation" && ["paused", "stopped"].includes(job.status) && (job.can_resume
         ? <button className="button-quiet" onClick={() => void api.request("/v1/jobs/resume", "POST", { generation_id: job.id }).catch((error) => onError(String(error)))}><Play size={16} /> Resume</button>
         : <span className="muted small" title="The run stopped before a usable checkpoint was saved">No checkpoint to resume</span>)}
@@ -129,6 +131,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     </div>
     {exporting && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}
     {savedExport && <div className="path-with-copy muted small"><span className="path-value" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved ZIP path" onError={onError} /></div>}
+    {expanded && detailsExtra}
     </div>
     {files && <BundleFileBrowser jobId={job.id} files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
     {confirmDelete && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete bundle"><h2>Delete this bundle?</h2><p>The run directory, linked evaluation reports, and their Studio records will be removed. The authored scenario remains available.</p><div className="path-with-copy"><span className="path-value source-path" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div><div className="close-modal-actions"><button className="button-quiet" onClick={() => setConfirmDelete(false)}>Cancel</button><button className="button-danger" disabled={working} onClick={() => void deleteBundle()}>Delete bundle</button></div></div></div>}

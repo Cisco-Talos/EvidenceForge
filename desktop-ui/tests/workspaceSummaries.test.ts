@@ -1,7 +1,7 @@
 import { generationInputs, generationIsCurrent } from "../src/ScenarioStates";
 import { expect, test } from "vitest";
 import type { CatalogItem, ImportedBundle, StudioJob, StudioSnapshot } from "../src/api";
-import { bundleSummary, generationSummary, latestJob, latestRunState, orderedBundles, scoringSummary, validationSummary } from "../src/workspaceSummaries";
+import { bundleSummary, generationSummary, latestJob, latestRunState, orderedBundles, runsSummary, scoringSummary, validationSummary } from "../src/workspaceSummaries";
 
 const item = { id: "scenario", path: "/workspace/scenario.yaml", source_sha256: "current" } as CatalogItem;
 const snapshot = { dependencies: { scenario: { fingerprint: "packs", changed_at: 10 } } } as StudioSnapshot;
@@ -13,6 +13,20 @@ test("latest submission stays the summary target when an older run resumes later
   const summary = generationSummary(latestJob([newer, run]), item, snapshot, 1024);
   expect(summary.headline).toBe("Failed · Partial data 1.0 KB");
   expect(summary.detail).toContain("Latest run #new-run");
+});
+
+test("merged runs summary keeps generation, score, counts and input freshness together", () => {
+  const evaluation: StudioJob = { ...run, id: "score", kind: "evaluation", generation_id: run.id, created_at: 25, scorecard: { overall_score: 96, acceptance_passed: false } };
+  const older = { ...run, id: "older", status: "paused", submitted_at: 15 };
+  const imported = { id: "imported", created_at: 30, size_bytes: 2048 } as ImportedBundle;
+  const summary = runsSummary([run, older], [imported], [evaluation], item, snapshot, { "old-run": 1024 });
+  expect(summary.headline).toBe("Completed · Generated data 1.0 KB · 96/100 · Failed");
+  expect(summary.detail).toContain("3 runs · 1 paused · 1 imported");
+  expect(summary.detail).toContain("Latest run #old-run");
+  expect(summary.inputs?.state).toBe("current");
+  expect(runsSummary([{ ...run, id: "new", submitted_at: 40 }], [], [evaluation], item, snapshot, {}).headline).toContain("Not evaluated");
+  expect(runsSummary([], [imported], [], item, snapshot, {}).headline).toBe("Completed · 2.0 KB · Imported");
+  expect(runsSummary([], [], [], item, snapshot, {}, 1024).headline).toBe("Estimated data 1.0 KB · Not evaluated");
 });
 
 test("an actual completed size is separate from the estimate for changed inputs", () => {

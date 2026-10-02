@@ -56,6 +56,19 @@ export function scoringSummary(generation: StudioJob | undefined, evaluation: St
   return { headline, detail: `${context} · Evaluation #${evaluation.id.slice(0, 8)}`, inputs };
 }
 
+/** Summarize generation and evaluation of the same latest run, plus all owned/imported data. */
+export function runsSummary(jobs: StudioJob[], imports: ImportedBundle[], evaluations: StudioJob[], item: CatalogItem, snapshot: StudioSnapshot, sizes: Record<string, number | null>, estimate?: number): SectionSummary {
+  const latest = latestJob(jobs);
+  if (!latest && imports.length) return bundleSummary(jobs, imports, sizes);
+  const generation = generationSummary(latest, item, snapshot, latest ? sizes[latest.id] : null, estimate);
+  const evaluation = latestJob(evaluations.filter((job) => job.generation_id === latest?.id));
+  const score = scoringSummary(latest, evaluation, item, snapshot);
+  const active = jobs.filter((job) => ["running", "queued", "paused"].includes(job.status));
+  return { ...generation,
+    headline: `${generation.headline} · ${score.headline}`,
+    detail: [countLabel(jobs.length + imports.length, "run"), active.length && jobStatusCounts(active), imports.length && `${imports.length} imported`, latest && generation.detail].filter(Boolean).join(" · ") };
+}
+
 export type BundleEntry = { kind: "job"; id: string; time: number; job: StudioJob } | { kind: "import"; id: string; time: number; bundle: ImportedBundle };
 
 export function orderedBundles(jobs: StudioJob[], imports: ImportedBundle[]): BundleEntry[] {

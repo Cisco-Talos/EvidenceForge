@@ -99,13 +99,19 @@ Studio calculates a resource forecast through `eforge resources predict` after s
 include, pack, overlay, output-parent, or checkpoint-setting changes. Predictions run one at a
 time in the background and are cached across restarts. Scenario rows show a clearly marked data
 estimate before generation; a fresh completed run takes precedence with its measured bundle size.
-Overview shows a compact forecast, while Generation adds ranges, peak memory and disk,
+The scenario workspace's **Runs → Forecast** action shows ranges, peak memory and disk,
 capacity warnings, and a manual refresh icon. Refresh before a large run to recheck current
 machine capacity. Predictions do not replace validation or reserve capacity for other jobs.
 
 Generation uses the configured output parent and automatically constructs each run directory.
-Scoring lets you choose a completed run to evaluate and view its saved scores. The job center
-shows all generation and evaluation rows in stable order with independent progress. The Bundles
+The **Runs** section lists generations and imported bundles in stable submission/import order,
+with measured size, generation progress and the latest evaluation outcome on each row. Expand a
+run to inspect/export/delete its bundle, operate its generation, and see its scores directly;
+expand the score pillars for subscores or open the raw report. Only the latest valid saved
+evaluation is retained for each run. A crashed, interrupted, or unreadable evaluation keeps the
+previous score; a completed report replaces it even when the data fails required quality checks.
+The job center shows generation and evaluation operations in stable order with independent
+progress. The Bundles
 page groups Studio runs and read-only imported complete CLI bundles by
 scenario. A bundle can be inspected with the file viewer or exported as a ZIP. Removing an
 imported bundle from Studio removes its index entry and leaves its files in place. Studio can
