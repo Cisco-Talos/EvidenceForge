@@ -102,3 +102,15 @@ test("a repeated explicit navigation request reopens the same scorecard after ma
   rerender(<Tooltip.Provider><ScoringRuns {...props} focusVersion={1} /></Tooltip.Provider>);
   expect(await screen.findByRole("region", { name: "Saved scorecard" })).toBeVisible();
 });
+
+
+test("a failed score remains red while unverified legacy inputs have a separate warning", async () => {
+  const { props, rerender } = setup([second, { ...evaluation, scorecard: { overall_score: 96, acceptance_passed: false } }]);
+  rerender(<Tooltip.Provider><ScoringRuns {...props} snapshot={{ dependencies: { scenario: { ready: true, fingerprint: "checked-later", changed_at: 300, rows: [] } } } as StudioSnapshot} /></Tooltip.Provider>);
+  const row = screen.getByRole("region", { name: "Scoring run second" });
+  expect(within(row).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+  expect(within(row).getByText("Inputs unverified")).toBeVisible();
+  await userEvent.setup().click(within(row).getByRole("button", { name: "Run #second" }));
+  expect(within(row).getByText(/a later dependency check cannot establish/)).toBeVisible();
+  expect(within(row).queryByText(/dependencies have changed/)).toBeNull();
+});

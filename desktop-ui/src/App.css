@@ -300,6 +300,8 @@ p { line-height: 1.5; }
 .header-summary { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .summary-outcome { color: #ccd9e9; font-weight: 500; }
 .summary-context { color: #8ea7c1; font-size: 11px; }
+.summary-inputs, .score-run-identity > small.summary-inputs { display: inline-flex; align-items: center; gap: 4px; color: #f1cc8f; font-size: 11px; }
+.summary-inputs > svg { flex: none; }
 .workspace-section-actions { display: flex; align-items: center; flex: none; gap: 8px; }
 .workspace-section-actions button { font-size: 12px; padding: 7px 10px; }
 .workspace-section-body { padding: 18px; border-top: 1px solid var(--line-soft); }

@@ -1,7 +1,7 @@
 import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
-import { chronologicalJobs } from "./jobOrder";
+import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
 
 type State = "none" | "stale" | "working" | "success" | "warning" | "error";
 export interface OperationState { label: string; state: State; detail: string }
@@ -52,16 +52,41 @@ function validationState(item: CatalogItem, record?: ValidationRecord, dependenc
   return { label: "Validation", state: "success", detail: "Current revision passed validation." };
 }
 
-export function generationIsCurrent(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): boolean {
+export interface RunInputStatus { state: "current" | "changed" | "unverified"; label: string; detail: string }
+
+/** Missing legacy provenance cannot establish that inputs actually changed. */
+export function generationInputs(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): RunInputStatus {
+  if (!job.source_sha256 || !item.source_sha256) return { state: "unverified", label: "Inputs unverified", detail: "This run does not record enough scenario provenance to compare its inputs with the current files." };
+  if (job.source_sha256 !== item.source_sha256) return { state: "changed", label: "Inputs changed", detail: "The scenario YAML differs from this run's captured revision. Its result still describes the generated data." };
   const health = snapshot.dependencies?.[item.id];
-  return job.source_sha256 === item.source_sha256 && (job.dependency_sha256
-    ? !health || job.dependency_sha256 === health.fingerprint
-    : (job.submitted_at || job.created_at || job.started_at || 0) >= (health?.changed_at || 0));
+  if (job.dependency_sha256) {
+    if (!health) return { state: "unverified", label: "Inputs unverified", detail: "Current dependencies have not been checked yet. The run retains its captured inputs and result." };
+    if (job.dependency_sha256 !== health.fingerprint) return { state: "changed", label: "Inputs changed", detail: "Packs, included files, or configuration differ from this run's captured inputs. Its result still describes the generated data." };
+  } else if (jobSubmittedAt(job) < (health?.changed_at || 0)) {
+    return { state: "unverified", label: "Inputs unverified", detail: "The scenario YAML still matches. This older run has no dependency fingerprint, so a later dependency check cannot establish whether its packs, includes, or configuration changed." };
+  }
+  return { state: "current", label: "Current revision", detail: "This run's inputs match the current scenario and dependency records." };
+}
+
+export function generationIsCurrent(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): boolean {
+  return generationInputs(job, item, snapshot).state === "current";
 }
 
 export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
   const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
   const changedAt = snapshot.dependencies?.[item.id]?.changed_at || 0;
+  const validation = validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt);
+  const latestGeneration = latest(generations);
+  const inputs = latestGeneration && generationInputs(latestGeneration, item, snapshot);
+  if (latestGeneration && inputs?.state === "unverified") {
+    const evaluation = latest(snapshot.jobs.filter((job) => job.kind === "evaluation" && job.generation_id === latestGeneration.id));
+    const unverifiedState = (label: string, job: StudioJob | undefined): OperationState => {
+      const result = jobState(label, job, false);
+      return { ...result, state: result.state === "success" ? "warning" : result.state,
+        detail: `${result.detail.replace("this scenario revision", "the run's captured data")} Inputs unverified: ${inputs.detail}` };
+    };
+    return [validation, unverifiedState("Generation", latestGeneration), unverifiedState("Evaluation", evaluation)];
+  }
   const currentGenerations = generations.filter((job) => generationIsCurrent(job, item, snapshot));
   const generation = latest(currentGenerations);
   const currentIds = new Set(currentGenerations.map((job) => job.id));
@@ -74,7 +99,7 @@ export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): Ope
     evaluationStatus.detail = `Evaluation belongs to an earlier run. Latest run #${generation.id.slice(0, 8)} has not been evaluated.`;
   }
   return [
-    validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt),
+    validation,
     jobState("Generation", generation, generations.some((job) => job.status === "completed")),
     evaluationStatus,
   ];

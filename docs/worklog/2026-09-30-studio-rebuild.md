@@ -1407,3 +1407,38 @@ Reviewed the actual UI using disposable data at 1280×900 and 712×724, includin
   Rebuilt the native app for reopening; native runtime and Linux interaction were not rerun for
   this frontend refinement. Closed the review tab, reset the viewport and stopped only the
   disposable helper/frontend. Unrelated iteration-test source deletions remain excluded.
+
+
+## 2026-10-02 — Run outcome icons and input freshness
+
+User reported a green completed generation row with a grey-clock workspace header, and a 96/100
+acceptance-failed score whose header also showed a clock. Read-only inspection of the local service
+confirmed matching scenario YAML, an older generation without a dependency fingerprint, and a later
+dependency change/check timestamp. The old fallback could not prove changed dependencies, yet the
+header replaced both completed outcomes with a stale icon.
+
+- Workspace generation/scoring and scoring-run icons now describe the recorded outcome regardless
+  of input freshness: completed generation is green, failed required scoring checks are red,
+  indeterminate acceptance is yellow. A high overall score never overrides required checks.
+- Input comparisons distinguish current, known changed, and unverified records. Matching YAML plus
+  missing older dependency metadata is unverified, without claiming the inputs changed. Known
+  YAML/dependency mismatches remain distinct. Missing provenance/current dependency checks also
+  remain conservative for forecasts and current-run selection.
+- Collapsed headers and scoring rows show a separate amber Inputs changed/Inputs unverified notice
+  with hover explanation; expanded scoring shows the same precise explanation. Library statuses
+  warn about unverified success and preserve acceptance failure, rather than falsely claiming an
+  older scenario revision. Existing known-stale library selection remains in place.
+
+Verification: all 171 React tests pass, including the reported one-run legacy-metadata/96-point
+  failure case, independent header outcome/freshness, library failure visibility, actual YAML and
+  pack changes, missing records, failed/passed/indeterminate acceptance, and scoring-row notices.
+  TypeScript/frontend compilation, generated API types, full Ruff check/format and diff checks pass.
+  The macOS release app builds. No persisted user records, service, CLI, skills or schema changed.
+  Reviewed disposable data at 1280×900 and 712×724; no horizontal overflow or browser script errors.
+  Screenshots: `/private/tmp/eforge-outcome-headers.jpg`, `/private/tmp/eforge-outcome-compact.jpg`.
+
+Discussed workspace bundle redundancy: recommend one Runs section combining owned generation and
+  imported-bundle rows, retaining view/export/delete actions, while keeping the global Bundles page
+  for workspace-wide management. This structural proposal awaits user feedback; no bundle sections
+  have been removed. The native app is rebuilt. Disposable review services/tabs are closed and the
+  viewport reset; unrelated iteration-test source deletions remain excluded.

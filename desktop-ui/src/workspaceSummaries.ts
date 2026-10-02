@@ -1,9 +1,9 @@
 import type { CatalogItem, DependencyHealth, ImportedBundle, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime } from "./components";
 import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
-import { generationIsCurrent, jobState, type OperationState } from "./ScenarioStates";
+import { generationInputs, generationIsCurrent, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
 
-export interface SectionSummary { headline: string; detail: string }
+export interface SectionSummary { headline: string; detail: string; inputs?: RunInputStatus }
 
 export function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -23,14 +23,14 @@ export function jobStatusCounts(jobs: StudioJob[]): string {
 function runContext(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): string {
   const time = jobSubmittedAt(job);
   return [`Latest run #${job.id.slice(0, 8)}`, time ? formatTime(time) : "Time unknown",
-    generationIsCurrent(job, item, snapshot) ? "Current revision" : "Older revision or dependencies"].join(" · ");
+    generationIsCurrent(job, item, snapshot) && "Current revision"].filter(Boolean).join(" · ");
 }
 
+/** Operation outcome and input freshness are separate facts. */
 export function latestRunState(label: string, job: StudioJob | undefined, current = true): OperationState {
   const state = jobState(label, job, false);
   if (!job || current) return state;
-  return { ...state, state: job.status === "completed" ? "stale" : state.state,
-    detail: `${state.detail.replace("this scenario revision", "an older revision")} Inputs differ from the current scenario or dependencies.` };
+  return { ...state, detail: `${state.detail.replace("this scenario revision", "the run's captured data")} Current-input freshness is shown separately.` };
 }
 
 export function generationSummary(job: StudioJob | undefined, item: CatalogItem, snapshot: StudioSnapshot, size: number | null | undefined, estimate?: number): SectionSummary {
@@ -39,20 +39,21 @@ export function generationSummary(job: StudioJob | undefined, item: CatalogItem,
   const hours = progress?.total_hours ? `${progress.completed_hours} of ${progress.total_hours} simulated hours · ${Math.min(100, Math.round(progress.completed_hours / progress.total_hours * 100))}%` : "";
   const status = job.status[0].toUpperCase() + job.status.slice(1);
   return { headline: [status, job.status !== "completed" && hours, size != null ? `${job.status === "completed" ? "Generated data" : "Partial data"} ${formatBundleSize(size)}` : job.status === "completed" ? "Size unavailable" : ""].filter(Boolean).join(" · "),
-    detail: [runContext(job, item, snapshot), (job.status !== "completed" || !generationIsCurrent(job, item, snapshot)) && estimate != null ? `Current estimate ${formatBundleSize(estimate)}` : ""].filter(Boolean).join(" · ") };
+    detail: [runContext(job, item, snapshot), (job.status !== "completed" || !generationIsCurrent(job, item, snapshot)) && estimate != null ? `Current estimate ${formatBundleSize(estimate)}` : ""].filter(Boolean).join(" · "), inputs: generationInputs(job, item, snapshot) };
 }
 
 /** A score only describes the generation it evaluated, never a newer unevaluated run. */
 export function scoringSummary(generation: StudioJob | undefined, evaluation: StudioJob | undefined, item: CatalogItem, snapshot: StudioSnapshot): SectionSummary {
   if (!generation) return { headline: "Not evaluated", detail: "No generated run yet" };
   const context = runContext(generation, item, snapshot);
-  if (!evaluation) return { headline: "Not evaluated", detail: `${context}${generation.status === "completed" ? "" : ` · Generation ${generation.status}`}` };
+  const inputs = generationInputs(generation, item, snapshot);
+  if (!evaluation) return { headline: "Not evaluated", detail: `${context}${generation.status === "completed" ? "" : ` · Generation ${generation.status}`}`, inputs };
   const report = evaluation.scorecard;
   const status = report?.acceptance_passed === true ? "Passed" : report?.acceptance_passed === false ? "Failed" : "Indeterminate";
   const headline = evaluation.status === "completed" && report && !report.error
     ? `${report.overall_score?.toFixed(0) ?? "N/A"}/100 · ${status}${report.total_records == null ? "" : ` · ${report.total_records.toLocaleString()} records`}`
     : report?.error ? "Score report unavailable" : `Evaluation ${evaluation.status}`;
-  return { headline, detail: `${context} · Evaluation #${evaluation.id.slice(0, 8)}` };
+  return { headline, detail: `${context} · Evaluation #${evaluation.id.slice(0, 8)}`, inputs };
 }
 
 export type BundleEntry = { kind: "job"; id: string; time: number; job: StudioJob } | { kind: "import"; id: string; time: number; bundle: ImportedBundle };

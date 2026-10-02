@@ -1,6 +1,7 @@
+import { generationInputs, generationIsCurrent } from "../src/ScenarioStates";
 import { expect, test } from "vitest";
 import type { CatalogItem, ImportedBundle, StudioJob, StudioSnapshot } from "../src/api";
-import { bundleSummary, generationSummary, latestJob, orderedBundles, scoringSummary, validationSummary } from "../src/workspaceSummaries";
+import { bundleSummary, generationSummary, latestJob, latestRunState, orderedBundles, scoringSummary, validationSummary } from "../src/workspaceSummaries";
 
 const item = { id: "scenario", path: "/workspace/scenario.yaml", source_sha256: "current" } as CatalogItem;
 const snapshot = { dependencies: { scenario: { fingerprint: "packs", changed_at: 10 } } } as StudioSnapshot;
@@ -17,7 +18,8 @@ test("latest submission stays the summary target when an older run resumes later
 test("an actual completed size is separate from the estimate for changed inputs", () => {
   const summary = generationSummary({ ...run, dependency_sha256: "previous-packs" }, item, snapshot, 2097152, 4194304);
   expect(summary.headline).toBe("Completed · Generated data 2.0 MB");
-  expect(summary.detail).toContain("Older revision or dependencies");
+  expect(summary.inputs?.state).toBe("changed");
+  expect(summary.inputs?.label).toBe("Inputs changed");
   expect(summary.detail).toContain("Current estimate 4.0 MB");
 });
 
@@ -53,4 +55,36 @@ test("a stale validation keeps its actual findings without claiming current succ
   const summary = validationSummary({ exit_code: 1, error: "", report: { valid: false, issues: [{ severity: "error" }, { severity: "warning" }, { severity: "warning" }] } }, true, 100);
   expect(summary.headline).toBe("Needs changes · 1 error · 2 warnings");
   expect(summary.detail).toContain("Out of date · revalidate current inputs");
+});
+
+
+test("a legacy run with matching YAML and a later dependency check has unverified inputs", () => {
+  const legacy = { ...run, dependency_sha256: undefined, submitted_at: 5 };
+  const inputs = generationInputs(legacy, item, snapshot);
+  expect(inputs.state).toBe("unverified");
+  expect(inputs.detail).toContain("scenario YAML still matches");
+  expect(inputs.detail).toContain("no dependency fingerprint");
+  expect(generationIsCurrent(legacy, item, snapshot)).toBe(false);
+  expect(generationSummary(legacy, item, snapshot, 1024).inputs).toEqual(inputs);
+  const evaluation: StudioJob = { ...run, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: false } };
+  expect(scoringSummary(legacy, evaluation, item, snapshot).inputs).toEqual(inputs);
+  expect(latestRunState("Generation", legacy, false).state).toBe("success");
+  expect(latestRunState("Evaluation", evaluation, false).state).toBe("error");
+});
+
+test("matching, changed, and missing input records remain distinct", () => {
+  expect(generationInputs(run, item, snapshot).state).toBe("current");
+  expect(generationInputs({ ...run, source_sha256: "previous" }, item, snapshot).state).toBe("changed");
+  expect(generationInputs({ ...run, dependency_sha256: "previous" }, item, snapshot).state).toBe("changed");
+  expect(generationInputs({ ...run, source_sha256: undefined }, item, snapshot).state).toBe("unverified");
+  expect(generationInputs(run, item, { ...snapshot, dependencies: {} }).state).toBe("unverified");
+});
+
+test("a known input change keeps generation and evaluation outcomes independent", () => {
+  const changed = { ...run, dependency_sha256: "previous" };
+  expect(latestRunState("Generation", changed, false)).toMatchObject({ state: "success" });
+  expect(latestRunState("Generation", changed, false).detail).not.toContain("this scenario revision");
+  expect(latestRunState("Evaluation", { ...changed, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: false } }, false).state).toBe("error");
+  expect(latestRunState("Evaluation", { ...changed, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: true } }, false).state).toBe("success");
+  expect(latestRunState("Evaluation", { ...changed, kind: "evaluation", scorecard: { overall_score: 96, acceptance_passed: null } }, false).state).toBe("warning");
 });

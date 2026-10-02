@@ -1882,3 +1882,36 @@ test("Environment refresh failures recover the header action and keep existing s
     expect(within(environment).getByLabelText(/Environment: All required pack versions/)).toHaveClass("state-success");
   } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
+
+
+test("workspace result icons preserve generation success and scoring failure when legacy inputs are unverified", async () => {
+  const originalJobs = snapshot.jobs;
+  const originalDependencies = snapshot.dependencies;
+  const originalItems = snapshot.items;
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "current", changed_at: 200, rows: [] } };
+  snapshot.jobs = [
+    { ...originalJobs[0], status: "completed", source_sha256: "sha-alpha", submitted_at: 100, dependency_sha256: undefined },
+    { id: "score", kind: "evaluation", status: "completed", status_message: "", generation_id: "job-1", output_root: originalJobs[0].output_root, created_at: 150, scorecard: { overall_score: 96, acceptance_passed: false } },
+  ];
+  try {
+    const view = await renderExpandedApp();
+    expect(screen.getByLabelText(/Generation: Generation completed.*Inputs unverified/)).toHaveClass("state-warning");
+    expect(screen.getByLabelText(/Evaluation: Failed acceptance · 96\/100.*Inputs unverified/)).toHaveClass("state-error");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const generation = screen.getByRole("region", { name: "Generation", exact: true });
+    const scoring = screen.getByRole("region", { name: "Scoring", exact: true });
+    expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
+    expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+    expect(generation.querySelector("header")).toHaveTextContent("Inputs unverified");
+    expect(scoring.querySelector("header")).toHaveTextContent("96/100 · Failed");
+    expect(within(scoring).getByText("Inputs unverified")).toHaveAttribute("title", expect.stringContaining("no dependency fingerprint"));
+    expect(within(generation).queryByText("Inputs changed")).toBeNull();
+    expect(generation.querySelector(".state-stale")).toBeNull();
+    expect(scoring.querySelector(".state-stale")).toBeNull();
+    snapshot.items = [{ ...originalItems[0], source_sha256: "changed-source" }, originalItems[1]];
+    view.rerender(<App />);
+    expect(within(generation).getByText("Inputs changed")).toBeVisible();
+    expect(within(generation).getByLabelText(/Generation: Generation completed/)).toHaveClass("state-success");
+    expect(within(scoring).getByLabelText(/Evaluation: Failed acceptance · 96\/100/)).toHaveClass("state-error");
+  } finally { snapshot.jobs = originalJobs; snapshot.dependencies = originalDependencies; snapshot.items = originalItems; }
+});

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, ClipboardCheck } from "lucide-react";
+import { ChevronRight, ClipboardCheck, TriangleAlert } from "lucide-react";
 import type { CatalogItem, StudioApi, StudioJob, StudioSnapshot } from "./api";
 import { formatTime, StatusBadge } from "./components";
 import { chronologicalJobs, jobSubmittedAt } from "./jobOrder";
-import { generationIsCurrent, jobState, OperationStatus } from "./ScenarioStates";
+import { generationInputs, jobState, OperationStatus } from "./ScenarioStates";
 import { ScorecardPanel } from "./ScorecardPanel";
 import { latestRunState } from "./workspaceSummaries";
 
@@ -29,7 +29,8 @@ function ScoringRun({ generation, evaluations, item, snapshot, api, focusId, foc
   const selected = evaluations.find((job) => job.id === selectedId) || newest;
   const active = [...evaluations].reverse().find((job) => ["running", "queued", "paused"].includes(job.status));
   const focused = Boolean(focusId && (focusId === generation.id || evaluations.some((job) => job.id === focusId)));
-  const current = generationIsCurrent(generation, item, snapshot);
+  const inputs = generationInputs(generation, item, snapshot);
+  const current = inputs.state === "current";
   const bodyId = `score-body-${generation.id}`;
   const previous = evaluations.filter((job) => job.id !== newest?.id).reverse();
   useEffect(() => {
@@ -46,13 +47,13 @@ function ScoringRun({ generation, evaluations, item, snapshot, api, focusId, foc
     <header className="score-run-header">
       <button ref={toggle} className="score-run-toggle" aria-label={`Run #${generation.id.slice(0, 8)}`} aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(!expanded)}>
         <ChevronRight size={16} className={`disclosure-chevron ${expanded ? "expanded" : ""}`} />
-        <span className="score-run-identity"><strong>Run #{generation.id.slice(0, 8)}{latest && <small>Latest</small>}</strong><small>{jobSubmittedAt(generation) ? formatTime(jobSubmittedAt(generation)) : "Time unknown"} · {current ? "Current revision" : "Older revision or dependencies"}</small></span>
+        <span className="score-run-identity"><strong>Run #{generation.id.slice(0, 8)}{latest && <small>Latest</small>}</strong><small>{jobSubmittedAt(generation) ? formatTime(jobSubmittedAt(generation)) : "Time unknown"}{current ? " · Current revision" : ""}</small>{!current && <small className="summary-inputs" title={inputs.detail}><TriangleAlert size={12} aria-hidden="true" />{inputs.label}</small>}</span>
         <span className="score-run-result"><OperationStatus status={latestRunState("Evaluation", newest, current)} focusable={false} /><strong>{evaluationResult(newest)}</strong>{newest?.scorecard?.total_records != null && <small>{newest.scorecard.total_records.toLocaleString()} records</small>}</span>
       </button>
       <button className="button-quiet score-run-evaluate" disabled={evaluating || Boolean(active) || generation.status !== "completed"} onClick={onEvaluate} title={generation.status !== "completed" ? `Generation is ${generation.status}; only completed runs can be evaluated` : active ? "An evaluation for this run is already queued, running, or paused" : "Evaluate this run's captured data"}><ClipboardCheck size={15} />{evaluating ? "Queuing…" : active ? active.status === "paused" ? "Evaluation paused" : "Evaluation in progress" : newest ? "Re-evaluate" : "Evaluate"}</button>
     </header>
     <div id={bodyId} hidden={!expanded} className="score-run-details">{expanded && <>
-      {!current && <p className="run-revision-note">This score describes the run's captured inputs; the scenario or its dependencies have changed.</p>}
+      {!current && <p className="run-revision-note">{inputs.detail}</p>}
       {generation.status !== "completed" && <p className="muted small"><StatusBadge status={generation.status} /> Complete this generation before scoring its data.</p>}
       {selected && <div className="score-run-report-heading"><span>Evaluation #{selected.id.slice(0, 8)} · {jobSubmittedAt(selected) ? formatTime(jobSubmittedAt(selected)) : "Time unknown"}</span>{selected.id !== newest?.id && <button className="button-quiet" onClick={() => setSelectedId(null)}>Show latest evaluation</button>}</div>}
       {selected?.status === "completed" && selected.scorecard && !selected.scorecard.error ? <ScorecardPanel key={selected.id} jobId={selected.id} api={api} /> : <p className="muted small">{selected ? selected.scorecard?.error || selected.status_message || evaluationResult(selected) : "No evaluation yet. Use Evaluate on this run to create its scorecard."}</p>}
