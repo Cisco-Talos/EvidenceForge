@@ -502,6 +502,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   authoring revisions, deeper preflight, resource-aware scheduling, evaluation comparisons, and
   delivery presets remain. Review each stage with the user before advancing. See the
   [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+  All CLI/skill changes must preserve traditional command-line and native-harness workflows.
+  New configuration scopes must be optional, file-based, independently usable without Studio,
+  and preserve existing root selection and family-specific merge contracts.
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;

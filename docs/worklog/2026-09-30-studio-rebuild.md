@@ -1077,3 +1077,21 @@ the identities of ten catalog items, one project, three conversations, one job, 
 bundles; job status/output associations also match. Confirmed the new search schema and default
 five-match preference are live. The native release app is rebuilt; reopen Studio to attach to
 the refreshed helper. No later workflow slices were started.
+
+## 2026-10-02 — Configuration scope compatibility boundary
+
+The user requires that no Studio-related CLI, skill, or reference changes make traditional
+EvidenceForge use incompatible or harder through native ChatGPT/Claude harnesses or direct CLI
+commands. Treat this as a hard acceptance boundary for the remaining workflows.
+
+Current contract: CWD selects the implicit project root, `--project-root` selects an explicit
+one, `.eforge/config` supplies one overlay, and resolved inputs are self-contained. No ancestor
+search or Studio database lookup may become necessary for traditional use. Preserve the existing
+family-specific merges and policy ownership; later scope does not mean universal replacement.
+
+The user accepted project assignment selecting a project's configured overlay; the implementation
+design is still under discussion. Proposed direction: optional generic file-based configuration
+contexts/ordered overlays in the shared CLI/compiler, native-harness skills using those same
+public contracts, then Studio integration. No new flags, manifests, or layering behavior have
+been implemented or approved as a final schema. Require unchanged legacy behavior and matching
+effective configuration/provenance across CLI, skills, and Studio before accepting that feature.
