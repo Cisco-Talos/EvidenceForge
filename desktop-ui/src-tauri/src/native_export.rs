@@ -63,7 +63,8 @@ fn export_url(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
         || (url.path().starts_with("/v1/items/")
             && ((url.path().contains("/bundles/") && url.path().ends_with(".zip"))
                 || url.path().contains("/files/")))
-        || (url.path().starts_with("/v1/packs/") && url.path().ends_with("/export"));
+        || (url.path().starts_with("/v1/packs/") && url.path().ends_with("/export"))
+        || (url.path().starts_with("/v1/environment/") && url.path().contains("/files/"));
     if !allowed || url.host_str() != Some("127.0.0.1") || url.port() != base.port() {
         return Err("Invalid Studio export path".into());
     }
@@ -281,6 +282,12 @@ mod tests {
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/bundles/b.zip").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/files/scenario.yaml").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/packs/a/export").is_ok());
+        assert!(export_url(
+            "http://127.0.0.1:4400",
+            "/v1/environment/a/files/personas/test.yaml"
+        )
+        .is_ok());
+        assert!(export_url("http://127.0.0.1:4400", "/v1/environment/a/refresh").is_err());
         assert!(export_url("http://127.0.0.1:4400", "/v1/packs/a/clone").is_err());
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/rename").is_err());
         assert!(export_url("https://example.com", "/v1/jobs/a/bundle.zip").is_err());

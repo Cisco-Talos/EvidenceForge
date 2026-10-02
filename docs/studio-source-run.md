@@ -82,9 +82,19 @@ references. Native mode uses the Save dialog; browser preview uses a download.
 
 ### Other current workflows
 
-The scenario library groups scenarios into projects; pack libraries use virtual folders. Each
-scenario workspace contains Overview, Conversations, Validation, Generation, and Scoring views.
-Generation provides the output destination and run controls; Scoring lets you choose a completed
+The scenario and pack libraries share projects. Scenario rows show their project, operation
+status, and current bundle size or a clearly marked estimate. Search can find YAML content and
+show matching excerpts; sorting and filters are remembered independently per workspace unless
+you disable library recall in Settings. Each scenario workspace contains Overview, Environment,
+Conversations, Validation, Generation, and Scoring views.
+
+Environment resolves the current files through `eforge resolve`, showing exact pack versions and
+digests, declaring files, merge decisions, and the composed scenario model. **Choose packs**
+prepares a request in a new conversation for you to review and send; it does not directly rewrite
+the YAML. Workspace overlays can be inspected in the built-in viewer. Project grouping currently
+does not change overlay scope: `.eforge/config` applies throughout the workspace.
+
+Generation uses the configured output parent and automatically constructs each run directory; Scoring lets you choose a completed
 run to evaluate and view its saved scores. The job center shows all generation and evaluation rows
 in stable order with independent
 progress. The Bundles page groups Studio runs and read-only imported complete CLI bundles by

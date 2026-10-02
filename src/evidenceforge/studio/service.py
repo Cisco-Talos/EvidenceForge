@@ -49,6 +49,7 @@ from evidenceforge.studio.codex import (
     CodexTimeoutError,
     CodexUnavailableError,
 )
+from evidenceforge.studio.environment import EnvironmentReport, inspect_environment, overlay_files
 from evidenceforge.studio.imports import (
     DependencyHealth,
     ImportCommitRequest,
@@ -1297,6 +1298,35 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         if item.kind != "scenario":
             raise HTTPException(status_code=400, detail="Choose a scenario")
         return (await studio.refresh_dependencies([item]))[item.id]
+
+    @app.get("/v1/scenarios/{item_id}/environment")
+    async def environment(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> EnvironmentReport:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        try:
+            return await asyncio.to_thread(
+                inspect_environment, studio.settings, item.path, studio.settings.workspace
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/environment/{item_id}/files/{relative_path:path}")
+    def environment_file(
+        item_id: str, relative_path: str, studio: StudioService = Depends(authorized)
+    ) -> FileResponse:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        try:
+            root, files, _ = overlay_files(item.workspace)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if relative_path not in {entry.path for entry in files}:
+            raise HTTPException(status_code=404, detail="Overlay file not found")
+        return FileResponse(root / relative_path, filename=Path(relative_path).name)
 
     @app.get("/v1/packs/{item_id}/export")
     async def export_pack(

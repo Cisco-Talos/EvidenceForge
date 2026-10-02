@@ -174,6 +174,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Environment */
+        get: operations["environment_v1_scenarios__item_id__environment_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/environment/{item_id}/files/{relative_path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Environment File */
+        get: operations["environment_file_v1_environment__item_id__files__relative_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/packs/{item_id}/export": {
         parameters: {
             query?: never;
@@ -1560,6 +1594,74 @@ export interface components {
             dependencies?: string[];
         };
         /**
+         * EnvironmentReport
+         * @description Effective scenario and source declarations reported by eforge resolve.
+         */
+        EnvironmentReport: {
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Project Root
+             * Format: path
+             */
+            project_root: string;
+            /**
+             * Valid
+             * @default false
+             */
+            valid: boolean;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Compiled Sha256 */
+            compiled_sha256?: string | null;
+            /**
+             * Authored Kind
+             * @default
+             */
+            authored_kind: string;
+            /** Selected Packs */
+            selected_packs?: components["schemas"]["SelectedPack"][];
+            /** Effective Scenario */
+            effective_scenario?: {
+                [key: string]: unknown;
+            };
+            /** Field Origins */
+            field_origins?: {
+                [key: string]: string;
+            };
+            /** Organization Model Origins */
+            organization_model_origins?: {
+                [key: string]: string;
+            };
+            /** Catalog Origins */
+            catalog_origins?: {
+                [key: string]: string;
+            };
+            /** Catalog Field Origins */
+            catalog_field_origins?: {
+                [key: string]: string;
+            };
+            /** Merge Decisions */
+            merge_decisions?: {
+                [key: string]: string;
+            }[];
+            /**
+             * Overlay Root
+             * Format: path
+             */
+            overlay_root: string;
+            /** Overlay Files */
+            overlay_files?: components["schemas"]["OverlayFile"][];
+            /**
+             * Overlays Truncated
+             * @default false
+             */
+            overlays_truncated: boolean;
+        };
+        /**
          * EvaluationRequest
          * @description Request an evaluation for a completed generation.
          */
@@ -1868,6 +1970,16 @@ export interface components {
              * @enum {string}
              */
             pack_source: "" | "bundled" | "workspace";
+        };
+        /**
+         * OverlayFile
+         * @description One regular overlay file beneath the selected workspace.
+         */
+        OverlayFile: {
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
         };
         /**
          * PackCloneRequest
@@ -2225,6 +2337,32 @@ export interface components {
              * @default
              */
             rating_detail: string;
+        };
+        /**
+         * SelectedPack
+         * @description Resolved pack identity and integrity metadata.
+         */
+        SelectedPack: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "package" | "project" | "path";
+            /** Publisher */
+            publisher: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "industry" | "organization";
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+            /** Digest */
+            digest: string;
+            /** Location */
+            location: string;
         };
         /**
          * SkillInstallRequest
@@ -2853,6 +2991,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DependencyHealth"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    environment_v1_scenarios__item_id__environment_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvironmentReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    environment_file_v1_environment__item_id__files__relative_path__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+                relative_path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

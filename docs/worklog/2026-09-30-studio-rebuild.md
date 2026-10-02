@@ -941,3 +941,33 @@ in disposable output at `/private/tmp/eforge-healthcare-fixed-20261001b`; the au
 manifest and all referenced bundle hashes verify. Output is about 295.2 MiB. Full Ruff checks
 and formatting pass. The separate iteration-scenario temporal-integrity investigation remains
 deferred as requested. No existing user bundle was replaced or repaired.
+
+## 2026-10-01 — Environment inspection and exact pack choices
+
+- Added a scenario Environment tab using a fresh deterministic `eforge resolve` process. It
+  shows exact selected versions, publishers and digests, searchable source declarations,
+  composition overrides, and an expandable syntax-highlighted environment/baseline model.
+  Inspection is read-only and does not create resolved files or `.eforge/config`.
+- The accessible pack picker supports multiple industry packs or one organization with its
+  locked industry closure. Search includes author/version/reference. Prepare in chat opens a
+  new scenario-linked conversation with a reviewable request; it does not start a turn or rewrite
+  composition blindly through nested includes. Empty choices are gated and errors retain the
+  selection. Keyboard dismissal restores focus to the trigger.
+- Listed workspace overlays with adjacent path-copy controls and the built-in YAML viewer/export
+  path. Authenticated routes restrict files to known regular overlays in the active workspace;
+  symlinks and traversal are rejected. The interface explicitly states the current workspace-wide
+  scope. GUI project/scenario overlay layering and richer guided editors remain later work.
+- Constrained header action width so a laptop window preserves room for the scenario title and
+  content. Updated the source-run guide to describe shared projects and current environment scope.
+
+Verification: 111 service/import/library/environment tests and all 110 React interaction tests,
+all six Rust tests, generated API types, full Ruff, Cargo formatting, and frontend build passed.
+The native HTTP test needs loopback permission and passed after running with that permission.
+Browser review at 1280×720 and 712×724 verified the actual exact-version report, visible pack
+checkboxes, author/version search, empty-selection gating, and overlay preview. Screenshots:
+`/private/tmp/eforge-environment-review.png`,
+`/private/tmp/eforge-environment-picker-review.png`, and
+`/private/tmp/eforge-environment-picker-compact.png`. All review files and preferences were
+disposable; no user's scenario, pack, overlay, or conversation was changed. Native/Linux
+interaction review is still pending. Continuing into resource prediction under the user's
+authorization to complete additional slices while they are away.
