@@ -5,7 +5,7 @@ import type { components } from "./generated/studio";
 type Schema = components["schemas"];
 export type ItemKind = Schema["CatalogItem"]["kind"];
 // The service serializes every model field in snapshots, including fields with defaults.
-type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source" | "search_excerpt" | "search_field";
+type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source" | "search_excerpt" | "search_field" | "search_matches" | "search_match_count" | "search_revision";
 export type CatalogItem = Omit<Required<Schema["CatalogItem"]>, PackMetadata> & Pick<Schema["CatalogItem"], PackMetadata>;
 export type ImportedBundle = Required<Schema["ImportedBundle"]>;
 export type Project = Required<Schema["Project"]>;

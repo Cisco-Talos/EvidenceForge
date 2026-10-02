@@ -1416,6 +1416,18 @@ export interface components {
              * @default
              */
             search_field: string;
+            /** Search Matches */
+            search_matches?: components["schemas"]["SearchMatch"][];
+            /**
+             * Search Match Count
+             * @default 0
+             */
+            search_match_count: number;
+            /**
+             * Search Revision
+             * @default
+             */
+            search_revision: string;
         };
         /**
          * ClearCompletedRequest
@@ -1931,6 +1943,14 @@ export interface components {
             can_resume: boolean;
             /** Source Sha256 */
             source_sha256?: string | null;
+            /** Dependency Sha256 */
+            dependency_sha256?: string | null;
+            /** Input Snapshot */
+            input_snapshot?: string | null;
+            /** Input Sha256 */
+            input_sha256?: string | null;
+            /** Compiled Sha256 */
+            compiled_sha256?: string | null;
             scorecard?: components["schemas"]["JobScorecard"] | null;
         };
         /**
@@ -2669,6 +2689,36 @@ export interface components {
             rating_detail: string;
         };
         /**
+         * SearchMatch
+         * @description One matching field or source line, with safe text highlight offsets.
+         */
+        SearchMatch: {
+            /** Field */
+            field: string;
+            /**
+             * File
+             * @default
+             */
+            file: string;
+            /**
+             * Line
+             * @default 0
+             */
+            line: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "metadata" | "value" | "key" | "comment" | "text";
+            /** Excerpt */
+            excerpt: string;
+            /** Highlights */
+            highlights?: [
+                number,
+                number
+            ][];
+        };
+        /**
          * SelectedPack
          * @description Resolved pack identity and integrity metadata.
          */
@@ -2800,6 +2850,11 @@ export interface components {
              * @default 2
              */
             max_concurrent_generations: number;
+            /**
+             * Search Match Limit
+             * @default 5
+             */
+            search_match_limit: number;
             /**
              * Checkpoint Hours
              * @default 24

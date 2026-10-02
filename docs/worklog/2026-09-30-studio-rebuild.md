@@ -1015,3 +1015,58 @@ rebuilt. Closed the agent's temporary browser tab, reset viewport sizing, and st
 disposable helper/Vite processes. The user's browser tab and authored files were left intact.
 Next review: native scenario rows/project drag, Environment pack selection, and resource forecasts
 with the user's actual scenarios before wider workflow expansion or Qt cutover.
+
+## 2026-10-02 — Core acceptance, immutable queued inputs, and contextual search
+
+User scope: native review is complete for now; Studio is accepted as the replacement. Complete
+items 1–3 only, then pause before further workflow expansion. The user chose substring search
+with multiple excerpts, a configurable display count, five by default, and an omitted-match count.
+
+- `eforge-desktop` now uses Studio's launcher; `eforge-studio` remains an alias. Removed the Qt
+  interface, bridge, interaction tests, and PySide dependencies. Retained the headless controller,
+  jobs, progress, library, and old-state readers; moved independent lifecycle/ownership tests into
+  `test_desktop_controller.py`. Old app-data files are not deleted. Refreshed README/source-run
+  documentation and reconciled the milestone/backlog.
+- New generations compile a self-contained resolved snapshot before queue publication, capturing
+  exact packs, source/include YAML, workspace overlays, defaults, and embedded email corpora.
+  Private state stores `inputs/<job-id>/RESOLVED_SCENARIO.yaml`; original authored paths remain
+  associations. Root/dependency identities are checked before/after capture. Changed, missing,
+  redirected, or symlinked snapshots fail before process launch. Reopening/resuming an unstarted
+  queue entry keeps that snapshot; Regenerate captures current inputs in a new run. Checkpoint
+  resume still uses the CLI's own recovery contract. UI freshness now compares captured dependency
+  hashes, avoiding false freshness when a queued run starts after a dependency edit.
+- Search indexes includes with root content and returns multiple matching fields/source lines,
+  source file/line and YAML path, highlighted text, and `[and N more]`. Names/descriptions rank
+  first, then scalar values, keys, and comments; word/prefix matches win within each group. This
+  is deterministic ranking, with no LLM calls. Matching values get display priority over location
+  text to keep rows compact. Hover/accessibility exposes the full location. Workspace Settings
+  offers Search matches per item (global preference, default five, range 1–50). Pack rows also
+  render excerpts. Search refreshes after content/include or display-count changes; stored catalog
+  metadata never retains transient search hits. Kind filtering precedes the result limit.
+- CI replaces the Qt job with the complete Studio/headless Python suite, React/type checks, Rust
+  contracts, and actual native shell builds on macOS/Linux. A clean `uv sync` exposed Starlette's
+  new `httpx2` TestClient requirement; recorded it explicitly in development dependencies rather
+  than relying on an untracked local install. Linux native builds are configured but have not
+  been run on this macOS host.
+
+Verification: all 157 Studio/prediction/headless Python tests, then the final 11 snapshot contracts
+(including three added failure cases) and six final search contracts, 118 React tests, six Rust
+shell contracts, complete
+repository test collection, generated type freshness, full Ruff checks and
+formatting, diff checks, and the final macOS release `.app` build pass. Real CLI validation and
+generation succeed from the captured input after deletion of the original scenario, nested
+includes, exact workspace pack, and overlay; a separate corpus contract proves declaring-file
+assets survive deletion. Tests cover mid-capture edits without publication, snapshot integrity,
+restart/queued-pause preservation, edited inputs producing new runs, precise freshness,
+configurable excerpt limits/counts, include refresh, escaped markup, and saved-settings feedback.
+
+Reviewed the live UI at 1280×720 and 712×724 in a disposable workspace. Confirmed highlighted
+values/keys, five visible matches, accurate omitted counts, changing the preference to two,
+returning to the existing search with the updated count, and resetting to five. Screenshots:
+`/private/tmp/eforge-search-matches-review.png` and
+`/private/tmp/eforge-search-matches-compact.png`. Closed the review tab, reset its viewport,
+and stopped the verified temporary helper/frontend after an authenticated idle check.
+
+Handoff: pause after items 1–3. Native core acceptance is already granted; do not re-require that
+review. Deeper environment work, isolated authoring drafts, advanced preflight/queue controls,
+evaluation drill-down/comparison, and delivery presets are still subsequent workflow slices.

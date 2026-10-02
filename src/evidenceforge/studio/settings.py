@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from evidenceforge.desktop.state import AppSettings
 from evidenceforge.studio.paths import StudioPaths, default_workspace
 
 
@@ -35,6 +36,7 @@ class StudioSettings(BaseModel):
     recent_workspaces: list[Path] = Field(default_factory=list)
     output_parents: dict[str, Path] = Field(default_factory=dict)
     max_concurrent_generations: int = Field(default=2, ge=1, le=16)
+    search_match_limit: int = Field(default=5, ge=1, le=50)
     checkpoint_hours: int = Field(default=24, ge=0)
     quit: QuitSettings = Field(default_factory=QuitSettings)
     skill_install_scope: Literal["global", "workspace"] = "global"
@@ -75,3 +77,21 @@ class SettingsStore:
 def settings_payload(settings: StudioSettings) -> dict[str, object]:
     """Return a JSON-compatible settings object for API responses."""
     return json.loads(settings.model_dump_json())
+
+
+def controller_settings(settings: StudioSettings) -> AppSettings:
+    """Translate shared quit preferences into the CLI controller model."""
+    quit_settings: QuitSettings = settings.quit
+    return AppSettings(
+        close_action=quit_settings.action,
+        continue_queued_generations=quit_settings.continue_queued_generations,
+        continue_evaluations=quit_settings.continue_evaluations,
+        pause_close_timing=quit_settings.pause_close_timing,
+        pause_evaluations=quit_settings.pause_evaluations,
+        kill_incomplete_bundles=quit_settings.kill_incomplete_bundles,
+        skill_install_scope=settings.skill_install_scope,
+        skill_install_agent=settings.skill_install_agent,
+        codex_path=settings.codex_path,
+        eforge_path=settings.eforge_path,
+        max_concurrent_generations=settings.max_concurrent_generations,
+    )

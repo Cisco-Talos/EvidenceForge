@@ -1,1 +1,1 @@
-"""Optional local desktop interface for EvidenceForge."""
+"""Headless CLI job, progress, and filesystem library infrastructure."""

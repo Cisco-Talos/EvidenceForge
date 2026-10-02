@@ -12,8 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.composition.models import SelectedPack
 from evidenceforge.desktop.jobs import _eforge_command
-from evidenceforge.studio.jobs import controller_settings
-from evidenceforge.studio.settings import StudioSettings
+from evidenceforge.studio.settings import StudioSettings, controller_settings
 
 
 class OverlayFile(BaseModel):

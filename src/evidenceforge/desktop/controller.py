@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -251,6 +252,19 @@ def _worker_tick(store: JobStore, intent: ControlIntent) -> bool:
                 and running_generations < intent.settings.max_concurrent_generations
             ):
                 try:
+                    if job.input_snapshot is not None and (
+                        job.input_snapshot.is_symlink()
+                        or not job.input_snapshot.is_file()
+                        or hashlib.sha256(job.input_snapshot.read_bytes()).hexdigest()
+                        != job.input_sha256
+                        or "generate" not in job.command
+                        or job.command.index("generate") + 1 >= len(job.command)
+                        or job.command[job.command.index("generate") + 1] != str(job.input_snapshot)
+                    ):
+                        raise ValueError(
+                            "Saved generation inputs are missing or changed. Regenerate from "
+                            "the scenario to create a new run"
+                        )
                     job.pid, job.process_created_at = _start_process(
                         job.command,
                         cwd=job.workspace or job.scenario.parent,

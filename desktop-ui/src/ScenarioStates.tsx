@@ -43,10 +43,17 @@ function validationState(item: CatalogItem, record?: ValidationRecord, dependenc
   return { label: "Validation", state: "success", detail: "Current revision passed validation." };
 }
 
+export function generationIsCurrent(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): boolean {
+  const health = snapshot.dependencies?.[item.id];
+  return job.source_sha256 === item.source_sha256 && (job.dependency_sha256
+    ? !health || job.dependency_sha256 === health.fingerprint
+    : (job.submitted_at || job.created_at || job.started_at || 0) >= (health?.changed_at || 0));
+}
+
 export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
   const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
   const changedAt = snapshot.dependencies?.[item.id]?.changed_at || 0;
-  const currentGenerations = generations.filter((job) => job.source_sha256 === item.source_sha256 && (!changedAt || (job.created_at || job.started_at || 0) >= changedAt));
+  const currentGenerations = generations.filter((job) => generationIsCurrent(job, item, snapshot));
   const generation = latest(currentGenerations);
   const currentIds = new Set(currentGenerations.map((job) => job.id));
   const allIds = new Set(generations.map((job) => job.id));

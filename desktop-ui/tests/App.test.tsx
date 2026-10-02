@@ -23,6 +23,7 @@ const snapshot: StudioSnapshot = {
     output_parents: {},
     max_concurrent_generations: 2,
     checkpoint_hours: 24,
+    search_match_limit: 5,
     quit: {
       action: "continue", continue_queued_generations: true,
       continue_evaluations: "continue", pause_close_timing: "handoff",
@@ -1493,4 +1494,16 @@ test("scenario rows use automatic predictions without validation and prefer fres
     rerender(<App />);
     expect(container.querySelector(".scenario-row-size")?.textContent).toBe("—");
   } finally { Object.assign(snapshot, original); }
+});
+
+test("queued run freshness uses captured dependency identity, not its later start time", () => {
+  const item = snapshot.items[0];
+  const base = {
+    ...snapshot,
+    dependencies: { [item.id]: { ready: true, fingerprint: "new-dependencies", rows: [], changed_at: 100 } },
+    jobs: [{ id: "queued-before-edit", kind: "generation", scenario: item.path, source_sha256: item.source_sha256, dependency_sha256: "old-dependencies", input_snapshot: "/private/inputs/run.yaml", status: "completed", output_root: "/tmp/run", started_at: 200, submitted_at: 50 }],
+  } as StudioSnapshot;
+  expect(scenarioStates(item, base)[1].state).toBe("stale");
+  base.jobs[0].dependency_sha256 = "new-dependencies";
+  expect(scenarioStates(item, base)[1].state).toBe("success");
 });

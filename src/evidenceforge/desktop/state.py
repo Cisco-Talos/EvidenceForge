@@ -1,4 +1,4 @@
-"""Durable state for the local desktop prototype."""
+"""Shared CLI job models and readers for retained desktop state."""
 
 from __future__ import annotations
 
@@ -52,6 +52,10 @@ class GenerationJob(BaseModel):
     owned_output: bool = False
     status_message: str = ""
     source_sha256: str | None = None
+    dependency_sha256: str | None = None
+    input_snapshot: Path | None = None
+    input_sha256: str | None = None
+    compiled_sha256: str | None = None
 
 
 class EvaluationJob(BaseModel):

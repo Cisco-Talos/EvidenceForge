@@ -108,7 +108,7 @@ function App() {
   const allDrafts = snapshot?.conversations.filter((chat) => !chat.item_id && inLibrary(chat.draft_kind)) || [];
   const scenarioCount = (snapshot?.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden).length || 0) + allDrafts.length;
   const ungroupedCount = (snapshot?.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden && !entry.project_id).length || 0) + allDrafts.filter((draft) => !draft.draft_project_id).length;
-  const searchKey = `${kind}:${search.trim()}`;
+  const searchKey = `${kind}:${search.trim()}:${snapshot?.settings.search_match_limit || 5}:${snapshot?.items.filter((entry) => entry.kind === kind || kind === "packs" && entry.kind !== "scenario").map((entry) => `${entry.id}:${entry.search_revision || entry.source_sha256}`).join(";")}`;
   const library = useMemo(() => snapshot?.items.filter((entry) =>
     (entry.kind === kind || (kind === "packs" && entry.kind !== "scenario")) && (!entry.hidden || showHidden) &&
     (selectedProjectId === null || (selectedProjectId === "ungrouped" ? !entry.project_id : entry.project_id === selectedProjectId)) &&

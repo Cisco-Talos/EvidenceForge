@@ -319,9 +319,9 @@ uv run eforge eval ./output
 
 ## Development
 
-An experimental Tauri desktop app is available for scenario authoring and generation jobs.
-See [Studio source-run guide](docs/studio-source-run.md) for setup and current scope. The earlier
-[Qt prototype](docs/desktop-prototype.md) remains available during Studio review.
+EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
+Run it with `uv run eforge-desktop` after following the
+[Studio source-run guide](docs/studio-source-run.md).
 
 ```bash
 uv sync --all-extras

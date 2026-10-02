@@ -2,7 +2,7 @@
 
 **Status:** 2.1.2 release preparation; post-v2.1.1 realism fixes merged to dev
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-30
+**Last Roadmap Review:** 2026-10-02
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -13,6 +13,11 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and completed-phase details
 ---
 
 ## Completed Milestones
+
+**EvidenceForge Studio core replacement.** Accepted the Tauri/React scenario workspace app
+on October 2, 2026; `eforge-desktop` now launches Studio and the Qt UI/dependency is retired.
+Queued generations capture immutable resolved inputs. The seven workflow stages remain active;
+see the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
 
 **2.0.1 cleanup and correctness.** Simplified generation ownership and shared infrastructure,
 corrected foreground lifecycle, resolver selection, and Kerberos timing, and repaired long-run
@@ -491,12 +496,13 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   structural validity, passes to zero errors, required-reference loading, warning churn, and
   repair regressions across representative scenario families. Use manual scenario-authoring
   acceptance for the 2.0 release candidates and final release.
-- [ ] Rebuild the local desktop GUI as Tauri/React with scenario workspaces, durable jobs,
-  conversation history, pack libraries, scorecards, bundle export, and overlay editing. Include
-  first-class projects that group scenarios and packs within a workspace, with a project overview
-  and ungrouped items; connect project overlays in the environment workflow. Review core parity
-  before the seven workflow stages. See the [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
-- [ ] Add Studio scenario YAML import with dependency review, nested includes and supporting
+- [ ] Complete the seven Studio workflow stages after accepted core parity. Find/resume has
+  project-aware lists, saved views, contextual search, and a command menu. Environment inspection
+  and exact pack choices are available; advanced editing, project/scenario overlays, isolated
+  authoring revisions, deeper preflight, resource-aware scheduling, evaluation comparisons, and
+  delivery presets remain. Review each stage with the user before advancing. See the
+  [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+- [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;
   source workspaces supply copies into the destination workspace. See the same Studio worklog for the import design decisions.

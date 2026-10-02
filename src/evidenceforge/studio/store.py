@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
+from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
 
 
 class CatalogItem(BaseModel):
@@ -45,6 +46,9 @@ class CatalogItem(BaseModel):
     imported: bool = False
     search_excerpt: str = ""
     search_field: str = ""
+    search_matches: list[SearchMatch] = Field(default_factory=list)
+    search_match_count: int = 0
+    search_revision: str = ""
 
 
 class Project(BaseModel):
@@ -258,6 +262,11 @@ class StudioStore:
             self._db.execute(
                 "ALTER TABLE validations ADD COLUMN dependency_sha256 TEXT NOT NULL DEFAULT ''"
             )
+        item_columns = {row["name"] for row in self._db.execute("PRAGMA table_info(items)")}
+        if "search_entries" not in item_columns:
+            self._db.execute(
+                "ALTER TABLE items ADD COLUMN search_entries TEXT NOT NULL DEFAULT '[]'"
+            )
         self._db.commit()
 
     def close(self) -> None:
@@ -382,9 +391,12 @@ class StudioStore:
         """Refresh file facts while preserving its stable ID and GUI organization."""
         workspace_key = str(workspace.resolve())
         path_key = str(source.path.resolve())
+        sources = index_sources(source.path, source.search_text, kind == "scenario")
+        content = "\n".join(sources.values())
+        entries = json.dumps([entry.model_dump() for entry in yaml_entries(sources)])
         with self._lock, self._db:
             row = self._db.execute(
-                "SELECT rowid, payload, content FROM items WHERE workspace=? AND kind=? AND path=?",
+                "SELECT rowid, payload, content, search_entries FROM items WHERE workspace=? AND kind=? AND path=?",
                 (workspace_key, kind, path_key),
             ).fetchone()
             old = CatalogItem.model_validate_json(row["payload"]) if row else None
@@ -402,6 +414,7 @@ class StudioStore:
                 pack_source=source.pack_source,
                 modified_at=source.modified_at,
                 source_sha256=hashlib.sha256(source.path.read_bytes()).hexdigest(),
+                search_revision=hashlib.sha256(content.encode()).hexdigest(),
                 users=source.users,
                 systems=source.systems,
                 events=source.events,
@@ -410,26 +423,32 @@ class StudioStore:
                 hidden=old.hidden if old else False,
                 imported=imported or (old.imported if old else False),
             )
-            if row and item == old and source.search_text == row["content"]:
+            if (
+                row
+                and item == old
+                and content == row["content"]
+                and entries == row["search_entries"]
+            ):
                 return item
             self._db.execute(
-                "INSERT INTO items(id, workspace, kind, path, payload, content) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "payload=excluded.payload, content=excluded.content",
+                "INSERT INTO items(id, workspace, kind, path, payload, content, search_entries) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "payload=excluded.payload, content=excluded.content, search_entries=excluded.search_entries",
                 (
                     item.id,
                     workspace_key,
                     kind,
                     path_key,
                     item.model_dump_json(),
-                    source.search_text,
+                    content,
+                    entries,
                 ),
             )
             item_row = self._db.execute("SELECT rowid FROM items WHERE id=?", (item.id,)).fetchone()
             self._db.execute("DELETE FROM items_fts WHERE rowid=?", (item_row["rowid"],))
             self._db.execute(
                 "INSERT INTO items_fts(rowid, name, description, content) VALUES (?, ?, ?, ?)",
-                (item_row["rowid"], item.name, item.description, source.search_text),
+                (item_row["rowid"], item.name, item.description, content),
             )
         return item
 
@@ -584,7 +603,9 @@ class StudioStore:
             self._db.execute("DELETE FROM projects WHERE id=?", (project.id,))
         return changed, changed_drafts, changed_views
 
-    def search_items(self, workspace: Path, query: str) -> list[CatalogItem]:
+    def search_items(
+        self, workspace: Path, query: str, match_limit: int = 5, kind: str | None = None
+    ) -> list[CatalogItem]:
         """Search names, descriptions, and indexed YAML with optional field scopes."""
         try:
             terms = shlex.split(query.casefold())
@@ -594,8 +615,11 @@ class StudioStore:
             return []
         with self._lock:
             rows = self._db.execute(
-                "SELECT payload, content FROM items WHERE workspace=?",
-                (str(workspace.resolve()),),
+                "SELECT payload, content, search_entries FROM items WHERE workspace=?"
+                + (" AND kind=?" if kind is not None else ""),
+                (str(workspace.resolve()), kind)
+                if kind is not None
+                else (str(workspace.resolve()),),
             ).fetchall()
         found: list[CatalogItem] = []
         for row in rows:
@@ -619,32 +643,59 @@ class StudioStore:
                 elif not any(term in text for text in fields.values()):
                     break
             else:
-                excerpt = ""
-                field = ""
+                scoped_terms: list[tuple[str, str]] = []
                 for term in terms:
                     scope, separator, value = term.partition(":")
-                    needle = value if separator and scope in fields else term
-                    if (scope == "yaml" and separator) or (
-                        needle in fields["yaml"]
-                        and needle not in fields["name"]
-                        and needle not in fields["description"]
-                    ):
-                        for line in row["content"].splitlines():
-                            line = line.strip()
-                            offset = line.casefold().find(needle)
-                            if offset >= 0:
-                                start = max(0, offset - 55)
-                                excerpt = line.strip()[start : start + 160]
-                                if start:
-                                    excerpt = "…" + excerpt
-                                if len(line.strip()) > start + 160:
-                                    excerpt += "…"
-                                field = "YAML"
-                                break
-                    if excerpt:
-                        break
+                    scoped_terms.append(
+                        (scope, value) if separator and scope in fields else ("", term)
+                    )
+                entries = [
+                    SearchMatch.model_validate(entry) for entry in json.loads(row["search_entries"])
+                ]
+                entries.extend(
+                    SearchMatch(field=key.title(), kind="metadata", excerpt=value)
+                    for key, value in {
+                        "name": item.name,
+                        "description": item.description,
+                        "author": item.publisher_display_name,
+                        "publisher": item.publisher,
+                        "version": item.version,
+                        "type": item.kind.removesuffix("_pack"),
+                        "location": item.pack_source,
+                        "compatibility": item.requires_evidenceforge,
+                    }.items()
+                    if value
+                )
+                if not any(scope == "yaml" for scope, _ in scoped_terms):
+                    matching_metadata = {
+                        entry.field.casefold()
+                        for entry in entries
+                        if entry.kind == "metadata"
+                        and any(
+                            value in entry.excerpt.casefold()
+                            for scope, value in scoped_terms
+                            if not scope or scope == entry.field.casefold()
+                        )
+                    }
+                    entries = [
+                        entry
+                        for entry in entries
+                        if entry.kind == "metadata" or entry.field not in matching_metadata
+                    ]
+                matches, count = matching_excerpts(entries, scoped_terms, match_limit)
                 found.append(
-                    item.model_copy(update={"search_excerpt": excerpt, "search_field": field})
+                    item.model_copy(
+                        update={
+                            "search_matches": matches,
+                            "search_match_count": count,
+                            "search_excerpt": matches[0].excerpt if matches else "",
+                            "search_field": "YAML"
+                            if matches and matches[0].kind != "metadata"
+                            else matches[0].field
+                            if matches
+                            else "",
+                        }
+                    )
                 )
                 if len(found) == 200:
                     break

@@ -42,13 +42,16 @@ def _paths(root: Path) -> StudioPaths:
     )
 
 
-def _scenario(workspace: Path, name: str) -> Path:
+def _scenario(workspace: Path, name: str, *, valid: bool = False) -> Path:
     path = workspace / "scenarios" / name / "scenario.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f"name: {name}\nversion: '1.0'\nenvironment:\n  users: []\n  systems: []\n",
         encoding="utf-8",
     )
+    if valid:
+        fixture = Path(__file__).resolve().parents[1] / "fixtures/scenarios/minimal.yaml"
+        path.write_text(fixture.read_text().replace("name: minimal-test", f"name: {name}"))
     return path
 
 
@@ -389,7 +392,7 @@ def test_checkpoint_setting_regeneration_and_incomplete_bundle_cleanup(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     workspace = tmp_path / "workspace"
-    scenario = _scenario(workspace, "short")
+    scenario = _scenario(workspace, "short", valid=True)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     paths = _paths(tmp_path / "private")
     app = create_app(paths, "secret")
@@ -430,7 +433,7 @@ def test_delete_incomplete_bundle_rejects_unowned_and_completed_outputs(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     workspace = tmp_path / "workspace"
-    scenario = _scenario(workspace, "safe")
+    scenario = _scenario(workspace, "safe", valid=True)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     app = create_app(_paths(tmp_path / "private"), "secret")
     headers = {"X-EForge-Token": "secret"}
@@ -1410,8 +1413,8 @@ def test_two_generation_progress_streams_reconcile_independently(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     workspace = tmp_path / "workspace"
-    _scenario(workspace, "alpha")
-    _scenario(workspace, "bravo")
+    _scenario(workspace, "alpha", valid=True)
+    _scenario(workspace, "bravo", valid=True)
     fake = tmp_path / "fake-eforge"
     fake.write_text(
         "#!" + sys.executable + "\n"
@@ -2184,7 +2187,7 @@ def test_generation_uses_saved_output_parent_and_accepts_explicit_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
-    _scenario(workspace, "saved-output")
+    _scenario(workspace, "saved-output", valid=True)
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
     app = create_app(_paths(tmp_path / "private"), "secret")
@@ -2218,7 +2221,7 @@ def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
-    scenario = _scenario(workspace, "history")
+    scenario = _scenario(workspace, "history", valid=True)
     paths = _paths(tmp_path / "private")
     monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
     monkeypatch.setattr("evidenceforge.studio.service.reconcile_jobs", lambda *_args: [])
@@ -2260,7 +2263,7 @@ def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped
         foreign_workspace = tmp_path / "foreign"
         foreign = queue_studio_generation(
             store,
-            _scenario(foreign_workspace, "foreign"),
+            _scenario(foreign_workspace, "foreign", valid=True),
             foreign_workspace,
             app.state.studio.settings,
         )

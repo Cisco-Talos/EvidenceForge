@@ -863,3 +863,14 @@ select { min-width: 185px; }
 .resource-forecast.compact .forecast-metrics > div { padding: 9px; }
 .resource-forecast.compact .forecast-metrics strong { font-size: 16px; }
 @media (max-width: 600px) { .forecast-metrics { gap: 7px; } .forecast-metrics > div { padding: 9px; } .forecast-metrics strong { font-size: 16px; } }
+
+.search-excerpts { display: flex; flex-direction: column; gap: 5px; margin: 5px 0; min-width: 0; }
+.search-excerpts .scenario-search-excerpt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; margin: 0; min-width: 0; }
+.search-excerpts .search-match-origin { color: var(--muted); font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-excerpts code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.search-excerpts mark { color: #f9e6aa; background: #50462a; border-radius: 2px; padding: 0 1px; }
+.search-more { color: var(--muted); font-size: 11px; }
+/* Keep five excerpts compact; prioritize the matching value over its location. */
+.search-excerpts .scenario-search-excerpt { flex-direction: row; align-items: baseline; gap: 10px; }
+.search-excerpts .scenario-search-excerpt code { order: 0; flex: 1 1 45%; min-width: 0; }
+.search-excerpts .search-match-origin { order: 1; flex: 0 1 55%; }

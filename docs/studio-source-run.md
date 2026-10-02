@@ -1,9 +1,10 @@
 # EvidenceForge Studio source-run guide
 
-Studio is the local Tauri desktop app under review. It uses a React interface, a private Python
+Studio is the local Tauri desktop app. It uses a React interface, a private Python
 service on loopback, Codex app-server for authoring conversations, and the deterministic `eforge`
-CLI for validation, generation, and evaluation. The Qt prototype remains available as
-`eforge-desktop` until Studio's core-parity review is accepted.
+CLI for validation, generation, and evaluation. Its core-parity replacement was accepted on
+October 2, 2026. `eforge-desktop` starts Studio; `eforge-studio` is an equivalent alias.
+The Qt interface and dependency have been removed. Old prototype app-data files are untouched.
 
 ## Run on macOS or Linux
 
@@ -11,7 +12,7 @@ CLI for validation, generation, and evaluation. The Qt prototype remains availab
    Sign in to Codex before authoring or use Studio's **Settings → Authoring & tools → Sign in**.
 2. In this checkout, run `uv sync --extra studio --extra dev`.
 3. In `desktop-ui/`, run `npm ci` once to install the frontend dependencies.
-4. From the checkout root, run `uv run eforge-studio`.
+4. From the checkout root, run `uv run eforge-desktop`.
 
 Studio starts or reconnects to one local service and opens its native window. The service binds
 only to loopback on an ephemeral port and requires a private per-launch token. Closing the window
@@ -48,7 +49,7 @@ conversations, and jobs; scenario YAML, pack files, and bundle contents remain a
 disk. Codex credentials stay in Codex's own storage. **Settings** has actions to open the active
 workspace, app data folder, and logs.
 
-## Current review scope
+## Current workflows
 
 ### Import scenarios and packs
 
@@ -115,3 +116,18 @@ This release is still in core-parity review. The planned workflow stages, includ
 editing, authoring diffs, resource-aware scheduling, generation setup, evaluation drill-down,
 and delivery controls, follow after that review. Incomplete bundles from external CLI runs are
 not yet importable; incomplete Studio-owned jobs already appear in the Bundles page.
+
+## Queued inputs and search excerpts
+
+Each new generation captures a self-contained `RESOLVED_SCENARIO.yaml` in private app state
+under `inputs/<job-id>/`. The worker reads this snapshot, including exact packs, includes,
+overlays, and embedded corpora. Later authoring or pack edits affect new runs only. The saved
+input digest is checked before launch. Checkpoint resume keeps the original run; Regenerate
+creates a new run using the scenario's current inputs. The authored path remains the library
+association, while source and dependency hashes identify the captured revision.
+
+Search keeps case-insensitive substring matching, including YAML keys. **Settings → Workspace →
+Search matches per item** controls the number of excerpts (five by default, up to fifty).
+Excerpts identify the source file, line, and field, highlight matches, and count additional
+matching fields. Names/descriptions rank first, YAML values next, then keys and comments;
+word/prefix occurrences win within each group. This ranking is deterministic and uses no AI.

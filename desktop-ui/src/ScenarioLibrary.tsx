@@ -7,6 +7,8 @@ import { formatBundleSize, formatTime } from "./components";
 import { ProjectPicker } from "./PackLibrary";
 import { ScenarioStates, scenarioStates } from "./ScenarioStates";
 
+import { SearchExcerpts } from "./SearchExcerpts";
+import { generationIsCurrent } from "./ScenarioStates";
 import { currentPrediction } from "./ResourceForecastPanel";
 
 export type ScenarioSort = "name" | "updated" | "project";
@@ -41,7 +43,7 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
   ].sort((a, b) => (sort === "updated" ? b.updated - a.updated : sort === "project" ? a.project.localeCompare(b.project) : 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   return <ul className="scenario-list" aria-label="Scenario library">{rows.map(({ id, name, updated, project, item, draft }) => {
     const available = !!item && snapshot.jobs.some((job) => job.kind === "generation" && job.scenario === item.path && job.status === "completed");
-    const freshRun = item && snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path && job.status === "completed" && job.source_sha256 === item.source_sha256 && (job.created_at || job.started_at || 0) >= (snapshot.dependencies?.[item.id]?.changed_at || 0)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
+    const freshRun = item && snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path && job.status === "completed" && generationIsCurrent(job, item, snapshot)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
     const actualSize = freshRun ? sizes[freshRun.id] : null;
     const validation = item && snapshot.validations[item.id];
     const forecast = validation && item && !["none", "stale"].includes(scenarioStates(item, snapshot)[0].state) ? validation.result.report?.resource_forecast as { final_output?: { expected_bytes?: number } } | undefined : undefined;
@@ -55,7 +57,7 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
         <span className="scenario-row-copy">
           <span className="scenario-row-title"><strong title={name}>{name}</strong><span className="scenario-project" title={`Project: ${project}`}><Folder size={12} /><span>{project}</span></span>{draft && <span className="draft-chip">Draft</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
-          {item?.search_excerpt && <span className="scenario-search-excerpt" title={item.search_excerpt}><span>{item.search_field} match</span><code>{item.search_excerpt}</code></span>}
+          {item && <SearchExcerpts item={item} />}
           <span className="scenario-mobile-meta">{item?.version || "Not authored yet"} · Updated {formatTime(updated)}</span>
         </span>
       </button>

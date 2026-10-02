@@ -1,4 +1,4 @@
-"""Detached local CLI jobs for the desktop prototype."""
+"""Detached local CLI workers shared by EvidenceForge Studio."""
 
 from __future__ import annotations
 

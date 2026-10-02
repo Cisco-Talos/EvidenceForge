@@ -42,7 +42,12 @@ from evidenceforge.desktop.skill_setup import skill_targets
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
-from evidenceforge.models.exceptions import ConfigurationError, PackError, PathSafetyError
+from evidenceforge.models.exceptions import (
+    ConfigurationError,
+    EvidenceForgeError,
+    PackError,
+    PathSafetyError,
+)
 from evidenceforge.studio.codex import (
     CodexClient,
     CodexThreadNotReadyError,
@@ -592,6 +597,10 @@ class JobSummary(BaseModel):
     checkpoint_hours: int | None = None
     can_resume: bool = False
     source_sha256: str | None = None
+    dependency_sha256: str | None = None
+    input_snapshot: Path | None = None
+    input_sha256: str | None = None
+    compiled_sha256: str | None = None
     scorecard: JobScorecard | None = None
 
 
@@ -1440,7 +1449,9 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         if len(search) > 256:
             raise HTTPException(status_code=400, detail="Search is too long")
         found = (
-            studio.store.search_items(studio.settings.workspace, search)
+            studio.store.search_items(
+                studio.settings.workspace, search, studio.settings.search_match_limit, kind
+            )
             if search.strip()
             else studio.store.items(studio.settings.workspace, kind)
         )
@@ -2547,7 +2558,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 previous.output_root.parent.parent,
                 studio.settings.checkpoint_hours,
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, EvidenceForgeError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         summary = job_summary(json.loads(job.model_dump_json()))
         await studio.emit(job.id, "job.created", summary)
@@ -2961,7 +2972,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 if request.checkpoint_hours is not None
                 else studio.settings.checkpoint_hours,
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, EvidenceForgeError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         summary = job_summary(json.loads(job.model_dump_json()))
         await studio.emit(job.id, "job.created", summary)

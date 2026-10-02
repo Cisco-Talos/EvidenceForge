@@ -4,19 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import sqlite3
 from glob import escape
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.composition.artifacts import write_resolved_scenario
+from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.desktop.controller import _worker_tick
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import queue_evaluation, queue_generation, request_suspension
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
-from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
+from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
-from evidenceforge.studio.settings import QuitSettings, StudioSettings
+from evidenceforge.models.exceptions import EvidenceForgeError
+from evidenceforge.studio.imports import dependency_health
+from evidenceforge.studio.settings import StudioSettings, controller_settings
 from evidenceforge.studio.store import StudioStore
 
 
@@ -50,24 +56,6 @@ class StudioJobStore:
         self.store.save_job(job.id, job.workspace, "evaluation", job)
 
 
-def controller_settings(settings: StudioSettings) -> AppSettings:
-    """Translate shared quit preferences into the CLI controller model."""
-    quit_settings: QuitSettings = settings.quit
-    return AppSettings(
-        close_action=quit_settings.action,
-        continue_queued_generations=quit_settings.continue_queued_generations,
-        continue_evaluations=quit_settings.continue_evaluations,
-        pause_close_timing=quit_settings.pause_close_timing,
-        pause_evaluations=quit_settings.pause_evaluations,
-        kill_incomplete_bundles=quit_settings.kill_incomplete_bundles,
-        skill_install_scope=settings.skill_install_scope,
-        skill_install_agent=settings.skill_install_agent,
-        codex_path=settings.codex_path,
-        eforge_path=settings.eforge_path,
-        max_concurrent_generations=settings.max_concurrent_generations,
-    )
-
-
 def queue_studio_generation(
     job_store: StudioJobStore,
     scenario: Path,
@@ -76,7 +64,21 @@ def queue_studio_generation(
     output_parent: Path | None = None,
     checkpoint_hours: int = 24,
 ) -> GenerationJob:
-    """Persist a new GUI-owned generation before launching it."""
+    """Freeze all deterministic inputs before publishing a queued generation."""
+    scenario = scenario.resolve()
+    workspace = workspace.resolve()
+    source_sha256 = hashlib.sha256(scenario.read_bytes()).hexdigest()
+    before = dependency_health(scenario, workspace)
+    if not before.ready:
+        raise ValueError("Resolve the scenario's missing or conflicting dependencies first")
+    compiled = compile_scenario(scenario, project_root=workspace)
+    after = dependency_health(scenario, workspace)
+    if (
+        not after.ready
+        or before.fingerprint != after.fingerprint
+        or source_sha256 != hashlib.sha256(scenario.read_bytes()).hexdigest()
+    ):
+        raise ValueError("Scenario inputs changed while queuing. Refresh and try again")
     job = queue_generation(
         scenario,
         workspace,
@@ -85,8 +87,23 @@ def queue_studio_generation(
         settings=controller_settings(settings),
         checkpoint_hours=checkpoint_hours,
     )
-    job.source_sha256 = hashlib.sha256(scenario.read_bytes()).hexdigest()
-    job_store.save_generation(job)
+    snapshot_directory = job_store.directory / "inputs" / job.id
+    try:
+        job.input_snapshot = write_resolved_scenario(compiled, snapshot_directory)
+        job.input_sha256 = hashlib.sha256(job.input_snapshot.read_bytes()).hexdigest()
+        job.compiled_sha256 = compiled.digests["compiled_sha256"]
+        job.source_sha256 = source_sha256
+        job.dependency_sha256 = before.fingerprint
+        # Preserve the authored path for associations; only the worker reads the snapshot.
+        job.command[job.command.index("generate") + 1] = str(job.input_snapshot)
+        job_store.save_generation(job)
+    except (OSError, ValueError, EvidenceForgeError, sqlite3.Error):
+        # These directories have just been reserved and have never been published to a worker.
+        if snapshot_directory.is_dir():
+            shutil.rmtree(snapshot_directory)
+        (job.output_root / ".eforge-desktop-job.json").unlink(missing_ok=True)
+        job.output_root.rmdir()
+        raise
     return job
 
 
