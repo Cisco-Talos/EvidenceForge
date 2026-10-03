@@ -62,12 +62,14 @@ def discover_codex(explicit: Path | None = None) -> str | None:
     found = shutil.which("codex")
     if found or sys.platform != "darwin":
         return found
+    # Finder has a minimal PATH. Prefer the standalone CLI there too so a
+    # separate Codex.app installation does not hide the CLI's model catalog.
     candidates = [
-        Path("/Applications/Codex.app/Contents/Resources/codex"),
-        Path.home() / "Applications/Codex.app/Contents/Resources/codex",
         Path("/opt/homebrew/bin/codex"),
         Path("/usr/local/bin/codex"),
         Path.home() / ".local/bin/codex",
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
+        Path.home() / "Applications/Codex.app/Contents/Resources/codex",
     ]
     return next(
         (str(path) for path in candidates if path.is_file() and os.access(path, os.X_OK)), None

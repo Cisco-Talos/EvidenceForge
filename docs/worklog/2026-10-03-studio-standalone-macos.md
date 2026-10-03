@@ -181,3 +181,31 @@ accepted prompts and briefly showed “Codex is working…” without a reply.
 
 This closes the bounded real-reply acceptance gap from the first build. Full
 scenario repair/authoring and the other Mac's macOS 26 field trial remain open.
+
+## Follow-up: Finder icon and differing model catalogs
+
+The user reported different Finder/Dock icons and different model choices between
+the standalone app and `uv run eforge-studio`.
+
+- Both the PNG Dock artwork and packaged ICNS have alpha transparency. The source
+  app had custom Finder icon metadata and an `Icon\r` resource fork, but Python's
+  macOS `copytree` dropped both during DMG staging. The installed copy also lacked
+  them. Packaging now uses `ditto --rsrc --extattr` to retain the custom icon.
+- Terminal PATH finds Homebrew Codex 0.160.0; Finder's minimal PATH fell back to
+  Codex.app's 0.146.0-alpha.3.1 before trying Homebrew. Model choices come from the
+  selected executable's live catalog. Finder fallback now prefers common standalone
+  CLI locations before Codex.app. PATH and explicit setting/override precedence
+  remain intact. Settings help and installation docs explain selection/reconnection.
+- Production TypeScript/frontend and native app builds passed, along with complete
+  Ruff check/format and Git whitespace checks. Minimal-PATH discovery on this Mac
+  selects `/opt/homebrew/bin/codex`.
+- Read-only inspection of the finished DMG confirmed byte-identical FinderInfo and
+  the 1,748,239-byte custom icon resource fork compared with the build app. Its
+  runtime archive contains the updated discovery implementation. DMG integrity
+  verification passed; the inspection volume was ejected. No Studio app/helper
+  was launched, and the user's running session was left open.
+- The previous chat-fix image is preserved as
+  `dist/macos/EvidenceForge-Studio-2.1.2-aarch64-chat-fix-test.dmg`.
+  The standard test image now has SHA256
+  `cef7f1be93bbed4a7dfe5bc6816e9485c22ec71c70a7a774d7cf73484332ca22`.
+  Quit Studio, eject the old image, and replace the Applications copy to load it.

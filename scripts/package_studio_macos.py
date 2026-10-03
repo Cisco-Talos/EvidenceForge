@@ -284,7 +284,13 @@ def build_app(root: Path, build: Path, configuration: Path, architectures: list[
     if volume.exists():
         shutil.rmtree(volume)
     volume.mkdir()
-    shutil.copytree(app, volume / app.name, symlinks=True)
+    # The custom transparent Finder icon lives in resource forks/Finder metadata.
+    # Python's macOS copytree drops them even though it copies the empty Icon file.
+    run(
+        ["/usr/bin/ditto", "--rsrc", "--extattr", str(app), str(volume / app.name)],
+        root,
+        environment,
+    )
     (volume / "Applications").symlink_to("/Applications", target_is_directory=True)
     version: str = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     label = "universal" if len(architectures) == 2 else architectures[0]

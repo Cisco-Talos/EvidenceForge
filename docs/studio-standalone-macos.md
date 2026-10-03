@@ -20,6 +20,20 @@ The companion `.dmg.sha256` file records the image checksum. In the folder conta
 both files, `shasum -a 256 -c EvidenceForge-Studio-2.1.2-aarch64-test.dmg.sha256`
 verifies the transferred copy.
 
+## Codex executable and available models
+
+Studio asks the selected Codex executable for its model catalog. Different Codex
+versions can expose different models, even with the same signed-in account.
+Automatic discovery uses `codex` on PATH, then common macOS CLI locations
+(`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`), then Codex.app's bundled CLI.
+Finder has a minimal PATH, so these fallback locations matter for the standalone app.
+
+To make terminal and standalone Studio use exactly the same executable, run
+`command -v codex` in your terminal and enter that absolute path under
+**Settings → Authoring & tools → Codex executable**. Save, then click the Codex
+status dot in the header and reconnect when authoring is idle. Settings are shared
+by both launch methods when they use the same app-data directory.
+
 ## Data and updates
 
 Workspace scenarios, packs, and output stay in the chosen workspace. Studio keeps

@@ -1,4 +1,4 @@
-// Brand the source-run .app using the original transparent artwork. macOS may
+// Brand the .app using the original transparent artwork. macOS may
 // synthesize a rounded tile for an ordinary legacy ICNS; a custom file icon
 // preserves its silhouette in Finder and in the Dock before the app launches.
 import AppKit
