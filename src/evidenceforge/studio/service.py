@@ -880,6 +880,11 @@ class StudioService:
         if conversation.connection_note and last_turn_status == "completed":
             conversation.connection_note = None
             changed = True
+        elif last_turn_status == "failed":
+            note = "Codex reported that this turn failed. Review its error before continuing."
+            if conversation.connection_note != note:
+                conversation.connection_note = note
+                changed = True
         if changed:
             conversation.updated_at = time.time()
             self.store.save_conversation(conversation)
@@ -2394,6 +2399,12 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 {"threadId": conversation.thread_id, "includeTurns": True},
                 timeout=10,
             )
+            outcomes = studio.store.codex_turn_outcomes(conversation.id, conversation.thread_id)
+            thread = result.get("thread", {})
+            turns = thread.get("turns", []) if isinstance(thread, dict) else []
+            for turn in turns if isinstance(turns, list) else []:
+                if isinstance(turn, dict) and (outcome := outcomes.get(turn.get("id"))):
+                    turn.update(outcome.model_dump(mode="json"))
             await studio.reconcile_codex_thread(conversation, result)
             return result
         except CodexThreadNotReadyError:
@@ -2540,6 +2551,25 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             }.get(kind)
         turn_id: str | None = None
         try:
+            if not conversation.model_id:
+                catalog = await studio.codex.call("model/list", {"limit": 100}, timeout=10)
+                models = [
+                    model
+                    for model in catalog.get("data", [])
+                    if isinstance(model, dict) and isinstance(model.get("id"), str) and model["id"]
+                ]
+                selected = next((model for model in models if model.get("isDefault")), None)
+                selected = selected or next(iter(models), None)
+                if selected is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Codex returned no models. Reconnect Codex and choose a model before sending.",
+                    )
+                # Match the picker's displayed default instead of inheriting a
+                # potentially incompatible model from the user's Codex config.
+                conversation.model_id = selected["id"]
+                if conversation.reasoning_effort is None:
+                    conversation.reasoning_effort = selected.get("defaultReasoningEffort")
             inputs: list[dict[str, str]] = [{"type": "text", "text": request.text}]
             if skill_name:
                 listing = await studio.codex.call(
@@ -2623,6 +2653,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     "thread/resume",
                     {
                         "threadId": conversation.thread_id,
+                        "model": conversation.model_id,
                         "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. Keep deterministic generation in eforge. Follow user requests and the EvidenceForge skills."
                         + configuration_instructions,
                     },

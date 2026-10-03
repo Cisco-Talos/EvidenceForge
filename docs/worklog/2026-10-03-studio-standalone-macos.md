@@ -102,7 +102,7 @@ has not been accepted on that floor or on the user's macOS 26 machine.
 `dist/macos/EvidenceForge-Studio-2.1.2-aarch64-test.dmg`, companion SHA256 file,
 and release app under `build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/`.
 The app is about 35 MiB; its compressed private runtime is about 28 MiB.
-Image integrity verification passed. DMG SHA256:
+Initial image integrity verification passed. Initial DMG SHA256:
 `9cc30677baefedc287d7e248788647782428194f39a3bbf27b651f6bd25b6746`.
 
 ### Remaining acceptance
@@ -119,3 +119,65 @@ native harness stops its own app, helper, workers, and launchd registration in a
 `finally` block. Final process verification confirmed no Studio review app, helper,
 or test worker remaining. Test artifacts stayed on disk for evidence; no application
 is left running.
+
+## Follow-up: silent packaged authoring failure
+
+October 3 field trial on the development Mac: validation worked, but “Fix in chat”
+accepted prompts and briefly showed “Codex is working…” without a reply.
+
+### Cause and evidence
+
+- The native helper was using the packaged retained runtime, not checkout Python.
+- Finder discovery selected Codex.app's `codex-cli 0.146.0-alpha.3.1`. Its model
+  catalog default was `gpt-5.6-sol`; Homebrew's independently installed CLI was
+  `0.160.0`. The user's shared Codex config selected `gpt-6.1-sol`.
+- Studio's model picker displayed the catalog default while omitting an explicit
+  model from thread/turn requests. Codex inherited `gpt-6.1-sol` and rejected it
+  for that ChatGPT connection. Three terminal notifications contained that error.
+- The UI ignored error notifications and failed-turn errors. This Codex version's
+  `thread/read` returned those same turns as completed, with user messages only and
+  no error. History reconciliation then cleared Studio's generic failure note.
+- The [official app-server contract](https://learn.chatgpt.com/docs/app-server#turn-events)
+  distinguishes completed, failed, and interrupted terminal statuses and includes
+  failure details. A successful RPC submission is not successful model inference.
+
+### Fix
+
+- A conversation without an explicit model resolves and saves the same catalog
+  default shown by the picker. Thread start/resume and turn start send it explicitly.
+  The selected model's default reasoning effort is saved when no effort was selected.
+  Explicit conversation choices remain intact; global Codex config is unchanged.
+- Empty catalogs produce an actionable error before a turn can inherit another
+  model. Saved choices absent from the current catalog are visibly marked unavailable.
+- Failed turns render provider errors beside the accepted user message, including
+  live non-retryable failures while history is pending. Retrying errors remain live.
+  Nested provider JSON messages are displayed as readable text.
+- Persisted terminal notifications restore status/error to returned history when
+  Codex's rollout drops them. The existing conversation/thread identities scope
+  this recovery; SQLite events remain authoritative and no schema migration is needed.
+
+### Acceptance and delivery
+
+- 185 Studio/desktop Python tests passed without coverage, including new/resumed
+  default model selection, explicit-choice preservation, empty catalogs, and
+  failed-history recovery after reopening.
+- 188 frontend tests passed, including history/live failure rendering, retrying
+  errors, and unavailable model choices. Production build and API type check passed.
+- The rebuilt native app, launched with isolated app data, a minimal PATH, and
+  Codex.app's same CLI, successfully returned `STUDIO_CHAT_OK` and
+  `STUDIO_CHAT_RESUMED_OK` from two real ChatGPT authoring turns. Both explicitly
+  used `gpt-5.6-sol`. Workspace skill installation used the bundled resources;
+  the bounded prompts requested no tools or file changes. Evidence:
+  `/private/var/folders/6j/v05n9sgs5tz_y4nmzrn4gmtc0000gn/T/eforge standalone chat ü adt_eh3t`.
+- Packaged CLI/resource verification passed again. The original image is preserved
+  as `dist/macos/EvidenceForge-Studio-2.1.2-aarch64-initial-test.dmg`.
+- Replacement image retains the standard `EvidenceForge-Studio-2.1.2-aarch64-test.dmg`
+  filename. Updated SHA256:
+  `393bb3a8430ce16e02ba0374ea8bff038480c4dae8585b6f2018ac4ca1c2b4a2`.
+- The disposable test app, helper, Codex subprocess, and launchd registration were
+  stopped. The user's currently open old package is deliberately left running.
+  Quit it, eject the old DMG, replace the Applications copy from the rebuilt image,
+  and reopen to load the fix. Workspace data and conversations remain in place.
+
+This closes the bounded real-reply acceptance gap from the first build. Full
+scenario repair/authoring and the other Mac's macOS 26 field trial remain open.

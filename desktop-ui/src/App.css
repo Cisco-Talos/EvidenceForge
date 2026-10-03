@@ -413,6 +413,7 @@ p { line-height: 1.5; }
 .message-row.agent { justify-content: flex-start; }
 .message-bubble { min-width: 0; max-width: min(79%, 690px); padding: 13px 17px; border: 1px solid #314a68; border-radius: 14px; color: #dae7f5; background: #17283e; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-row.user .message-bubble { border-color: #45659b; background: #213a60; }
+.message-row.error .message-bubble { border-color: #9a5055; background: #412a31; color: #ffd2d2; }
 .message-bubble p { margin: 5px 0 0; }
 .chat-markdown { white-space: normal; font-size: 13px; line-height: 1.6; min-width: 0; }
 .chat-markdown > :first-child { margin-top: 5px; }

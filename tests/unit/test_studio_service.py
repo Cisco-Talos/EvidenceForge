@@ -1535,7 +1535,7 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         f"'path': '/tmp/skills/{skill}/SKILL.md', 'enabled': True}}]}}]}}\n"
         "    elif method == 'thread/start': result = {'thread': {'id': 'thread-alpha'}}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
-        "    elif method == 'model/list': result = {'data': []}\n"
+        "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'account/read': result = {'account': {'type': 'chatgpt'}}\n"
         "    if method == 'turn/start':\n"
         "        print(json.dumps({'method': 'turn/completed', 'params': "
@@ -1616,6 +1616,8 @@ def test_uncertain_codex_turn_preserves_attempt_without_overwriting_fast_complet
     headers = {"X-EForge-Token": "local-secret"}
 
     async def fake_call(method: str, params: dict[str, object], *, timeout: float = 30) -> dict:
+        if method == "model/list":
+            return {"data": [{"id": "test-model", "isDefault": True}]}
         if method == "turn/start":
             if params["threadId"] == "fast-completion":
                 await studio._codex_event(
@@ -1696,6 +1698,7 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         "        result = {'data': [{'skills': [{'name': 'eforge-scenario', "
         "'path': '/tmp/skills/eforge-scenario/SKILL.md', 'enabled': True}]}]}\n"
         "    elif method == 'thread/start': result = {'thread': {'id': 'thread-draft'}}\n"
+        "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    if method == 'turn/start':\n"
         "        print(json.dumps({'method': 'turn/completed', 'params': "

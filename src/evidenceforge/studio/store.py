@@ -100,6 +100,15 @@ class Conversation(BaseModel):
     updated_at: float = Field(default_factory=time.time)
 
 
+class CodexTurnOutcome(BaseModel):
+    """Terminal outcome observed from Codex, retained independently of its rollout."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["completed", "failed", "interrupted"]
+    error: dict[str, Any] | None = None
+
+
 class StudioEvent(BaseModel):
     """One monotonically numbered change for reconnecting clients."""
 
@@ -345,6 +354,33 @@ class StudioStore:
             return StudioEvent(
                 seq=int(cursor.lastrowid), entity_id=entity_id, kind=kind, payload=payload
             )
+
+    def codex_turn_outcomes(
+        self, conversation_id: str, thread_id: str
+    ) -> dict[str, CodexTurnOutcome]:
+        """Recover terminal notifications that Codex history may omit or misclassify."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM events WHERE entity_id=? AND kind='conversation.event' "
+                "ORDER BY seq",
+                (conversation_id,),
+            ).fetchall()
+        outcomes: dict[str, CodexTurnOutcome] = {}
+        for row in rows:
+            event = json.loads(row["payload"])
+            params = event.get("params", {})
+            if event.get("method") != "turn/completed" or params.get("threadId") != thread_id:
+                continue
+            turn = params.get("turn", {})
+            if not isinstance(turn, dict) or not isinstance(turn.get("id"), str):
+                continue
+            if turn.get("status") not in {"completed", "failed", "interrupted"}:
+                continue
+            error = turn.get("error")
+            outcomes[turn["id"]] = CodexTurnOutcome.model_validate(
+                {"status": turn["status"], "error": error if isinstance(error, dict) else None}
+            )
+        return outcomes
 
     def events_after(self, seq: int, limit: int = 500) -> list[StudioEvent]:
         """Load a bounded event page after a client cursor."""

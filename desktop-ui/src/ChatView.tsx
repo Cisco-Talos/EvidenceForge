@@ -5,13 +5,26 @@ import { ChatActivity, upsertActivity, type ActivityItem } from "./ChatActivity"
 import { ChatMarkdown } from "./ChatMarkdown";
 
 interface HistoryItem { type: string; text?: string; content?: { type: string; text?: string }[]; [key: string]: unknown }
-interface HistoryTurn { id?: string; status?: string; items?: HistoryItem[] }
+interface TurnError { message?: string }
+interface HistoryTurn { id?: string; status?: string; error?: TurnError | null; items?: HistoryItem[] }
 interface CodexHistory { thread?: { turns?: HistoryTurn[] }; history_pending?: boolean }
 interface CodexModel { id: string; displayName?: string; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: { reasoningEffort: string }[] }
 interface CodexStatus { available: boolean; account_ready?: boolean; error?: string; models?: { data?: CodexModel[] }; skills?: { data?: { skills?: { name: string; enabled?: boolean }[] }[] } }
 interface PendingRequest { request_id: number | string; method: string; params: Record<string, unknown> }
-interface Message { id: string; role: "user" | "agent"; text: string }
-interface LocalTurn { localId: string; turnId: string | null; userText: string; agentText: string; completed: boolean; afterTurnCount: number }
+interface Message { id: string; role: "user" | "agent" | "error"; text: string }
+interface LocalTurn { localId: string; turnId: string | null; userText: string; agentText: string; errorText?: string; completed: boolean; afterTurnCount: number }
+
+function failedTurnText(status?: string, error?: TurnError | null): string | undefined {
+  if (status !== "failed") return undefined;
+  const message = error?.message || "Codex could not complete this turn. Try again or choose another model.";
+  try {
+    const detail = JSON.parse(message) as { error?: { message?: unknown } };
+    if (typeof detail?.error?.message === "string") return detail.error.message;
+  } catch {
+    // Most Codex errors are already plain text.
+  }
+  return message;
+}
 
 function startLocalTurn(turns: LocalTurn[], turnId: string, localId: string): LocalTurn[] {
   if (turns.some((turn) => turn.turnId === turnId)) return turns;
@@ -41,6 +54,8 @@ function flattenHistory(history: CodexHistory, localTurns: LocalTurn[]): { messa
         activities.push({ ...item, id: typeof item.id === "string" ? item.id : `${turn.id}-${index}`, status: typeof item.status === "string" ? item.status : turn.status || "completed" });
       }
     }
+    const error = failedTurnText(turn.status, turn.error);
+    if (error) messages.push({ id: `${turn.id}-error`, role: "error", text: error });
   }
   return { messages, activities };
 }
@@ -204,18 +219,23 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
       } else if (method === "item/agentMessage/delta" && turnId) {
         setLocalTurns((current) => appendAgentDelta(current, turnId, String(params.delta || ""), `event-${event.seq}`));
       } else if (method === "turn/completed") {
-        const completedId = (params.turn as { id?: string } | undefined)?.id;
+        const completed = params.turn as HistoryTurn | undefined;
+        const completedId = completed?.id;
         if (completedId) {
           completedTurnIds.current.add(completedId);
           setLocalTurns((current) => {
             const pending = current.some((turn) => turn.turnId === completedId)
               ? null : current.find((turn) => !turn.turnId && !turn.completed);
             return current.map((turn) => turn.turnId === completedId || turn === pending
-              ? { ...turn, turnId: completedId, completed: true } : turn);
+              ? { ...turn, turnId: completedId, completed: true,
+                errorText: failedTurnText(completed?.status, completed?.error || { message: turn.errorText }) } : turn);
           });
         }
         setLiveActivity([]);
         void loadHistory(completedId);
+      } else if (method === "error" && turnId && params.willRetry === false) {
+        setLocalTurns((current) => startLocalTurn(current, turnId, `event-${event.seq}`).map((turn) =>
+          turn.turnId === turnId ? { ...turn, errorText: failedTurnText("failed", params.error as TurnError) } : turn));
       } else if (method === "item/started" || method === "item/completed") {
         const activity = params.item as ActivityItem;
         if (activity && activity.type !== "agentMessage" && activity.type !== "userMessage") {
@@ -340,13 +360,13 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   if (!conversation) return <section className="chat-panel"><div className="chat-body"><div className="chat-welcome"><Sparkles size={26} /><h2>Select a conversation</h2><p>Every conversation stays connected to {item.name}.</p></div></div></section>;
 
   return <section className="chat-panel">
-    <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" maxLength={80} value={titleDraft} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTitle(false); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={savingTitle || !titleDraft.trim()}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" disabled={savingTitle} onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
+    <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" maxLength={80} value={titleDraft} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTitle(false); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={savingTitle || !titleDraft.trim()}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" disabled={savingTitle} onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{conversation.model_id && !models.some((model) => model.id === conversation.model_id) && <option value={conversation.model_id} disabled>{conversation.model_id} (unavailable)</option>}{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
     {conversation.connection_note && <p className="chat-connection-note" role="status">{conversation.connection_note}</p>}
     <div className="chat-body" ref={chatBody} onScroll={trackChatScroll}><div className="message-list">
       {!messages.length && !localTurns.length && !conversation.active && <div className="chat-welcome"><div className="chat-symbol"><Sparkles size={25} /></div><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{isNewDraft ? "Describe what you want to build. Codex will use the appropriate EvidenceForge skill and save the authored file in this workspace." : `Ask Codex to build, revise, or explain this ${item.kind === "scenario" ? "scenario" : "pack"}. Its source path is already in conversation context.`}</p></div>}
-      {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble"><span className="message-author">{message.role === "user" ? "You" : "Codex"}</span>{message.role === "agent" ? <ChatMarkdown text={message.text} /> : <p>{message.text}</p>}</div></div>)}
+      {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble" role={message.role === "error" ? "alert" : undefined}><span className="message-author">{message.role === "user" ? "You" : message.role === "error" ? "Codex error" : "Codex"}</span>{message.role === "agent" ? <ChatMarkdown text={message.text} /> : <p>{message.text}</p>}</div></div>)}
       <ChatActivity items={activities} />
-      {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><ChatMarkdown text={turn.agentText} /></div></div>}</Fragment>)}
+      {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><ChatMarkdown text={turn.agentText} /></div></div>}{turn.errorText && <div className="message-row error"><div className="message-bubble" role="alert"><span className="message-author">Codex error</span><p>{turn.errorText}</p></div></div>}</Fragment>)}
       <ChatActivity items={liveActivity} working={!!conversation.active || sending} />
       {conversation.active && !localTurns.some((turn) => !turn.completed && turn.agentText) && <p className="working-note"><span className="active-pulse" /> {codexHealth.state === "connected" ? "Codex is working…" : "Codex connection is uncertain…"}</p>}
       {historyPending && <p className="history-sync" role="status">{historyWarning ? "Conversation history is still unavailable. " : "Syncing conversation history…"}{historyWarning && <button type="button" onClick={() => void loadHistory(expectedTurnId.current || undefined)}>Retry</button>}</p>}

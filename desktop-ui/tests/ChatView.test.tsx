@@ -6,6 +6,84 @@ import type { Conversation, StudioApi, StudioEvent } from "../src/api";
 
 afterEach(() => { cleanup(); });
 
+test("failed history shows the provider error beside the accepted user message", async () => {
+  const message = "The 'selected-model' model is not supported for this account.";
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [{ id: "failed", status: "failed",
+      error: { message: JSON.stringify({ type: "error", error: { message } }) }, items: [
+        { type: "userMessage", content: [{ type: "text", text: "Fix these validation findings" }] },
+      ],
+    }] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true };
+  });
+  render(<ChatView item={{ name: "Scenario", kind: "scenario" }}
+    conversation={{ id: "failed-chat", active: false } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={() => () => undefined} onError={vi.fn()} />);
+  expect(await screen.findByText("Fix these validation findings")).toBeTruthy();
+  expect((await screen.findByRole("alert")).textContent).toContain(message);
+  expect(screen.queryByText("Codex is working…")).toBeNull();
+});
+
+test("a live non-retryable turn error stays visible while rollout history is pending", async () => {
+  let emit: ((event: StudioEvent) => void) | undefined;
+  let pendingHistory = false;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [] }, history_pending: pendingHistory };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true };
+  });
+  const view = render(<ChatView item={{ name: "Scenario", kind: "scenario" }}
+    conversation={{ id: "live-error", active: true } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={(listener) => { emit = listener; return () => { emit = undefined; }; }} onError={vi.fn()} />);
+  await waitFor(() => expect(request).toHaveBeenCalled());
+  pendingHistory = true;
+  await act(async () => {
+    emit?.({ seq: 1, entity_id: "live-error", kind: "conversation.event", payload: {
+      method: "error", params: { turnId: "turn-failed", willRetry: false, error: { message: "Usage limit reached" } },
+    } });
+    emit?.({ seq: 2, entity_id: "live-error", kind: "conversation.event", payload: {
+      method: "turn/completed", params: { turn: { id: "turn-failed", status: "failed" } },
+    } });
+  });
+  expect((await screen.findByRole("alert")).textContent).toContain("Usage limit reached");
+  view.unmount();
+});
+
+test("a retrying provider error does not display a terminal failure", async () => {
+  let emit: ((event: StudioEvent) => void) | undefined;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true };
+  });
+  render(<ChatView item={{ name: "Scenario", kind: "scenario" }}
+    conversation={{ id: "retry-chat", active: true } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={(listener) => { emit = listener; return () => { emit = undefined; }; }} onError={vi.fn()} />);
+  await act(async () => emit?.({ seq: 1, entity_id: "retry-chat", kind: "conversation.event", payload: {
+    method: "error", params: { turnId: "retry-turn", willRetry: true, error: { message: "Reconnecting" } },
+  } }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("a saved model missing from the catalog remains visible as unavailable", async () => {
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true, models: { data: [{ id: "default-model", isDefault: true }] } };
+  });
+  render(<ChatView item={{ name: "Scenario", kind: "scenario" }}
+    conversation={{ id: "unavailable-model", active: false, model_id: "saved-model" } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={() => () => undefined} onError={vi.fn()} />);
+  const option = await screen.findByRole("option", { name: "saved-model (unavailable)" });
+  expect(option.hasAttribute("disabled")).toBe(true);
+  expect((screen.getByRole("combobox", { name: "Model" }) as HTMLSelectElement).value).toBe("saved-model");
+});
+
 test("chat renders Markdown and highlighted code while commands and summaries expand individually", async () => {
   const conversation = { id: "rich-chat", title: "Review", active: false } as Conversation;
   const longCommand = `eforge validate ${"long-path/".repeat(25)}scenario.yaml --json`;
