@@ -39,8 +39,9 @@ def test_macos_helper_launch_is_independent_and_scoped_to_data_directory(
     monkeypatch.setenv("UNRELATED_API_SECRET", "must-not-be-persisted")
     run = Mock(
         side_effect=[
-            subprocess.CompletedProcess([], 0 if registered else 1),
+            subprocess.CompletedProcess([], 0 if registered else 1, stdout="state = exited\n"),
             subprocess.CompletedProcess([], 0),
+            *([subprocess.CompletedProcess([], 0)] if registered else []),
         ]
     )
     monkeypatch.setattr(background.subprocess, "run", run)
@@ -70,8 +71,23 @@ def test_macos_helper_launch_is_independent_and_scoped_to_data_directory(
     if os.name == "posix":
         assert agent.stat().st_mode & 0o777 == 0o600
     assert run.call_args_list[0].args[0][1] == "print"
-    assert run.call_args_list[1].args[0][1] == ("kickstart" if registered else "bootstrap")
+    assert run.call_args_list[0].kwargs["text"] is True
+    assert run.call_args_list[1].args[0][1] == ("bootout" if registered else "bootstrap")
+    assert run.call_args_list[-1].args[0][1] == "bootstrap"
     popen.assert_not_called()
+
+
+def test_macos_does_not_replace_running_registration_without_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, stdout="\tpid = 1234\n"))
+    monkeypatch.setattr(background.subprocess, "run", run)
+    monkeypatch.setattr(background.psutil, "pid_exists", lambda pid: pid == 1234)
+    with pytest.raises(RuntimeError, match="still running without a usable descriptor"):
+        background.start_background_service(paths)
+    assert run.call_count == 1
 
 
 def test_macos_launch_failure_does_not_fall_back_to_app_owned_helper(

@@ -14,13 +14,14 @@ from pathlib import Path
 
 import psutil
 import uvicorn
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 if os.name == "posix":
     import fcntl
 
 from evidenceforge.studio.background import start_background_service
 from evidenceforge.studio.paths import StudioPaths, studio_paths
+from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.service import create_app
 
 
@@ -33,6 +34,8 @@ class ServiceDescriptor(BaseModel):
     created_at: float
     port: int
     token: str
+    runtime_id: str = "source"
+    executable: str | None = None
 
     @property
     def url(self) -> str:
@@ -62,6 +65,58 @@ def _is_live(descriptor: ServiceDescriptor) -> bool:
         return False
 
 
+def _replace_idle(descriptor: ServiceDescriptor) -> None:
+    """Retire only an authenticated, idle helper with verified process identity."""
+    request = urllib.request.Request(
+        f"{descriptor.url}/v1/runtime/prepare-replacement",
+        method="POST",
+        headers={"X-EForge-Token": descriptor.token},
+        data=b"",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            result = ReplacementReady.model_validate_json(response.read())
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            raise RuntimeError(
+                "Another Studio build still has active work. Finish or pause its jobs and "
+                "stop active authoring before opening this build."
+            ) from error
+        raise RuntimeError(
+            "The existing Studio helper cannot safely hand off to this build. "
+            "Close its work and stop that helper before reopening Studio."
+        ) from error
+    if not result.ready or result.runtime_id != descriptor.runtime_id:
+        raise RuntimeError("Studio's helper did not confirm an authenticated idle handoff")
+    try:
+        process = psutil.Process(descriptor.pid)
+        command = process.cmdline()
+        if (
+            abs(process.create_time() - descriptor.created_at) >= 0.01
+            or not descriptor.executable
+            or Path(process.exe()).resolve() != Path(descriptor.executable).resolve()
+            or "evidenceforge.studio.bootstrap" not in command
+            or "--serve" not in command
+        ):
+            raise RuntimeError("Studio helper identity changed; no process was stopped")
+        process.terminate()
+        process.wait(timeout=8)
+    except psutil.NoSuchProcess:
+        return
+    except (psutil.AccessDenied, psutil.TimeoutExpired) as error:
+        raise RuntimeError(
+            "Studio's idle helper did not exit; it was not forcibly killed"
+        ) from error
+
+
+class ReplacementReady(BaseModel):
+    """Authenticated response required before replacing a live helper."""
+
+    model_config = ConfigDict(extra="forbid")
+    ready: bool
+    runtime_id: str = Field(min_length=1)
+
+
 def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
     """Return the existing service or launch a detached one and await readiness."""
     app_paths = paths or studio_paths()
@@ -72,7 +127,9 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
             fcntl.flock(lock, fcntl.LOCK_EX)
         descriptor = _read_descriptor(app_paths.service_file)
         if descriptor and _is_live(descriptor):
-            return descriptor
+            if descriptor.runtime_id == runtime_id():
+                return descriptor
+            _replace_idle(descriptor)
         app_paths.logs.mkdir(parents=True, exist_ok=True)
         start_background_service(app_paths)
         deadline = time.monotonic() + 12
@@ -99,6 +156,8 @@ def serve(paths: StudioPaths | None = None) -> None:
         created_at=psutil.Process().create_time(),
         port=int(listener.getsockname()[1]),
         token=secrets.token_urlsafe(32),
+        runtime_id=runtime_id(),
+        executable=str(Path(sys.executable).resolve()),
     )
     temporary = app_paths.service_file.with_suffix(f".{os.getpid()}.tmp")
     with os.fdopen(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
@@ -129,7 +188,10 @@ def main() -> None:
     if "--serve" in sys.argv[1:]:
         serve()
         return
-    descriptor = connect_or_start()
+    try:
+        descriptor = connect_or_start()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SystemExit(str(error)) from None
     print(json.dumps({"url": descriptor.url, "token": descriptor.token}))
 
 

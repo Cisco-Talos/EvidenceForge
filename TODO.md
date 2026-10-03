@@ -507,11 +507,13 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   New configuration scopes must be optional, file-based, independently usable without Studio,
   and preserve existing root selection and family-specific merge contracts.
 - [ ] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
-  Agreed delivery: universal macOS app/DMG (initially two private runtimes), Linux x64 AppImage,
-  then optional Windows x64 setup EXE. Codex remains separately installed. Use native platform CI
-  builds and clean-machine acceptance; signing/notarization and helper replacement are pending.
-  See the [current Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) for decisions,
-  remaining workflow stages, implementation order and verification boundaries.
+  Initial field test targets Apple Silicon macOS 26; Developer ID signing/notarization are
+  deferred by user decision. Universal macOS delivery is blocked by the locked cryptography
+  dependency's missing Intel wheel. Follow with Linux x64 AppImage, then optional Windows x64
+  setup EXE. Codex remains separately installed. Require native builds and clean-machine acceptance.
+  See the [standalone worklog](docs/worklog/2026-10-03-studio-standalone-macos.md) and
+  [installation instructions](docs/studio-standalone-macos.md); the
+  [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;

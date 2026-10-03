@@ -144,8 +144,8 @@ def test_mid_capture_change_does_not_publish_job_or_bundle(
     source = _scenario(workspace, "changed", valid=True)
     real_compile = compile_scenario
 
-    def changing_compile(path: Path, *, project_root: Path) -> object:
-        result = real_compile(path, project_root=project_root)
+    def changing_compile(path: Path, *, project_root: Path, context: Path | None = None) -> object:
+        result = real_compile(path, project_root=project_root, context=context)
         path.write_text(path.read_text() + "\n# changed while compiling\n")
         return result
 

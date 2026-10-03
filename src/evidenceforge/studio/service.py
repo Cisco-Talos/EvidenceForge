@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -94,6 +94,7 @@ from evidenceforge.studio.jobs import (
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
+from evidenceforge.studio.runtime import runtime_id, runtime_root
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.store import (
     CatalogItem,
@@ -680,6 +681,9 @@ class StudioService:
         self.authoring_stop_task: asyncio.Task[None] | None = None
         self.authoring_stop_lock = asyncio.Lock()
         self.pending_codex_requests: dict[int | str, dict[str, Any]] = {}
+        self.replacement_ready = False
+        self.active_requests = 0
+        self.job_cycle_lock = asyncio.Lock()
         self.codex = CodexClient(self.settings.codex_path, self._codex_event, self._codex_request)
         self.codex_health = CodexHealth()
         self.codex_failures = 0
@@ -930,8 +934,12 @@ class StudioService:
 
     async def _job_loop(self) -> None:
         while True:
+            if self.replacement_ready:
+                await asyncio.sleep(0.75)
+                continue
             intent = self.intent
-            changed = await asyncio.to_thread(reconcile_jobs, self.jobs, intent)
+            async with self.job_cycle_lock:
+                changed = await asyncio.to_thread(reconcile_jobs, self.jobs, intent)
             removed = await asyncio.to_thread(retain_latest_evaluations, self.jobs)
             for job_id in removed:
                 await self.emit(job_id, "job.deleted", {"id": job_id})
@@ -1068,6 +1076,8 @@ class StudioService:
             await self.prediction_wakeup.wait()
             self.prediction_wakeup.clear()
             while self.prediction_pending:
+                if self.replacement_ready:
+                    break
                 item_id = next(iter(self.prediction_pending))
                 item, dependencies, settings = self.prediction_pending.pop(item_id)
                 await self.predict_item(item, dependencies, settings)
@@ -1161,6 +1171,22 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         allow_headers=["X-EForge-Token", "Content-Type"],
     )
     app.state.studio = service
+
+    @app.middleware("http")
+    async def runtime_handoff(request: Request, call_next: Any) -> Response:
+        excluded = request.url.path in {"/v1/health", "/v1/runtime/prepare-replacement"}
+        if service.replacement_ready and not excluded:
+            return Response(
+                "Studio is handing off to a newer build. Reopen the app.", status_code=409
+            )
+        if not excluded:
+            service.active_requests += 1
+        try:
+            return await call_next(request)
+        finally:
+            if not excluded:
+                service.active_requests -= 1
+
     bundle_download_tickets: dict[str, tuple[str, float]] = {}
 
     def authorized(x_eforge_token: str | None = Header(default=None)) -> StudioService:
@@ -1170,7 +1196,21 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
 
     @app.get("/v1/health")
     def health(studio: StudioService = Depends(authorized)) -> dict[str, str]:
-        return {"status": "ok", "pid": str(os.getpid())}
+        return {"status": "ok", "pid": str(os.getpid()), "runtime_id": runtime_id()}
+
+    @app.post("/v1/runtime/prepare-replacement")
+    async def prepare_replacement(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
+        async with studio.job_cycle_lock:
+            jobs = studio.store.job_payloads()
+            if (
+                studio.active_requests
+                or studio.prediction_lock.locked()
+                or studio.store.active_conversations()
+                or any(job.get("status") in {"queued", "running", "suspending"} for job in jobs)
+            ):
+                raise HTTPException(status_code=409, detail="Studio still has active work")
+            studio.replacement_ready = True
+            return {"ready": True, "runtime_id": runtime_id()}
 
     @app.get("/v1/bootstrap")
     def bootstrap(studio: StudioService = Depends(authorized)) -> StudioSnapshot:
@@ -2520,6 +2560,12 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                     )
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
             configuration_instructions = ""
+            if runtime_root() is not None:
+                configuration_instructions = (
+                    f" The standalone EvidenceForge CLI is {str(runtime_root() / 'bin/eforge')!r}. "
+                    "Use that absolute executable for EvidenceForge commands in this conversation; "
+                    "it includes its own runtime and requires no uv or Python installation."
+                )
             context_source = (
                 item.path
                 if item is not None and item.kind == "scenario"
@@ -2533,7 +2579,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 if item is None:
                     configure_scenario(context_source, conversation.workspace, project)
                 arguments = context_arguments(context_source, conversation.workspace)
-                configuration_instructions = (
+                configuration_instructions += (
                     " For authored scenario inspection, validation, resolution, resource forecasting, and generation, "
                     f"use this explicitly selected configuration: {arguments[0]} {arguments[1]!r}. "
                     "Use eforge info configuration_context --json with that selection to inspect named layers. "

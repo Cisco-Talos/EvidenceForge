@@ -14,6 +14,7 @@ from uuid import uuid4
 import psutil
 
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
+from evidenceforge.studio.runtime import command_environment, runtime_root
 
 _detached_processes: list[subprocess.Popen[bytes]] = []
 
@@ -30,7 +31,8 @@ def _eforge_command(settings: AppSettings | None = None) -> list[str]:
         if executable is None:
             raise FileNotFoundError("Set EFORGE_DESKTOP_EFORGE_BIN to a packaged eforge CLI")
         return [executable]
-    return [sys.executable, "-m", "evidenceforge"]
+    options = ["-I", "-B"] if runtime_root() is not None else []
+    return [sys.executable, *options, "-m", "evidenceforge"]
 
 
 def _start_process(command: list[str], *, cwd: Path, log_file: Path) -> tuple[int, float]:
@@ -44,6 +46,7 @@ def _start_process(command: list[str], *, cwd: Path, log_file: Path) -> tuple[in
             stdout=log_stream,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=command_environment(),
         )
     _detached_processes[:] = [running for running in _detached_processes if running.poll() is None]
     _detached_processes.append(process)

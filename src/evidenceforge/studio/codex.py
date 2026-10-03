@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import shutil
 import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
+
+from evidenceforge.studio.runtime import command_environment, discover_codex
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,7 @@ class CodexClient:
             ):
                 return
             await self._stop_transport()
-            command = (
-                os.environ.get("EFORGE_DESKTOP_CODEX_BIN")
-                or (str(self.binary) if self.binary else None)
-                or shutil.which("codex")
-            )
+            command = discover_codex(self.binary)
             if not command:
                 raise CodexUnavailableError("Codex CLI was not found; set its path in Settings")
             try:
@@ -85,6 +81,7 @@ class CodexClient:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=MAX_PROTOCOL_LINE_BYTES,
+                    env=command_environment(),
                 )
             except OSError as error:
                 raise CodexUnavailableError(f"Could not start Codex: {error}") from error

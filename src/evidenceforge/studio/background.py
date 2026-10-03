@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import os
 import plistlib
+import re
 import subprocess
 import sys
 
+import psutil
+
 from evidenceforge.studio.paths import StudioPaths
+from evidenceforge.studio.runtime import command_environment, runtime_root
 
 
 def _macos_environment() -> dict[str, str]:
@@ -16,7 +20,7 @@ def _macos_environment() -> dict[str, str]:
     names = {"HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "PYTHONPATH", "CODEX_HOME"}
     environment = {
         key: value
-        for key, value in os.environ.items()
+        for key, value in command_environment().items()
         if key in names or key.startswith(("EFORGE_", "XDG_"))
     }
     environment["EFORGE_STUDIO_DAEMON"] = "1"
@@ -37,7 +41,13 @@ def _start_macos(paths: StudioPaths) -> None:
     log = str(paths.logs / "service.log")
     configuration: dict[str, object] = {
         "Label": label,
-        "ProgramArguments": [sys.executable, "-m", "evidenceforge.studio.bootstrap", "--serve"],
+        "ProgramArguments": [
+            sys.executable,
+            *(["-I", "-B"] if runtime_root() is not None else []),
+            "-m",
+            "evidenceforge.studio.bootstrap",
+            "--serve",
+        ],
         "EnvironmentVariables": _macos_environment(),
         "RunAtLoad": True,
         "StandardOutPath": log,
@@ -54,13 +64,26 @@ def _start_macos(paths: StudioPaths) -> None:
     finally:
         temporary.unlink(missing_ok=True)
     existing = subprocess.run(
-        ["/bin/launchctl", "print", target], capture_output=True, check=False, timeout=5
+        ["/bin/launchctl", "print", target],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
     )
-    command = (
-        ["/bin/launchctl", "kickstart", target]
-        if existing.returncode == 0
-        else ["/bin/launchctl", "bootstrap", domain, str(agent)]
-    )
+    if existing.returncode == 0:
+        # A loaded but exited launchd service retains its old ProgramArguments.
+        # Re-register it so relocation/upgrades use the selected retained runtime.
+        match = re.search(r"\bpid = (\d+)", existing.stdout or "")
+        if match and psutil.pid_exists(int(match[1])):
+            raise RuntimeError(
+                "Studio's launchd helper is still running without a usable descriptor"
+            )
+        retired = subprocess.run(
+            ["/bin/launchctl", "bootout", target], capture_output=True, check=False, timeout=5
+        )
+        if retired.returncode != 0:
+            raise RuntimeError("Could not retire Studio's exited launchd registration")
+    command = ["/bin/launchctl", "bootstrap", domain, str(agent)]
     result = subprocess.run(command, capture_output=True, check=False, timeout=5)
     if result.returncode != 0:
         raise RuntimeError(

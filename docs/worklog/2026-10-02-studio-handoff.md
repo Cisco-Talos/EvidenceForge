@@ -121,6 +121,12 @@ The present request is to record the handoff, not to start packaging or another 
 
 ## Standalone apps — agreed direction, NOT IMPLEMENTED
 
+**October 3 update:** macOS implementation and current acceptance now live in the
+[standalone worklog](2026-10-03-studio-standalone-macos.md). The user deferred signing
+and notarization and confirmed an Apple Silicon macOS 26 test machine. The first
+artifact is Apple Silicon; the locked cryptography dependency blocks Intel assembly.
+The section below preserves the original planning context.
+
 The user wants real-case testing on another Mac and accepted the following distribution approach:
 
 | Platform | Initial delivery | Build environment |

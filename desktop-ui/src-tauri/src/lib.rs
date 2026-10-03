@@ -2,6 +2,8 @@
 mod macos_icon;
 mod native_dialog;
 mod native_export;
+#[cfg(target_os = "macos")]
+mod standalone;
 
 use tauri_plugin_dialog::DialogExt;
 
@@ -28,8 +30,21 @@ fn studio_python() -> std::ffi::OsString {
 }
 
 #[tauri::command]
-fn studio_connection() -> Result<serde_json::Value, String> {
-    let output = std::process::Command::new(studio_python())
+fn studio_connection(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    let runtime = standalone::selected(&app)?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    let mut command = std::process::Command::new(studio_python());
+    #[cfg(target_os = "macos")]
+    if let Some(runtime) = runtime {
+        command = std::process::Command::new(runtime.python);
+        command.args(["-I", "-B"]);
+        command.env("EFORGE_STUDIO_RUNTIME_ROOT", runtime.root);
+        command.env_remove("PYTHONHOME");
+        command.env_remove("PYTHONPATH");
+    }
+    let output = command
         .args(["-m", "evidenceforge.studio.bootstrap"])
         .output()
         .map_err(|error| format!("Could not start the Studio service: {error}"))?;

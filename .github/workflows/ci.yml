@@ -152,6 +152,26 @@ jobs:
         working-directory: desktop-ui
         run: npm run tauri -- build --debug --no-bundle
 
+      - name: Build standalone Apple Silicon test DMG
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin --toolchain stable
+          uv run python scripts/package_studio_macos.py --build-app
+
+      - name: Verify isolated packaged CLI and resources
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        run: >-
+          uv run python scripts/verify_studio_macos.py
+          "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
+
+      - name: Upload standalone test package
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Studio-macOS-Apple-Silicon-test
+          path: dist/macos/*
+          if-no-files-found: error
+
   windows-checkpoint-durability:
     name: Windows checkpoint durability
     runs-on: windows-latest
