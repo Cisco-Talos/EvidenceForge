@@ -208,6 +208,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/items/{item_id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Assets */
+        get: operations["assets_v1_items__item_id__assets_get"];
+        put?: never;
+        /** Update Asset */
+        post: operations["update_asset_v1_items__item_id__assets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/assets/choices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Asset Choices */
+        get: operations["asset_choices_v1_items__item_id__assets_choices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/assets/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Asset Detail */
+        get: operations["asset_detail_v1_items__item_id__assets_detail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/scenarios/{item_id}/configuration": {
         parameters: {
             query?: never;
@@ -1387,6 +1439,181 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AssetCategory
+         * @description Category metadata with counts before search and filtering.
+         */
+        AssetCategory: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Total */
+            total: number;
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
+        };
+        /**
+         * AssetChoices
+         * @description Bounded searchable choices from the same effective asset revision.
+         */
+        AssetChoices: {
+            /** Revision */
+            revision: string;
+            /** Matching */
+            matching: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Entries */
+            entries: string[];
+        };
+        /**
+         * AssetDetail
+         * @description Lazy effective values, field origins and authoring schema.
+         */
+        AssetDetail: {
+            /** Revision */
+            revision: string;
+            summary?: components["schemas"]["AssetSummary"] | null;
+            /** Category */
+            category: string;
+            /** Identity Field */
+            identity_field: string;
+            /** Value */
+            value: {
+                [key: string]: unknown;
+            };
+            /** Field Origins */
+            field_origins: {
+                [key: string]: components["schemas"]["AssetOrigin"];
+            };
+            /** Schema Document */
+            schema_document: {
+                [key: string]: unknown;
+            };
+            /** Next Version */
+            next_version?: string | null;
+            /** Inherited Value */
+            inherited_value?: {
+                [key: string]: unknown;
+            } | null;
+            /** Override Fields */
+            override_fields?: string[];
+            /** Conversion From */
+            conversion_from?: ("users" | "stale_accounts") | null;
+            /** Conversion Effects */
+            conversion_effects?: string[];
+            /** Previous Value */
+            previous_value?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * AssetEdit
+         * @description One requested change against the revision the user reviewed.
+         */
+        AssetEdit: {
+            /** Revision */
+            revision: string;
+            /** Category */
+            category: string;
+            /** Asset Id */
+            asset_id?: string | null;
+            /** Key */
+            key: string;
+            /** Value */
+            value: {
+                [key: string]: unknown;
+            };
+            /** Version */
+            version?: string | null;
+            /** Restore Fields */
+            restore_fields?: string[];
+            /** Convert From */
+            convert_from?: ("users" | "stale_accounts") | null;
+            /**
+             * Preview
+             * @default false
+             */
+            preview: boolean;
+        };
+        /**
+         * AssetOrigin
+         * @description One graphical badge's accessible label and source.
+         */
+        AssetOrigin: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "scenario" | "pack" | "mixed" | "configuration";
+            /** Source */
+            source: string;
+        };
+        /**
+         * AssetPage
+         * @description Filtered, bounded view of a fingerprinted inventory.
+         */
+        AssetPage: {
+            /** Revision */
+            revision: string;
+            /** Categories */
+            categories: components["schemas"]["AssetCategory"][];
+            /** Category */
+            category: string;
+            /** Total */
+            total: number;
+            /** Matching */
+            matching: number;
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Entries */
+            entries: components["schemas"]["AssetSummary"][];
+        };
+        /**
+         * AssetSaved
+         * @description File destination of a successfully validated change.
+         */
+        AssetSaved: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Version */
+            version?: string | null;
+            /** Validation Errors */
+            validation_errors?: string[];
+            /** Effects */
+            effects?: string[];
+        };
+        /**
+         * AssetSummary
+         * @description Compact list entry; full values are fetched only on expansion.
+         */
+        AssetSummary: {
+            /** Id */
+            id: string;
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            origin: components["schemas"]["AssetOrigin"];
+            /** Account Status */
+            account_status?: ("active" | "disabled" | "stale") | null;
+        };
         /**
          * BundleImportRequest
          * @description Local path to a complete generation created outside Studio.
@@ -3645,6 +3872,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnvironmentReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assets_v1_items__item_id__assets_get: {
+        parameters: {
+            query?: {
+                category?: string;
+                query?: string;
+                origin?: "" | "scenario" | "pack" | "mixed" | "configuration";
+                source?: string;
+                page?: number;
+                page_size?: number;
+                account_status?: "" | "active" | "disabled" | "stale";
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_asset_v1_items__item_id__assets_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssetEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetSaved"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    asset_choices_v1_items__item_id__assets_choices_get: {
+        parameters: {
+            query: {
+                source: string;
+                revision: string;
+                query?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetChoices"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    asset_detail_v1_items__item_id__assets_detail_get: {
+        parameters: {
+            query: {
+                category: string;
+                revision: string;
+                asset_id?: string | null;
+                conversion?: boolean;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssetDetail"];
                 };
             };
             /** @description Validation Error */

@@ -1127,7 +1127,7 @@ test("Clear Completed targets one job type and removed source runs can still be 
   const originalJobs = snapshot.jobs;
   const originalRemoved = snapshot.removed_job_ids;
   snapshot.jobs = [{ ...originalJobs[0], status: "completed" }, originalJobs[1], {
-    id: "evaluation-1", kind: "evaluation", generation_id: "job-1", status: "completed", output_root: "/tmp/run",
+    id: "evaluation-1", kind: "evaluation", generation_id: "job-1", status: "completed", output_root: "/tmp/run", scorecard: { overall_score: 98, acceptance_passed: true },
   }];
   snapshot.removed_job_ids = ["job-1"];
   const request = vi.mocked(useStudio().api!.request);

@@ -74,7 +74,7 @@ test("review exposes copy and missing statuses without automatically validating"
   expect(screen.getByRole("button", { name: "Copy scenario.yaml source path" })).toBeTruthy();
   expect(request.mock.calls.some(([path]) => path.endsWith("/validate"))).toBe(false);
   await user.click(screen.getByRole("button", { name: "Import with dependency errors" }));
-  expect(request).toHaveBeenCalledWith("/v1/imports/review-1/commit", "POST", { accepted_publishers: [] }, 180000);
+  expect(request).toHaveBeenCalledWith("/v1/imports/review-1/commit", "POST", { accepted_publishers: [] }, 240000);
   expect(onImported).toHaveBeenCalledWith(null);
 });
 
@@ -185,7 +185,7 @@ test.each(["file", "workspace"])("%s import defaults to all packs, allows a subs
   expect(request).toHaveBeenCalledWith("/v1/imports/pack/preview", "POST", { path: "/source/input", source_workspaces: [], project_id: "project" }, 180000);
   expect(request).toHaveBeenCalledWith("/v1/imports/review-1/commit", "POST", {
     accepted_publishers: ["example"], selected_packs: ["example:industry:healthcare@1.0.0", "example:organization:clinic@1.0.0"],
-  }, 180000);
+  }, 240000);
 });
 
 test("select and deselect all controls gate empty imports and restore independent choices", async () => {

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, Copy, Folder, Gauge, MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Copy, Download, Upload, Package, Folder, Gauge, MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import type { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, StudioJob, StudioSnapshot } from "./api";
 import { formatTime, ValidationPanel } from "./components";
@@ -8,6 +8,7 @@ import { CopyPathButton } from "./CopyPathButton";
 import { ChatView } from "./ChatView";
 import { ConversationList } from "./ConversationList";
 import { HeaderSummary, WorkspaceSection } from "./WorkspaceSection";
+import { AssetBrowser } from "./AssetBrowser";
 import { EnvironmentView } from "./EnvironmentView";
 import { ScenarioRuns } from "./ScenarioRuns";
 import { environmentState, generationIsCurrent, OperationStatus, scenarioStates } from "./ScenarioStates";
@@ -119,9 +120,10 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       <WorkspaceSection title="Conversations" icon={<MessageSquareText size={19} />} summary={<HeaderSummary summary={{ headline: [countLabel(conversations.length, "conversation"), activeChats && `${activeChats} working`, attentionChats && `${attentionChats} need input`].filter(Boolean).join(" · "), detail: preferred ? `${preferred.active ? "Continue active" : "Latest"}: ${preferred.title} · ${formatTime(preferred.updated_at)}` : "No conversations yet" }} />} expanded={expanded.includes("conversations")} onToggle={() => toggle("conversations")} actions={<>{preferred && <button className="button-primary" title={`Continue ${preferred.title}${preferred.active ? " (active turn)" : " (most recently updated)"}`} onClick={() => onOpenConversation(preferred)}><MessageSquareText size={15} /> Continue</button>}<button className={preferred ? "button-quiet" : "button-primary"} onClick={onCreateConversation}><Plus size={15} /> New conversation</button></>}>
         {conversations.length ? conversationList : undefined}
       </WorkspaceSection>
+      {item.kind !== "scenario" && <WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse and edit · changes create a new version</span>} expanded={expanded.includes("assets")} onToggle={() => toggle("assets")} actions={<><button className="button-quiet" onClick={onImportPacks}><Upload size={15} /> Import</button><button className="button-quiet" onClick={() => void api.download(`/v1/packs/${item.id}/export`, `${item.name}-${item.version}.efpack`).catch((error) => onError(String(error)))}><Download size={15} /> Export</button></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} /></WorkspaceSection>}
       {item.kind === "scenario" && <>
         <div data-workspace-section="environment"><WorkspaceSection title="Environment" icon={<OperationStatus status={environmentState(health, environmentRefreshing)} focusable={false} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={expanded.includes("environment")} onToggle={() => toggle("environment")} actions={<button className="icon-button" aria-label="Refresh environment" title="Recheck packs, includes, and configuration from disk" disabled={environmentRefreshing} onClick={() => void refreshEnvironment()}><RefreshCw size={16} className={environmentRefreshing ? "spinning" : ""} /></button>}>
-          <EnvironmentView embedded refreshVersion={environmentRefresh} dependencyHealth={health} onImportPacks={onImportPacks} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario" && !entry.hidden)} dependencyFingerprint={health?.fingerprint} api={api} onPrepare={onPrepare} onError={onError} />
+          <EnvironmentView embedded refreshVersion={environmentRefresh} dependencyHealth={health} onImportPacks={onImportPacks} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario" && !entry.hidden)} dependencyFingerprint={health?.fingerprint} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
         <div data-workspace-section="validation"><WorkspaceSection title="Validation" icon={<OperationStatus status={states[0]} focusable={false} />} summary={<HeaderSummary summary={validationInfo} />} expanded={expanded.includes("validation")} onToggle={() => toggle("validation")} actions={<>{validationIssues.length > 0 && <button className="button-quiet" onClick={onFix} disabled={busy} title="Open a new conversation with a prepared request and the current findings"><MessageSquareText size={16} /> Fix in chat</button>}<button className="button-quiet" onClick={onValidate} disabled={busy}><ShieldCheck size={15} /> {busy ? "Working…" : "Validate"}</button></>}>
           {validationDetails ? <ValidationPanel result={validation} embedded /> : undefined}

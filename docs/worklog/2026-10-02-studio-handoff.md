@@ -98,6 +98,15 @@ and oldest-first jobs have been superseded. This document summarizes the current
   preserve prior scores; completed quality-failed reports replace them. This is Studio retention,
   not a change to CLI evaluation. Duplicate active evaluation of a run is prevented.
 
+### October 5 asset workflow
+
+Searchable, bounded asset lists with expandable rows, graphical origins and
+reviewed scenario/pack editing are implemented. Pack edits create new versions;
+scenario edits retain pack ownership through private overrides. See the
+[asset worklog](2026-10-05-studio-assets.md) for scope, tests, limits and the updated
+macOS field-test image. Broader origins and authoring beyond those categories
+remain part of the workflow backlog.
+
 ## Remaining workflow work
 
 Core replacement is accepted; the seven original stages are not all complete. Features have been

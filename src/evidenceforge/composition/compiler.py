@@ -26,6 +26,7 @@ from evidenceforge.utils.paths import read_text_file_beneath
 from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
+from .accounts import apply_account_transitions
 from .identity import is_semantic_packaged_default
 from .models import (
     CompiledScenario,
@@ -719,6 +720,25 @@ def compile_scenario(
         scenario_data = raw
         authored_kind = "scenario-1.0"
 
+    try:
+        scenario_data, account_effects = apply_account_transitions(scenario_data)
+    except ValueError as exc:
+        raise _ScenarioSchemaValidationError(
+            f"invalid account transitions: {exc}",
+            graph,
+            input_kind=authored_kind,
+            path_prefix="account_transitions",
+        ) from exc
+    merge_decisions.extend(
+        {
+            "path": "account_transitions",
+            "action": effect,
+            "lower_layer": "environment",
+            "higher_layer": "scenario",
+            "winner": "scenario",
+        }
+        for effect in account_effects
+    )
     if context is not None:
         with overlay_project_root_scope(
             resolved_project_root, tuple(layer.path for layer in selection.overlays)

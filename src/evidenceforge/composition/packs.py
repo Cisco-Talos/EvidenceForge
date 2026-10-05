@@ -1642,6 +1642,7 @@ class PackRepository:
         version: str,
         publisher: str,
         publisher_display_name: str,
+        updates: dict[str, bytes] | None = None,
     ) -> Path:
         """Copy one validated pack into the project repository with a new identity."""
 
@@ -1672,6 +1673,24 @@ class PackRepository:
                 old_name=pack_namespace(source_pack.manifest.publisher, source_pack.manifest.name),
                 new_name=pack_namespace(manifest.publisher, manifest.name),
             )
+            for relative, content in (updates or {}).items():
+                if relative not in source_pack.payload_files:
+                    raise PackError(
+                        "Pack revisions may update only existing semantic payload files"
+                    )
+                target = staging / relative
+                if target.is_symlink() or not target.is_file():
+                    raise PackError("Pack revision target is not a regular semantic file")
+                target.write_bytes(
+                    self._copied_file_bytes(
+                        Path(relative),
+                        content,
+                        old_name=pack_namespace(
+                            source_pack.manifest.publisher, source_pack.manifest.name
+                        ),
+                        new_name=pack_namespace(manifest.publisher, manifest.name),
+                    )
+                )
             _write_new_file_no_follow(
                 staging / PACK_MANIFEST_FILENAME,
                 yaml.safe_dump(
@@ -1689,7 +1708,7 @@ class PackRepository:
                     "This file is non-semantic and is not included in the pack digest.\n"
                 ).encode(),
             )
-            self._load(
+            staged_pack = self._load(
                 staging,
                 source="path",
                 reference=PackReference(
@@ -1701,6 +1720,7 @@ class PackRepository:
                 ),
                 expected_type=manifest.type,
             )
+            self.validate_semantics(staged_pack)
             self._publish_staged_pack(staging, destination)
             published = True
             self._reload_authored_pack(destination, manifest)

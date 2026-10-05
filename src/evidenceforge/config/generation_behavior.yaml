@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 156
+current_revision: 158
 history_start_revision: 1
-behavior_surface_sha256: 8f73e597d5ac62d4b558606af16d98e8327f7194fb5a8d9a6dcc84b10e344131
+behavior_surface_sha256: 8587aa35fee18c127955a14ae30a989376606c2534f2df3a4a054c8dd234ae81
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1579,3 +1579,17 @@ changes:
       - effective-config-snapshot
     formats: []
     summary: Add explicitly selected ordered overlay inputs while preserving existing default rendering, serialized legacy inputs, and per-family merge semantics. Opt-in layer changes are captured as input drift rather than a default behavior change.
+  - revision: 157
+    id: studio-staged-pack-revisions
+    impact: none
+    domains:
+      - pack-authoring
+    formats: []
+    summary: Adds validated staged payload revisions to pack copying; existing compilation and log rendering are unchanged.
+  - revision: 158
+    id: authored-account-transitions
+    impact: none
+    domains:
+      - scenario-composition
+    formats: []
+    summary: Adds opt-in account retirement and restoration with reversible directory links before canonical validation. Existing authored inputs and resolved generation behavior are unchanged.

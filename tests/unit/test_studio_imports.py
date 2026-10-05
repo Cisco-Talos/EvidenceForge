@@ -384,7 +384,7 @@ def test_service_review_validation_commit_and_dependency_refresh(
 
     def validate(_settings: object, scenario: Path, root: Path) -> ValidationResult:
         validations.append(scenario)
-        assert root != workspace
+        assert root != workspace if len(validations) == 1 else root == workspace
         return ValidationResult(exit_code=1, error="Advisory schema finding")
 
     monkeypatch.setattr(service_module, "_validate_source", validate)
@@ -415,6 +415,8 @@ def test_service_review_validation_commit_and_dependency_refresh(
         item = result["item"]
         assert item["name"] == "imported" and item["project_id"] == project["id"]
         snapshot = client.get("/v1/bootstrap", headers=headers).json()
+        assert validations[-1] == Path(item["path"])
+        assert snapshot["validations"][item["id"]]["result"]["error"] == "Advisory schema finding"
         assert not snapshot["dependencies"][item["id"]]["ready"]
         assert (
             client.post(

@@ -21,7 +21,7 @@ from evidenceforge.desktop.controller import _worker_tick
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import resume_generation
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
-from evidenceforge.evaluation.models import AcceptanceCriterion, SubScore
+from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import load_thresholds
 from evidenceforge.studio.codex import CodexClient, CodexThreadNotReadyError, CodexTimeoutError
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
@@ -2311,7 +2311,16 @@ def test_job_history_cleanup_preserves_outputs_and_links_and_is_workspace_scoped
         output = completed.output_root / "evidence.xml"
         output.write_text("<Event>preserve me</Event>", encoding="utf-8")
         result = tmp_path / "score.json"
-        result.write_text("{}", encoding="utf-8")
+        result.write_text(
+            QualityReport(
+                scenario_name="history",
+                evaluated_at="2026-10-05T12:00:00Z",
+                total_records=1,
+                overall_score=100,
+                acceptance_passed=True,
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
         evaluation = EvaluationJob(
             id="evaluation",
             generation_id=completed.id,

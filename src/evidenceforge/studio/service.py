@@ -20,7 +20,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -48,6 +57,17 @@ from evidenceforge.models.exceptions import (
     EvidenceForgeError,
     PackError,
     PathSafetyError,
+)
+from evidenceforge.studio.assets import (
+    AssetChoices,
+    AssetDetail,
+    AssetEdit,
+    AssetPage,
+    AssetSaved,
+    Inventory,
+    build_inventory,
+    inventory_revision,
+    save_asset,
 )
 from evidenceforge.studio.codex import (
     CodexClient,
@@ -693,6 +713,8 @@ class StudioService:
         self._progress_signatures: dict[str, tuple[tuple[str, int, int], ...]] = {}
         self.imports: dict[str, PreparedImport] = {}
         self.import_lock = asyncio.Lock()
+        self.asset_lock = asyncio.Lock()
+        self.asset_inventories: dict[str, Inventory] = {}
         self.prediction_task: asyncio.Task[None] | None = None
         self.prediction_lock = asyncio.Lock()
         self.prediction_pending: dict[str, tuple[CatalogItem, str, StudioSettings]] = {}
@@ -1511,6 +1533,136 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             )
         except (OSError, ValueError, ConfigurationError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def asset_inventory(item: CatalogItem, studio: StudioService) -> Inventory:
+        revision = await asyncio.to_thread(
+            inventory_revision, item.path, studio.settings.workspace, item.kind != "scenario"
+        )
+        cached = studio.asset_inventories.get(item.id)
+        if cached is not None and cached.revision == revision:
+            return cached
+        inventory = await asyncio.to_thread(
+            build_inventory, item.path, studio.settings.workspace, item.kind != "scenario"
+        )
+        studio.asset_inventories.pop(item.id, None)
+        while len(studio.asset_inventories) >= 4:
+            studio.asset_inventories.pop(next(iter(studio.asset_inventories)))
+        studio.asset_inventories[item.id] = inventory
+        return inventory
+
+    @app.get("/v1/items/{item_id}/assets")
+    async def assets(
+        item_id: str,
+        category: str = "",
+        query: str = Query(default="", max_length=200),
+        origin: Literal["", "scenario", "pack", "mixed", "configuration"] = "",
+        source: str = Query(default="", max_length=200),
+        page: int = Query(default=0, ge=0),
+        page_size: int = Query(default=50, ge=25, le=100),
+        account_status: Literal["", "active", "disabled", "stale"] = "",
+        studio: StudioService = Depends(authorized),
+    ) -> AssetPage:
+        async with studio.asset_lock:
+            try:
+                if page_size not in {25, 50, 100}:
+                    raise ValueError("Choose 25, 50 or 100 assets per page")
+                inventory = await asset_inventory(catalog_source(item_id, studio), studio)
+                return inventory.page(
+                    category or next(iter(inventory.models)),
+                    query,
+                    origin,
+                    source,
+                    page,
+                    page_size,
+                    account_status,
+                )
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (EvidenceForgeError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/items/{item_id}/assets/choices")
+    async def asset_choices(
+        item_id: str,
+        source: str,
+        revision: str,
+        query: str = Query(default="", max_length=200),
+        page: int = Query(default=0, ge=0),
+        page_size: int = Query(default=50, ge=1, le=100),
+        studio: StudioService = Depends(authorized),
+    ) -> AssetChoices:
+        async with studio.asset_lock:
+            try:
+                inventory = await asset_inventory(catalog_source(item_id, studio), studio)
+                if inventory.revision != revision:
+                    raise FileExistsError("Inputs changed. Refresh assets before choosing values")
+                return inventory.choices(source, query, page, page_size)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (EvidenceForgeError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/items/{item_id}/assets/detail")
+    async def asset_detail(
+        item_id: str,
+        category: str,
+        revision: str,
+        asset_id: str | None = None,
+        conversion: bool = False,
+        studio: StudioService = Depends(authorized),
+    ) -> AssetDetail:
+        async with studio.asset_lock:
+            try:
+                inventory = await asset_inventory(catalog_source(item_id, studio), studio)
+                if inventory.revision != revision:
+                    raise FileExistsError(
+                        "Inputs changed. Refresh the list before opening this asset"
+                    )
+                detail = (
+                    inventory.conversion_detail(category, asset_id)
+                    if conversion and asset_id
+                    else inventory.detail(category, asset_id)
+                )
+                if inventory.pack and detail.next_version:
+                    major, minor, patch = map(int, detail.next_version.split("."))
+                    parent = (
+                        studio.settings.workspace
+                        / ".eforge/packs"
+                        / inventory.pack.manifest.publisher
+                        / inventory.pack.manifest.type
+                        / inventory.pack.manifest.name
+                    )
+                    while (parent / f"{major}.{minor}.{patch}").exists():
+                        patch += 1
+                    detail.next_version = f"{major}.{minor}.{patch}"
+                return detail
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (EvidenceForgeError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/items/{item_id}/assets")
+    async def update_asset(
+        item_id: str,
+        request: AssetEdit,
+        studio: StudioService = Depends(authorized),
+    ) -> AssetSaved:
+        async with studio.asset_lock:
+            try:
+                item = catalog_source(item_id, studio)
+                inventory = await asset_inventory(item, studio)
+                saved = await asyncio.to_thread(
+                    save_asset, item.path, studio.settings.workspace, inventory, request
+                )
+                studio.asset_inventories.clear()
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (EvidenceForgeError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not request.preview:
+            await studio.scan()
+            await studio.emit(item.id, "assets.updated", saved.model_dump(mode="json"))
+        return saved
 
     @app.post("/v1/scenarios/{item_id}/configuration")
     async def set_configuration(

@@ -50,19 +50,14 @@ test("an unavailable declaration line is reported without highlighting a differe
   expect(document.querySelector(".matched-line")).toBeNull();
 });
 
-test("validation findings start collapsed while failure status and repair remain visible", async () => {
+test("validation findings and repair are directly visible", async () => {
   const result = { report: { valid: false, scenario: { name: "Example" }, issues: [{ severity: "error", field_path: "users.0", message: "Unknown host", suggestion: "Select an existing host" }] } } as ValidationResult;
   const onFix = vi.fn();
   render(<ValidationPanel result={result} onFix={onFix} />);
   expect(screen.getByText("Needs changes")).toBeVisible();
-  expect(screen.queryByText("Unknown host")).not.toBeInTheDocument();
+  expect(screen.getByText("Unknown host")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Validation findings 1 finding" })).not.toBeInTheDocument();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Fix in chat" }));
   expect(onFix).toHaveBeenCalledOnce();
-  const toggle = screen.getByRole("button", { name: "Validation findings 1 finding" });
-  toggle.focus();
-  await user.keyboard(" ");
-  await waitFor(() => expect(screen.getByText("Unknown host")).toBeVisible());
-  await user.click(toggle);
-  expect(screen.queryByText("Unknown host")).not.toBeInTheDocument();
 });

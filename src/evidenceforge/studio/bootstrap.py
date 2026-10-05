@@ -125,9 +125,10 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
     with lock_path.open("a+") as lock:
         if os.name == "posix":
             fcntl.flock(lock, fcntl.LOCK_EX)
+        selected_runtime = runtime_id()
         descriptor = _read_descriptor(app_paths.service_file)
         if descriptor and _is_live(descriptor):
-            if descriptor.runtime_id == runtime_id():
+            if descriptor.runtime_id == selected_runtime:
                 return descriptor
             _replace_idle(descriptor)
         app_paths.logs.mkdir(parents=True, exist_ok=True)
@@ -135,7 +136,7 @@ def connect_or_start(paths: StudioPaths | None = None) -> ServiceDescriptor:
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
             descriptor = _read_descriptor(app_paths.service_file)
-            if descriptor and _is_live(descriptor):
+            if descriptor and descriptor.runtime_id == selected_runtime and _is_live(descriptor):
                 return descriptor
             time.sleep(0.1)
     raise RuntimeError(f"Studio service did not become ready; see {app_paths.logs / 'service.log'}")

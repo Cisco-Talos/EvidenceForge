@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Download, RefreshCw, Search, SquarePen } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
+import { AssetBrowser } from "./AssetBrowser";
 import { ConfigurationLayers } from "./ConfigurationLayers";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { SourceDeclarations } from "./SourceDeclarations";
@@ -55,9 +56,9 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, api, onPrepare, onError, embedded = false }: {
+export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onChanged, api, onPrepare, onError, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; dependencyHealth?: DependencyHealth;
-  refreshVersion?: number; onImportPacks?: () => void; api: StudioApi;
+  refreshVersion?: number; onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
   onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
@@ -88,6 +89,7 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
     {report && <>
       {!report.valid && <p role="alert" className="field-error">{report.error} Use Validation to review findings, or prepare a repair in chat.</p>}
       {report.source_sha256 !== item.source_sha256 && <p className="run-revision-note">The source changed during inspection. Refresh the library to load this revision.</p>}
+      {report.valid && <AssetBrowser key={item.id} item={item} api={api} refreshVersion={`${dependencyFingerprint}:${refreshVersion}:${refresh}`} onChanged={async () => { setRefresh((value) => value + 1); await onChanged?.(); }} />}
       <ConfigurationLayers item={item} report={report} api={api} onRefresh={() => setRefresh((value) => value + 1)} onPrepare={onPrepare} onError={onError} />
       {report.valid && <>
         <InspectionSection title="Resolved scenario model" count={report.authored_kind} summary={(() => { const environment = report.effective_scenario.environment as Record<string, unknown> | undefined; return ["users", "systems", "groups"].map((key) => Array.isArray(environment?.[key]) ? `${environment[key].length} ${environment[key].length === 1 ? key.slice(0, -1) : key}` : "").filter(Boolean).join(" · ") || "No environment entities"; })()}><p className="muted">Scenario fields after pack composition. Runtime catalogs also use the selected configuration layers.</p><ChatMarkdown text={"```json\n" + JSON.stringify({ environment: report.effective_scenario.environment, baseline_activity: report.effective_scenario.baseline_activity }, null, 2) + "\n```"} /></InspectionSection>

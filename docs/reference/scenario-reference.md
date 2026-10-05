@@ -1859,3 +1859,47 @@ Persona fields are optional with null defaults:
 - `work_hours_parsed` is auto-populated from the `work_hours` string if not explicitly provided
 
 **Breaking change (Phase 8.4):** The `events` field on storyline entries is now required. The old `details` dict and `event_sequence` fields have been removed. All storyline entries must use the typed `events` list format.
+
+
+## Account retirement and restoration
+
+Authored Scenario 1.0 and 2.0 files can select an account kind with the optional
+root-level `account_transitions` list. This works with scenario-owned and inherited
+organization-pack accounts. Packs remain unchanged.
+
+```yaml
+account_transitions:
+  - username: former.employee
+    target: stale_accounts
+    # Optional complete User record retained for a guided later restoration:
+    previous_user:
+      username: former.employee
+      full_name: Former Employee
+      email: former.employee@example.com
+      enabled: false
+
+environment:
+  stale_accounts:
+    - username: former.employee
+      last_active: "2026-09-30"
+      reason: Former employee
+```
+
+Each username occurs once in `account_transitions`, ignoring case, and `target`
+is either `users` or `stale_accounts`. A matching target record must exist after
+normal scenario/pack composition. `previous_user`, when provided, must be a valid
+User with the same username; it is authoring history, not an active account.
+
+Compilation removes that username from the opposite effective account list. When
+targeting `stale_accounts`, it also removes effective group memberships and clears
+system `assigned_user` links. The original source records and directory links are
+retained, allowing restoration by changing `target` to `users` and authoring the
+restored User in `environment.users`. Studio fills that form from `previous_user`
+when available and lets the author choose Active or Disabled.
+
+Other user references are not rewritten. Storyline actors, identity overrides,
+storage principals, audiences and email relationships must still pass canonical
+validation. Studio's conversion review shows blocking findings before saving.
+The environment must retain at least one regular user. Queued generation inputs
+remain immutable; resolved scenarios contain the effective accounts and directory
+links rather than authoring history, so generation needs no transition-specific logic.
