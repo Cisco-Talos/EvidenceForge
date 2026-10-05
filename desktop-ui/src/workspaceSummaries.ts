@@ -1,6 +1,7 @@
 import type { CatalogItem, DependencyHealth, ImportedBundle, StudioJob, StudioSnapshot, ValidationResult } from "./api";
 import { formatBundleSize, formatTime } from "./components";
 import { recentJobs, jobSubmittedAt } from "./jobOrder";
+import { jobDisplayStatus } from "./jobOutcomes";
 import { generationInputs, generationIsCurrent, jobState, type OperationState, type RunInputStatus } from "./ScenarioStates";
 
 export interface SectionSummary {
@@ -24,7 +25,7 @@ export function latestSavedEvaluation(evaluations: StudioJob[]): StudioJob | und
 
 export function jobStatusCounts(jobs: StudioJob[]): string {
   return ["running", "queued", "paused", "completed", "failed", "stopped", "cancelled"]
-    .map((status) => ({ status, count: jobs.filter((job) => job.status === status).length }))
+    .map((status) => ({ status, count: jobs.filter((job) => jobDisplayStatus(job) === status).length }))
     .filter(({ count }) => count > 0).map(({ status, count }) => `${count} ${status}`).join(" · ");
 }
 
@@ -107,9 +108,11 @@ export function validationSummary(result: ValidationResult | undefined, stale: b
   const counts = report?.severity_counts as Record<string, number> | undefined;
   const errors = counts?.error ?? issues.filter((issue) => issue.severity === "error").length;
   const warnings = counts?.warning ?? issues.filter((issue) => issue.severity === "warning").length;
-  const findings = [errors > 0 && countLabel(errors, "error"), warnings > 0 && countLabel(warnings, "warning"), issues.length > errors + warnings && countLabel(issues.length - errors - warnings, "other finding")].filter(Boolean).join(" · ");
+  const infos = counts?.info ?? issues.filter((issue) => issue.severity === "info").length;
+  const others = Math.max(0, issues.length - errors - warnings - infos);
+  const findings = [errors > 0 && countLabel(errors, "error"), warnings > 0 && countLabel(warnings, "warning"), infos > 0 && countLabel(infos, "info finding"), others > 0 && countLabel(others, "other finding")].filter(Boolean).join(" · ");
   const valid = result.exit_code === 0 && report?.valid !== false && errors === 0;
-  return { headline: !report ? "Validation could not finish" : `${valid ? warnings ? "Valid with warnings" : "Passed" : "Needs changes"}${findings ? ` · ${findings}` : " · No findings"}`,
+  return { headline: !report ? "Validation could not finish" : `${valid ? warnings ? "Valid with warnings" : "Passed" : "Needs changes"}${findings ? ` · ${findings}` : valid ? " · No validation issues found" : ""}`,
     detail: [stale ? "Out of date · revalidate current inputs" : "Current revision", completedAt ? `Checked ${formatTime(completedAt)}` : ""].filter(Boolean).join(" · ") };
 }
 

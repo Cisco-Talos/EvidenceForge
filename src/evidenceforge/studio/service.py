@@ -84,6 +84,7 @@ from evidenceforge.studio.jobs import (
     StudioJobStore,
     can_resume,
     controller_settings,
+    job_completed_successfully,
     job_summary,
     progress_signature,
     queue_studio_evaluation,
@@ -229,8 +230,8 @@ class EvaluationRequest(BaseModel):
     generation_id: str
 
 
-class ClearCompletedRequest(BaseModel):
-    """Remove completed history entries of one job type in the current workspace."""
+class ClearJobHistoryRequest(BaseModel):
+    """Remove matching history entries of one job type in the current workspace."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1075,6 +1076,23 @@ class StudioService:
                 self.prediction_wakeup.set()
         return results
 
+    async def validate_item(self, item: CatalogItem) -> ValidationResult:
+        """Check final authored inputs and retain the result for the workspace."""
+        health = (await self.refresh_dependencies([item]))[item.id]
+        result = await asyncio.to_thread(_validate_source, self.settings, item.path, item.workspace)
+        self.store.save_validation(item.id, item.source_sha256, result, health.fingerprint)
+        await self.emit(
+            item.id,
+            "scenario.validated",
+            {
+                "source_sha256": item.source_sha256,
+                "dependency_sha256": health.fingerprint,
+                "completed_at": time.time(),
+                "result": json.loads(result.model_dump_json()),
+            },
+        )
+        return result
+
     async def _prediction_loop(self) -> None:
         """Process one cheap forecast at a time without delaying jobs or chat events."""
         while True:
@@ -1341,6 +1359,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             plan = import_plan(studio, preview_id)
             if plan.target is None:
                 raise HTTPException(status_code=400, detail="This review is for pack import")
+            plan.validation_requested = True
             # Prepare the destination's overlay context without copying it into the imported scenario.
             config = studio.settings.workspace / ".eforge/config"
             target = plan.stage / ".eforge/config"
@@ -1431,6 +1450,10 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
                 item.imported = True
                 studio.store.save_item(item)
                 await studio.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
+                if item.kind == "scenario" and plan.validation_requested:
+                    # Preview paths/configuration can differ from the final destination.
+                    # Recheck there before publishing a current workspace result.
+                    await studio.validate_item(item)
             selected_keys = (
                 plan.selected_pack_keys(request.selected_packs)
                 if plan.review.kind == "pack"
@@ -2251,22 +2274,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
 
         if item.workspace.resolve() != studio.settings.workspace.resolve():
             raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
-        health = (await studio.refresh_dependencies([item]))[item.id]
-        result = await asyncio.to_thread(
-            _validate_source, studio.settings, item.path, studio.settings.workspace
-        )
-        studio.store.save_validation(item.id, item.source_sha256, result, health.fingerprint)
-        await studio.emit(
-            item.id,
-            "scenario.validated",
-            {
-                "source_sha256": item.source_sha256,
-                "dependency_sha256": health.fingerprint,
-                "completed_at": time.time(),
-                "result": json.loads(result.model_dump_json()),
-            },
-        )
-        return result
+        return await studio.validate_item(item)
 
     @app.get("/v1/conversations")
     def conversations(
@@ -2802,21 +2810,37 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         await studio.emit(job_id, "job.history_removed", {"job_ids": [job_id]})
         return JobHistoryChange(job_ids=[job_id])
 
-    @app.post("/v1/jobs/history/clear-completed")
-    async def clear_completed_history(
-        request: ClearCompletedRequest, studio: StudioService = Depends(authorized)
+    async def clear_job_history(
+        request: ClearJobHistoryRequest, studio: StudioService, *, finished: bool
     ) -> JobHistoryChange:
         removed = set(studio.store.removed_job_ids(studio.settings.workspace))
         job_ids = [
             payload["id"]
             for payload in studio.store.job_payloads(studio.settings.workspace, request.kind)
-            if payload["status"] == "completed" and payload["id"] not in removed
+            if payload["id"] not in removed
+            and (
+                payload["status"] in {"completed", "failed", "stopped", "cancelled"}
+                if finished
+                else job_completed_successfully(payload)
+            )
         ]
         studio.store.remove_job_history(job_ids)
         await studio.emit(
             str(studio.settings.workspace), "job.history_removed", {"job_ids": job_ids}
         )
         return JobHistoryChange(job_ids=job_ids)
+
+    @app.post("/v1/jobs/history/clear-completed")
+    async def clear_completed_history(
+        request: ClearJobHistoryRequest, studio: StudioService = Depends(authorized)
+    ) -> JobHistoryChange:
+        return await clear_job_history(request, studio, finished=False)
+
+    @app.post("/v1/jobs/history/clear-finished")
+    async def clear_finished_history(
+        request: ClearJobHistoryRequest, studio: StudioService = Depends(authorized)
+    ) -> JobHistoryChange:
+        return await clear_job_history(request, studio, finished=True)
 
     @app.post("/v1/jobs/{job_id}/regenerate")
     async def regenerate(

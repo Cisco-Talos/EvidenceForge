@@ -392,6 +392,7 @@ class PreparedImport:
         self.created_at = time.monotonic()
         self.review = ImportReview(id=uuid4().hex, kind=kind, name=name, destination=workspace)
         self.project_id: str | None = None
+        self.validation_requested: bool = False
         self.target: Path | None = None
         self.sources: dict[Path, str] = {}
         self.reservations: dict[Path, str | None] = {}

@@ -296,6 +296,16 @@ def job_summary(payload: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def job_completed_successfully(payload: dict[str, Any]) -> bool:
+    """Keep failed or indeterminate evaluations out of successful history cleanup."""
+    if payload["status"] != "completed":
+        return False
+    if "scenario" in payload:
+        return True
+    scorecard = job_summary(payload).get("scorecard", {})
+    return scorecard.get("acceptance_passed") is True and not scorecard.get("error")
+
+
 def suspend_generation(job_store: StudioJobStore, job_id: str) -> str:
     """Request a safe checkpoint for one active app-owned generation."""
     job = next((entry for entry in job_store.load_generations() if entry.id == job_id), None)

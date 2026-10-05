@@ -209,3 +209,37 @@ the standalone app and `uv run eforge-studio`.
   The standard test image now has SHA256
   `cef7f1be93bbed4a7dfe5bc6816e9485c22ec71c70a7a774d7cf73484332ca22`.
   Quit Studio, eject the old image, and replace the Applications copy to load it.
+
+## October 5 field feedback: validation, headers, and history
+
+The user reports that the standalone app works well on the other Mac. This is
+positive field-use evidence; the exact OS revision and individual acceptance
+workflows were not recorded. They requested four minor workflow changes.
+
+- Workspace Validation now shows outcome, error/warning/info counts, freshness,
+  checked time, and repair action in its overall header. Opening it reveals the
+  findings directly. A successful result without findings remains a green check
+  and does not create an empty fold. Import results also show findings directly.
+- Workspace, library, job, inspection, import, and scorecard list headers use a
+  contrasting blue background. Contents are inset to distinguish parent groups
+  from individual rows. Existing groups with multiple choices remain available.
+- Prepared-import validation records that a check was requested. On confirmation,
+  Studio checks the final destination after publishing packs and configuring the
+  scenario, then saves/emits a normal workspace validation with source/dependency
+  freshness. Temporary preview paths and changed destination configuration cannot
+  be presented as a current result. Imports without an optional check stay unchecked.
+- Job center uses a split control: Clear Completed removes successful generations
+  and evaluations with readable, passed acceptance; failed/unrated evaluations stay.
+  Clear Finished removes completed, failed, stopped, and cancelled history entries.
+  Both preserve queued/running/paused jobs and all bundles/reports. Evaluations that
+  failed acceptance or have unreadable reports display failed badges/counts while
+  retaining their report lifecycle and source links. Cleanup remains workspace/type
+  scoped, and links can still reveal hidden history entries.
+- Frontend/TypeScript and native macOS builds passed. Generated API types, complete
+  Ruff check/format, Git whitespace, and DMG checksum checks passed. No automated
+  behavior tests were added or run for this follow-up; these UI changes await the
+  user's next field review. No Studio app or helper was launched during the work.
+- The previous image is preserved as
+  `dist/macos/EvidenceForge-Studio-2.1.2-aarch64-before-field-polish.dmg`.
+  The standard test DMG was rebuilt with SHA256
+  `6266829327f7cbb771e892503b9ef7c17f488d1c4c3bc1ae8651b4ca193f7e6c`.
