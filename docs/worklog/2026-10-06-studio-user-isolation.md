@@ -107,6 +107,9 @@ Final macOS evidence:
   explicit disposable workspace before the final gates. Read-only metadata checks confirmed the
   existing default-workspace layout and owner lock remained unchanged from October 5. Production
   records and engine content were not modified.
+- Delivery preflight removed trailing whitespace at the end of four newly added SQL fixtures;
+  SQL statements and saved records are unchanged. The fixture preservation/recovery suite was
+  rerun before pushing. Implementation commit: `86d5f6f0`.
 
 Linux/Windows native CI remains required before release; no native execution on those hosts is
 claimed here. The user requested committing and pushing the cumulative upgrade, lifecycle and

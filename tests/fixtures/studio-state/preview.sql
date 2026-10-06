@@ -62,4 +62,3 @@
             CREATE INDEX IF NOT EXISTS projects_workspace_idx ON projects(workspace);
             CREATE INDEX IF NOT EXISTS conversations_item_idx ON conversations(item_id);
             CREATE INDEX IF NOT EXISTS jobs_workspace_idx ON jobs(workspace, kind);
-            
