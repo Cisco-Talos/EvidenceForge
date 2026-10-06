@@ -534,6 +534,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   See the [standalone worklog](docs/worklog/2026-10-03-studio-standalone-macos.md) and
   [installation instructions](docs/studio-standalone-macos.md); the
   [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.
+  Automatic runtime retention, configurable rollback days, and visible uncertain-removal warnings
+  are implemented; see the [runtime cleanup worklog](docs/worklog/2026-10-06-studio-runtime-cleanup.md).
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;

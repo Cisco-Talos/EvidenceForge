@@ -846,6 +846,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runtime/cleanup-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Runtime Cleanup Settings */
+        put: operations["save_runtime_cleanup_settings_v1_runtime_cleanup_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/validate": {
         parameters: {
             query?: never;
@@ -3114,6 +3131,53 @@ export interface components {
             calibration_evidence_id: string;
         };
         /**
+         * RuntimeCleanupReport
+         * @description Current cleanup outcome, including warnings that survive a UI reconnect.
+         */
+        RuntimeCleanupReport: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            settings?: components["schemas"]["RuntimeCleanupSettings"];
+            /** Checked At */
+            checked_at?: number | null;
+            /** Removed */
+            removed?: string[];
+            /** Warnings */
+            warnings?: components["schemas"]["RuntimeCleanupWarning"][];
+        };
+        /**
+         * RuntimeCleanupSettings
+         * @description Independent, immutable v1 configuration for the disposable runtime cache.
+         */
+        RuntimeCleanupSettings: {
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: number;
+            /**
+             * Previous Runtime Days
+             * @default 30
+             */
+            previous_runtime_days: number;
+        };
+        /**
+         * RuntimeCleanupWarning
+         * @description An eligible runtime retained because removal could not be verified or completed.
+         */
+        RuntimeCleanupWarning: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Message */
+            message: string;
+        };
+        /**
          * SavedView
          * @description A named workspace library query.
          */
@@ -3558,6 +3622,7 @@ export interface components {
             removed_job_ids?: string[];
             /** Imported Bundles */
             imported_bundles: components["schemas"]["ImportedBundle"][];
+            runtime_cleanup?: components["schemas"]["RuntimeCleanupReport"] | null;
         };
         /**
          * TurnRequest
@@ -5759,6 +5824,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExportLocation"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_runtime_cleanup_settings_v1_runtime_cleanup_settings_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeCleanupSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeCleanupReport"];
                 };
             };
             /** @description Validation Error */

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Check, Folder, Sparkles } from "lucide-react";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
-import { StudioApi, StudioSettings } from "./api";
+import { RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
 import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
 
@@ -10,9 +10,10 @@ type Tab = "workspace" | "jobs" | "tools";
 interface CodexAccount { type?: string; email?: string }
 interface CodexStatus { available: boolean; error?: string; account?: { account?: CodexAccount | null } }
 
-export function SettingsView({ settings, paths, api, onSaved, onError }: {
+export function SettingsView({ settings, paths, runtimeCleanup, api, onSaved, onError }: {
   settings: StudioSettings;
   paths: { data: string; logs: string };
+  runtimeCleanup?: RuntimeCleanupReport | null;
   api: StudioApi;
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
@@ -30,7 +31,18 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
   const [rememberView, setRememberView] = useState(true);
   const [savedRememberView, setSavedRememberView] = useState(true);
   const [libraryReady, setLibraryReady] = useState(false);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(savedSettings) || rememberView !== savedRememberView;
+  const incomingRuntimeDays = runtimeCleanup?.settings?.previous_runtime_days ?? 30;
+  const [runtimeDays, setRuntimeDays] = useState(incomingRuntimeDays);
+  const [savedRuntimeDays, setSavedRuntimeDays] = useState(incomingRuntimeDays);
+  const lastIncomingRuntimeDays = useRef(incomingRuntimeDays);
+  useEffect(() => {
+    if (lastIncomingRuntimeDays.current === incomingRuntimeDays) return;
+    const previous = lastIncomingRuntimeDays.current;
+    lastIncomingRuntimeDays.current = incomingRuntimeDays;
+    setRuntimeDays((current) => current === previous ? incomingRuntimeDays : current);
+    setSavedRuntimeDays(incomingRuntimeDays);
+  }, [incomingRuntimeDays]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedSettings) || rememberView !== savedRememberView || runtimeDays !== savedRuntimeDays;
   useEffect(() => {
     let cancelled = false;
     setLibraryReady(false);
@@ -86,6 +98,15 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
     if (!dirty || saving) return;
     setSaving(true);
     try {
+      if (runtimeDays !== savedRuntimeDays) {
+        const result = await api.request<RuntimeCleanupReport>("/v1/runtime/cleanup-settings", "PUT", {
+          schema_version: 1,
+          previous_runtime_days: Math.min(3650, Math.max(0, Math.trunc(runtimeDays))),
+        });
+        const days = result.settings?.previous_runtime_days ?? runtimeDays;
+        setSavedRuntimeDays(days);
+        setRuntimeDays(days);
+      }
       const saved = await api.request<StudioSettings>("/v1/settings", "PUT", {
         ...draft,
         max_concurrent_generations: Math.min(16, Math.max(1, draft.max_concurrent_generations)),
@@ -169,6 +190,7 @@ export function SettingsView({ settings, paths, api, onSaved, onError }: {
         <div className="setting-row"><div className="setting-copy"><strong>Search matches per item</strong><Help text="Show this many matching fields or source lines (five by default). Names and descriptions rank first, then YAML values, keys, and comments. Substring matching is unchanged; extra matches are counted." /></div><input className="setting-number" type="number" min={1} max={50} aria-label="Search matches per item" value={draft.search_match_limit ?? 5} onChange={(event) => setDraft({ ...draft, search_match_limit: Number(event.target.value) })} onBlur={() => setDraft((current) => ({ ...current, search_match_limit: Math.min(50, Math.max(1, current.search_match_limit || 5)) }))} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>App data</strong><Help text="Private scenario organization, conversations, job history, and settings. Authored YAML and bundles stay in your workspace." /></div><div className="setting-control"><span className="path-label" title={paths.data}>{shortPath(paths.data)}</span><CopyPathButton path={paths.data} label="Copy app data path" onError={onError} /><button className="icon-button" title="Open app data folder" aria-label="Open app data folder" onClick={() => void openLocalFolder(paths.data)}><ArrowUpRight size={16} /></button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Keep previous app runtime (days)</strong><Help text="Keep the previous successfully launched runtime for this many days after replacement (30 by default). Zero removes the extra rollback period. Other unused runtimes have a 24-hour grace period. Current and running runtimes are protected. Saving applies cleanup immediately; authored packs, scenarios, conversations, and bundles are preserved." /></div><input className="setting-number" type="number" min={0} max={3650} aria-label="Keep previous app runtime (days)" value={runtimeDays} onChange={(event) => setRuntimeDays(Number(event.target.value))} onBlur={() => setRuntimeDays((current) => Math.min(3650, Math.max(0, Math.trunc(current))))} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Service logs</strong><Help text="Diagnostic logs for the local background service." /></div><div className="setting-control"><span className="path-label" title={paths.logs}>{shortPath(paths.logs)}</span><CopyPathButton path={paths.logs} label="Copy logs path" onError={onError} /><button className="icon-button" title="Open logs folder" aria-label="Open logs folder" onClick={() => void openLocalFolder(paths.logs)}><ArrowUpRight size={16} /></button></div></div>
       </>}
       {tab === "jobs" && <>

@@ -23,6 +23,7 @@ from evidenceforge.evaluation.models import QualityReport
 from evidenceforge.generation.checkpoints.control import read_suspension_record
 from evidenceforge.generation.checkpoints.errors import CheckpointError
 from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 logger = logging.getLogger(__name__)
 _controller_processes: list[subprocess.Popen[bytes]] = []
@@ -144,6 +145,7 @@ def _start_evaluation(job: EvaluationJob) -> None:
             stdout=output,
             stderr=errors,
             start_new_session=True,
+            pass_fds=runtime_worker_fds(),
         )
     _evaluation_processes[:] = [
         running for running in _evaluation_processes if running.poll() is None

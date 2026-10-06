@@ -127,6 +127,11 @@ from evidenceforge.studio.pack_lifecycle import (
 )
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.runtime import runtime_id, runtime_root
+from evidenceforge.studio.runtime_cleanup import (
+    RuntimeCleanup,
+    RuntimeCleanupReport,
+    RuntimeCleanupSettings,
+)
 from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.state_io import StudioStateError
@@ -687,6 +692,7 @@ class StudioSnapshot(BaseModel):
     jobs: list[JobSummary]
     removed_job_ids: list[str] = Field(default_factory=list)
     imported_bundles: list[ImportedBundle]
+    runtime_cleanup: RuntimeCleanupReport | None = None
 
 
 class CodexReconnectRequest(BaseModel):
@@ -784,6 +790,8 @@ class StudioService:
         self.prediction_lock = asyncio.Lock()
         self.prediction_pending: dict[str, tuple[CatalogItem, str, StudioSettings]] = {}
         self.prediction_wakeup = asyncio.Event()
+        self.runtime_cleanup = RuntimeCleanup(paths.data)
+        self._last_runtime_cleanup = 0.0
 
     async def start(self) -> None:
         """Index the selected workspace and start durable job reconciliation."""
@@ -796,6 +804,8 @@ class StudioService:
         )
         if self.workspace_coordinator and self.workspace_coordinator.status.state == "ready":
             await self.scan(resolve_drafts=False)
+        await asyncio.to_thread(self.runtime_cleanup.successful_launch)
+        await self.clean_runtimes()
         self.prediction_task = asyncio.create_task(self._prediction_loop())
         self.job_task = asyncio.create_task(self._job_loop())
         self.codex_task = asyncio.create_task(self._monitor_codex())
@@ -848,6 +858,7 @@ class StudioService:
             return
         await self.emit(conversation.id, "conversation.event", {"method": method, "params": params})
         if method == "turn/completed":
+            self._last_runtime_cleanup = 0.0
             conversation.active = False
             conversation.needs_attention = False
             turn = params.get("turn", {})
@@ -1073,7 +1084,21 @@ class StudioService:
                     await self.emit(payload["id"], "job.updated", job_summary(payload))
                 if time.monotonic() - self._last_scan >= 10:
                     await self.scan()
+                if time.monotonic() - self._last_runtime_cleanup >= 3600 or any(
+                    payload.get("status") in {"completed", "failed", "cancelled", "paused"}
+                    for payload in changed
+                ):
+                    await self.clean_runtimes()
             await asyncio.sleep(0.75)
+
+    async def clean_runtimes(self) -> RuntimeCleanupReport:
+        """Publish persistent UI warnings after a serialized, bounded cache cleanup pass."""
+        previous = self.runtime_cleanup.report.model_dump(mode="json", exclude={"checked_at"})
+        report = await asyncio.to_thread(self.runtime_cleanup.clean)
+        self._last_runtime_cleanup = time.monotonic()
+        if report.model_dump(mode="json", exclude={"checked_at"}) != previous:
+            await self.emit("runtime", "runtime.cleanup", report.model_dump(mode="json"))
+        return report
 
     async def emit(self, entity_id: str, kind: str, payload: dict[str, Any]) -> StudioEvent:
         """Commit and broadcast a state change."""
@@ -1255,6 +1280,7 @@ class StudioService:
             "seq": self.store.latest_seq(),
             "settings": json.loads(self.settings.model_dump_json()),
             "paths": json.loads(self.paths.model_dump_json()),
+            "runtime_cleanup": self.runtime_cleanup.report.model_dump(mode="json"),
             "items": [json.loads(item.model_dump_json()) for item in items],
             "projects": [
                 json.loads(project.model_dump_json()) for project in self.store.projects(workspace)
@@ -2927,6 +2953,17 @@ def create_app(
         directory = location.directory.resolve()
         studio.store.set_export_directory(studio.settings.workspace, directory)
         return ExportLocation(directory=directory)
+
+    @app.put("/v1/runtime/cleanup-settings")
+    async def save_runtime_cleanup_settings(
+        settings: RuntimeCleanupSettings, studio: StudioService = Depends(authorized)
+    ) -> RuntimeCleanupReport:
+        async with studio.job_cycle_lock:
+            try:
+                await asyncio.to_thread(studio.runtime_cleanup.save_settings, settings)
+            except (OSError, ValueError, StudioStateError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            return await studio.clean_runtimes()
 
     @app.put("/v1/settings")
     async def save_settings(

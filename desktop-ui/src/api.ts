@@ -17,6 +17,7 @@ export type TurnSubmission = Required<Schema["TurnSubmission"]>;
 export type CodexHealth = Required<Schema["CodexHealth"]>;
 export type QuitSettings = Required<Schema["QuitSettings"]>;
 export type StudioSettings = Omit<Required<Schema["StudioSettings"]>, "quit"> & { quit: QuitSettings };
+export type RuntimeCleanupReport = Schema["RuntimeCleanupReport"];
 export type GenerationProgress = Required<Schema["GenerationProgress"]>;
 export type StudioJob = Schema["JobSummary"];
 export type ScorecardDetail = Schema["ScorecardDetail"];

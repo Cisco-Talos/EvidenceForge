@@ -1177,3 +1177,8 @@ select { min-width: 185px; }
 .pack-workflow svg { flex-shrink: 0; }
 .pack-delete-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .pack-delete-dialog ul { max-height: 220px; overflow: auto; padding-left: 20px; }
+
+.runtime-cleanup-notice { margin: 16px 28px 0; padding: 12px 16px; border: 1px solid #9b743c; border-radius: 8px; background: #30291f; color: #f0d4a7; flex-shrink: 0; }
+.runtime-cleanup-notice summary { cursor: pointer; font-weight: 600; }
+.runtime-cleanup-notice p { margin: 8px 0; }
+.runtime-cleanup-notice code { overflow-wrap: anywhere; font-size: 12px; }

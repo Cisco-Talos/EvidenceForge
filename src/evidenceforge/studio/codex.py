@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.studio.runtime import command_environment, discover_codex
+from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ class CodexClient:
                     stderr=asyncio.subprocess.PIPE,
                     limit=MAX_PROTOCOL_LINE_BYTES,
                     env=command_environment(),
+                    pass_fds=runtime_worker_fds(),
                 )
             except OSError as error:
                 raise CodexUnavailableError(f"Could not start Codex: {error}") from error
