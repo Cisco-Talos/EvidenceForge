@@ -85,8 +85,9 @@ formats. No accounts, production-state modifications, application version bump o
 Simulations inject identities or stat ownership; they do not prove native kernel access denial
 between actual separate accounts. Native tests use only disposable state and harness-owned child
 processes, with synchronized concurrent attachment and bounded startup readiness polling. The
-required Linux/macOS/Windows recovery CI matrix includes both ownership test files alongside
-helper lifecycle tests. No account creation is added to CI.
+required macOS recovery CI gate includes both ownership test files alongside helper lifecycle
+tests. The user subsequently deferred Linux/Windows GUI support and native gates on October 6.
+No account creation is added to CI.
 
 ## Validation and remaining acceptance
 
@@ -111,13 +112,15 @@ Final macOS evidence:
   SQL statements and saved records are unchanged. The fixture preservation/recovery suite was
   rerun before pushing. Implementation commit: `86d5f6f0`.
 
-Linux/Windows native CI remains required before release; no native execution on those hosts is
-claimed here. The user requested committing and pushing the cumulative upgrade, lifecycle and
+macOS native CI remains required before release. Linux/Windows GUI native acceptance is deferred
+by the October 6 support decision; no native execution on those hosts is claimed here. The user
+requested committing and pushing the cumulative upgrade, lifecycle and
 isolation effort on October 6. The feature branch retains the existing application version.
 
-**Explicitly deferred:** use genuinely separate accounts on each supported OS to launch Studio
+**Explicitly deferred:** use genuinely separate macOS accounts to launch Studio
 simultaneously, verify separate private data/settings/queues/limits, refuse foreign discovery and
 custom data roots, verify no cross-account connection/signal/permission repair, and independently
-verify Windows ACL denial from the other account. Include same display names/different SIDs and
-account/session switching where the host supports it. This is durable backlog work in `TODO.md`,
+test account/session switching. Windows ACL denial and same display names/different SIDs belong
+to deferred future Windows GUI acceptance, alongside Linux native cross-account testing. This is
+durable backlog work in `TODO.md`,
 not a reason to block the user-approved local implementation or to create accounts now.

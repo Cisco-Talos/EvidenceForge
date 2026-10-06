@@ -31,7 +31,7 @@ Tests use disposable roots, injected monotonic clocks and harness-owned child pr
 tests execute the production server shutdown callback, verify descriptor/lock cleanup, and retain
 a real worker behind a parent-controlled completion barrier. No application data, running user
 helper, engine artifacts or DMGs are modified. Native lifecycle tests join the existing required
-Linux/macOS/Windows recovery CI matrix.
+macOS recovery CI gate. Linux and Windows GUI gates were deferred by the user later on October 6.
 
 ## macOS validation
 
@@ -50,5 +50,6 @@ Linux/macOS/Windows recovery CI matrix.
   passed. The source-run macOS `.app` was rebuilt with `--bundles app`; no DMG was built.
 - Full Ruff lint and format checks, Rust format check and `git diff --check` passed.
 
-Linux/Windows native execution remains the required CI matrix's responsibility; no native results
-for those hosts are claimed locally. The running user helper and production state were untouched.
+macOS native execution remains required in CI. Linux/Windows GUI execution is deferred by the
+October 6 support decision; no native results for those hosts are claimed locally. The running
+user helper and production state were untouched.

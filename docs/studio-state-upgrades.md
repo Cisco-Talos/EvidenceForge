@@ -118,6 +118,10 @@ process-crash behavior. A separate filesystem durability model checks ordering a
 including deliberately weakened flush protocols. Neither is a certification against every
 hardware, storage-controller or power-loss failure.
 
+**Current GUI support is macOS only.** Linux and Windows ownership/publication adapters remain
+experimental. Their native GUI acceptance is deferred until those platforms are considered for
+support; engine and CLI acceptance on those platforms is unchanged.
+
 ## Adding a future migration
 
 Review the three implementation areas together: frozen contracts and guarded readers; backup,
@@ -140,8 +144,10 @@ execution and recovery coordination; frontend and native release gates.
 5. Enumerate every new persistent publication boundary, including package/pointer journals and
    restoration. Add deterministic observer barriers and injectable I/O adapters in tests. Normal
    applications have no environment-controlled crash hooks.
-6. Run routine tests, the required extended matrix and all three native CI runners. Update the
-   traceability table and worklog; use existing release coverage and version-bump rules.
+6. Run routine tests and the required extended matrix on the supported native macOS CI runner.
+   Update the traceability table and worklog; use existing release coverage and version-bump rules.
+   Any future GUI platform must pass its own native crash, recovery and ownership gates before
+   support is advertised.
 
 Derived FTS and validation/dependency/prediction caches can be rebuilt after authoritative
 validation. Missing or malformed authoritative records must never be silently deleted. API-type
@@ -204,13 +210,14 @@ uv run pytest -m slow --no-cov tests/integration/test_studio_state_crashes.py te
 ```
 
 `Studio state recovery` in `.github/workflows/ci.yml` runs routine and required extended tests
-natively on Linux, macOS and Windows and is a dependency of the aggregate CI gate. Optional soak
+natively on macOS and is a dependency of the aggregate CI gate. Linux and Windows GUI native gates
+are deferred by the October 6 support decision. Optional soak
 runs do not replace this gate. Release coverage uses the repository's existing default-suite
 70% requirement, separately from the extended tests; slow/soak are never run under coverage.
 No DMG build is added or required by the recovery job.
 
 Failure artifacts use disposable fixtures and sanitized versions, journals, boundaries and
 inventories. No production state or authentication tokens belong in those artifacts. Release
-acceptance requires all native runners and applicable backend/frontend, generated-type, lint,
-build and release checks to pass. A passing macOS local run alone is not cross-platform release
-acceptance.
+acceptance requires the macOS native GUI gates and applicable backend/frontend, generated-type,
+lint, build and release checks to pass. Local macOS results do not replace CI or establish support
+for Linux or Windows. The existing engine/CLI Linux and Windows gates remain required.

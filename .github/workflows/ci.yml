@@ -83,7 +83,8 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests without coverage
-        run: uv run pytest --no-cov
+        # Studio's native GUI lifecycle is gated separately on its supported macOS host.
+        run: uv run pytest --no-cov --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
 
   studio:
     name: Studio (${{ matrix.os }})
@@ -92,17 +93,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [macos-latest]
 
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install Linux Tauri dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Install uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -152,11 +147,10 @@ jobs:
         working-directory: desktop-ui
         run: npm run tauri -- build --debug --no-bundle
 
-      - name: Build standalone Apple Silicon test DMG
-        if: runner.os == 'macOS'
+      - name: Build standalone Apple Silicon test app
         run: |
           rustup target add aarch64-apple-darwin --toolchain stable
-          uv run python scripts/package_studio_macos.py --build-app
+          uv run python scripts/package_studio_macos.py --build-app --skip-dmg
 
       - name: Verify isolated packaged CLI and resources
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -164,8 +158,12 @@ jobs:
           uv run python scripts/verify_studio_macos.py
           "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
 
-      - name: Upload standalone test package
-        if: runner.os == 'macOS'
+      - name: Archive standalone test app
+        run: |
+          mkdir -p dist/macos
+          ditto -c -k --sequesterRsrc --keepParent "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app" "dist/macos/EvidenceForge-Studio-aarch64-test.zip"
+
+      - name: Upload standalone test app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Studio-macOS-Apple-Silicon-test
@@ -179,7 +177,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest]
     steps:
       - name: Preserve frozen fixture bytes
         run: git config --global core.autocrlf false

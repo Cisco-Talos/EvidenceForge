@@ -8,6 +8,13 @@ Read this first when resuming Studio work, then consult the relevant sections of
 early descriptions of cards, tabs, Qt availability, overlay limitations, browser-only exports,
 and oldest-first jobs have been superseded. This document summarizes the current state.
 
+**October 6 support decision:** macOS is the only supported GUI platform for now. Linux and
+Windows GUI support, packaging and native acceptance are deferred for future exploration. Earlier
+three-platform delivery plans below are historical context, not current commitments. Required
+Studio CI now runs on macOS; engine/CLI Linux and Windows gates remain unchanged. Current CI
+archives the standalone app without creating a DMG. See the
+[dev integration worklog](2026-10-06-studio-dev-integration.md).
+
 ## Accepted architecture and compatibility boundaries
 
 - Local Tauri desktop shell, React/TypeScript interface, authenticated Python application service

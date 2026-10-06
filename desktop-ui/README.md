@@ -4,6 +4,9 @@ The Tauri/React frontend for EvidenceForge Studio. The local Python service owns
 workspace data, Codex conversations, and generation jobs; `eforge` remains the
 deterministic worker.
 
+The GUI currently supports macOS only. Linux and Windows GUI builds and native
+acceptance are deferred for later exploration; engine/CLI platform support is unchanged.
+
 From the repository root, install the Python dependencies with
 `uv sync --extra studio --extra dev`. Then run `npm ci` in this directory and
 `uv run eforge-studio` from the repository root for the native window. For a

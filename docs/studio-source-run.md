@@ -6,7 +6,12 @@ CLI for validation, generation, and evaluation. Its core-parity replacement was 
 October 2, 2026. `eforge-desktop` starts Studio; `eforge-studio` is an equivalent alias.
 The Qt interface and dependency have been removed. Old prototype app-data files are untouched.
 
-## Run on macOS or Linux
+**Supported GUI platform: macOS only.** Linux and Windows implementations are exploratory;
+GUI packaging, native acceptance and support on those platforms are deferred. The engine and CLI
+retain their existing platform support. Current standalone testing targets Apple Silicon; see
+[macOS package acceptance and limitations](studio-standalone-macos.md).
+
+## Run on macOS
 
 1. Install Node.js, npm, Rust/Tauri's platform build prerequisites, `uv`, and the Codex CLI.
    Sign in to Codex before authoring or use Studio's **Settings → Authoring & tools → Sign in**.
@@ -19,8 +24,8 @@ only to loopback on an ephemeral port and requires a private per-launch token. C
 applies the configured job and authoring-turn quit policies; it does not stop a generation that
 has been configured to continue in the background. Reopen Studio to reconnect to that work.
 The source checkout, Python environment, Node.js, and Rust build tools are required for this
-development release. Standalone packaging is planned but not implemented; see the
-[current handoff and distribution decisions](worklog/2026-10-02-studio-handoff.md).
+source-run development mode. A separate standalone Apple Silicon test package is available; see
+[macOS package instructions](studio-standalone-macos.md).
 
 On macOS, the helper runs as a transient user launchd service, independently of the window.
 Its private `service-agent.plist` lives in Studio's state directory; the registration lasts for
@@ -67,8 +72,8 @@ native testing separately. Real tests with separate OS accounts are explicitly d
 | Platform | Settings and library index | Logs and cache |
 | --- | --- | --- |
 | macOS | `~/Library/Application Support/EvidenceForge/settings.json` and `studio.sqlite` | `~/Library/Logs/EvidenceForge/` and `~/Library/Caches/EvidenceForge/` |
-| Linux | `$XDG_CONFIG_HOME/evidenceforge/settings.json` and `$XDG_DATA_HOME/evidenceforge/studio.sqlite` | `$XDG_STATE_HOME/evidenceforge/` and `$XDG_CACHE_HOME/evidenceforge/` |
-| Windows, later | `%LOCALAPPDATA%\EvidenceForge\settings.json` and `studio.sqlite` | `logs\` and `cache\` there |
+| Linux, exploratory | `$XDG_CONFIG_HOME/evidenceforge/settings.json` and `$XDG_DATA_HOME/evidenceforge/studio.sqlite` | `$XDG_STATE_HOME/evidenceforge/` and `$XDG_CACHE_HOME/evidenceforge/` |
+| Windows, exploratory | `%LOCALAPPDATA%\EvidenceForge\settings.json` and `studio.sqlite` | `logs\` and `cache\` there |
 
 Linux uses the standard XDG defaults under `~/.config`, `~/.local/share`, `~/.local/state`, and
 `~/.cache` when those variables are unset. The SQLite file stores workspace-specific organization,

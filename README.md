@@ -320,6 +320,8 @@ uv run eforge eval ./output
 ## Development
 
 EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
+The GUI currently supports **macOS only**; Linux and Windows GUI support is deferred for later
+exploration. This does not change the engine or CLI platform support described above.
 Run it with `uv run eforge-desktop` after following the
 [Studio source-run guide](docs/studio-source-run.md).
 

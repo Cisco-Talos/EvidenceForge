@@ -1,5 +1,8 @@
 # Standalone Studio for macOS
 
+Studio currently supports **macOS only**. Linux and Windows GUI support is deferred for later
+exploration. Engine and CLI platform support is unchanged.
+
 ## Install the test package
 
 The first standalone package is for Apple Silicon. The intended field-test system
@@ -89,7 +92,9 @@ wheels and generates stable runtime archives and a content identity. Cargo build
 with its lockfile. Developer ID signing and notarization are disabled for the test
 artifact; normal compiler-generated ad hoc executable signatures remain.
 
-Outputs are under `dist/macos/`. macOS Studio CI builds and uploads the test DMG
-and checksum and checks packaged CLI/resources on native Apple Silicon runners.
+For an app build without creating a DMG, add `--skip-dmg` to the packaging command. macOS Studio
+CI uses that option, checks packaged CLI/resources on native Apple Silicon runners, and uploads
+a ZIP of the app under `dist/macos/`. Manual DMG creation remains available when needed; DMGs are
+not required for the migration or current PR gates.
 Build outputs are ignored by Git. See the [implementation worklog](worklog/2026-10-03-studio-standalone-macos.md)
 for detailed evidence and outstanding acceptance.

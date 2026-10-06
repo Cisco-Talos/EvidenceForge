@@ -2,7 +2,7 @@
 
 **Status:** 2.1.2 release preparation; post-v2.1.1 realism fixes merged to dev
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-02
+**Last Roadmap Review:** 2026-10-06
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -493,19 +493,22 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Medium-Term
 
-- [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS, Linux and
-  Windows when a suitable test host is available. User explicitly deferred account creation on
+- [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
+  suitable test host is available. User explicitly deferred account creation on
   October 6. UID/SID simulations and same-account native helper/locking tests are implemented;
-  they do not substitute for this cross-account acceptance. See the
+  they do not substitute for this cross-account acceptance. Linux and Windows GUI testing is
+  deferred until future platform exploration. See the
   [isolation worklog](docs/worklog/2026-10-06-studio-user-isolation.md).
 
 - [ ] **P1 — public Studio release gate:** Version Studio-owned SQL/JSON settings and filesystem
   layouts; require verified backups, interrupted-upgrade recovery, pre-use restoration and
-  native crash/fault gates on Linux/macOS/Windows. Engine-owned formats stay outside this effort.
+  native crash/fault gates on macOS, the only currently supported GUI platform. Linux and Windows
+  GUI support and native acceptance are deferred by the October 6 user decision. Engine-owned
+  formats and engine/CLI platform support stay outside this scope change.
   Implementation and macOS evidence are tracked in the
   [upgrade worklog](docs/worklog/2026-10-05-studio-state-upgrades.md); see
-  [contracts and test traceability](docs/studio-state-upgrades.md). Require the Linux/macOS/Windows
-  native CI matrix and existing release checks before closing this release gate.
+  [contracts and test traceability](docs/studio-state-upgrades.md). Require the macOS native GUI
+  gates and existing engine/CLI and release checks before closing this release gate.
 
 - [ ] Automate clean-room scenario-agent acceptance after the 2.0 release, measuring first-draft
   structural validity, passes to zero errors, required-reference loading, warning churn, and
@@ -523,8 +526,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
   Initial field test targets Apple Silicon macOS 26; Developer ID signing/notarization are
   deferred by user decision. Universal macOS delivery is blocked by the locked cryptography
-  dependency's missing Intel wheel. Follow with Linux x64 AppImage, then optional Windows x64
-  setup EXE. Codex remains separately installed. Require native builds and clean-machine acceptance.
+  dependency's missing Intel wheel. macOS is the only supported GUI platform for now; explore
+  Linux and Windows later, with packaging and native acceptance planned separately before support.
+  Codex remains separately installed. Require native macOS builds and clean-machine acceptance.
   See the [standalone worklog](docs/worklog/2026-10-03-studio-standalone-macos.md) and
   [installation instructions](docs/studio-standalone-macos.md); the
   [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.

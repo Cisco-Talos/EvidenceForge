@@ -226,8 +226,15 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
     return configuration
 
 
-def build_app(root: Path, build: Path, configuration: Path, architectures: list[str]) -> None:
-    """Build a native shell and create a drag-to-Applications test DMG."""
+def build_app(
+    root: Path,
+    build: Path,
+    configuration: Path,
+    architectures: list[str],
+    *,
+    skip_dmg: bool = False,
+) -> None:
+    """Build a native shell and optionally create a drag-to-Applications test DMG."""
     if sys.platform != "darwin":
         raise RuntimeError("The macOS application must be built on macOS")
     lock = RuntimeLock.model_validate_json(
@@ -278,6 +285,9 @@ def build_app(root: Path, build: Path, configuration: Path, architectures: list[
         root,
         environment,
     )
+    if skip_dmg:
+        print(f"Standalone app: {app}", flush=True)
+        return
     destination = root / "dist/macos"
     destination.mkdir(parents=True, exist_ok=True)
     volume = build / "dmg-volume"
@@ -322,6 +332,7 @@ def main() -> None:
         "--architectures", nargs="+", choices=["aarch64", "x86_64"], default=["aarch64"]
     )
     parser.add_argument("--build-app", action="store_true")
+    parser.add_argument("--skip-dmg", action="store_true", help="Build the app without a DMG")
     parser.add_argument("--build-directory", type=Path)
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -329,7 +340,7 @@ def main() -> None:
     architectures = list(dict.fromkeys(arguments.architectures))
     configuration = assemble(root, build, architectures)
     if arguments.build_app:
-        build_app(root, build, configuration, architectures)
+        build_app(root, build, configuration, architectures, skip_dmg=arguments.skip_dmg)
 
 
 if __name__ == "__main__":

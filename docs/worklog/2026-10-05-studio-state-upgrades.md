@@ -30,8 +30,9 @@ cumulative upgrade/lifecycle/isolation work on October 6.
    coalesce, opposing concurrent actions and stale IDs refuse. React renders the warning before
    explicit **Continue with upgrade** acceptance (revised by the user's follow-up), named progress,
    recovery actions/details, and alternative workspace selection.
-   API schema generation is explicitly side-effect free. CI has a required recovery matrix on
-   Linux/macOS/Windows, including bounded extended tests without coverage. The recovery job adds
+   API schema generation is explicitly side-effect free. CI requires native macOS recovery,
+   including bounded extended tests without coverage. The October 6 user support decision deferred
+   Linux/Windows GUI gates; the original three-platform plan is superseded. The recovery job adds
    no DMG build. Documentation includes first-adoption compatibility, recovery scope, future
    migration rules, fixture provenance and a named-test traceability table.
 
@@ -57,7 +58,8 @@ A completed restore remains in maintenance mode until explicit retry or a compat
 - Full Ruff check and format check passed: 966 Python files formatted consistently.
 - Generation behavior declaration remains current (revision 158, digest
   `8587aa35fee18c127955a14ae30a989376606c2534f2df3a4a054c8dd234ae81`).
-- CI YAML parsed successfully; the three-platform recovery matrix is required by `ci-required`.
+- CI YAML parsed successfully; recovery is required by `ci-required`. The original three-platform
+  matrix was narrowed to supported macOS GUI acceptance on October 6.
 - `git diff --check` passed; the three application version declarations are unchanged.
 
 Tests use test-only observers and I/O adapters, precise barriers, and exact unreaped `Popen` child
@@ -67,8 +69,9 @@ reported separately; neither certifies every storage-device failure.
 
 ## Release acceptance still pending outside this local session
 
-Native Linux and Windows recovery CI results must pass before release, including the Windows ACL
-case skipped locally. Existing release coverage/version/tag checks and native packaging acceptance
+Native macOS recovery CI results must pass before release. Linux and Windows GUI acceptance,
+including the native Windows ACL case skipped locally, is deferred by the October 6 user decision.
+Existing release coverage/version/tag checks and native packaging acceptance
 remain release requirements; no feature-branch version bump was made. The durable P1 release gate
 in `TODO.md` remains open for these results. See the October 6
 [isolation worklog](2026-10-06-studio-user-isolation.md) for final cumulative validation and delivery.
