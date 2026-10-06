@@ -120,6 +120,13 @@ scenario edits retain pack ownership through private overrides. See the
 macOS field-test image. Broader origins and authoring beyond those categories
 remain part of the workflow backlog.
 
+### October 6 pack lifecycle review
+
+Both pack kinds now have canonical validation/release review and dependency-aware, reviewed
+workspace-version deletion with retained recovery files. Existing creation, chat authoring,
+structured version edits and portable import/export were exercised together. See the
+[pack lifecycle worklog](2026-10-06-studio-pack-lifecycle.md) for acceptance and remaining scope.
+
 ## Remaining workflow work
 
 Core replacement is accepted; the seven original stages are not all complete. Features have been
@@ -129,8 +136,8 @@ reimplementing completed slices.
 | Stage | Delivered foundation | Remaining planned work |
 | --- | --- | --- |
 | 1 Find/resume | Projects, status/freshness, contextual excerpts, saved views, command menu | Final acceptance/completeness review rather than a new library rewrite |
-| 2 Environment | Exact pack inspection/selection request, lifecycle/import/export, optional scopes, declarations | Guided structured pack/config editing and full effective-value origins |
-| 3 Author/revise | Persistent conversations, scenario context, model controls, repair entry | Structured scenario preview, isolated draft diffs/acceptance, revision history and contextual repair integration |
+| 2 Environment | Exact pack choices, create/clone/chat authoring, guided asset editing/versioning, import/export, validation/release review, reviewed workspace-version deletion, optional scopes | Broader structured pack/config editing and full effective-value origins |
+| 3 Author/revise | Persistent conversations, scenario context, model controls, repair entry | Structured scenario preview, isolated scenario/pack draft diffs and acceptance, revision history and contextual repair integration |
 | 4 Validate/preflight | Readable findings, dependency/freshness checks, resource forecasts; CLI reachability exists | In-place finding navigation/repair, richer reachability view, automatic validation of accepted revisions (proposed on) |
 | 5 Generate/operate | Immutable inputs, concurrency, all-job progress, checkpoint/recovery, forecast | Resource-aware scheduling and richer per-run setup/overrides; evaluate-after-generation proposed on, verify current coverage before adding |
 | 6 Evaluate/iterate | Run-linked expandable scorecards, raw report, progress | Evidence drill-down, comparisons between different runs and targeted repair; retain safety limits and latest-report policy |

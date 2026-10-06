@@ -115,6 +115,16 @@ from evidenceforge.studio.jobs import (
     suspend_generation,
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
+from evidenceforge.studio.pack_lifecycle import (
+    PackDeleted,
+    PackDeleteRequest,
+    PackDeleteReview,
+    PackReview,
+    remove_workspace_pack,
+    retired_pack_sources,
+    review_pack,
+    review_pack_deletion,
+)
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.runtime import runtime_id, runtime_root
 from evidenceforge.studio.sessions import WindowSessions
@@ -767,6 +777,7 @@ class StudioService:
         self.imports: dict[str, PreparedImport] = {}
         self.import_lock = asyncio.Lock()
         self.asset_lock = asyncio.Lock()
+        self.library_lock = asyncio.Lock()
         self.workspace_selection_lock = asyncio.Lock()
         self.asset_inventories: dict[str, Inventory] = {}
         self.prediction_task: asyncio.Task[None] | None = None
@@ -1078,8 +1089,16 @@ class StudioService:
 
     async def scan(self, *, resolve_drafts: bool = True) -> list[CatalogItem]:
         """Discover authoritative YAML without blocking the event loop."""
+        async with self.library_lock:
+            return await self._scan(resolve_drafts=resolve_drafts)
+
+    async def _scan(self, *, resolve_drafts: bool = True) -> list[CatalogItem]:
         workspace = self.settings.workspace
         before = self.store.items(workspace)
+        retired = await asyncio.to_thread(retired_pack_sources, workspace)
+        for item in before:
+            if item.kind != "scenario" and item.path in retired:
+                self.store.remove_pack(item.id)
 
         def discover() -> list[CatalogItem]:
             items = [
@@ -2149,6 +2168,79 @@ def create_app(
             raise HTTPException(status_code=404, detail="Overlay file not found")
         return FileResponse(root / relative_path, filename=Path(relative_path).name)
 
+    @app.get("/v1/packs/{item_id}/review")
+    async def pack_review(item_id: str, studio: StudioService = Depends(authorized)) -> PackReview:
+        item = catalog_source(item_id, studio)
+        if item.kind == "scenario":
+            raise HTTPException(status_code=400, detail="Choose a pack")
+        async with studio.asset_lock:
+            return await asyncio.to_thread(review_pack, item.path, item.workspace)
+
+    @app.get("/v1/packs/{item_id}/deletion")
+    async def pack_deletion_review(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> PackDeleteReview:
+        item = catalog_source(item_id, studio)
+        if item.kind == "scenario":
+            raise HTTPException(status_code=400, detail="Choose a pack")
+        try:
+            review = await asyncio.to_thread(
+                review_pack_deletion,
+                item.path,
+                item.workspace,
+                [entry.path for entry in studio.store.items(item.workspace, "scenario")],
+                [entry.path for entry in studio.store.items(item.workspace, "organization_pack")],
+            )
+        except (OSError, ValueError, ConfigurationError, PackError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if studio.store.active_conversations():
+            review.removable = False
+            review.problems.append("Wait for active authoring turns before deleting packs")
+        return review
+
+    @app.post("/v1/packs/{item_id}/delete")
+    async def delete_pack(
+        item_id: str, request: PackDeleteRequest, studio: StudioService = Depends(authorized)
+    ) -> PackDeleted:
+        async with (
+            studio.workspace_selection_lock,
+            studio.asset_lock,
+            studio.import_lock,
+            studio.library_lock,
+        ):
+            item = catalog_source(item_id, studio)
+            if item.kind == "scenario":
+                raise HTTPException(status_code=400, detail="Choose a pack")
+            if studio.store.active_conversations():
+                raise HTTPException(status_code=409, detail="Wait for active authoring turns")
+            try:
+                # No await between the final consumer check, retirement and index removal.
+                # Turn submission shares asset_lock; scans share library_lock.
+                result = remove_workspace_pack(
+                    item.path,
+                    item.workspace,
+                    request.revision,
+                    [entry.path for entry in studio.store.items(item.workspace, "scenario")],
+                    [
+                        entry.path
+                        for entry in studio.store.items(item.workspace, "organization_pack")
+                    ],
+                )
+                try:
+                    studio.store.remove_pack(item.id)
+                except (sqlite3.Error, ValueError):
+                    result.recovery_path.rename(item.path.parent)
+                    raise
+                studio.asset_inventories.pop(item.id, None)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (OSError, ValueError, ConfigurationError, PackError, sqlite3.Error) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        await studio.scan()
+        await studio.emit(str(item.workspace), "library.refreshed", {"deleted_pack": item.id})
+        await studio.emit(item.id, "pack.deleted", json.loads(result.model_dump_json()))
+        return result
+
     @app.get("/v1/packs/{item_id}/export")
     async def export_pack(
         item_id: str, studio: StudioService = Depends(authorized)
@@ -3131,6 +3223,12 @@ def create_app(
     @app.post("/v1/conversations/{conversation_id}/turns")
     async def start_turn(
         conversation_id: str, request: TurnRequest, studio: StudioService = Depends(authorized)
+    ) -> TurnSubmission:
+        async with studio.asset_lock:
+            return await submit_turn(conversation_id, request, studio)
+
+    async def submit_turn(
+        conversation_id: str, request: TurnRequest, studio: StudioService
     ) -> TurnSubmission:
         conversation = studio.store.conversation(conversation_id)
         if conversation is None or conversation.workspace != studio.settings.workspace:

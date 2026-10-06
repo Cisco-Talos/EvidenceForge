@@ -430,6 +430,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/packs/{item_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pack Review */
+        get: operations["pack_review_v1_packs__item_id__review_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/packs/{item_id}/deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Pack Deletion Review */
+        get: operations["pack_deletion_review_v1_packs__item_id__deletion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/packs/{item_id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Pack */
+        post: operations["delete_pack_v1_packs__item_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/packs/{item_id}/export": {
         parameters: {
             query?: never;
@@ -2549,6 +2600,45 @@ export interface components {
             conversation: components["schemas"]["Conversation"];
         };
         /**
+         * PackDeleteRequest
+         * @description A confirmation tied to all reviewed files and consumers.
+         */
+        PackDeleteRequest: {
+            /** Revision */
+            revision: string;
+        };
+        /**
+         * PackDeleteReview
+         * @description Exact version and live consumers reviewed before a removal.
+         */
+        PackDeleteReview: {
+            /** Reference */
+            reference: string;
+            /** Revision */
+            revision: string;
+            /** Files */
+            files: number;
+            /** Bytes */
+            bytes: number;
+            /** Consumers */
+            consumers?: string[];
+            /** Problems */
+            problems?: string[];
+            /** Removable */
+            removable: boolean;
+        };
+        /**
+         * PackDeleted
+         * @description Recovery location outside the active pack repository.
+         */
+        PackDeleted: {
+            /**
+             * Recovery Path
+             * Format: path
+             */
+            recovery_path: string;
+        };
+        /**
          * PackImportRequest
          * @description One received release archive; destination is the active workspace.
          */
@@ -2576,6 +2666,39 @@ export interface components {
             publisher_display_name?: string | null;
             /** Scope */
             scope?: ("user" | "project") | null;
+        };
+        /**
+         * PackReview
+         * @description Current canonical validation, identity, exports and locked dependencies.
+         */
+        PackReview: {
+            /** Valid */
+            valid: boolean;
+            /**
+             * Reference
+             * @default
+             */
+            reference: string;
+            /**
+             * Digest
+             * @default
+             */
+            digest: string;
+            /** Exports */
+            exports?: {
+                [key: string]: string[];
+            };
+            /** Dependencies */
+            dependencies?: string[];
+            /** Model Contributions */
+            model_contributions?: {
+                [key: string]: string[];
+            };
+            /**
+             * Error
+             * @default
+             */
+            error: string;
         };
         /**
          * PredictionRecord
@@ -4526,6 +4649,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pack_review_v1_packs__item_id__review_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pack_deletion_review_v1_packs__item_id__deletion_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackDeleteReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_pack_v1_packs__item_id__delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackDeleted"];
                 };
             };
             /** @description Validation Error */

@@ -1981,3 +1981,38 @@ test("workspace result icons preserve generation success and scoring failure whe
     expect(row.querySelector(".summary-inputs")).toHaveTextContent("Inputs changed");
   } finally { snapshot.jobs = originalJobs; snapshot.dependencies = originalDependencies; snapshot.items = originalItems; }
 });
+
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`${kind} exposes workspace version deletion while protecting bundled versions`, async () => {
+    const originalItems = snapshot.items;
+    const api = useStudio().api!;
+    const request = vi.mocked(api.request);
+    const implementation = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "deletable", kind, name: "office", version: "1.0.0", pack_source: "workspace" as const };
+    snapshot.items = [pack, { ...pack, id: "bundled", version: "2.0.0", pack_source: "bundled" }];
+    request.mockImplementation(async (path, ...args) => {
+      if (path === "/v1/packs/deletable/deletion") return { reference: "training:industry:office@1.0.0", revision: "review", files: 9, removable: false, consumers: ["Scenario: practice"], problems: [] };
+      return implementation(path, ...args);
+    });
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Options for office 2.0.0" }));
+      expect(screen.queryByRole("menuitem", { name: "Delete version…" })).not.toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete version…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Delete office 1.0.0?" });
+      expect(await within(dialog).findByText("Scenario: practice")).toBeVisible();
+      expect(within(dialog).getByRole("button", { name: "Delete version" })).toBeDisabled();
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Open office 1.0.0" }));
+      expect(screen.getByRole("button", { name: "Validation & release" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "office actions" }));
+      expect(screen.getByRole("menuitem", { name: "Delete version…" })).toBeVisible();
+    } finally { snapshot.items = originalItems; request.mockImplementation(implementation); }
+  });
+}

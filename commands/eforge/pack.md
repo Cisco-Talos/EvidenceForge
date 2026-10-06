@@ -174,7 +174,10 @@ order to choose a winner.
   package, project, or explicitly referenced path repositories.
 - Never treat the absence of packs as an error or warning for Scenario 1.0 or monolithic Scenario
   2.0.
-- Never delete a pack on the user's behalf; no public pack-delete workflow exists.
+- The CLI has no pack-delete command. Do not remove pack directories on the user's behalf.
+  Studio's explicit Delete version review can remove one workspace version after checking consumers,
+  with retained recovery files. Pack deletion must go through that reviewed workflow when requested;
+  bundled packs remain protected.
 
 ## Report
 

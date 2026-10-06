@@ -511,6 +511,21 @@ class StudioStore:
                 "UPDATE items SET payload=? WHERE id=?", (item.model_dump_json(), item.id)
             )
 
+    def remove_pack(self, item_id: str) -> None:
+        """Remove a retired pack's local associations, preserving Codex and run files."""
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT rowid, kind FROM items WHERE id=?", (item_id,)
+            ).fetchone()
+            if row is None or row["kind"] not in {"industry_pack", "organization_pack"}:
+                raise ValueError("Choose an indexed pack")
+            self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))
+            self._db.execute("DELETE FROM conversations WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM validations WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM dependency_health WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM resource_predictions WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM items WHERE id=?", (item_id,))
+
     def projects(self, workspace: Path) -> list[Project]:
         """List projects in a workspace without scanning source directories."""
         with self._lock:

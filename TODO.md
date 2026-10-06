@@ -517,8 +517,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Complete the seven Studio workflow stages after accepted core parity. Find/resume has
   project-aware lists, saved views, contextual search, and a command menu. Environment inspection
   and exact pack choices are available; optional portable project/scenario overlay contexts are
-  implemented. Guided editing, complete effective-value origins, isolated authoring revisions,
-  deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
+  implemented. Pack creation/editing/import/export and reviewed exact-version deletion are part
+  of Stage 2; see the [pack lifecycle review](docs/worklog/2026-10-06-studio-pack-lifecycle.md).
+  Broader guided editing, complete effective-value origins, isolated scenario **and pack** authoring
+  revisions, deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
   [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
   All CLI/skill changes must preserve traditional command-line and native-harness workflows.
   New configuration scopes must be optional, file-based, independently usable without Studio,

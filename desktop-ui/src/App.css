@@ -1169,3 +1169,11 @@ select { min-width: 185px; }
 .state-maintenance details { margin-top: 20px; overflow-wrap: anywhere; }
 .state-maintenance input { width: 100%; margin: 10px 0; }
 .upgrade-warning { padding: 14px 20px; border: 1px solid #bba260; border-radius: 8px; background: #302b20; color: #f1d897; overflow-wrap: anywhere; }
+
+.pack-workflow { display: grid; gap: 10px; }
+.pack-workflow p, .pack-workflow h4, .pack-workflow ul { margin: 0; }
+.pack-workflow code, .pack-delete-dialog { overflow-wrap: anywhere; }
+.pack-workflow .state-success, .pack-workflow .error-text { display: flex; gap: 8px; align-items: flex-start; }
+.pack-workflow svg { flex-shrink: 0; }
+.pack-delete-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 75; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.pack-delete-dialog ul { max-height: 220px; overflow: auto; padding-left: 20px; }

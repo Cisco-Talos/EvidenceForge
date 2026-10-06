@@ -119,6 +119,33 @@ versions and publisher namespaces; conflicting releases cannot overwrite existin
 pack's menu has **Export pack…**, producing an `.efpack` with its locked closure and portable
 references. Native mode uses the Save dialog; browser preview uses a download.
 
+### Author, revise, share and delete packs
+
+Use **Packs → New** for either industry or organization content. The named draft opens a
+skill-guided conversation. **Assets** provides structured editing of supported categories;
+reviewed saves create a new exact version and keep earlier versions and scenario selections.
+Use **Clone** to tailor a different identity. Broader edits remain available through conversations.
+
+Open **Validation & release** to check current catalogs and locked dependencies and inspect
+identity, digest, exports and organization model contributions. **Fix in chat** prepares a repair
+request for your review. **Export release…** creates an `.efpack` for import elsewhere and
+revalidates the closure. This shares a file; it does not upload to a remote registry. Validate a
+scenario consuming the pack to establish that its complete environment is usable.
+
+Workspace versions offer **Delete version…** in the library and workspace menus. The review
+lists scenarios and organization packs using that exact copy and version. Update their references
+first. Unreadable consumers and active authoring also block removal; bundled packs cannot be
+removed. Confirmation rechecks files and consumers, so a stale review requires refresh.
+
+Deletion removes the active version and its local conversation associations while preserving
+Codex histories, other versions, exports and captured runs. A recovery copy remains at the path
+reported by Studio under `.eforge/deleted-packs/<operation>/pack`. The adjacent version-1
+`deletion.json` records its original workspace-relative `pack.yaml` path. To recover content,
+quit Studio and move the retained `pack` directory back to that exact version directory only if
+it is absent; never overwrite another version. Reopen Studio to index it again. Local conversation
+associations are not restored. Recovery copies are not automatically purged; this slice adds no
+GUI restore/purge controls. Interrupted file retirement/index cleanup reconciles on the next scan.
+
 ### Other current workflows
 
 The scenario and pack libraries share projects. Scenario rows show their project, operation
