@@ -384,11 +384,49 @@ class StudioStore:
         content = "\n".join(sources.values())
         entries = json.dumps([entry.model_dump() for entry in yaml_entries(sources)])
         with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT rowid, payload, content, search_entries FROM items WHERE workspace=? AND kind=? AND path=?",
-                (workspace_key, kind, path_key),
-            ).fetchone()
-            old = CatalogItem.model_validate_json(row["payload"]) if row else None
+            if kind != "scenario" and source.pack_source == "bundled":
+                rows = self._db.execute(
+                    "SELECT rowid, payload, content, search_entries FROM items "
+                    "WHERE workspace=? AND kind=? "
+                    "AND json_extract(payload, '$.pack_source')='bundled' "
+                    "AND json_extract(payload, '$.publisher')=? "
+                    "AND json_extract(payload, '$.name')=? "
+                    "AND json_extract(payload, '$.version')=? ORDER BY rowid",
+                    (workspace_key, kind, source.publisher, source.name, source.version),
+                ).fetchall()
+                # Runtime directories change between builds. Bundled identity does not.
+                # Consolidate preview-era aliases in the same transaction as relocation.
+                row = rows[0] if rows else None
+                old = CatalogItem.model_validate_json(row["payload"]) if row else None
+                if old:
+                    for alias in rows[1:]:
+                        duplicate = CatalogItem.model_validate_json(alias["payload"])
+                        old.project_id = old.project_id or duplicate.project_id
+                        old.folder = old.folder or duplicate.folder
+                        old.hidden = old.hidden or duplicate.hidden
+                        for chat in self._db.execute(
+                            "SELECT payload FROM conversations WHERE item_id=?", (duplicate.id,)
+                        ).fetchall():
+                            conversation = Conversation.model_validate_json(chat["payload"])
+                            conversation.item_id = old.id
+                            self._db.execute(
+                                "UPDATE conversations SET item_id=?, payload=? WHERE id=?",
+                                (old.id, conversation.model_dump_json(), conversation.id),
+                            )
+                        self._db.execute("DELETE FROM items_fts WHERE rowid=?", (alias["rowid"],))
+                        # These are derived caches; the current source owns fresh checks.
+                        for table in ("validations", "dependency_health", "resource_predictions"):
+                            self._db.execute(
+                                f"DELETE FROM {table} WHERE item_id=?", (duplicate.id,)
+                            )
+                        self._db.execute("DELETE FROM items WHERE id=?", (duplicate.id,))
+            else:
+                row = self._db.execute(
+                    "SELECT rowid, payload, content, search_entries FROM items "
+                    "WHERE workspace=? AND kind=? AND path=?",
+                    (workspace_key, kind, path_key),
+                ).fetchone()
+                old = CatalogItem.model_validate_json(row["payload"]) if row else None
             item = CatalogItem(
                 id=old.id if old else uuid4().hex,
                 workspace=workspace,
@@ -414,7 +452,7 @@ class StudioStore:
             )
             if (
                 row
-                and item == old
+                and item == CatalogItem.model_validate_json(row["payload"])
                 and content == row["content"]
                 and entries == row["search_entries"]
             ):
@@ -422,7 +460,8 @@ class StudioStore:
             self._db.execute(
                 "INSERT INTO items(id, workspace, kind, path, payload, content, search_entries) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "payload=excluded.payload, content=excluded.content, search_entries=excluded.search_entries",
+                "path=excluded.path, payload=excluded.payload, content=excluded.content, "
+                "search_entries=excluded.search_entries",
                 (
                     item.id,
                     workspace_key,

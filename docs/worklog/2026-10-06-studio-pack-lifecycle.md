@@ -61,3 +61,33 @@ macOS `.app` build passed. Vite retains the existing large-chunk advisory. Full 
 formatting and whitespace checks passed. The final relevant backend/skill suite passed all
 239 tests, including the unreadable-organization regression. No full-engine, coverage, extended
 release or soak gate is claimed for this Studio slice.
+
+## Field-test correction: duplicate bundled packs
+
+The user reported repeated industry and organization rows after loading the build. Read-only
+inspection confirmed 24 bundled rows: the same six exact releases indexed from the source
+checkout and three retained standalone runtime directories. Index identity used absolute paths,
+so each runtime replacement added another set. Project membership did not cause the duplicates.
+
+Bundled catalog identity now uses workspace, pack type, publisher, name and exact version.
+Discovery updates the authoritative source path while retaining the oldest stable item ID.
+Existing aliases consolidate transactionally; their Codex conversation associations move to
+that ID, retaining thread IDs, active status and timestamps. The oldest item's project/folder
+assignment wins a conflict, or the earliest assigned alias fills an empty value. A hidden alias
+keeps the consolidated item hidden. Alias search rows and disposable check caches are retired.
+Workspace packs retain path identity; publisher, version, kind and workspace remain distinct.
+No source files, runtime folders, scenarios or captured jobs are removed.
+
+Six focused regressions cover both pack kinds, repeated relocations, existing alias repair,
+organization/conversation preservation, scope/version/namespace separation and transaction
+rollback. A consistent SQLite backup of the user's index was repaired in a disposable directory:
+26 pack rows became eight (six bundled and two workspace), preserving scenario/workspace IDs,
+projects and conversations. The real index was not manually changed.
+
+The standalone Apple Silicon app rebuilt with the corrected backend using `--skip-dmg`.
+All 124 relevant identity/lifecycle/service/search/state/library regressions passed, along with
+full Ruff lint/format and whitespace checks. Packaged runtime checksum, isolated CLI, bundled
+skills/references and scenario validation passed. The delivered build is
+`build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app`.
+The user's live session was left running. Reopening this build will reconcile existing duplicates
+on the normal library scan under the fixed runtime.
