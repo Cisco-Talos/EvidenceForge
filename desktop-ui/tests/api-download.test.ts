@@ -8,6 +8,18 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
 
+test("window identity survives API reconnects and is attached to lifecycle requests", async () => {
+  const fetch = vi.fn(async (_url: string, _options: RequestInit) => Response.json({ status: "ok" }));
+  vi.stubGlobal("fetch", fetch);
+  await new StudioApi({ url: "http://127.0.0.1:4400", token: "secret" }).request("/v1/session/heartbeat", "POST");
+  await new StudioApi({ url: "http://127.0.0.1:4400", token: "secret" }).request("/v1/session/close", "POST");
+  const first = fetch.mock.calls[0][1] as RequestInit;
+  const second = fetch.mock.calls[1][1] as RequestInit;
+  const id = (first.headers as Record<string, string>)["X-EForge-Session"];
+  expect(id).toMatch(/^[\da-f-]{36}$/);
+  expect((second.headers as Record<string, string>)["X-EForge-Session"]).toBe(id);
+});
+
 test("native file save uses the system command and remembers the workspace folder", async () => {
   const unlisten = vi.fn();
   const onProgress = vi.fn();

@@ -13,6 +13,7 @@ import psutil
 
 from evidenceforge.studio.paths import StudioPaths
 from evidenceforge.studio.runtime import command_environment, runtime_root
+from evidenceforge.studio.state_io import atomic_write, open_regular
 
 
 def _macos_environment() -> dict[str, str]:
@@ -54,15 +55,7 @@ def _start_macos(paths: StudioPaths) -> None:
         "StandardErrorPath": log,
     }
     agent = paths.state / "service-agent.plist"
-    temporary = agent.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        with os.fdopen(
-            os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "wb"
-        ) as out:
-            plistlib.dump(configuration, out)
-        os.replace(temporary, agent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write(agent, plistlib.dumps(configuration))
     existing = subprocess.run(
         ["/bin/launchctl", "print", target],
         capture_output=True,
@@ -94,10 +87,18 @@ def _start_macos(paths: StudioPaths) -> None:
 
 def start_background_service(paths: StudioPaths) -> None:
     """Start a detached helper, using a transient user launch agent on macOS."""
+    from evidenceforge.studio.ownership import validate_private_paths
+
+    validate_private_paths(paths)
     if sys.platform == "darwin":
         _start_macos(paths)
         return
-    with (paths.logs / "service.log").open("ab") as log:
+    from evidenceforge.studio.ownership import secure_directory
+
+    secure_directory(paths.logs, repair=True)
+    with os.fdopen(
+        open_regular(paths.logs / "service.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND), "ab"
+    ) as log:
         subprocess.Popen(
             [sys.executable, "-m", "evidenceforge.studio.bootstrap", "--serve"],
             stdin=subprocess.DEVNULL,

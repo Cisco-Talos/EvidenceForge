@@ -493,6 +493,20 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Medium-Term
 
+- [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS, Linux and
+  Windows when a suitable test host is available. User explicitly deferred account creation on
+  October 6. UID/SID simulations and same-account native helper/locking tests are implemented;
+  they do not substitute for this cross-account acceptance. See the
+  [isolation worklog](docs/worklog/2026-10-06-studio-user-isolation.md).
+
+- [ ] **P1 — public Studio release gate:** Version Studio-owned SQL/JSON settings and filesystem
+  layouts; require verified backups, interrupted-upgrade recovery, pre-use restoration and
+  native crash/fault gates on Linux/macOS/Windows. Engine-owned formats stay outside this effort.
+  Implementation and macOS evidence are tracked in the
+  [upgrade worklog](docs/worklog/2026-10-05-studio-state-upgrades.md); see
+  [contracts and test traceability](docs/studio-state-upgrades.md). Require the Linux/macOS/Windows
+  native CI matrix and existing release checks before closing this release gate.
+
 - [ ] Automate clean-room scenario-agent acceptance after the 2.0 release, measuring first-draft
   structural validity, passes to zero errors, required-reference loading, warning churn, and
   repair regressions across representative scenario families. Use manual scenario-authoring

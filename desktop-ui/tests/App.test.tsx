@@ -16,6 +16,7 @@ import { scenarioStates } from "../src/ScenarioStates";
 import { useStudio } from "../src/useStudio";
 
 const workspace = "/tmp/EvidenceForge";
+const upgradeNotification = vi.hoisted(() => ({ message: null as string | null, clear: vi.fn() }));
 const snapshot: StudioSnapshot = {
   seq: 12,
   settings: {
@@ -77,7 +78,10 @@ vi.mock("../src/useStudio", () => ({
     }) };
     const reload = vi.fn(async () => undefined);
     const subscribeEvents = () => () => undefined;
-    return () => ({ api, snapshot, error: null, liveState: "connected", validations: {}, subscribeEvents, reload });
+    return () => ({ api, snapshot, error: null, liveState: "connected", validations: {}, subscribeEvents, reload,
+      upgradeNotice: upgradeNotification.message,
+      clearUpgradeNotice: () => { upgradeNotification.message = null; upgradeNotification.clear(); },
+    });
   })(),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(async () => undefined) }));
@@ -97,7 +101,7 @@ vi.mock("@tauri-apps/api/window", () => {
   return { getCurrentWindow: () => current };
 });
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); upgradeNotification.message = null; vi.useRealTimers(); });
 
 async function expandLibraryGroups(selector = ".scenario-group") {
   for (const group of document.querySelectorAll<HTMLDetailsElement>(selector)) {
@@ -111,6 +115,19 @@ async function renderExpandedApp() {
   await expandLibraryGroups();
   return view;
 }
+
+test("upgrade completion uses the existing five-second notification and is consumed", async () => {
+  vi.useFakeTimers();
+  upgradeNotification.message = "Studio UI state upgraded successfully. Recovery backup: /private/recovery";
+  const view = render(<App />);
+  expect(screen.getByText(/Studio UI state upgraded successfully/).closest(".toast-info")).not.toBeNull();
+  expect(upgradeNotification.clear).toHaveBeenCalledOnce();
+  expect(view.container.querySelector("main > .upgrade-warning")).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(screen.queryByText(/Studio UI state upgraded successfully/)).toBeNull();
+  view.rerender(<App />);
+  expect(screen.queryByText(/Studio UI state upgraded successfully/)).toBeNull();
+});
 
 
 test("path controls copy the complete path even when the label is shortened", async () => {

@@ -1,3 +1,4 @@
+import { StateMaintenance } from "./StateMaintenance";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2, Trash2, X } from "lucide-react";
 import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
@@ -76,6 +77,11 @@ function App() {
   const [sourceViewer, setSourceViewer] = useState<{ itemId: string; files: BundleFiles } | null>(null);
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const { notice, showError: setNotice, showNotice, dismiss: dismissNotice } = useNotice();
+  useEffect(() => {
+    if (!snapshot || !studio.upgradeNotice) return;
+    showNotice(studio.upgradeNotice);
+    studio.clearUpgradeNotice();
+  }, [snapshot, studio.upgradeNotice, studio.clearUpgradeNotice, showNotice]);
   const [busy, setBusy] = useState(false);
   const [closeFailed, setCloseFailed] = useState(false);
   const [closeProblem, setCloseProblem] = useState<CloseProblem | null>(null);
@@ -635,7 +641,12 @@ function App() {
   }, [draftConversationId, draftConversation, snapshot?.items]);
 
   const submitClose = useCallback(async (options?: { confirm_delete?: boolean; generation_exceptions?: Record<string, string> }) => {
-    if (!api || !snapshot) return;
+    if (!api) return;
+    if (!snapshot) {
+      await api.request("/v1/session/detach", "POST").catch(() => undefined);
+      await invoke("studio_exit");
+      return;
+    }
     try {
       const result = await api.request<{ status: string }>("/v1/session/close", "POST", options, 3000);
       if (result.status === "waiting") setCloseProblem({ type: "waiting", jobIds: [] });
@@ -660,7 +671,7 @@ function App() {
   closeHandler.current = submitClose;
 
   useEffect(() => {
-    if (!api || !snapshot || !window.__TAURI_INTERNALS__) return;
+    if (!api || !window.__TAURI_INTERNALS__) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async (event) => {
@@ -697,6 +708,7 @@ function App() {
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
 
+  if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
   if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p><button onClick={() => window.location.reload()}>Retry</button></div>;
 
   const showLibrary = ["scenarios", "packs"].includes(section);

@@ -172,6 +172,30 @@ jobs:
           path: dist/macos/*
           if-no-files-found: error
 
+  studio-state-recovery:
+    name: Studio state recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Preserve frozen fixture bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra studio --extra dev
+      - name: Preservation and fault tests
+        run: uv run pytest --no-cov tests/integration/test_studio_state_upgrade.py tests/integration/test_studio_state_edges.py tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_migrations.py tests/unit/test_studio_state_durability.py tests/unit/test_studio_state_contracts.py
+      - name: Native helper lifecycle
+        run: uv run pytest --no-cov tests/unit/test_studio_sessions.py tests/integration/test_studio_helper.py tests/unit/test_studio_runtime.py tests/unit/test_studio_ownership.py tests/integration/test_studio_ownership.py
+      - name: Extended native crash matrix
+        run: uv run pytest -m slow --no-cov tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_edges.py tests/integration/test_studio_state_migrations.py
+
   windows-checkpoint-durability:
     name: Windows checkpoint durability
     runs-on: windows-latest
@@ -211,7 +235,7 @@ jobs:
   ci-required:
     name: Required CI
     runs-on: ubuntu-latest
-    needs: [lint, tests, studio, windows-checkpoint-durability]
+    needs: [lint, tests, studio, studio-state-recovery, windows-checkpoint-durability]
     if: always()
 
     steps:
@@ -227,6 +251,10 @@ jobs:
             exit 1
           fi
 
+          if [ "${{ needs.studio-state-recovery.result }}" != "success" ]; then
+            echo "Studio state recovery gates failed"
+            exit 1
+          fi
           if [ "${{ needs.studio.result }}" != "success" ]; then
             echo "Studio finished with result: ${{ needs.studio.result }}"
             exit 1

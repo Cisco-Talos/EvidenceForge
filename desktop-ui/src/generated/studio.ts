@@ -4,6 +4,91 @@
  */
 
 export interface paths {
+    "/v1/session/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat */
+        post: operations["heartbeat_v1_session_heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/session/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Detach Window */
+        post: operations["detach_window_v1_session_detach_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/state/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** State Status */
+        get: operations["state_status_v1_state_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/state/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** State Upgrade */
+        post: operations["state_upgrade_v1_state_upgrade_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/state/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** State Restore */
+        post: operations["state_restore_v1_state_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -2398,6 +2483,14 @@ export interface components {
             expanded_groups?: string[];
         };
         /**
+         * OperationRequest
+         * @description Bind a maintenance request to the exact prepared operation.
+         */
+        OperationRequest: {
+            /** Operation Id */
+            operation_id: string;
+        };
+        /**
          * OverlayFile
          * @description One regular overlay file beneath the selected workspace.
          */
@@ -3409,6 +3502,69 @@ export interface components {
              */
             delivery: "confirmed" | "uncertain";
         };
+        /**
+         * UpgradeStatus
+         * @description Public maintenance state, available independently of normal service stores.
+         */
+        UpgradeStatus: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "pending" | "running" | "failed" | "restored" | "blocked";
+            /**
+             * Scope
+             * @default private
+             * @enum {string}
+             */
+            scope: "private" | "workspace";
+            /** Operation Id */
+            operation_id: string;
+            /**
+             * Phase
+             * @default Inspecting saved state
+             */
+            phase: string;
+            /**
+             * Completed Steps
+             * @default 0
+             */
+            completed_steps: number;
+            /**
+             * Total Steps
+             * @default 5
+             */
+            total_steps: number;
+            /**
+             * Incompatible
+             * @default false
+             */
+            incompatible: boolean;
+            /** Warning */
+            warning?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Backup Path */
+            backup_path?: string | null;
+            /**
+             * Can Retry
+             * @default false
+             */
+            can_retry: boolean;
+            /**
+             * Can Restore
+             * @default false
+             */
+            can_restore: boolean;
+            /** Versions */
+            versions?: {
+                [key: string]: number;
+            };
+            /** Target Versions */
+            target_versions?: {
+                [key: string]: number;
+            };
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -3483,6 +3639,175 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    heartbeat_v1_session_heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-session"?: string;
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    detach_window_v1_session_detach_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-session"?: string;
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_status_v1_state_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_upgrade_v1_state_upgrade_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    state_restore_v1_state_restore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_v1_health_get: {
         parameters: {
             query?: never;
@@ -6612,6 +6937,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                "x-eforge-session"?: string;
                 "x-eforge-token"?: string | null;
             };
             path?: never;
@@ -6682,6 +7008,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                "x-eforge-session"?: string;
                 "x-eforge-token"?: string | null;
             };
             path?: never;
@@ -6715,6 +7042,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                "x-eforge-session"?: string;
                 "x-eforge-token"?: string | null;
             };
             path?: never;

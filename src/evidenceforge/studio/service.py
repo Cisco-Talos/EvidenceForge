@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -31,9 +31,10 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
 from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
@@ -116,7 +117,15 @@ from evidenceforge.studio.jobs import (
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, ensure_workspace, studio_paths
 from evidenceforge.studio.runtime import runtime_id, runtime_root
+from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
+from evidenceforge.studio.state_io import StudioStateError
+from evidenceforge.studio.state_upgrade import (
+    OperationRequest,
+    StateCoordinator,
+    UpgradeStatus,
+    check_workers,
+)
 from evidenceforge.studio.store import (
     CatalogItem,
     Conversation,
@@ -681,14 +690,58 @@ class CodexReconnectRequest(BaseModel):
 class StudioService:
     """Own application state, job reconciliation, and connected clients."""
 
-    def __init__(self, paths: StudioPaths, token: str) -> None:
+    def __init__(
+        self,
+        paths: StudioPaths,
+        token: str,
+        coordinator: StateCoordinator | None = None,
+        new_install: bool = False,
+    ) -> None:
+        if coordinator is None:
+            new_install = not (paths.database_file.exists() or paths.settings_file.exists())
+            coordinator = StateCoordinator(paths)
+            coordinator.initialize_if_fresh()
+            if (
+                coordinator.status.state == "pending"
+                and not coordinator.status.incompatible
+                and not coordinator.status.error
+            ):
+                coordinator.apply(coordinator.status.operation_id)
+        if coordinator.status.state != "ready":
+            raise StudioStateError("Studio state preparation is incomplete")
+        coordinator.owner.acquire()
+        self.coordinator = coordinator
+        self.workspace_coordinator: StateCoordinator | None = None
+        self.pending_workspace: Path | None = None
+        self.preparing_workspace = False
         self.paths = paths
         self.token = token
         self.settings_store = SettingsStore(paths)
         self.settings = self.settings_store.load()
-        self.settings.workspace = ensure_workspace(self.settings.workspace)
-        self.settings_store.save(self.settings)
+        initializing_default = new_install or (
+            coordinator.journal.initial_layout is not None
+            and not coordinator.journal.workspace_initialized
+        )
+        created_workspace = initializing_default and not self.settings.workspace.exists()
+        if initializing_default:
+            self.settings.workspace = ensure_workspace(self.settings.workspace)
+        self.workspace_coordinator = StateCoordinator(paths, self.settings.workspace)
+        self.workspace_coordinator.initialize_workspace_if_fresh(created_workspace)
+        self.workspace_coordinator.prepare()
+        if (
+            self.workspace_coordinator.status.state == "pending"
+            and not self.workspace_coordinator.status.error
+            and not self.workspace_coordinator.status.incompatible
+        ):
+            self.workspace_coordinator.apply(self.workspace_coordinator.status.operation_id)
+        if self.workspace_coordinator.status.state == "ready":
+            self.workspace_coordinator.owner.acquire()
+        if initializing_default:
+            coordinator.journal.workspace_initialized = True
+            coordinator.persist()
         self.store = StudioStore(paths.database_file)
+        if self.workspace_coordinator.status.state == "ready":
+            self.store.record_workspace_migrations(self.workspace_coordinator.layout)
         self.jobs = StudioJobStore(self.store, paths.state)
         saved_control = self.store.load_control()
         self.intent = (
@@ -714,6 +767,7 @@ class StudioService:
         self.imports: dict[str, PreparedImport] = {}
         self.import_lock = asyncio.Lock()
         self.asset_lock = asyncio.Lock()
+        self.workspace_selection_lock = asyncio.Lock()
         self.asset_inventories: dict[str, Inventory] = {}
         self.prediction_task: asyncio.Task[None] | None = None
         self.prediction_lock = asyncio.Lock()
@@ -722,10 +776,15 @@ class StudioService:
 
     async def start(self) -> None:
         """Index the selected workspace and start durable job reconciliation."""
+        if self.workspace_coordinator and self.workspace_coordinator.status.state != "ready":
+            return
+        if self.job_task is not None:
+            return
         await self._clear_abandoned_turns(
             "Studio restarted before this Codex turn finished. Review its history before continuing."
         )
-        await self.scan()
+        if self.workspace_coordinator and self.workspace_coordinator.status.state == "ready":
+            await self.scan(resolve_drafts=False)
         self.prediction_task = asyncio.create_task(self._prediction_loop())
         self.job_task = asyncio.create_task(self._job_loop())
         self.codex_task = asyncio.create_task(self._monitor_codex())
@@ -754,6 +813,9 @@ class StudioService:
         for plan in self.imports.values():
             plan.close()
         self.store.close()
+        if self.workspace_coordinator:
+            self.workspace_coordinator.close()
+        self.coordinator.close()
 
     async def _codex_event(self, method: str, params: dict[str, Any]) -> None:
         """Persist agent activity and keep conversation state current."""
@@ -962,36 +1024,44 @@ class StudioService:
 
     async def _job_loop(self) -> None:
         while True:
-            if self.replacement_ready:
+            if (
+                self.preparing_workspace
+                or self.coordinator.status.state != "ready"
+                or self.replacement_ready
+                or (
+                    self.workspace_coordinator
+                    and self.workspace_coordinator.status.state != "ready"
+                )
+            ):
                 await asyncio.sleep(0.75)
                 continue
             intent = self.intent
             async with self.job_cycle_lock:
                 changed = await asyncio.to_thread(reconcile_jobs, self.jobs, intent)
-            removed = await asyncio.to_thread(retain_latest_evaluations, self.jobs)
-            for job_id in removed:
-                await self.emit(job_id, "job.deleted", {"id": job_id})
-            if intent.action == "resume" and self.intent.id == intent.id:
-                self.set_intent(
-                    ControlIntent(action="open", settings=controller_settings(self.settings))
-                )
-            visible = self.store.job_payloads(self.settings.workspace)
-            visible_ids = {payload["id"] for payload in visible}
-            updates = {
-                payload["id"]: payload for payload in changed if payload["id"] in visible_ids
-            }
-            for payload in visible:
-                if "scenario" not in payload:
-                    continue
-                job = GenerationJob.model_validate(payload)
-                signature = progress_signature(job)
-                if self._progress_signatures.get(job.id) != signature:
-                    updates[job.id] = payload
-                    self._progress_signatures[job.id] = signature
-            for payload in updates.values():
-                await self.emit(payload["id"], "job.updated", job_summary(payload))
-            if time.monotonic() - self._last_scan >= 10:
-                await self.scan()
+                removed = await asyncio.to_thread(retain_latest_evaluations, self.jobs)
+                for job_id in removed:
+                    await self.emit(job_id, "job.deleted", {"id": job_id})
+                if intent.action == "resume" and self.intent.id == intent.id:
+                    self.set_intent(
+                        ControlIntent(action="open", settings=controller_settings(self.settings))
+                    )
+                visible = self.store.job_payloads(self.settings.workspace)
+                visible_ids = {payload["id"] for payload in visible}
+                updates = {
+                    payload["id"]: payload for payload in changed if payload["id"] in visible_ids
+                }
+                for payload in visible:
+                    if "scenario" not in payload:
+                        continue
+                    job = GenerationJob.model_validate(payload)
+                    signature = progress_signature(job)
+                    if self._progress_signatures.get(job.id) != signature:
+                        updates[job.id] = payload
+                        self._progress_signatures[job.id] = signature
+                for payload in updates.values():
+                    await self.emit(payload["id"], "job.updated", job_summary(payload))
+                if time.monotonic() - self._last_scan >= 10:
+                    await self.scan()
             await asyncio.sleep(0.75)
 
     async def emit(self, entity_id: str, kind: str, payload: dict[str, Any]) -> StudioEvent:
@@ -1006,7 +1076,7 @@ class StudioService:
         self.store.save_control(intent)
         self.intent = intent
 
-    async def scan(self) -> list[CatalogItem]:
+    async def scan(self, *, resolve_drafts: bool = True) -> list[CatalogItem]:
         """Discover authoritative YAML without blocking the event loop."""
         workspace = self.settings.workspace
         before = self.store.items(workspace)
@@ -1030,7 +1100,8 @@ class StudioService:
         by_source = {(item.kind, item.path.resolve()): item for item in items}
         for conversation in self.store.conversations(workspace):
             if (
-                conversation.item_id
+                not resolve_drafts
+                or conversation.item_id
                 or conversation.draft_path is None
                 or conversation.draft_kind is None
             ):
@@ -1187,21 +1258,184 @@ class StudioService:
         }
 
 
-def create_app(paths: StudioPaths | None = None, token: str | None = None) -> FastAPI:
+def _maintenance_path(path: str) -> bool:
+    return path in {
+        "/v1/health",
+        "/v1/runtime/prepare-replacement",
+        "/v1/session/heartbeat",
+        "/v1/session/detach",
+    } or path.startswith("/v1/state/")
+
+
+class _RequestActivityMiddleware:
+    """Retain helper ownership until full responses finish, including streams."""
+
+    def __init__(self, app: ASGIApp, studio: Callable[[], StudioService | None]) -> None:
+        self.app = app
+        self.studio = studio
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        tracked = (
+            self.studio()
+            if scope["type"] == "http" and not _maintenance_path(scope["path"])
+            else None
+        )
+        if tracked:
+            tracked.active_requests += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if tracked:
+                tracked.active_requests -= 1
+
+
+def create_app(
+    paths: StudioPaths | None = None,
+    token: str | None = None,
+    *,
+    schema_only: bool = False,
+    shutdown: Callable[[], None] | None = None,
+    sessions: WindowSessions | None = None,
+) -> FastAPI:
     """Construct a local-only API with disposable dependency injection for tests."""
     app_paths = paths or studio_paths()
     secret = token or os.environ.get("EFORGE_STUDIO_TOKEN") or ""
     if not secret:
         raise ValueError("A Studio service token is required")
-    service = StudioService(app_paths, secret)
+    new_install = not (app_paths.database_file.exists() or app_paths.settings_file.exists())
+    coordinator = None if schema_only else StateCoordinator(app_paths)
+    service: StudioService | None = None
+    if coordinator:
+        coordinator.initialize_if_fresh()
+        coordinator.prepare()
+        if (
+            coordinator.status.state == "pending"
+            and not coordinator.status.incompatible
+            and not coordinator.status.error
+        ):
+            coordinator.apply(coordinator.status.operation_id)
+        if coordinator.status.state == "ready":
+            try:
+                service = StudioService(app_paths, secret, coordinator, new_install)
+            except (OSError, StudioStateError) as error:
+                coordinator.status.state = "failed"
+                coordinator.status.error = str(error)
+                coordinator.status.can_retry = True
+                coordinator.status.can_restore = False
+    operation_lock = asyncio.Lock()
+    operation_task: asyncio.Task[None] | None = None
+    operation_restore: bool | None = None
+    initializing = False
+    windows = sessions or WindowSessions()
+    shutting_down = False
+
+    def background_pending() -> bool:
+        if not service:
+            return False
+        return bool(service.store.active_conversations()) or any(
+            job.get("status") in {"running", "suspending"}
+            or job.get("status") == "queued"
+            and not (
+                service.intent.action == "continue"
+                and (
+                    "scenario" in job
+                    and not service.intent.settings.continue_queued_generations
+                    or "scenario" not in job
+                    and service.intent.settings.continue_evaluations != "continue"
+                )
+            )
+            for job in service.store.job_payloads()
+        )
+
+    async def check_idle_shutdown() -> bool:
+        """Fence new activity before asking this helper's own server to exit."""
+        nonlocal shutting_down
+        if shutting_down:
+            return True
+        if windows.has_other_windows(""):
+            windows.should_exit(False)
+            return False
+        busy = initializing or bool(operation_task and not operation_task.done())
+        if service:
+            busy = busy or bool(
+                service.active_requests
+                or service.preparing_workspace
+                or service.job_cycle_lock.locked()
+                or service.prediction_lock.locked()
+                or service.authoring_stop_task
+                and not service.authoring_stop_task.done()
+            )
+        # Start the grace period after background work actually finishes, rather
+        # than counting its running time as idle time. Reads stay behind active cycles.
+        if service and not busy:
+            busy = background_pending()
+        if not windows.should_exit(busy):
+            return False
+        lock = service.job_cycle_lock if service else operation_lock
+        async with lock:
+            try:
+                await asyncio.to_thread(check_workers, app_paths.database_file)
+            except (OSError, ValueError, sqlite3.Error, StudioStateError):
+                windows.should_exit(True)
+                return False
+            # A window or request may have arrived during the ownership check.
+            busy = initializing or bool(operation_task and not operation_task.done())
+            if service:
+                busy = busy or bool(
+                    service.active_requests
+                    or service.preparing_workspace
+                    or service.prediction_lock.locked()
+                    or service.authoring_stop_task
+                    and not service.authoring_stop_task.done()
+                )
+                if not busy:
+                    busy = background_pending()
+            if not windows.should_exit(busy):
+                return False
+            shutting_down = True
+            if service:
+                service.replacement_ready = True
+            if shutdown:
+                shutdown()
+            return True
+
+    async def idle_shutdown_loop() -> None:
+        while not await check_idle_shutdown():
+            await asyncio.sleep(1)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await service.start()
+        nonlocal initializing, service
+        if service:
+            initializing = True
+            try:
+                await service.start()
+            except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
+                if coordinator:
+                    coordinator.status.state = "failed"
+                    coordinator.status.error = (
+                        f"Studio initialization failed: {type(error).__name__}"
+                    )
+                    coordinator.status.can_retry = True
+                    coordinator.status.can_restore = False
+                await service.stop()
+                service = None
+                app.state.studio = None
+            finally:
+                initializing = False
         try:
+            idle_task = asyncio.create_task(idle_shutdown_loop()) if shutdown else None
             yield
         finally:
-            await service.stop()
+            if idle_task:
+                idle_task.cancel()
+                await asyncio.gather(idle_task, return_exceptions=True)
+            if operation_task:
+                await operation_task
+            if service:
+                await service.stop()
+            elif coordinator:
+                coordinator.close()
 
     app = FastAPI(title="EvidenceForge Studio API", version="1.0.0", lifespan=lifespan)
     app.add_middleware(
@@ -1213,38 +1447,181 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
             "http://127.0.0.1:1420",
         ],
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["X-EForge-Token", "Content-Type"],
+        allow_headers=["X-EForge-Token", "X-EForge-Session", "Content-Type"],
     )
     app.state.studio = service
+    app.state.sessions = windows
+    app.state.check_idle_shutdown = check_idle_shutdown
 
     @app.middleware("http")
     async def runtime_handoff(request: Request, call_next: Any) -> Response:
-        excluded = request.url.path in {"/v1/health", "/v1/runtime/prepare-replacement"}
-        if service.replacement_ready and not excluded:
+        excluded = _maintenance_path(request.url.path)
+        if shutting_down:
+            return JSONResponse({"detail": "Studio helper is stopping; reconnect"}, status_code=503)
+        if not excluded and (
+            initializing or service is None or coordinator and coordinator.status.state != "ready"
+        ):
+            if request.headers.get("X-EForge-Token") != secret:
+                return JSONResponse({"detail": "Invalid local service token"}, status_code=401)
+            return JSONResponse({"detail": {"code": "studio_state_not_ready"}}, status_code=503)
+        if (
+            service
+            and (
+                service.preparing_workspace
+                or service.workspace_coordinator
+                and service.workspace_coordinator.status.state != "ready"
+            )
+            and not excluded
+            and request.url.path != "/v1/workspaces/select"
+        ):
+            if request.headers.get("X-EForge-Token") != secret:
+                return JSONResponse({"detail": "Invalid local service token"}, status_code=401)
+            return JSONResponse({"detail": {"code": "workspace_state_not_ready"}}, status_code=503)
+        if service and service.replacement_ready and not excluded:
             return Response(
                 "Studio is handing off to a newer build. Reopen the app.", status_code=409
             )
-        if not excluded:
-            service.active_requests += 1
-        try:
-            return await call_next(request)
-        finally:
-            if not excluded:
-                service.active_requests -= 1
+        return await call_next(request)
 
     bundle_download_tickets: dict[str, tuple[str, float]] = {}
 
     def authorized(x_eforge_token: str | None = Header(default=None)) -> StudioService:
-        if x_eforge_token != service.token:
+        if x_eforge_token != secret:
             raise HTTPException(status_code=401, detail="Invalid local service token")
+        if service is None:
+            raise HTTPException(status_code=503, detail="Studio state preparation is incomplete")
         return service
 
+    def maintenance_auth(x_eforge_token: str | None = Header(default=None)) -> None:
+        if x_eforge_token != secret:
+            raise HTTPException(status_code=401, detail="Invalid local service token")
+
+    @app.post("/v1/session/heartbeat", dependencies=[Depends(maintenance_auth)])
+    async def heartbeat(
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+    ) -> dict[str, str]:
+        windows.heartbeat(x_eforge_session)
+        return {"status": "window alive"}
+
+    @app.post("/v1/session/detach", dependencies=[Depends(maintenance_auth)])
+    async def detach_window(
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+    ) -> dict[str, str]:
+        windows.close(x_eforge_session)
+        return {"status": "window detached"}
+
+    def active_coordinator() -> StateCoordinator:
+        if coordinator is None:
+            raise HTTPException(status_code=503, detail="Schema-only application")
+        if (
+            service
+            and service.workspace_coordinator
+            and service.workspace_coordinator.status.state != "ready"
+        ):
+            return service.workspace_coordinator
+        return coordinator
+
+    @app.get("/v1/state/status", dependencies=[Depends(maintenance_auth)])
+    def state_status() -> UpgradeStatus:
+        status = active_coordinator().status
+        if (initializing or service and service.preparing_workspace) and status.state == "ready":
+            return status.model_copy(update={"state": "running", "phase": "Starting Studio"})
+        return status
+
+    async def run_operation(target: StateCoordinator, identity: str, restore: bool) -> None:
+        nonlocal service, initializing
+        async with operation_lock:
+            initializing = True
+            try:
+                await asyncio.to_thread(target.apply, identity, restore)
+                if coordinator and coordinator.status.state == "ready" and not service:
+                    service = StudioService(app_paths, secret, coordinator, new_install)
+                    app.state.studio = service
+                    await service.start()
+                elif service and target.status.state == "ready" and target.scope == "workspace":
+                    service.store.record_workspace_migrations(target.layout)
+                    if service.pending_workspace:
+                        service.settings.workspace = service.pending_workspace
+                        service.pending_workspace = None
+                        service.settings_store.save(service.settings)
+                    await service.scan(resolve_drafts=False)
+                    if service.job_task is None:
+                        await service.start()
+            except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
+                # Validated migration completion does not imply service initialization succeeded.
+                # Keep normal endpoints gated and surface a retry, without later rollback.
+                target.status.state = "failed"
+                target.status.error = f"Studio initialization failed: {type(error).__name__}"
+                target.status.can_retry = True
+                target.status.can_restore = False
+                if service and target.scope == "private":
+                    await service.stop()
+                    service = None
+                    app.state.studio = None
+            finally:
+                initializing = False
+
+    async def begin_operation(request: OperationRequest, restore: bool) -> UpgradeStatus:
+        nonlocal operation_task, operation_restore
+        target = active_coordinator()
+        if request.operation_id != target.status.operation_id:
+            raise HTTPException(status_code=409, detail="Prepared operation is obsolete")
+        if operation_task is not None and not operation_task.done():
+            if operation_restore != restore:
+                raise HTTPException(status_code=409, detail="Another recovery action is running")
+            return state_status()
+        if target.status.state == "ready" and not restore:
+            return target.status
+        if target.status.state == "restored" and restore:
+            return target.status
+        if restore and (not target.status.can_restore or target.status.state == "running"):
+            raise HTTPException(status_code=409, detail="Restore is not available")
+        if target.status.state == "blocked":
+            raise HTTPException(status_code=409, detail=target.status.error)
+        if operation_task is None or operation_task.done():
+            operation_restore = restore
+            operation_task = asyncio.create_task(
+                run_operation(target, request.operation_id, restore)
+            )
+        return target.status
+
+    @app.post("/v1/state/upgrade", dependencies=[Depends(maintenance_auth)])
+    async def state_upgrade(request: OperationRequest) -> UpgradeStatus:
+        return await begin_operation(request, False)
+
+    @app.post("/v1/state/restore", dependencies=[Depends(maintenance_auth)])
+    async def state_restore(request: OperationRequest) -> UpgradeStatus:
+        return await begin_operation(request, True)
+
     @app.get("/v1/health")
-    def health(studio: StudioService = Depends(authorized)) -> dict[str, str]:
-        return {"status": "ok", "pid": str(os.getpid()), "runtime_id": runtime_id()}
+    def health(_auth: None = Depends(maintenance_auth)) -> dict[str, str]:
+        return {
+            "status": "ok",
+            "pid": str(os.getpid()),
+            "runtime_id": runtime_id(),
+            "ready": str(
+                bool(
+                    service
+                    and not initializing
+                    and not service.preparing_workspace
+                    and active_coordinator().status.state == "ready"
+                )
+            ).lower(),
+        }
 
     @app.post("/v1/runtime/prepare-replacement")
-    async def prepare_replacement(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
+    async def prepare_replacement(_auth: None = Depends(maintenance_auth)) -> dict[str, Any]:
+        if service is None:
+            if initializing or operation_task and not operation_task.done():
+                raise HTTPException(status_code=409, detail="Studio state preparation is running")
+            try:
+                check_workers(app_paths.database_file)
+            except (OSError, ValueError, sqlite3.Error, StudioStateError) as error:
+                raise HTTPException(
+                    status_code=409, detail="Retained work blocks replacement"
+                ) from error
+            return {"ready": True, "runtime_id": runtime_id()}
+        studio = service
         async with studio.job_cycle_lock:
             jobs = studio.store.job_payloads()
             if (
@@ -1267,10 +1644,15 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
 
     @app.websocket("/v1/events/ws")
     async def event_socket(websocket: WebSocket) -> None:
-        if websocket.query_params.get("token") != service.token:
+        if websocket.query_params.get("token") != secret:
             await websocket.close(code=1008)
             return
         queue: asyncio.Queue[StudioEvent] = asyncio.Queue()
+        if service is None or (
+            service.workspace_coordinator and service.workspace_coordinator.status.state != "ready"
+        ):
+            await websocket.close(code=1013)
+            return
         service.subscribers.add(queue)
         await websocket.accept()
         try:
@@ -2332,12 +2714,70 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
     async def select_workspace(
         selection: WorkspaceSelection, studio: StudioService = Depends(authorized)
     ) -> dict[str, Any]:
+        async with studio.workspace_selection_lock:
+            if operation_task and not operation_task.done():
+                raise HTTPException(status_code=409, detail="Workspace preparation is running")
+            async with studio.job_cycle_lock:
+                studio.preparing_workspace = True
+                try:
+                    return await select_workspace_locked(selection, studio)
+                finally:
+                    studio.preparing_workspace = False
+
+    async def select_workspace_locked(
+        selection: WorkspaceSelection, studio: StudioService
+    ) -> dict[str, Any]:
+        if (
+            selection.path.absolute() == studio.settings.workspace.absolute()
+            and studio.workspace_coordinator
+            and studio.workspace_coordinator.status.state == "ready"
+        ):
+            return studio.snapshot()
+        registered = selection.path.absolute() in {
+            studio.settings.workspace.absolute(),
+            *(path.absolute() for path in studio.settings.recent_workspaces),
+            *studio.store.registered_workspaces(),
+        }
+        created_workspace = not selection.path.exists() and not registered
+        if created_workspace:
+            ensure_workspace(selection.path)  # Explicit selection creates a new workspace only.
+        candidate = StateCoordinator(studio.paths, selection.path)
+        candidate.initialize_workspace_if_fresh(created_workspace)
+        candidate.prepare()
+        if (
+            candidate.status.state == "pending"
+            and not candidate.status.error
+            and not candidate.status.incompatible
+        ):
+            await asyncio.to_thread(candidate.apply, candidate.status.operation_id)
+        if candidate.status.state == "ready":
+            try:
+                candidate.owner.acquire()
+            except StudioStateError as error:
+                candidate.status.state = "failed"
+                candidate.status.error = str(error)
+                candidate.status.can_retry = True
+        if candidate.status.state != "ready":
+            if studio.workspace_coordinator:
+                studio.workspace_coordinator.close()
+            studio.workspace_coordinator = candidate
+            studio.pending_workspace = selection.path
+            await studio.emit(
+                str(selection.path), "state.maintenance", candidate.status.model_dump(mode="json")
+            )
+            raise HTTPException(status_code=409, detail={"code": "workspace_state_not_ready"})
+        studio.store.record_workspace_migrations(candidate.layout)
         previous = studio.settings.workspace
-        studio.settings.workspace = ensure_workspace(selection.path)
+        if studio.workspace_coordinator:
+            studio.workspace_coordinator.close()
+        studio.workspace_coordinator = candidate
+        studio.settings.workspace = selection.path.absolute()
         recent = [previous, *studio.settings.recent_workspaces]
         studio.settings.recent_workspaces = list(dict.fromkeys(recent))[:10]
         studio.settings_store.save(studio.settings)
-        await studio.scan()
+        await studio.scan(resolve_drafts=False)
+        if studio.job_task is None:
+            await studio.start()
         await studio.emit(str(studio.settings.workspace), "workspace.selected", {})
         return studio.snapshot()
 
@@ -3710,7 +4150,11 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
     async def close_window(
         request: CloseWindowRequest | None = None,
         studio: StudioService = Depends(authorized),
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
     ) -> dict[str, str]:
+        if windows.has_other_windows(x_eforge_session):
+            windows.close(x_eforge_session)
+            return {"status": "window detached"}
         choices = request or CloseWindowRequest()
         quit_settings = studio.settings.quit
         generations = studio.jobs.load_generations()
@@ -3745,6 +4189,7 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         if quit_settings.authoring_turns == "stop":
             studio.schedule_authoring_stop()
         await studio.emit("session", "session.closed", {"action": studio.intent.action})
+        windows.close(x_eforge_session)
         waiting = quit_settings.action == "pause" and quit_settings.pause_close_timing == "wait"
         return {"status": "waiting" if waiting else "close action handed off"}
 
@@ -3764,18 +4209,28 @@ def create_app(paths: StudioPaths | None = None, token: str | None = None) -> Fa
         return {"ready": not running, "running": [job.id for job in running], "failures": failures}
 
     @app.post("/v1/session/cancel-close")
-    async def cancel_close(studio: StudioService = Depends(authorized)) -> dict[str, str]:
+    async def cancel_close(
+        studio: StudioService = Depends(authorized),
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+    ) -> dict[str, str]:
+        windows.open(x_eforge_session)
         studio.set_intent(
             ControlIntent(action="open", settings=controller_settings(studio.settings))
         )
         return {"status": "close cancelled"}
 
     @app.post("/v1/session/open")
-    async def open_window(studio: StudioService = Depends(authorized)) -> dict[str, str]:
+    async def open_window(
+        studio: StudioService = Depends(authorized),
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+    ) -> dict[str, str]:
+        windows.open(x_eforge_session)
         if studio.intent.action != "pause":
             studio.set_intent(
                 ControlIntent(action="open", settings=controller_settings(studio.settings))
             )
         return {"status": "window attached"}
 
+    # Add last so ownership includes streaming through the outer HTTP middleware.
+    app.add_middleware(_RequestActivityMiddleware, studio=lambda: service)
     return app

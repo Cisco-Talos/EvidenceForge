@@ -13,9 +13,15 @@ import {
   StudioSettings,
   StudioSnapshot,
   ValidationResult,
+  UpgradeStatus,
 } from "./api";
 
 export interface StudioState {
+  maintenance: UpgradeStatus | null;
+  upgradeNotice: string | null;
+  clearUpgradeNotice: () => void;
+  recoverState: (restore?: boolean) => Promise<void>;
+  selectRecoveryWorkspace: (path: string) => Promise<void>;
   api: StudioApi | null;
   snapshot: StudioSnapshot | null;
   error: string | null;
@@ -85,6 +91,9 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
 }
 
 export function useStudio(): StudioState {
+  const [maintenance, setMaintenance] = useState<UpgradeStatus | null>(null);
+  const [upgradeNotice, setUpgradeNotice] = useState<string | null>(null);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
   const [api, setApi] = useState<StudioApi | null>(null);
   const [snapshot, setSnapshot] = useState<StudioSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +101,11 @@ export function useStudio(): StudioState {
   const [validations, setValidations] = useState<Record<string, ValidationResult>>({});
   const socketRef = useRef<WebSocket | null>(null);
   const apiRef = useRef<StudioApi | null>(null);
+  const observedOperation = useRef<string | null>(null);
+  const acceptedOperations = useRef(new Set<string>());
+  const recoveryInFlight = useRef(false);
   const eventListeners = useRef(new Set<(event: StudioEvent) => void>());
+  const clearUpgradeNotice = useCallback(() => setUpgradeNotice(null), []);
 
   const subscribeEvents = useCallback((listener: (event: StudioEvent) => void) => {
     eventListeners.current.add(listener);
@@ -106,6 +119,31 @@ export function useStudio(): StudioState {
     setSnapshot(fresh);
   }, []);
 
+  const recoverState = useCallback(async (restore = false) => {
+    if (!apiRef.current || !maintenance || recoveryInFlight.current || maintenance.state === "running") return;
+    recoveryInFlight.current = true;
+    const previous = maintenance;
+    acceptedOperations.current.add(maintenance.operation_id);
+    setError(null);
+    setMaintenance({ ...maintenance, state: "running", phase: restore ? "Starting restoration" : "Starting upgrade" });
+    try {
+      await apiRef.current.request(`/v1/state/${restore ? "restore" : "upgrade"}`, "POST", { operation_id: maintenance.operation_id });
+      setRecoveryRevision((current) => current + 1);
+    } catch (failure) {
+      acceptedOperations.current.delete(previous.operation_id);
+      setMaintenance(previous);
+      setError(String(failure));
+    } finally { recoveryInFlight.current = false; }
+  }, [maintenance]);
+
+  const selectRecoveryWorkspace = useCallback(async (path: string) => {
+    if (!apiRef.current) return;
+    try {
+      await apiRef.current.request("/v1/workspaces/select", "POST", { path });
+      setRecoveryRevision((current) => current + 1);
+    } catch (failure) { setError(String(failure)); setRecoveryRevision((current) => current + 1); }
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -114,6 +152,27 @@ export function useStudio(): StudioState {
       try {
         const client = await connectStudio();
         if (disposed) return;
+        apiRef.current = client;
+        setApi(client);
+        await client.request("/v1/session/heartbeat", "POST");
+        const status = await client.request<UpgradeStatus>("/v1/state/status");
+        if (disposed) return;
+        if (status.state !== "ready") {
+          observedOperation.current = status.operation_id;
+          const starting = status.state === "pending" && !status.error && acceptedOperations.current.has(status.operation_id);
+          setMaintenance(starting ? { ...status, state: "running", phase: "Starting upgrade" } : status);
+          setSnapshot(null);
+          if (["pending", "running"].includes(status.state) && !status.error) {
+            reconnectTimer = setTimeout(() => { reconnectTimer = null; void attach(); }, 500);
+          }
+          return;
+        }
+        setMaintenance(null);
+        if (observedOperation.current === status.operation_id && status.backup_path) {
+          setUpgradeNotice(`Studio UI state upgraded successfully. Recovery backup: ${status.backup_path}`);
+        }
+        observedOperation.current = null;
+        acceptedOperations.current.clear();
         await client.request("/v1/session/open", "POST");
         const initial = await client.request<StudioSnapshot>("/v1/bootstrap");
         if (disposed) return;
@@ -125,6 +184,12 @@ export function useStudio(): StudioState {
         socketRef.current = client.subscribe(
           initial.seq,
           (event) => {
+            if (event.kind === "state.maintenance") {
+              setMaintenance(event.payload as unknown as UpgradeStatus);
+              setSnapshot(null);
+              setRecoveryRevision((current) => current + 1);
+              return;
+            }
             for (const listener of eventListeners.current) listener(event);
             setSnapshot((current) => (current ? applyEvent(current, event) : current));
             if (event.kind === "scenario.validated") {
@@ -164,7 +229,16 @@ export function useStudio(): StudioState {
       socketRef.current?.close();
       if (reconnectTimer) clearTimeout(reconnectTimer);
     };
-  }, [reload]);
+  }, [reload, recoveryRevision]);
 
-  return { api, snapshot, error, liveState, validations, subscribeEvents, reload };
+  useEffect(() => {
+    if (!api) return;
+    // Keep maintenance screens and reconnecting/minimized windows attached as well.
+    const timer = setInterval(() => {
+      void api.request("/v1/session/heartbeat", "POST").catch(() => undefined);
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [api]);
+
+  return { api, snapshot, error, liveState, validations, subscribeEvents, reload, maintenance, upgradeNotice, clearUpgradeNotice, recoverState, selectRecoveryWorkspace };
 }

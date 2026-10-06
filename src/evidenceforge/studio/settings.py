@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from evidenceforge.desktop.state import AppSettings
 from evidenceforge.studio.paths import StudioPaths, default_workspace
+from evidenceforge.studio.state_io import StudioStateError, atomic_write
 
 
 class QuitSettings(BaseModel):
@@ -58,20 +58,37 @@ class SettingsStore:
     """Atomically save global settings outside the workspace."""
 
     def __init__(self, paths: StudioPaths) -> None:
+        from evidenceforge.studio.ownership import validate_private_paths
+
+        validate_private_paths(paths)
         self.path = paths.settings_file
 
     def load(self) -> StudioSettings:
         """Load user preferences or return first-run defaults."""
-        if not self.path.is_file():
+        from evidenceforge.studio.state_io import safe_path
+
+        safe_path(self.path)
+        if not self.path.exists():
             return StudioSettings()
-        return StudioSettings.model_validate_json(self.path.read_text(encoding="utf-8"))
+        if not self.path.is_file():
+            raise StudioStateError("Studio settings must be a regular file; inspect saved state")
+        from evidenceforge.studio.state_upgrade import settings_document
+
+        version, values = settings_document(self.path)
+        if version != 1:
+            raise StudioStateError("Studio settings need a backed-up upgrade before opening")
+        return StudioSettings.model_validate(values)
 
     def save(self, settings: StudioSettings) -> None:
         """Write validated settings without leaving a partial document."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
-        temporary.write_text(settings.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(temporary, self.path)
+        if self.path.exists():
+            self.load()  # Do not overwrite an unsupported or unversioned document.
+        atomic_write(
+            self.path,
+            json.dumps(
+                {"schema_version": 1, "settings": settings_payload(settings)}, indent=2
+            ).encode(),
+        )
 
 
 def settings_payload(settings: StudioSettings) -> dict[str, object]:

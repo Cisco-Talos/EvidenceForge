@@ -67,8 +67,14 @@ and oldest-first jobs have been superseded. This document summarizes the current
   option. Approval/input is never automatically granted. Job ownership includes PID + creation
   time; unrelated terminal processes must never be stopped or deleted.
 - macOS helper uses a transient user launchd service, with no helper Dock icon/login item;
-  Linux uses a detached process. It currently stays available after tasks finish, until explicit
-  stop/logout/reboot. Reopening reconnects. Update/replacement lifecycle remains packaging work.
+  Linux uses a detached process. The October 6 lifecycle fix exits after the last window closes
+  and background work finishes, with an eight-second idle grace period. Windows share settings,
+  the selected workspace and generation concurrency. See the
+  [helper lifecycle worklog](2026-10-06-studio-helper-lifecycle.md).
+- October 6 account isolation validates private roots and actual helper UID/SID before token
+  delivery or replacement. Private discovery is versioned; windows share limits within one
+  account, while accounts retain independent helpers and limits. Real separate-account testing
+  is deferred by the user; see the [isolation worklog](2026-10-06-studio-user-isolation.md).
 
 ### Environment, runs, evaluation and delivery
 

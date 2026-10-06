@@ -26,7 +26,13 @@ On macOS, the helper runs as a transient user launchd service, independently of 
 Its private `service-agent.plist` lives in Studio's state directory; the registration lasts for
 the current login session and adds no login item. This keeps a closed Studio window from retaining
 a macOS 27 background-process Dock entry. Linux uses a detached process. The helper currently
-remains available after its tasks finish and exits on logout, reboot, or an explicit stop.
+tracks each window separately. After the last window closes, it applies the configured quit
+policies, waits for background jobs and authoring to finish, and exits after eight idle seconds.
+Queued work configured to remain on hold does not prevent exit. Reopening during the grace period
+reattaches; reopening after exit starts a helper. Window heartbeats also cover maintenance screens
+and reconnects; an unannounced window exit expires after two minutes. Worker ownership uncertainty
+prevents shutdown. Windows sharing the same data directory share settings, the selected workspace,
+and one generation concurrency limit.
 
 ## Workspace and app data
 
@@ -37,6 +43,26 @@ packs or overlays. Open **Settings → Workspace** to choose another workspace. 
 its workspace from the shell's current directory.
 
 Global settings and the SQLite library index live outside the workspace:
+
+Each OS account has its own helper, settings, queue and generation limit. Multiple windows using
+the same private data directory share that helper and limit. Studio checks the helper's actual
+POSIX UID or Windows token SID, process start time, executable and launch command before sending
+its connection token, and checks again before replacement. Window session IDs only track lifetime;
+they never authorize access. HTTP and WebSocket access still require the private bearer token.
+
+Private roots are checked before saved state or helper credentials are read. On macOS/Linux,
+verified account-owned application defaults are tightened to directory mode `700`; a custom
+`EFORGE_STUDIO_HOME` or nonstandard XDG location must already be private if it exists. A missing
+custom directory is created privately. Foreign ownership, writable ancestry, links, reparse
+points, aliased files and unverifiable helpers produce a refusal instead of another helper launch.
+Credentials require file mode `600`. Windows uses native owner/SID and private DACL checks.
+Studio does not take ownership of foreign directories or change permissions on system ancestors,
+authored scenarios, packs or generated documents. An exited helper's stale discovery file is
+recognized by process identity and can be replaced; malformed or newer discovery cannot be
+silently discarded. The discovery format is transient and does not change saved-state versions.
+
+The [account-isolation worklog](worklog/2026-10-06-studio-user-isolation.md) records simulated and
+native testing separately. Real tests with separate OS accounts are explicitly deferred.
 
 | Platform | Settings and library index | Logs and cache |
 | --- | --- | --- |
@@ -49,6 +75,12 @@ Linux uses the standard XDG defaults under `~/.config`, `~/.local/share`, `~/.lo
 conversations, and jobs; scenario YAML, pack files, and bundle contents remain authoritative on
 disk. Codex credentials stay in Codex's own storage. **Settings** has actions to open the active
 workspace, app data folder, and logs.
+
+Studio versions its database, saved JSON, settings and private/workspace conventions. Incompatible
+upgrades keep their warning visible until you select **Continue with upgrade**, then create a
+verified recovery backup before preparation. Completion uses the existing timed notification.
+Failed or interrupted upgrades can be retried or restored before normal use resumes. See
+[Studio state upgrades and recovery](studio-state-upgrades.md) for scope, recovery steps and tests.
 
 ## Current workflows
 

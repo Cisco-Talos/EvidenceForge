@@ -34,7 +34,12 @@ def test_macos_helper_launch_is_independent_and_scoped_to_data_directory(
 ) -> None:
     paths = _paths(tmp_path)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(background.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(
+        background.os,
+        "getuid",
+        lambda: os.geteuid() if hasattr(os, "geteuid") else 1000,
+        raising=False,
+    )
     monkeypatch.setenv("EFORGE_STUDIO_HOME", str(tmp_path))
     monkeypatch.setenv("UNRELATED_API_SECRET", "must-not-be-persisted")
     run = Mock(
@@ -95,7 +100,12 @@ def test_macos_launch_failure_does_not_fall_back_to_app_owned_helper(
 ) -> None:
     paths = _paths(tmp_path)
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(background.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(
+        background.os,
+        "getuid",
+        lambda: os.geteuid() if hasattr(os, "geteuid") else 1000,
+        raising=False,
+    )
     monkeypatch.setattr(
         background.subprocess,
         "run",

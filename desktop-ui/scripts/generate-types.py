@@ -30,12 +30,9 @@ def main() -> None:
             cache=root / "cache",
             logs=root / "logs",
         )
-        app = create_app(paths, "schema-only-token")
-        try:
-            schema = root / "openapi.json"
-            schema.write_text(json.dumps(app.openapi()), encoding="utf-8")
-        finally:
-            app.state.studio.store.close()
+        app = create_app(paths, "schema-only-token", schema_only=True)
+        schema = root / "openapi.json"
+        schema.write_text(json.dumps(app.openapi()), encoding="utf-8")
         output = root / "studio.ts" if check else target
         subprocess.run(
             [

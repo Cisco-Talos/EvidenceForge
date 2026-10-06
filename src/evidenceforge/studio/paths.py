@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from platformdirs import user_documents_path
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StudioPaths(BaseModel):
@@ -20,6 +20,8 @@ class StudioPaths(BaseModel):
     state: Path
     cache: Path
     logs: Path
+    # Explicit overrides cannot inherit the permission-repair policy of application defaults.
+    custom_roots: tuple[Path, ...] = Field(default=(), exclude=True, repr=False)
 
     @property
     def settings_file(self) -> Path:
@@ -41,13 +43,14 @@ def studio_paths() -> StudioPaths:
     """Use platform conventions, with one disposable-root test override."""
     override = os.environ.get("EFORGE_STUDIO_HOME")
     if override:
-        root = Path(override).expanduser().resolve()
+        root = Path(override).expanduser().absolute()
         return StudioPaths(
             config=root / "config",
             data=root / "data",
             state=root / "state",
             cache=root / "cache",
             logs=root / "logs",
+            custom_roots=(root,),
         )
     if sys.platform == "darwin":
         support = Path.home() / "Library" / "Application Support" / "EvidenceForge"
@@ -62,7 +65,11 @@ def studio_paths() -> StudioPaths:
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         root = local / "EvidenceForge"
         return StudioPaths(
-            config=root, data=root, state=root, cache=root / "cache", logs=root / "logs"
+            config=root,
+            data=root,
+            state=root,
+            cache=root / "cache",
+            logs=root / "logs",
         )
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
@@ -74,6 +81,16 @@ def studio_paths() -> StudioPaths:
         state=state / "evidenceforge",
         cache=cache / "evidenceforge",
         logs=state / "evidenceforge",
+        custom_roots=tuple(
+            root / "evidenceforge"
+            for variable, root, standard in (
+                ("XDG_CONFIG_HOME", config, Path.home() / ".config"),
+                ("XDG_DATA_HOME", data, Path.home() / ".local/share"),
+                ("XDG_STATE_HOME", state, Path.home() / ".local/state"),
+                ("XDG_CACHE_HOME", cache, Path.home() / ".cache"),
+            )
+            if variable in os.environ and root.absolute() != standard.absolute()
+        ),
     )
 
 

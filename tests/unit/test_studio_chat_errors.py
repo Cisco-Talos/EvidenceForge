@@ -138,6 +138,9 @@ def test_failed_notification_overrides_lossy_rollout_history_after_reopening(
         },
     )
     studio.store.close()
+    studio.coordinator.close()
+    if studio.workspace_coordinator:
+        studio.workspace_coordinator.close()
     app = _app(tmp_path, monkeypatch)
     studio = app.state.studio
 

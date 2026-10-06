@@ -5,7 +5,12 @@ mod native_export;
 #[cfg(target_os = "macos")]
 mod standalone;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+
+#[derive(Default)]
+struct ExitHandoff(AtomicBool);
 
 fn studio_python() -> std::ffi::OsString {
     if let Some(explicit) = std::env::var_os("EFORGE_STUDIO_PYTHON") {
@@ -57,6 +62,7 @@ fn studio_connection(app: tauri::AppHandle) -> Result<serde_json::Value, String>
 
 #[tauri::command]
 fn studio_exit(app: tauri::AppHandle) {
+    app.state::<ExitHandoff>().0.store(true, Ordering::SeqCst);
     // A prevented close event can outlive AppHandle::exit on macOS. The controller
     // handoff is already durable before this command is called, so bound shutdown.
     std::thread::spawn(|| {
@@ -126,6 +132,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(native_export::ExportState::default())
+        .manage(ExitHandoff::default())
         .invoke_handler(tauri::generate_handler![
             studio_connection,
             studio_exit,
@@ -134,6 +141,18 @@ pub fn run() {
             native_export::save_studio_export,
             native_export::cancel_studio_export
         ])
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if !app.state::<ExitHandoff>().0.load(Ordering::SeqCst) {
+                    if let Some(window) = app.get_webview_window("main") {
+                        // Menu Quit/Cmd-Q must reach the same React quit-policy handoff
+                        // as the window close button. studio_exit permits the final exit.
+                        api.prevent_exit();
+                        let _ = window.close();
+                    }
+                }
+            }
+        });
 }

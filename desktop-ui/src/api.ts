@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { components } from "./generated/studio";
 
 type Schema = components["schemas"];
+export type UpgradeStatus = Schema["UpgradeStatus"];
 export type ItemKind = Schema["CatalogItem"]["kind"];
 // The service serializes every model field in snapshots, including fields with defaults.
 type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source" | "search_excerpt" | "search_field" | "search_matches" | "search_match_count" | "search_revision";
@@ -66,6 +67,9 @@ interface Connection {
   token: string;
 }
 
+// A renderer keeps its identity across reconnects; separate windows get separate IDs.
+const windowSession = crypto.randomUUID();
+
 export class StudioApiError extends Error {
   readonly status: number;
   readonly detail: unknown;
@@ -108,6 +112,7 @@ export class StudioApi {
       signal: controller.signal,
       headers: {
         "X-EForge-Token": this.token,
+        "X-EForge-Session": windowSession,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

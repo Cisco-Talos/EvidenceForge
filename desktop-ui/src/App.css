@@ -1164,3 +1164,8 @@ select { min-width: 185px; }
 .asset-conversion-review { margin: 1rem 0; padding: 1rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 .asset-conversion-review ul { margin: .6rem 0; padding-left: 1.4rem; }
 .asset-conversion-review .asset-form-errors { margin-top: 1rem; }
+
+.state-maintenance { max-width: 760px; margin: auto; padding: 36px; text-align: left; }
+.state-maintenance details { margin-top: 20px; overflow-wrap: anywhere; }
+.state-maintenance input { width: 100%; margin: 10px 0; }
+.upgrade-warning { padding: 14px 20px; border: 1px solid #bba260; border-radius: 8px; background: #302b20; color: #f1d897; overflow-wrap: anywhere; }

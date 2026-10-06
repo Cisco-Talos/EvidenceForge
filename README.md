@@ -345,6 +345,8 @@ coverage gate, coding conventions, and external-parser validation requirements.
   overlays and data catalogs
 - [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) — Safe suspension,
   recovery, status, storage, and filesystem behavior
+- [Studio State Upgrades and Recovery](docs/studio-state-upgrades.md) — UI state contracts,
+  verified backups, interrupted-upgrade recovery and native release gates
 - [Output Target Ingest Guides](docs/output-targets/README.md) — Default, SOF-ELK, and Splunk
   layouts, parsing, and ingestion
 - [Adversarial Payload Testing](docs/reference/adversarial_payload.md) — Safe synthetic payload and
