@@ -1182,3 +1182,7 @@ select { min-width: 185px; }
 .runtime-cleanup-notice summary { cursor: pointer; font-weight: 600; }
 .runtime-cleanup-notice p { margin: 8px 0; }
 .runtime-cleanup-notice code { overflow-wrap: anywhere; font-size: 12px; }
+
+.environment-pack-link { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #a6c5e9; text-align: left; }
+.environment-pack-link > svg { flex: none; }
+.environment-pack-link:hover strong { color: #c2daff; text-decoration: underline; }

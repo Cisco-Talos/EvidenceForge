@@ -19,7 +19,7 @@ import { countLabel, environmentSummary, latestJob, latestRunState, runsSummary,
 
 export type WorkspaceTarget = "overview" | "environment" | "conversations" | "validation" | "generation" | "scoring";
 
-export function ScenarioWorkspace({ item, snapshot, conversations, selectedConversation, target, jobs, api, codexHealth, busy, validation, focusJobId, initialDraft, subscribeEvents, onNavigate, onOpenConversation, onCreateConversation, onRenameConversation, onDeleteConversation, onRenameScenario, onProjectChange, onClone, onExportPack, onDeletePack, onHidden, onViewYaml, onImportPacks, onGenerate, onValidate, onFix, onPrepare, onDraftSubmitted, onChanged, onError }: {
+export function ScenarioWorkspace({ item, snapshot, conversations, selectedConversation, target, jobs, api, codexHealth, busy, validation, focusJobId, initialDraft, subscribeEvents, onNavigate, onOpenConversation, onCreateConversation, onRenameConversation, onDeleteConversation, onRenameScenario, onProjectChange, onClone, onExportPack, onDeletePack, onHidden, onViewYaml, onImportPacks, onOpenPack, onGenerate, onValidate, onFix, onPrepare, onDraftSubmitted, onChanged, onError }: {
   item: CatalogItem; snapshot: StudioSnapshot; conversations: Conversation[]; selectedConversation: string | null;
   target: WorkspaceTarget; jobs: StudioJob[]; api: StudioApi; codexHealth: CodexHealth; busy: boolean;
   validation: Parameters<typeof ValidationPanel>[0]["result"]; focusJobId: string | null; initialDraft?: string;
@@ -29,6 +29,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   onRenameConversation: (chat: Conversation) => void; onDeleteConversation: (chat: Conversation) => void;
   onRenameScenario: (name: string) => Promise<void>; onProjectChange: (id: string | null) => void;
   onClone: () => void; onExportPack: () => void; onDeletePack: () => void; onHidden: () => void; onViewYaml: () => void;
+  onOpenPack?: (pack: CatalogItem) => void;
   onImportPacks: () => void; onGenerate: () => Promise<void>; onValidate: () => void; onFix: () => void;
   onPrepare: (prompt: string) => Promise<void>; onDraftSubmitted: (id: string) => void;
   onChanged: () => Promise<void>; onError: (message: string) => void;
@@ -125,7 +126,7 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       {item.kind !== "scenario" && <WorkspaceSection title="Assets" icon={<Package size={19} />} summary={<span>Browse and edit · changes create a new version</span>} expanded={expanded.includes("assets")} onToggle={() => toggle("assets")} actions={<><button className="button-quiet" onClick={onImportPacks}><Upload size={15} /> Import</button><button className="button-quiet" onClick={onExportPack}><Download size={15} /> Export</button></>}><AssetBrowser key={item.id} item={item} api={api} onChanged={onChanged} /></WorkspaceSection>}
       {item.kind === "scenario" && <>
         <div data-workspace-section="environment"><WorkspaceSection title="Environment" icon={<OperationStatus status={environmentState(health, environmentRefreshing)} focusable={false} />} summary={<HeaderSummary summary={environmentInfo} />} expanded={expanded.includes("environment")} onToggle={() => toggle("environment")} actions={<button className="icon-button" aria-label="Refresh environment" title="Recheck packs, includes, and configuration from disk" disabled={environmentRefreshing} onClick={() => void refreshEnvironment()}><RefreshCw size={16} className={environmentRefreshing ? "spinning" : ""} /></button>}>
-          <EnvironmentView embedded refreshVersion={environmentRefresh} dependencyHealth={health} onImportPacks={onImportPacks} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario" && !entry.hidden)} dependencyFingerprint={health?.fingerprint} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
+          <EnvironmentView embedded refreshVersion={environmentRefresh} dependencyHealth={health} onImportPacks={onImportPacks} onOpenPack={onOpenPack} item={item} packs={snapshot.items.filter((entry) => entry.kind !== "scenario")} dependencyFingerprint={health?.fingerprint} api={api} onChanged={onChanged} onPrepare={onPrepare} onError={onError} />
         </WorkspaceSection></div>
         <div data-workspace-section="validation"><WorkspaceSection title="Validation" icon={<OperationStatus status={states[0]} focusable={false} />} summary={<HeaderSummary summary={validationInfo} />} expanded={expanded.includes("validation")} onToggle={() => toggle("validation")} actions={<>{validationIssues.length > 0 && <button className="button-quiet" onClick={onFix} disabled={busy} title="Open a new conversation with a prepared request and the current findings"><MessageSquareText size={16} /> Fix in chat</button>}<button className="button-quiet" onClick={onValidate} disabled={busy}><ShieldCheck size={15} /> {busy ? "Working…" : "Validate"}</button></>}>
           {validationDetails ? <ValidationPanel result={validation} embedded /> : undefined}

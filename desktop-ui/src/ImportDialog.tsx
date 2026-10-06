@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, TriangleAlert, X, XCircle } from "lucide-react";
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, TriangleAlert, X, XCircle } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { CatalogItem, DependencyRow, ImportResult, ImportReview, Project, StudioApi, ValidationResult } from "./api";
@@ -8,7 +8,7 @@ import { ValidationPanel } from "./components";
 import { scenarioNameError } from "./scenarioName";
 import { packSelection } from "./packSelection";
 
-export function DependencyRows({ rows, selection }: { rows: DependencyRow[]; selection?: {
+export function DependencyRows({ rows, selection, onOpen, canOpen }: { rows: DependencyRow[]; onOpen?: (row: DependencyRow) => void; canOpen?: (row: DependencyRow) => boolean; selection?: {
   selected: Set<string>; requiredBy: Map<string, string[]>; busy: boolean;
   onToggle: (key: string, checked: boolean) => void; onAll: () => void; onNone: () => void;
 } }) {
@@ -20,7 +20,7 @@ export function DependencyRows({ rows, selection }: { rows: DependencyRow[]; sel
     const required = selection?.requiredBy.get(row.key) || [];
     return <div key={row.key} className={`dependency-row dependency-${row.status}`}>
       {selection && row.kind === "pack" && <input type="checkbox" className="visible-check" aria-label={`Import ${row.label}`} checked={selection.selected.has(row.key)} disabled={selection.busy || required.length > 0} aria-describedby={required.length ? `required-${row.key}` : undefined} onChange={(event) => selection.onToggle(row.key, event.target.checked)} />}
-      <Icon size={16} aria-label={row.status} /><div><strong>{row.label}</strong><small>{row.detail}</small>
+      <Icon size={16} aria-label={row.status} /><div>{onOpen && canOpen?.(row) ? <button type="button" className="environment-pack-link" aria-label={`Open ${row.label} pack workspace`} title="Open pack workspace" onClick={() => onOpen(row)}><strong>{row.label}</strong><ArrowUpRight size={14} aria-hidden="true" /></button> : <strong>{row.label}</strong>}<small>{row.detail}</small>
         {required.length > 0 && <small className="required-pack-note" id={`required-${row.key}`}>Required by {required.join(", ")}</small>}
         {row.source && <div className="dependency-path path-with-copy"><small className="path-value" title={row.source}>{row.source}</small><CopyPathButton path={row.source} label={`Copy ${row.label} source path`} onError={setCopyError} /></div>}
         {row.source_digest && row.digest && row.source_digest !== row.digest && <details><summary>Digest changes</summary><code>Original: {row.source_digest}<br />Prepared: {row.digest}</code></details>}

@@ -288,6 +288,7 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                                     label=dependency_key,
                                     status="conflict",
                                     detail="Digest does not match the organization's locked dependency",
+                                    source=str(member.root / "pack.yaml"),
                                     digest=locked.digest,
                                     source_digest=member.digest,
                                 )
@@ -325,6 +326,7 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                                 label=member_key,
                                 status="available",
                                 detail="Exact pack is available",
+                                source=str(member.root / "pack.yaml"),
                                 digest=member.digest,
                             )
                         )

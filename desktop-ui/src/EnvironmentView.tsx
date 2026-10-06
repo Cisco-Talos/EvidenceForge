@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Download, RefreshCw, Search, SquarePen } from "lucide-react";
+import { ArrowUpRight, Check, Download, RefreshCw, Search, SquarePen } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
 import { AssetBrowser } from "./AssetBrowser";
@@ -8,6 +8,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SourceDeclarations } from "./SourceDeclarations";
 import { InspectionSection } from "./InspectionSection";
 import { DependencyRows } from "./ImportDialog";
+import { dependencyPackItem, selectedPackItem } from "./environmentPackLinks";
 
 export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
   return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
@@ -24,7 +25,7 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   const [selected, setSelected] = useState(initial);
   const [query, setQuery] = useState("");
   const [working, setWorking] = useState(false);
-  const choices: PackChoice[] = packs.filter((pack) => pack.publisher && pack.version).map((pack) => {
+  const choices: PackChoice[] = packs.filter((pack) => !pack.hidden && pack.publisher && pack.version).map((pack) => {
     const source = pack.pack_source === "bundled" ? "package" : "project";
     const kind = pack.kind === "industry_pack" ? "industry" : "organization";
     const reference = `${source}:${pack.publisher}:${kind}:${pack.name}@${pack.version}`;
@@ -56,9 +57,10 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onChanged, api, onPrepare, onError, embedded = false }: {
+export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; dependencyHealth?: DependencyHealth;
   refreshVersion?: number; onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
+  onOpenPack?: (pack: CatalogItem) => void;
   onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
@@ -81,7 +83,11 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
     {!embedded && <div className="section-heading"><h2>Environment</h2><button className="icon-button" aria-label="Refresh environment" title="Read current scenario, packs, and overlays" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button></div>}
     <section className="environment-direct-packs" aria-label="Environment packs">
       <header><h3>Packs <small>{packCount}</small></h3>{onImportPacks && packRows.some((row) => ["missing", "conflict"].includes(row.status)) && <button className="button-quiet" onClick={onImportPacks}><Download size={15} /> Import packs</button>}<button ref={pickerTrigger} className="button-quiet" disabled={!report || loading} onClick={() => setPicker(true)}><SquarePen size={15} /> Choose packs</button></header>
-      {packRows.length ? <DependencyRows rows={packRows} /> : report?.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span><strong>{pack.name} <small>{pack.version}</small></strong><code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>)}</ul> : report && <p className="muted">{report.valid ? "This scenario uses its inline environment; no packs are selected." : "Selected packs could not be resolved."}</p>}
+      {packRows.length ? <DependencyRows rows={packRows} canOpen={(row) => !!onOpenPack && !!dependencyPackItem(row, report?.selected_packs || [], packs)} onOpen={(row) => { const target = dependencyPackItem(row, report?.selected_packs || [], packs); if (target) onOpenPack?.(target); }} /> : report?.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => {
+        const target = selectedPackItem(pack, packs);
+        const title = <strong>{pack.name} <small>{pack.version}</small></strong>;
+        return <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span>{target && onOpenPack ? <button type="button" className="environment-pack-link" aria-label={`Open ${pack.publisher}:${pack.type}:${pack.name}@${pack.version} pack workspace`} title="Open pack workspace" onClick={() => onOpenPack(target)}>{title}<ArrowUpRight size={14} aria-hidden="true" /></button> : title}<code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>;
+      })}</ul> : report && <p className="muted">{report.valid ? "This scenario uses its inline environment; no packs are selected." : "Selected packs could not be resolved."}</p>}
       {fileErrors.length > 0 && <div className="environment-file-errors"><h3>Files needing attention</h3><DependencyRows rows={fileErrors} /></div>}
       {otherRows.length > fileErrors.length && <InspectionSection title="Included files and dependencies" count={`${otherRows.length - fileErrors.length} checks`}><DependencyRows rows={otherRows.filter((row) => !fileErrors.includes(row))} /></InspectionSection>}
     </section>

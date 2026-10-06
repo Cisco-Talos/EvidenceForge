@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import App from "../src/App";
 import { StudioApi, StudioApiError, StudioSnapshot } from "../src/api";
+import type { EnvironmentReport } from "../src/api";
 import { ScorecardPanel } from "../src/ScorecardPanel";
 import { JobCard } from "../src/components";
 import { BundleFileBrowser } from "../src/BundleFileBrowser";
@@ -1923,6 +1924,49 @@ test("Environment is green when ready and refreshes dependencies without opening
     expect(request.mock.calls.some(([path]) => path.endsWith("/environment"))).toBe(false);
   } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
+
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`Environment opens the referenced ${kind} workspace and switches the library section`, async () => {
+    const originalItems = snapshot.items;
+    const originalDependencies = snapshot.dependencies;
+    const request = vi.mocked(useStudio().api!.request);
+    const implementation = request.getMockImplementation()!;
+    const type = kind === "industry_pack" ? "industry" : "organization";
+    const pack = { ...originalItems[0], id: "selected-pack", kind, name: "Sector", version: "1.0.0", publisher: "team", pack_source: "workspace" as const, path: `${workspace}/.eforge/packs/team/${type}/Sector/1.0.0/pack.yaml`, hidden: true };
+    const reference = `team:${type}:Sector@1.0.0`;
+    snapshot.items = [...originalItems, { ...pack, id: "newer-pack", version: "2.0.0", hidden: false }, pack];
+    snapshot.dependencies = { alpha: { ready: true, fingerprint: "ready", rows: [
+      { key: reference, kind: "pack", label: reference, status: "available", detail: "Exact version verified", digest: "pack-digest", source: pack.path },
+    ] } };
+    const environment: EnvironmentReport = {
+      source_sha256: "sha-alpha", project_root: workspace, valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
+      selected_packs: [{ source: "project", publisher: "team", type, name: "Sector", version: "1.0.0", digest: "pack-digest", location: `project:${reference}` }],
+      effective_scenario: { environment: {} }, field_origins: {}, organization_model_origins: {}, catalog_origins: {}, catalog_field_origins: {}, merge_decisions: [], declarations: [],
+      overlay_root: `${workspace}/.eforge/config`, overlay_files: [], overlays_truncated: false,
+    };
+    request.mockImplementation(async (path, ...args) => {
+      if (path === "/v1/scenarios/alpha/environment") return environment;
+      if (/^\/v1\/items\/[^/]+\/assets\?/.test(path)) return { revision: "compiled", category: "users", categories: [], total: 0, matching: 0, page: 0, page_size: 50, entries: [] };
+      return implementation(path, ...args);
+    });
+    try {
+      const user = userEvent.setup();
+      const { container } = await renderExpandedApp();
+      await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+      const region = screen.getByRole("region", { name: "Environment", exact: true });
+      await user.click(within(region).getByRole("button", { name: "Environment", exact: true }));
+      await user.click(await within(region).findByRole("button", { name: `Open ${reference} pack workspace` }));
+      expect(screen.getByRole("heading", { name: "Sector", exact: true })).toBeVisible();
+      expect(screen.getByText("Version 1.0.0")).toBeVisible();
+      expect(screen.getByRole("region", { name: "Validation & release", exact: true })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Assets", exact: true })).toBeVisible();
+      expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
+      expect(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" })).toHaveClass("selected");
+      expect(container.querySelector(".back-link")).toHaveTextContent("Packs");
+      expect(pack.hidden).toBe(true);
+    } finally { snapshot.items = originalItems; snapshot.dependencies = originalDependencies; request.mockImplementation(implementation); }
+  });
+}
 
 test("Environment refresh failures recover the header action and keep existing status", async () => {
   const original = snapshot.dependencies;
