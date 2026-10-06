@@ -128,6 +128,7 @@ def test_output_parent_paths_match_prediction_and_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     settings = StudioSettings(
         workspace=tmp_path / "workspace",
         output_parents={"~/workspace": Path("~/exports/../bundles")},

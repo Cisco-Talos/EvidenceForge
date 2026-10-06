@@ -42,3 +42,26 @@ Fresh integration checks passed:
   creates no DMG/output volume. Packaging option parsing passed. Native packaged app verification
   will run in CI; no runtime download, full package rebuild or DMG occurred in this session.
 - Refreshed remote refs; `origin/dev` is an ancestor of this branch, so integration is conflict-free.
+
+## First CI run and test corrections
+
+PR: [#435](https://github.com/Cisco-Talos/EvidenceForge/pull/435).
+The first [CI run](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/37494240139)
+passed lint, Linux engine tests, macOS state recovery and Windows checkpoint durability. It failed
+on two environment frontend tests and two Windows Python tests. The user authorized fixing and
+pushing these on October 6.
+
+- Environment tests now route asset, environment and configuration requests separately. Delayed
+  asset loads receive a valid typed page rather than an environment report. Pagination tests await
+  asset rendering and scope declaration row/scalar checks to their own table. Environment refresh
+  assertions count environment requests independently of asset requests; session storage is cleared.
+- Configuration diagnostics are decoded from JSON before comparing native `Path` values, avoiding
+  raw JSON escaping and Windows separator assumptions.
+- The home-expansion fixture sets `HOME` and Windows `USERPROFILE` to the same disposable root.
+  Assertions still require forecasts and actual output paths to agree without creating output.
+
+These changes affect tests only. No tests are skipped, requirements weakened, application behavior
+changed or DMGs built. Local validation: **216 frontend tests passed**, **31 affected Python tests
+passed**, TypeScript/Vite build and generated API types passed, full Ruff lint/format and diff checks
+passed. Native Windows validation remains the retriggered engine CI job; local macOS execution is
+not claimed as Windows evidence.

@@ -4,9 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
 import { afterEach, expect, test, vi } from "vitest";
 import { EnvironmentView } from "../src/EnvironmentView";
-import type { CatalogItem, EnvironmentReport, StudioApi } from "../src/api";
+import type { AssetPage, CatalogItem, EnvironmentReport, StudioApi } from "../src/api";
 
-const item = { id: "scenario", source_sha256: "source", name: "Example" } as CatalogItem;
+const item = { id: "scenario", kind: "scenario", source_sha256: "source", name: "Example" } as CatalogItem;
 const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
   selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "/workspace/office" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "/package" }],
@@ -21,13 +21,19 @@ const packs = [
   { kind: "industry_pack", name: "healthcare", version: "1.0.0", publisher: "evidenceforge", publisher_display_name: "EvidenceForge", pack_source: "bundled" },
 ] as CatalogItem[];
 function setup(request = vi.fn(async () => report), onPrepare = vi.fn(async (_prompt: string) => undefined)) {
-  const api = { request, readTextPreview: vi.fn(async () => ({ text: "# Header\n# Context\n\ndomains: []\ndescription: Clinic exercise\n", truncated: false, binary: false })), download: vi.fn(async () => ({ status: "browser" })) } as unknown as StudioApi;
+  const assets: AssetPage = { revision: "compiled", category: "users", categories: [{ key: "users", label: "Users", total: 0, editable: true }], total: 0, matching: 0, page: 0, page_size: 50, entries: [] };
+  const api = { request: vi.fn(async (path: string, ..._args: unknown[]) => {
+    if (/^\/v1\/items\/[^/]+\/assets\?/.test(path)) return assets;
+    if (/^\/v1\/scenarios\/[^/]+\/configuration$/.test(path)) return {};
+    if (/^\/v1\/scenarios\/[^/]+\/environment$/.test(path)) return request();
+    throw new Error(`Unexpected test request: ${path}`);
+  }), readTextPreview: vi.fn(async () => ({ text: "# Header\n# Context\n\ndomains: []\ndescription: Clinic exercise\n", truncated: false, binary: false })), download: vi.fn(async () => ({ status: "browser" })) } as unknown as StudioApi;
   const onError = vi.fn();
   const props = { item, packs, api, onPrepare, onError, dependencyFingerprint: "deps-1" };
   const view = render(<Tooltip.Provider><EnvironmentView {...props} /></Tooltip.Provider>);
-  return { ...view, api, onPrepare, onError, props };
+  return { ...view, api, onPrepare, onError, props, environmentRequest: request };
 }
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 test("embedded Environment shows dependency rows directly without readiness or pack disclosures", async () => {
   const request = vi.fn(async () => ({ ...report, valid: false, selected_packs: [], error: "Required pack missing" }));
@@ -66,7 +72,7 @@ test("folded environment inspection headers expose selected values and compositi
 });
 
 test("exact versions and source declarations are searchable and refresh after dependency changes", async () => {
-  const { api, props, rerender } = setup();
+  const { environmentRequest, props, rerender } = setup();
   const user = userEvent.setup();
   await screen.findByRole("heading", { name: "Packs 2" });
   expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
@@ -77,10 +83,10 @@ test("exact versions and source declarations are searchable and refresh after de
   expect(screen.getByText("Clinic exercise")).toBeVisible();
   expect(screen.queryByText("office/pack.yaml")).not.toBeInTheDocument();
   rerender(<Tooltip.Provider><EnvironmentView {...props} dependencyFingerprint="deps-2" /></Tooltip.Provider>);
-  await waitFor(() => expect(api.request).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(environmentRequest).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh environment" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Refresh environment" }));
-  await waitFor(() => expect(api.request).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(environmentRequest).toHaveBeenCalledTimes(3));
 });
 
 test("declaring YAML opens from a field by keyboard with its inspected revision", async () => {
@@ -104,10 +110,12 @@ test("declarations page through bounded rows and search values without hiding fa
   const declarations = Array.from({ length: 23 }, (_, index) => ({ path: `field.${index}`, layer: "Scenario" as const, source: "scenario.yaml", source_key: "sources/scenario.yaml", value: index === 0 ? false : index === 1 ? 0 : index === 2 ? "" : index === 3 ? null : `value-${index}`, value_found: true }));
   setup(vi.fn(async () => ({ ...report, declarations })));
   await screen.findByText("Source declarations");
+  await screen.findByText("No assets in this category yet.");
   const user = userEvent.setup();
   await user.click(screen.getByText("Source declarations"));
-  expect(screen.getAllByRole("row")).toHaveLength(11);
-  for (const value of ["false", "0", '""', "null"]) expect(screen.getByText(value, { exact: true })).toBeVisible();
+  const table = screen.getByRole("columnheader", { name: "Field / layer" }).closest("table")!;
+  expect(within(table).getAllByRole("row")).toHaveLength(11);
+  for (const value of ["false", "0", '""', "null"]) expect(within(table).getByText(value, { exact: true })).toBeVisible();
   expect(screen.getByText("1–10 of 23 fields")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Next declarations" }));
   expect(screen.getByText("11–20 of 23 fields")).toBeVisible();
@@ -202,13 +210,13 @@ test("an old response cannot replace a newly selected scenario", async () => {
 
 
 test("scenario configuration can be toggled and is refreshed before inspection", async () => {
-  const { api } = setup();
+  const { api, environmentRequest } = setup();
   await userEvent.setup().click(await screen.findByRole("button", { name: "Configuration layers 1 enabled · 2 layers" }));
   const checkbox = screen.getByRole("checkbox", { name: "Use Scenario configuration" });
   expect(checkbox).not.toBeChecked();
   await userEvent.setup().click(checkbox);
   await waitFor(() => expect(api.request).toHaveBeenCalledWith("/v1/scenarios/scenario/configuration", "POST", { scenario_enabled: true }));
-  await waitFor(() => expect(api.request).toHaveBeenCalledTimes(3));
+  await waitFor(() => expect(environmentRequest).toHaveBeenCalledTimes(2));
 });
 
 
@@ -232,6 +240,7 @@ test("inspection sections start folded, expose counts, and expand independently 
 test("source pages provide first, last, numbered jumps and accessible current-page state", async () => {
   const declarations = Array.from({ length: 120 }, (_, index) => ({ ...report.declarations[0], path: `field.${index}`, value: `value-${index}` }));
   setup(vi.fn(async () => ({ ...report, declarations })));
+  await screen.findByText("No assets in this category yet.");
   const user = userEvent.setup();
   await user.click(await screen.findByText("Source declarations"));
   const pages = screen.getByRole("navigation", { name: "Source declaration pages" });

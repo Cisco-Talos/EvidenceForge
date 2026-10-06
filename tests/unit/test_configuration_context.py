@@ -257,4 +257,5 @@ def test_invalid_extra_layer_identifies_its_declaring_file(tmp_path: Path) -> No
     )
     result = CliRunner().invoke(app, ["validate-config", "--context", str(context), "--json"])
     assert result.exit_code != 0
-    assert str(patch) in result.stdout
+    report = json.loads(result.stdout)
+    assert any(Path(issue["file"]) == patch for issue in report["errors"])
