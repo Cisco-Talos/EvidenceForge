@@ -221,6 +221,7 @@ For scripted or non-interactive use:
 | `eforge checkpoint verify <bundle-root> [--verbose\|--json]` | Read-only full hydration with phased progress and behavior/runtime drift diagnostics |
 | `eforge checkpoint suspend <bundle-root>` | Ask an active checkpoint-enabled generator to stop safely after its current simulated hour |
 | `eforge validate <scenario.yaml>` | Validate schema and cross-references, and always print a machine-aware memory and disk forecast |
+| `eforge resources predict <scenario.yaml> [--destination <dir>] [--checkpoint-hours N] [--json]` | Predict generated-data size, peak memory, and disk requirements without generating output or running validation |
 | `eforge resolve <scenario.yaml> -o <resolved.yaml> [--explain-composition]` | Compile an authoritative, self-contained scenario without generating logs |
 | `eforge pack <command>` | Discover, author, lock, validate, package, inspect, import, or hydrate industry and organization packs |
 | `eforge eval <output_dir> [-s <scenario.yaml>] [--allow-large-evaluation]` | Evaluate quality; new bundles use their adjacent resolved scenario, while legacy bundles require `--scenario` |
@@ -234,6 +235,11 @@ Useful `generate` flags include `--verbose` / `--debug`, `--formats` / `-F`,
 `--target default|sof-elk|splunk`, `--resume`, `--overwrite`, and `--checkpoint-hours N`. The
 default checkpoint cadence is 24 simulated hours; `0` disables new checkpoints. `validate` accepts
 the same checkpoint-cadence option so its resource forecast reflects the intended run.
+
+`resources predict` uses the same calibrated forecast as validation and generation. Supply
+`--project-root` for a workspace's packs and overlays, and `--destination` to check the filesystem
+where output will be saved. Its JSON report includes estimate ranges, resource pressure, and a
+machine snapshot. Prediction availability does not certify scenario validity; validate separately.
 
 Resume defaults to `--resume-policy compatible`. It attempts environment drift such as Python,
 dependency, OS, and architecture changes, while preserving hard integrity, state-schema, immutable
@@ -313,6 +319,12 @@ uv run eforge eval ./output
 
 ## Development
 
+EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
+The GUI currently supports **macOS only**; Linux and Windows GUI support is deferred for later
+exploration. This does not change the engine or CLI platform support described above.
+Run it with `uv run eforge-desktop` after following the
+[Studio source-run guide](docs/studio-source-run.md).
+
 ```bash
 uv sync --all-extras
 uv run pytest
@@ -335,6 +347,8 @@ coverage gate, coding conventions, and external-parser validation requirements.
   overlays and data catalogs
 - [Generation Checkpoints and Resume](docs/reference/GENERATION_CHECKPOINTS.md) — Safe suspension,
   recovery, status, storage, and filesystem behavior
+- [Studio State Upgrades and Recovery](docs/studio-state-upgrades.md) — UI state contracts,
+  verified backups, interrupted-upgrade recovery and native release gates
 - [Output Target Ingest Guides](docs/output-targets/README.md) — Default, SOF-ELK, and Splunk
   layouts, parsing, and ingestion
 - [Adversarial Payload Testing](docs/reference/adversarial_payload.md) — Safe synthetic payload and

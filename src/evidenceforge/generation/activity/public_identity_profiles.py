@@ -245,7 +245,12 @@ def translate_dns_registry_public_identities(document: dict[str, Any]) -> dict[s
     }
 
 
-def _overlay_document(relative_path: str) -> dict[str, Any] | None:
+def _overlay_document(
+    relative_path: str, files: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    if files is not None:
+        value = files.get(relative_path)
+        return deepcopy(value) if isinstance(value, dict) else None
     effective = current_effective_config()
     if effective is not None and not uses_ambient_overlay_compat():
         return project_overlay_document(relative_path)
@@ -276,31 +281,25 @@ def _with_overlay_provenance(document: dict[str, Any], relative_path: str) -> di
     return annotated
 
 
-def load_public_identity_profiles() -> dict[str, Any]:
-    """Load and validate the canonical registry with translated 2.x overlays."""
-
-    global _CACHED_DATA
-    if _CACHED_DATA is not None:
-        return _CACHED_DATA
-    found, packaged = packaged_default_document(_CONFIG_PATH)
-    data = packaged if found else load_yaml_file(_CONFIG_PATH)
-    if not isinstance(data, dict):
-        raise ValueError("public_identity_profiles.yaml must contain a mapping")
-    legacy_external = _overlay_document(_LEGACY_EXTERNAL_PATH)
+def _apply_identity_overlays(
+    data: dict[str, Any], files: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Apply one layer's compatibility translations followed by its canonical entries."""
+    legacy_external = _overlay_document(_LEGACY_EXTERNAL_PATH, files)
     if legacy_external is not None:
         data = _merge_registry(
             data,
             translate_external_actor_profiles(legacy_external),
             canonical_overlay=False,
         )
-    legacy_mail = _overlay_document(_LEGACY_MAIL_PATH)
+    legacy_mail = _overlay_document(_LEGACY_MAIL_PATH, files)
     if legacy_mail is not None:
         data = _merge_registry(
             data,
             translate_mail_public_identities(legacy_mail),
             canonical_overlay=False,
         )
-    network_params = _overlay_document(_NETWORK_PARAMS_PATH)
+    network_params = _overlay_document(_NETWORK_PARAMS_PATH, files)
     if network_params is not None:
         for field, role, provider in (
             ("public_dns_resolvers", "dns", "public-dns"),
@@ -314,18 +313,35 @@ def load_public_identity_profiles() -> dict[str, Any]:
             )
             if patch:
                 data = _merge_registry(data, patch, canonical_overlay=False)
-    dns_registry = _overlay_document(_DNS_REGISTRY_PATH)
+    dns_registry = _overlay_document(_DNS_REGISTRY_PATH, files)
     if dns_registry is not None:
         patch = translate_dns_registry_public_identities(dns_registry)
         if patch:
             data = _merge_registry(data, patch, canonical_overlay=False)
-    canonical = _overlay_document(_CONFIG_RELATIVE_PATH)
+    canonical = _overlay_document(_CONFIG_RELATIVE_PATH, files)
     if canonical is not None:
         data = _merge_registry(
             data,
             _with_overlay_provenance(canonical, _CONFIG_RELATIVE_PATH),
             canonical_overlay=True,
         )
+    return data
+
+
+def load_public_identity_profiles() -> dict[str, Any]:
+    """Load the canonical registry with each selected layer's existing translation rules."""
+    global _CACHED_DATA
+    if _CACHED_DATA is not None:
+        return _CACHED_DATA
+    found, packaged = packaged_default_document(_CONFIG_PATH)
+    data = packaged if found else load_yaml_file(_CONFIG_PATH)
+    if not isinstance(data, dict):
+        raise ValueError("public_identity_profiles.yaml must contain a mapping")
+    data = _apply_identity_overlays(data)
+    effective = current_effective_config()
+    if effective is not None and not uses_ambient_overlay_compat():
+        for layer in getattr(effective, "overlay_layers", ()):
+            data = _apply_identity_overlays(data, layer.files)
     validated = PublicIdentityProfilesConfig.model_validate(data)
     _CACHED_DATA = validated.model_dump(mode="python")
     return _CACHED_DATA
@@ -341,17 +357,26 @@ def reset_public_identity_profiles_cache() -> None:
 def consumed_legacy_public_identity_overlays() -> tuple[str, ...]:
     """Return user-owned legacy identity files present in the active project snapshot."""
 
-    consumed: list[str] = []
-    external = _overlay_document(_LEGACY_EXTERNAL_PATH)
-    if external is not None and any(
-        isinstance(external.get(field), list) and bool(external[field])
-        for field in ("logon_source_ips", "failed_logon_source_ips", "connection_c2_ips")
-    ):
-        consumed.append(_LEGACY_EXTERNAL_PATH)
-    mail = _overlay_document(_LEGACY_MAIL_PATH)
-    if mail is not None and bool(mail.get("providers") or mail.get("reserved_replacement_domains")):
-        consumed.append(_LEGACY_MAIL_PATH)
-    return tuple(consumed)
+    consumed: set[str] = set()
+    effective = current_effective_config()
+    snapshots = (
+        [None, *(layer.files for layer in getattr(effective, "overlay_layers", ()))]
+        if effective is not None
+        else [None]
+    )
+    for files in snapshots:
+        external = _overlay_document(_LEGACY_EXTERNAL_PATH, files)
+        if external is not None and any(
+            isinstance(external.get(field), list) and bool(external[field])
+            for field in ("logon_source_ips", "failed_logon_source_ips", "connection_c2_ips")
+        ):
+            consumed.add(_LEGACY_EXTERNAL_PATH)
+        mail = _overlay_document(_LEGACY_MAIL_PATH, files)
+        if mail is not None and bool(
+            mail.get("providers") or mail.get("reserved_replacement_domains")
+        ):
+            consumed.add(_LEGACY_MAIL_PATH)
+    return tuple(sorted(consumed))
 
 
 class PublicIdentityRegistry:

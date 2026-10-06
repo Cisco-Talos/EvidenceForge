@@ -681,14 +681,24 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
     # Overlay files must parse cleanly before merged loaders use them.
     # If an overlay file has bad YAML, report it as an error rather than
     # letting it crash the merged loaders.
-    from evidenceforge.config.overlay import get_overlay_directory, retired_overlay_errors
+    from evidenceforge.config.overlay import (
+        get_overlay_directories,
+        get_overlay_directory,
+        retired_overlay_errors,
+    )
 
-    overlay_dir = get_overlay_directory()
-    overlay_yaml_files: list[Path] = []
-    if overlay_dir and overlay_dir.is_dir():
-        overlay_yaml_files = sorted(overlay_dir.rglob("*.yaml"))
-    for relative_path, message in retired_overlay_errors(overlay_dir):
-        result.issues.append(Issue("ERROR", f"overlay/{relative_path}", message))
+    overlay_dirs = get_overlay_directories()
+    base_overlay_dir = get_overlay_directory()
+    overlay_entries = [
+        (directory, path)
+        for directory in overlay_dirs
+        for path in sorted(directory.rglob("*.yaml"))
+    ]
+    overlay_yaml_files = [path for _, path in overlay_entries]
+    for directory in overlay_dirs:
+        prefix = "overlay" if directory == base_overlay_dir else str(directory)
+        for relative_path, message in retired_overlay_errors(directory):
+            result.issues.append(Issue("ERROR", f"{prefix}/{relative_path}", message))
 
     from .configuration_overlay_shapes import OVERLAY_FILE_SCHEMAS
 
@@ -712,20 +722,22 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
         )
         overlay_errors = True
 
-    for path in overlay_yaml_files:
+    for overlay_dir, path in overlay_entries:
         data, err = _safe_load_yaml(path)
         rel_path = logical_path(path.relative_to(overlay_dir))
+        prefix = "overlay" if overlay_dir == base_overlay_dir else str(overlay_dir)
+        overlay_label = f"{prefix}/{rel_path}"
         if err:
-            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", f"YAML parse error: {err}"))
+            result.issues.append(Issue("ERROR", overlay_label, f"YAML parse error: {err}"))
             overlay_errors = True
         elif data is None:
-            result.issues.append(Issue("ERROR", f"overlay/{rel_path}", "File is empty"))
+            result.issues.append(Issue("ERROR", overlay_label, "File is empty"))
             overlay_errors = True
         elif not isinstance(data, dict):
             result.issues.append(
                 Issue(
                     "ERROR",
-                    f"overlay/{rel_path}",
+                    overlay_label,
                     f"Expected a YAML mapping at root, got {type(data).__name__}",
                 )
             )
@@ -739,7 +751,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                 result.issues.append(
                     Issue(
                         "ERROR",
-                        f"overlay/{rel_path}",
+                        overlay_label,
                         "Unknown overlay file — not a recognized config path. Check filename for typos.",
                     )
                 )
@@ -777,7 +789,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                         result.issues.append(
                             Issue(
                                 "ERROR",
-                                f"overlay/{rel_path}",
+                                overlay_label,
                                 f'Unexpected top-level key "{key}" — this will be ignored by the engine. Check for typos.',
                             )
                         )
@@ -791,7 +803,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                         result.issues.append(
                             Issue(
                                 "ERROR",
-                                f"overlay/{rel_path}",
+                                overlay_label,
                                 f'Field "{field_name}" should be a list, got {type(value).__name__}',
                             )
                         )
@@ -802,7 +814,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                                 result.issues.append(
                                     Issue(
                                         "ERROR",
-                                        f"overlay/{rel_path}",
+                                        overlay_label,
                                         f'"{field_name}" entry #{i + 1} should be a mapping, got {type(item).__name__}',
                                     )
                                 )
@@ -811,7 +823,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                                 result.issues.append(
                                     Issue(
                                         "ERROR",
-                                        f"overlay/{rel_path}",
+                                        overlay_label,
                                         f'"{field_name}" entry #{i + 1} missing required "{key_field}" field',
                                     )
                                 )
@@ -827,7 +839,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                                         result.issues.append(
                                             Issue(
                                                 "ERROR",
-                                                f"overlay/{rel_path}",
+                                                overlay_label,
                                                 f'Duplicate {key_field}="{k}" in "{field_name}" (entries #{seen_overlay_keys[k]} and #{j + 1}) — last entry wins, first is lost',
                                             )
                                         )
@@ -840,7 +852,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a mapping, got {type(data[field_name]).__name__}',
                         )
                     )
@@ -854,7 +866,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a mapping, got {type(value).__name__}',
                         )
                     )
@@ -870,7 +882,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                         result.issues.append(
                             Issue(
                                 "ERROR",
-                                f"overlay/{rel_path}",
+                                overlay_label,
                                 f'Field "{field_name}" must map non-empty strings to '
                                 "non-empty strings",
                             )
@@ -886,7 +898,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                         result.issues.append(
                             Issue(
                                 "ERROR",
-                                f"overlay/{rel_path}",
+                                overlay_label,
                                 f'Field "{field_name}" should be a list, got {type(value).__name__}',
                             )
                         )
@@ -897,7 +909,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                                 result.issues.append(
                                     Issue(
                                         "ERROR",
-                                        f"overlay/{rel_path}",
+                                        overlay_label,
                                         f'"{field_name}" entry #{i + 1} should be a string, got {type(item).__name__}',
                                     )
                                 )
@@ -909,7 +921,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a '
                             f"{expected_type.__name__}, got {type(data[field_name]).__name__}",
                         )
@@ -922,7 +934,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a list, got '
                             f"{type(data[field_name]).__name__}",
                         )
@@ -938,7 +950,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a list, got {type(value).__name__}',
                         )
                     )
@@ -953,7 +965,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                         result.issues.append(
                             Issue(
                                 "ERROR",
-                                f"overlay/{rel_path}",
+                                overlay_label,
                                 f'"{field_name}" entry #{i + 1} should contain exactly '
                                 f"{required_length} non-empty strings",
                             )
@@ -965,7 +977,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a string, got '
                             f"{type(data[field_name]).__name__}",
                         )
@@ -980,7 +992,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Field "{field_name}" should be a number, got '
                             f"{type(data[field_name]).__name__}",
                         )
@@ -1015,11 +1027,13 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                             overlay_errors = True
 
     # Validate overlay persona files specifically (one-file-per-persona pattern)
-    if overlay_dir:
+    for overlay_dir in overlay_dirs:
         overlay_personas_dir = overlay_dir / "personas"
         if overlay_personas_dir.is_dir():
             for persona_file in sorted(overlay_personas_dir.glob("*.yaml")):
                 rel_path = logical_path(persona_file.relative_to(overlay_dir))
+                prefix = "overlay" if overlay_dir == base_overlay_dir else str(overlay_dir)
+                overlay_label = f"{prefix}/{rel_path}"
                 pdata, perr = _safe_load_yaml(persona_file)
                 if perr:
                     continue  # Already caught in YAML health check above
@@ -1029,7 +1043,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f"Persona file should be a mapping, got {type(pdata).__name__}",
                         )
                     )
@@ -1038,7 +1052,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             'Persona file missing required "name" field — it will be silently ignored by the loader',
                         )
                     )
@@ -1047,7 +1061,7 @@ def _validate_raw_overlays(result: ValidationResult) -> tuple[list[Path], bool]:
                     result.issues.append(
                         Issue(
                             "ERROR",
-                            f"overlay/{rel_path}",
+                            overlay_label,
                             f'Persona name "{pdata["name"]}" does not match filename "{persona_file.stem}" — filename must match the name field',
                         )
                     )

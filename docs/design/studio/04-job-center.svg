@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img">
+<title>Job center</title>
+<defs><linearGradient id="primary" x2="0" y2="1"><stop stop-color="#789bff"/><stop offset="1" stop-color="#5278e9"/></linearGradient></defs>
+<rect x="0" y="0" width="1440" height="900" rx="0" fill="#0b111c"/>
+<rect x="0" y="0" width="222" height="900" rx="0" fill="#0e1826"/>
+<rect x="221" y="0" width="1" height="900" rx="0" fill="#223248"/>
+<rect x="222" y="0" width="1218" height="59" rx="0" fill="#0c1421"/>
+<rect x="222" y="58" width="1218" height="1" rx="0" fill="#223248"/>
+<rect x="18" y="23" width="34" height="34" rx="9" fill="#3d62b0"/>
+<text x="35" y="46" fill="#c3d5ff" font-size="25" font-weight="400" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">≋</text>
+<text x="63" y="41" fill="#e9edf5" font-size="17" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">EvidenceForge</text>
+<text x="64" y="58" fill="#72d9c4" font-size="9" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">S T U D I O</text>
+<rect x="16" y="86" width="190" height="34" rx="7" fill="#17273a"/>
+<circle cx="29" cy="103" r="4" fill="#72d9c4"/>
+<text x="40" y="108" fill="#adbed0" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Documents / EvidenceForge</text>
+<text x="30" y="156" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◇</text>
+<text x="60" y="155" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Scenarios</text>
+<text x="30" y="205" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▱</text>
+<text x="60" y="204" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Industry packs</text>
+<text x="30" y="254" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▢</text>
+<text x="60" y="253" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Org packs</text>
+<rect x="12" y="289" width="198" height="40" rx="8" fill="#233958"/>
+<rect x="12" y="289" width="3" height="40" rx="2" fill="#80a7ff"/>
+<text x="30" y="315" fill="#91b4ea" font-size="18" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">◌</text>
+<text x="60" y="314" fill="#e9edf5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Job center</text>
+<text x="31" y="850" fill="#9db3cb" font-size="19" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">⚙</text>
+<text x="60" y="850" fill="#a3b2c5" font-size="14" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Settings</text>
+<text x="254" y="38" fill="#e9edf5" font-size="13" font-weight="650" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Job center</text>
+<text x="1300" y="38" fill="#72d9c4" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">●  Local service</text>
+<text x="258" y="105" fill="#72d9c4" font-size="10" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">ALL OPERATIONS</text>
+<text x="258" y="149" fill="#e9edf5" font-size="34" font-weight="750" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Job center</text>
+<text x="258" y="176" fill="#94a9be" font-size="14" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Track every generation and evaluation in your workspace.</text>
+<rect x="1215" y="128" width="184" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="1307" y="151" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">▶  Resume paused jobs</text>
+<rect x="258" y="208" width="116" height="69" rx="9" fill="#142238" stroke="#2b4059"/>
+<text x="276" y="239" fill="#e9edf5" font-size="23" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">2</text>
+<text x="276" y="260" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Running</text>
+<rect x="387" y="208" width="116" height="69" rx="9" fill="#142238" stroke="#2b4059"/>
+<text x="405" y="239" fill="#e9edf5" font-size="23" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">1</text>
+<text x="405" y="260" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Queued</text>
+<rect x="516" y="208" width="116" height="69" rx="9" fill="#142238" stroke="#2b4059"/>
+<text x="534" y="239" fill="#e9edf5" font-size="23" font-weight="700" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">8</text>
+<text x="534" y="260" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Completed</text>
+<rect x="258" y="307" width="555" height="256" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="277" y="338" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Healthcare breach</text>
+<text x="278" y="360" fill="#98c8ff" font-size="11" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">GENERATION  ·  RUNNING</text>
+<text x="278" y="394" fill="#e9edf5" font-size="13" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">5 of 8 simulated hours</text>
+<text x="788" y="394" fill="#bdd2f1" font-size="12" font-weight="650" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">63%</text>
+<rect x="278" y="408" width="514" height="12" rx="7" fill="#2a3e57"/>
+<rect x="278" y="408" width="323" height="12" rx="7" fill="#7294f3"/>
+<text x="278" y="448" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Rendering coordinated evidence · checkpoint enabled</text>
+<rect x="278" y="473" width="514" height="1" rx="0" fill="#2b4059"/>
+<rect x="278" y="492" width="132" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="344" y="515" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Open bundle</text>
+<rect x="419" y="492" width="91" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="464" y="515" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Suspend</text>
+<rect x="835" y="307" width="555" height="256" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="854" y="338" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Branch office intrusion</text>
+<text x="855" y="360" fill="#98c8ff" font-size="11" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">GENERATION  ·  RUNNING</text>
+<text x="855" y="394" fill="#e9edf5" font-size="13" font-weight="600" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">2 of 8 simulated hours</text>
+<text x="1365" y="394" fill="#bdd2f1" font-size="12" font-weight="650" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">25%</text>
+<rect x="855" y="408" width="514" height="12" rx="7" fill="#2a3e57"/>
+<rect x="855" y="408" width="128" height="12" rx="7" fill="#7294f3"/>
+<text x="855" y="448" fill="#94a9be" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Rendering coordinated evidence · checkpoint enabled</text>
+<rect x="855" y="473" width="514" height="1" rx="0" fill="#2b4059"/>
+<rect x="855" y="492" width="132" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="921" y="515" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Open bundle</text>
+<rect x="996" y="492" width="91" height="36" rx="8" fill="#213650" stroke="#45648e"/>
+<text x="1041" y="515" fill="#e9edf5" font-size="12" font-weight="650" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Suspend</text>
+<rect x="258" y="585" width="1132" height="150" rx="11" fill="#121f31" stroke="#2b4059"/>
+<text x="277" y="616" fill="#e9edf5" font-size="17" font-weight="680" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Queued · Insider exfiltration</text>
+<text x="278" y="637" fill="#94a9be" font-size="13" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Waiting for an available worker</text>
+<text x="278" y="696" fill="#7895b0" font-size="11" font-weight="400" text-anchor="start" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">Each job keeps its own progress, log, and bundle path.</text>
+</svg>

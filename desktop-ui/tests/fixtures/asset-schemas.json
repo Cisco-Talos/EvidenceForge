@@ -1,0 +1,654 @@
+{
+  "user": {
+    "description": "User definition (simplified for Phase 1).\n\nRepresents a user in the simulated environment who may generate log activity.\n\nAttributes:\n    username: Username (alphanumeric, dot, dollar sign, dash, underscore)\n    full_name: User's full name\n    email: Email address (basic format validation)\n    groups: List of group names this user belongs to\n    enabled: If False, user generates no activity\n    persona: Reference to a persona name (if None, no activity generated)\n    primary_system: Primary system hostname for this user (optional)",
+    "properties": {
+      "username": {
+        "pattern": "^[a-zA-Z0-9._$-]+$",
+        "title": "Username",
+        "type": "string"
+      },
+      "full_name": {
+        "title": "Full Name",
+        "type": "string"
+      },
+      "email": {
+        "title": "Email",
+        "type": "string",
+        "format": "email"
+      },
+      "groups": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Groups",
+        "type": "array",
+        "x-asset-choices": "groups",
+        "x-asset-custom": false
+      },
+      "enabled": {
+        "default": true,
+        "title": "Enabled",
+        "type": "boolean"
+      },
+      "persona": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Reference to persona name",
+        "title": "Persona",
+        "x-asset-choices": "personas",
+        "x-asset-custom": false
+      },
+      "primary_system": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Primary system hostname",
+        "title": "Primary System",
+        "x-asset-choices": "systems",
+        "x-asset-custom": false
+      },
+      "browsing_intensity": {
+        "anyOf": [
+          {
+            "pattern": "^(light|normal|heavy)$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Per-user browsing intensity override (takes precedence over persona)",
+        "title": "Browsing Intensity"
+      }
+    },
+    "required": [
+      "username",
+      "full_name",
+      "email"
+    ],
+    "title": "User",
+    "type": "object"
+  },
+  "group": {
+    "description": "Group definition (simplified for Phase 1).\n\nRepresents a user group in the simulated environment.\n\nAttributes:\n    name: Group name\n    description: Optional group description\n    members: List of usernames in this group\n    permissions: Optional list of permissions (Phase 1: stored as strings)",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "description": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Description"
+      },
+      "members": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Members",
+        "type": "array",
+        "x-asset-choices": "users",
+        "x-asset-custom": false
+      },
+      "permissions": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Permissions",
+        "x-asset-choices": "permissions",
+        "x-asset-custom": true
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "Group",
+    "type": "object"
+  },
+  "application": {
+    "$defs": {
+      "ApplicationDeploymentEntry": {
+        "additionalProperties": false,
+        "description": "Path-independent release and placement policy for one application platform.",
+        "properties": {
+          "kind": {
+            "const": "managed",
+            "title": "Kind",
+            "type": "string"
+          },
+          "product_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]*$",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Version",
+            "type": "string"
+          },
+          "build": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Build",
+            "type": "string"
+          },
+          "architectures": {
+            "default": [
+              "x64"
+            ],
+            "items": {
+              "enum": [
+                "x86",
+                "x64",
+                "arm64",
+                "neutral"
+              ],
+              "type": "string"
+            },
+            "title": "Architectures",
+            "type": "array"
+          },
+          "scope": {
+            "enum": [
+              "machine",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "variant": {
+            "default": "stable",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Variant",
+            "type": "string"
+          },
+          "fleet_prevalence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Fleet Prevalence",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "product_id",
+          "version",
+          "build",
+          "scope"
+        ],
+        "title": "ApplicationDeploymentEntry",
+        "type": "object"
+      },
+      "CatalogApplicationDeploymentEntry": {
+        "additionalProperties": false,
+        "description": "Current catalog-owned release policy without an authored package version.\n\n``pe_metadata`` takes the exact source-native version from the adjacent\nplatform metadata. ``host_build`` binds an OS-owned/package-manager image\nto the scenario host build or distribution release. ``unspecified`` keeps\na stable explicit legacy-native release dimension without fabricating a\nversion.",
+        "properties": {
+          "kind": {
+            "const": "catalog",
+            "title": "Kind",
+            "type": "string"
+          },
+          "release_policy": {
+            "enum": [
+              "pe_metadata",
+              "host_build",
+              "unspecified"
+            ],
+            "title": "Release Policy",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "machine",
+              "user"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Id"
+          },
+          "architectures": {
+            "default": [
+              "x64"
+            ],
+            "items": {
+              "enum": [
+                "x86",
+                "x64",
+                "arm64",
+                "neutral"
+              ],
+              "type": "string"
+            },
+            "title": "Architectures",
+            "type": "array"
+          },
+          "variant": {
+            "default": "stable",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Variant",
+            "type": "string"
+          },
+          "fleet_prevalence": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Fleet Prevalence",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "release_policy",
+          "scope"
+        ],
+        "title": "CatalogApplicationDeploymentEntry",
+        "type": "object"
+      },
+      "LegacyStaticApplicationDeploymentEntry": {
+        "additionalProperties": false,
+        "description": "Explicit compatibility descriptor for applications not yet release-managed.",
+        "properties": {
+          "kind": {
+            "const": "legacy_static",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "LegacyStaticApplicationDeploymentEntry",
+        "type": "object"
+      },
+      "LoadedModuleEntry": {
+        "additionalProperties": false,
+        "description": "A DLL/module entry in a loaded_modules list.",
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "release_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "owner_release",
+                  "pe_metadata",
+                  "host_build",
+                  "unspecified"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Release Policy"
+          },
+          "product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Product Id"
+          },
+          "signed": {
+            "default": true,
+            "title": "Signed",
+            "type": "boolean"
+          },
+          "signature": {
+            "default": "Microsoft Windows",
+            "title": "Signature",
+            "type": "string"
+          },
+          "signature_status": {
+            "default": "Valid",
+            "title": "Signature Status",
+            "type": "string"
+          },
+          "pe_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pe Metadata"
+          },
+          "load_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "startup",
+                  "runtime"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Load Phase"
+          },
+          "startup_probability": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Startup Probability",
+            "type": "number"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "LoadedModuleEntry",
+        "type": "object"
+      },
+      "PlatformConfig": {
+        "additionalProperties": false,
+        "description": "Per-OS platform config within an application entry.",
+        "properties": {
+          "image_path": {
+            "title": "Image Path",
+            "type": "string"
+          },
+          "available_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Available From"
+          },
+          "available_until": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Available Until"
+          },
+          "deployment": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ApplicationDeploymentEntry"
+              },
+              {
+                "$ref": "#/$defs/CatalogApplicationDeploymentEntry"
+              },
+              {
+                "$ref": "#/$defs/LegacyStaticApplicationDeploymentEntry"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Deployment"
+          },
+          "pe_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pe Metadata"
+          },
+          "command_templates": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command Templates"
+          },
+          "command_parameter_pools": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Command Parameter Pools"
+          },
+          "children": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Children"
+          },
+          "loaded_modules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/LoadedModuleEntry"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Loaded Modules"
+          }
+        },
+        "required": [
+          "image_path"
+        ],
+        "title": "PlatformConfig",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "A single application entry in application_catalog.yaml.",
+    "properties": {
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "display_name": {
+        "title": "Display Name",
+        "type": "string"
+      },
+      "platforms": {
+        "additionalProperties": {
+          "$ref": "#/$defs/PlatformConfig"
+        },
+        "title": "Platforms",
+        "type": "object",
+        "propertyNames": {
+          "enum": [
+            "windows",
+            "linux"
+          ]
+        },
+        "minProperties": 1
+      },
+      "categories": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Categories",
+        "type": "array",
+        "x-asset-choices": "categories",
+        "x-asset-custom": true
+      },
+      "personas": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Personas",
+        "type": "array",
+        "x-asset-choices": "personas",
+        "x-asset-custom": false
+      },
+      "system_types": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "System Types",
+        "x-asset-enum": [
+          "workstation",
+          "server",
+          "domain_controller"
+        ]
+      },
+      "selection_weight": {
+        "default": 10,
+        "exclusiveMinimum": 0,
+        "title": "Selection Weight",
+        "type": "integer"
+      },
+      "compatibility_group": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Compatibility Group"
+      },
+      "compatibility_option": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Compatibility Option"
+      },
+      "singleton_per_session": {
+        "default": false,
+        "title": "Singleton Per Session",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "display_name",
+      "platforms",
+      "categories",
+      "personas"
+    ],
+    "title": "ApplicationEntry",
+    "type": "object"
+  }
+}

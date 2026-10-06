@@ -1217,10 +1217,14 @@ class NetworkTransactionPlanner:
                     ),
                 )
             elif type(member) is ProcessMaterializationPlan:
+                # One host can own both transport roles (for example SSH to itself).
+                # Resolve the process by distinct canonical hosts, not role count.
                 candidate_hosts = tuple(
-                    host
-                    for host in (event.src_host, event.dst_host)
-                    if host is not None and identity.hostname in {host.hostname, host.fqdn}
+                    {
+                        (host.hostname, host.fqdn, host.ip): host
+                        for host in (event.src_host, event.dst_host)
+                        if host is not None and identity.hostname in {host.hostname, host.fqdn}
+                    }.values()
                 )
                 if len(candidate_hosts) != 1:
                     raise StateError(

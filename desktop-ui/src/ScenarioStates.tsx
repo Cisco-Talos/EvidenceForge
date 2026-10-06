@@ -1,0 +1,130 @@
+import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
+import { Tooltip } from "radix-ui";
+import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
+import { recentJobs, jobSubmittedAt } from "./jobOrder";
+
+type State = "none" | "stale" | "working" | "success" | "warning" | "error";
+export interface OperationState { label: string; state: State; detail: string }
+
+export function environmentState(health?: DependencyHealth, refreshing = false): OperationState {
+  if (refreshing) return { label: "Environment", state: "working", detail: "Checking current pack versions and included files." };
+  if (!health) return { label: "Environment", state: "none", detail: "Dependencies have not been checked yet." };
+  return { label: "Environment", state: health.ready ? "success" : "error", detail: health.ready
+    ? "All required pack versions and included files are available."
+    : health.rows.filter((row) => ["missing", "conflict"].includes(row.status)).map((row) => `${row.label}: ${row.detail}`).join(" · ") || "Environment dependencies could not be resolved." };
+}
+
+function latest(jobs: StudioJob[]): StudioJob | undefined {
+  return recentJobs(jobs)[0];
+}
+
+export function jobState(label: string, job: StudioJob | undefined, stale: boolean): OperationState {
+  if (!job) return { label, state: stale ? "stale" : "none", detail: stale ? `${label} was completed for an older scenario revision.` : `${label} has not been run.` };
+  if (job.status === "queued" || job.status === "running" || job.status === "paused") {
+    return { label, state: "working", detail: `${label} is ${job.status}.` };
+  }
+  if (job.status === "completed") {
+    if (job.kind === "evaluation") {
+      const report = job.scorecard;
+      if (report?.error) return { label, state: "error", detail: `Evaluation report is unavailable: ${report.error}` };
+      const score = report?.overall_score == null ? "" : ` · ${report.overall_score.toFixed(0)}/100`;
+      if (report?.acceptance_passed === false) return { label, state: "error", detail: `Failed acceptance${score}. One or more required checks failed for this scenario revision.` };
+      if (report?.acceptance_passed === true) return { label, state: "success", detail: `Passed acceptance${score} for this scenario revision.` };
+      return { label, state: "warning", detail: `Evaluation completed${score}, but acceptance is ${report ? "indeterminate" : "unavailable"}.` };
+    }
+    return { label, state: "success", detail: `${label} completed for this scenario revision.` };
+  }
+  return { label, state: "error", detail: `${label} ${job.status}${job.status_message ? `: ${job.status_message}` : "."}` };
+}
+
+function validationState(item: CatalogItem, record?: ValidationRecord, dependencyFingerprint?: string, dependencyChangedAt = 0): OperationState {
+  if (!record) return { label: "Validation", state: "none", detail: "This scenario has not been validated in Studio." };
+  if (record.source_sha256 !== item.source_sha256 || !!record.dependency_sha256 && !!dependencyFingerprint && record.dependency_sha256 !== dependencyFingerprint || !record.dependency_sha256 && dependencyChangedAt > record.completed_at) {
+    return { label: "Validation", state: "stale", detail: "Validation predates the latest scenario or dependency change." };
+  }
+  const counts = record.result.report?.severity_counts as { warning?: number; error?: number } | undefined;
+  if (record.result.exit_code !== 0 || (counts?.error || 0) > 0) {
+    return { label: "Validation", state: "error", detail: `${counts?.error || "Some"} validation errors in the current revision.` };
+  }
+  if ((counts?.warning || 0) > 0) {
+    return { label: "Validation", state: "warning", detail: `Current revision is valid with ${counts?.warning} warnings.` };
+  }
+  return { label: "Validation", state: "success", detail: "Current revision passed validation." };
+}
+
+export interface RunInputStatus { state: "current" | "changed" | "unverified"; label: string; detail: string }
+
+/** Missing legacy provenance cannot establish that inputs actually changed. */
+export function generationInputs(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): RunInputStatus {
+  if (!job.source_sha256 || !item.source_sha256) return { state: "unverified", label: "Inputs unverified", detail: "This run does not record enough scenario provenance to compare its inputs with the current files." };
+  if (job.source_sha256 !== item.source_sha256) return { state: "changed", label: "Inputs changed", detail: "The scenario YAML differs from this run's captured revision. Its result still describes the generated data." };
+  const health = snapshot.dependencies?.[item.id];
+  if (job.dependency_sha256) {
+    if (!health) return { state: "unverified", label: "Inputs unverified", detail: "Current dependencies have not been checked yet. The run retains its captured inputs and result." };
+    if (job.dependency_sha256 !== health.fingerprint) return { state: "changed", label: "Inputs changed", detail: "Packs, included files, or configuration differ from this run's captured inputs. Its result still describes the generated data." };
+  } else if (jobSubmittedAt(job) < (health?.changed_at || 0)) {
+    return { state: "unverified", label: "Inputs unverified", detail: "The scenario YAML still matches. This older run has no dependency fingerprint, so a later dependency check cannot establish whether its packs, includes, or configuration changed." };
+  }
+  return { state: "current", label: "Current revision", detail: "This run's inputs match the current scenario and dependency records." };
+}
+
+export function generationIsCurrent(job: StudioJob, item: CatalogItem, snapshot: StudioSnapshot): boolean {
+  return generationInputs(job, item, snapshot).state === "current";
+}
+
+export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
+  const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
+  const changedAt = snapshot.dependencies?.[item.id]?.changed_at || 0;
+  const validation = validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt);
+  const latestGeneration = latest(generations);
+  const inputs = latestGeneration && generationInputs(latestGeneration, item, snapshot);
+  if (latestGeneration && inputs?.state === "unverified") {
+    const evaluation = latest(snapshot.jobs.filter((job) => job.kind === "evaluation" && job.generation_id === latestGeneration.id));
+    const unverifiedState = (label: string, job: StudioJob | undefined): OperationState => {
+      const result = jobState(label, job, false);
+      return { ...result, state: result.state === "success" ? "warning" : result.state,
+        detail: `${result.detail.replace("this scenario revision", "the run's captured data")} Inputs unverified: ${inputs.detail}` };
+    };
+    return [validation, unverifiedState("Generation", latestGeneration), unverifiedState("Evaluation", evaluation)];
+  }
+  const currentGenerations = generations.filter((job) => generationIsCurrent(job, item, snapshot));
+  const generation = latest(currentGenerations);
+  const currentIds = new Set(currentGenerations.map((job) => job.id));
+  const allIds = new Set(generations.map((job) => job.id));
+  const evaluations = snapshot.jobs.filter((job) => job.kind === "evaluation" && !!job.generation_id && allIds.has(job.generation_id));
+  const currentEvaluations = evaluations.filter((job) => !!job.generation_id && currentIds.has(job.generation_id));
+  const evaluation = latest(currentEvaluations.filter((job) => job.generation_id === generation?.id));
+  const evaluationStatus = jobState("Evaluation", evaluation, evaluations.some((job) => job.status === "completed"));
+  if (generation && !evaluation && evaluations.some((job) => job.status === "completed")) {
+    evaluationStatus.detail = `Evaluation belongs to an earlier run. Latest run #${generation.id.slice(0, 8)} has not been evaluated.`;
+  }
+  return [
+    validation,
+    jobState("Generation", generation, generations.some((job) => job.status === "completed")),
+    evaluationStatus,
+  ];
+}
+
+const icons = {
+  none: CircleMinus,
+  stale: Clock3,
+  working: LoaderCircle,
+  success: CheckCircle2,
+  warning: TriangleAlert,
+  error: XCircle,
+};
+
+export function OperationStatus({ status, compact = true, focusable = true }: { status: OperationState; compact?: boolean; focusable?: boolean }) {
+  const { label, state, detail } = status;
+  const Icon = icons[state];
+  return <Tooltip.Root>
+    <Tooltip.Trigger asChild><span className={`state-icon state-${state}`} tabIndex={focusable ? 0 : undefined} aria-label={`${label}: ${detail}`}><Icon size={compact ? 16 : 15} />{!compact && <small>{label}</small>}</span></Tooltip.Trigger>
+    <Tooltip.Portal><Tooltip.Content className="state-tooltip" sideOffset={6}>{detail}<Tooltip.Arrow className="state-tooltip-arrow" /></Tooltip.Content></Tooltip.Portal>
+  </Tooltip.Root>;
+}
+
+export function ScenarioStates({ item, snapshot, compact = false }: { item: CatalogItem; snapshot: StudioSnapshot; compact?: boolean }) {
+  return <div className={`scenario-states ${compact ? "compact" : ""}`} aria-label="Scenario operation status">
+    {scenarioStates(item, snapshot).map((status) => <OperationStatus key={status.label} status={status} compact={compact} />)}
+  </div>;
+}

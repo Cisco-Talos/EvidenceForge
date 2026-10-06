@@ -52,6 +52,7 @@ htmlcov/
 # Project specific
 .env
 output/
+/runs/
 *.log
 checkpoints/
 !src/evidenceforge/generation/checkpoints/

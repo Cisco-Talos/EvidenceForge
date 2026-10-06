@@ -1,0 +1,1542 @@
+# EvidenceForge Studio rebuild
+
+**Current handoff:** Read [the October 2 consolidated state and packaging decisions](2026-10-02-studio-handoff.md)
+first. Entries below preserve chronological history and may describe superseded UI/contracts.
+
+The user approved replacing the Qt Widgets prototype with a Tauri, React, and Python service desktop app. Keep the Qt prototype available until the new app reaches core parity and passes review. There is no requirement to migrate prototype metadata; authored YAML and generated bundles remain authoritative.
+
+## Agreed delivery order
+
+1. Design and feasibility slice: scenario library and workspace, conversations, job center, compact settings, two simultaneous generations, close and reconnect.
+2. Core prototype parity, including Codex authoring, libraries, job controls, quit behavior, and source-run macOS/Linux support. Pause for user review.
+3. Seven workflow stages from the approved plan, one at a time with review after each.
+
+## Current implementation
+
+- `src/evidenceforge/studio/` contains platform paths, JSON settings, SQLite catalog, local authenticated FastAPI service, durable job adapter, and detached-service bootstrap.
+- `desktop-ui/` contains the Tauri shell and a first React implementation of the scenario/pack libraries, workspace, job center, and settings.
+- The macOS Tauri debug build and frontend production build pass. Focused service and React
+  interaction checks cover the evolving Studio slice. The five screen review mockups are in
+  `docs/design/studio/`, and a live in-app browser preview runs from disposable Studio metadata.
+- The Qt prototype remains in place; existing user edits to prototype files are untouched.
+
+## Design review checkpoint
+
+The first Tauri test launched a native window on the user's desktop. Its close button and File →
+Exit did not close it; that test process was stopped. The native close handler has since been
+changed to bound the service handoff wait and offer a force-close path, but the rebuilt native
+window has not yet been retested. The user reviewed the five screen mockups and asked to try the
+app. Their first feedback was to show validation/generation/evaluation states since the latest
+scenario edit, add per-conversation rename/delete, make generation concurrency a setting, and
+allow run-specific scenario ZIP download from both library cards and scenario workspaces. They
+also supplied the location of official logos and requested UI branding and a real app icon.
+
+That feedback is implemented in the preview slice:
+
+- Scenario operation states use distinct shapes and colors, tooltips, and the SHA-256 of the
+  authored YAML to distinguish current from stale results. Validation results survive reopening.
+  The active source hash does not yet cover pack or overlay changes.
+- Conversation entries have rename/delete menus. Deletion is blocked while a turn is active.
+- Settings includes a persisted maximum of one to 16 concurrent generations (default two), and
+  the detached controller leaves excess work queued. Evaluations do not consume those slots.
+- The library card and scenario workspace have Download bundle actions. A scenario with multiple
+  completed runs offers a run picker. The ZIP contains one run's self-contained bundle, the
+  current authored scenario YAML and companion notes, and any completed linked evaluation report.
+  The resolved scenario inside the run is the authoritative generation input. Export is currently
+  browser-Blob based; large-bundle streaming/save-location handling remains Stage 7 work.
+- Repo copies of the official full-color dark/light logo were used for the sidebar, loading view,
+  favicon, and Tauri icon set. The OneDrive source folder was inaccessible in the sandbox; the
+  repo copies were sufficient. The preview CSS was corrected at narrow widths.
+- Added `websockets` to the Studio dependency extra; before that, the preview service emitted
+  repeated unsupported-WebSocket-upgrade warnings and did not support live event updates.
+
+The in-app browser preview points at repository scenarios with a disposable Studio home under
+`/private/tmp/eforge-studio-preview2`. A real CLI validation of `branch-office-example` was
+confirmed visually: the persistent state icon and validation panel show one warning. No actual
+generation was started in the repository workspace. Pause here for design feedback before
+expanding core parity. The first-pass design is not accepted yet.
+
+## Library and job-center feedback (September 30)
+
+The next preview feedback led to four focused changes:
+
+- Removed the topbar's constant “Local service” indicator. The Python controller is an
+  implementation detail; the UI still reports connection failures when they occur.
+- Moved validation, generation, and evaluation states to small icon-only controls alongside each
+  scenario card's title, with keyboard focus and descriptive tooltips. Bundle download is an
+  adjacent icon. The card no longer reserves a full footer row for status pills.
+- Added **Fix in chat** to validation reports with findings. It creates a scenario-linked
+  conversation and prepares a message with the saved findings, their paths, and suggested fixes.
+  The request tells Codex to revalidate current authored files before making changes. The user
+  reviews and sends the draft; it is never submitted automatically. A sent draft does not reappear
+  when the conversation is reopened.
+- The Job center now counts active Codex turns and lists working chats separately from chats
+  waiting for approval/input. A row opens that scenario's conversation. Empty jobs use a compact
+  panel, and Resume paused jobs appears only when a paused job exists. The service clears persisted
+  active-turn flags after its owning Codex process has gone away on restart or disconnect, and
+  clears outstanding approval cards on disconnect.
+
+Focused verification: 11 React interaction tests, 14 Studio service tests, TypeScript/Vite build,
+and Ruff checks pass. The compact card, validation action, and authoring activity list were reviewed
+visually in the in-app browser preview. The preview's existing Codex turn remains marked active;
+its history request did not answer within a short inspection timeout, so live Codex throughput
+and approval handling still need the core-parity end-to-end review.
+
+## Codex connection recovery (September 30)
+
+The saved preview conversation exposed two causes of a history hang. The history endpoint first
+called `thread/resume` before `thread/read`, although `thread/read` can inspect the stored thread
+without resuming it. More critically, the real app-server's full history response exceeded
+Python asyncio's default 64 KiB stream line limit. The reader task then exited while the
+Codex process was still alive, leaving the chat disconnected. The endpoint now calls only
+`thread/read`; the transport accepts protocol lines up to 64 MiB and processes RPC responses
+independently of potentially slow event handlers. Codex calls have bounded timeouts, including
+their write step.
+
+The service now probes the Codex app-server every eight seconds, reconciles active turn flags,
+and broadcasts `codex.health` transitions. A small topbar dot shows connected, checking/stalled,
+or disconnected state, with a hover explanation and a manual reconnect action. Reconnecting
+warns before interrupting active turns and preserves saved thread IDs. The Job center no longer
+counts uncertain turns as working. Conversation history shows a recovery note if a turn was
+interrupted; the note clears when a later history read confirms the turn actually completed.
+The health probe must send an explicit empty `params` object to `thread/loaded/list`; the
+real app-server rejects the call if that field is omitted.
+
+The live saved Codex thread was read successfully through both the direct app-server bridge
+and the Studio history route. The refreshed browser preview shows a green Codex indicator and
+loads the saved user message, agent answer, and collapsed activity. The browser also detects
+loss of the Studio event stream, marks the dot disconnected, and retries automatically rather
+than leaving a stale green Codex status. Focused verification now has 18 Studio service tests
+and 13 React interaction tests; TypeScript/Vite build and Ruff checks pass. The native Tauri
+window and Linux smoke test remain part of the core-parity gate.
+
+## New-thread history readiness (September 30)
+
+A real first turn exposed an app-server race: `turn/start` succeeded and Codex began answering,
+but an immediate `thread/read` found an empty rollout file and returned a thread-store error.
+Studio previously treated this as a connection failure and showed an error even though the
+turn was running. The bridge now classifies that exact empty-rollout response as transient.
+The history route returns `history_pending` without changing connection health, and the active
+turn health probe tolerates the same response. The chat keeps the submitted message visible,
+retries saved history with bounded backoff, and offers a manual retry if it remains unavailable.
+The browser no longer reads history immediately after a successful send; completion or a
+history-read retry refreshes it. Backend and React regression tests cover the race and recovery.
+The focused Studio suite now has 20 service tests and 15 React interaction tests; the
+TypeScript/Vite build and full Ruff checks pass. The preview service and Vite connection were
+refreshed after confirming no active Codex turns, and the saved user turn and answer reload.
+
+## Viewport-sized conversations (September 30)
+
+The conversation view used a fixed `100vh - 258px` height with a 540px minimum. A tall scenario
+header made the window itself scroll, pushing the composer below shorter browser windows. The
+conversation tab now uses the topbar breadcrumb for scenario context, fills the remaining app
+height, and gives scrolling to the chat transcript and conversation rail. The composer stays
+inside the viewport. New output follows the bottom while the user is there. If the user scrolls
+up, incoming output and sends leave the transcript in place until they manually reach the exact
+bottom again. Opening another conversation starts at its latest turn. A 712×724 browser review
+confirmed the document and app shell are exactly
+724px tall, with the composer ending at the viewport bottom and the transcript scrolled to its
+latest message.
+
+## Project grouping clarification
+
+The approved workflow plan includes virtual folders, project-folder overviews, and a later
+project-overlay area, but did not define a first-class Project record. The user wants projects
+to group scenarios. The roadmap now calls for stable project identities inside a workspace,
+project overview/navigation, and an Ungrouped view; group membership can initially live in
+SQLite so existing scenario files do not move. Project overlays can attach to the same identity
+in the environment stage. The first project grouping slice is implemented below; project
+overlays remain part of the environment workflow stage.
+
+## Projects slice (September 30)
+
+Projects now have stable IDs and workspace-scoped, case-insensitive unique names in Studio's
+SQLite catalog. Scenario membership is metadata on indexed items; rescanning preserves it and
+does not move authored YAML or runs. A project can be created, renamed, described, and deleted.
+Deletion returns its scenarios to Ungrouped. The service checks that both the project and the
+scenario belong to the selected workspace before changing membership. Bootstrap and live events
+include projects so the view survives a service restart and updates without reopening the app.
+
+The scenario library has a compact project rail with All scenarios, project counts, and Ungrouped.
+Selecting a project shows its description and scenarios. Scenario cards can be moved through a
+menu or dragged by a visible grip onto a project or Ungrouped; the selected drop target is
+highlighted. The scenario workspace has a project picker. The move menu remains the keyboard
+path. At narrow widths the rail becomes horizontal and card status icons wrap below long names.
+
+The disposable browser preview at `http://127.0.0.1:1420/` was refreshed only after confirming
+no active Studio jobs or Codex turns. A "Studio review" project was created there and
+`branch-office-example` assigned for user review. Creation, menu assignment, project counts,
+project overview, and the scenario workspace picker were observed in the live browser. Browser
+automation did not trigger native HTML drag events when dragging the grip, so physical drag and
+drop still needs user testing in the preview; React interaction tests verify the drag/drop event
+contract and both project and Ungrouped destinations. The project slice has 21 Studio service
+tests and 20 React tests passing. This is the next feedback gate before further core parity.
+
+## Follow-up turns in chat (September 30)
+
+The chat could omit a submitted follow-up and append its answer to the preceding answer. React
+stored only the latest WebSocket event, so a `conversation.updated` event arriving directly after
+`turn/completed` could replace the completion before the chat rendered it. The chat also used one
+live answer string across turns and waited for saved history before clearing it. Studio now sends
+each event directly to chat subscribers. The chat keeps optimistic prompts and streamed answers
+as separate turn records keyed by Codex turn ID, and removes a local turn only when the saved
+terminal turn is available. It retries history reads when Codex has not yet persisted the turn.
+Interaction tests cover back-to-back turns with stale history, and a hook test verifies both
+completion and conversation update arrive when React batches them.
+
+## Drafts, discovery, and library recall (September 30)
+
+New scenario and pack actions now create durable draft conversations with stable target paths.
+The draft appears in the library and can be resumed or deleted. The first Codex turn receives the
+target path and authoring skill as context, and a rescan links the draft to the authored file once
+the turn finishes. Scenario project membership carries across that handoff. Deleting a project
+also returns its unfinished drafts to Ungrouped.
+
+Library search now covers indexed YAML content as well as names and descriptions, with `name:`,
+`description:`, and `yaml:` scopes. Items can be hidden from their menu and revealed through a
+compact Show hidden control. Saved views store a search, selected project or Ungrouped, and the
+hidden-item setting per workspace; the library can apply and delete them. The topbar command menu
+opens with Cmd/Ctrl+K and searches pages, projects, and authored items. Completed evaluation jobs
+read their saved quality reports into compact scorecards shown in the scenario overview and run
+history.
+
+The preview service was refreshed only after confirming zero active jobs and turns, and the saved
+views and command menu were inspected in the 712 by 724 in-app browser. The draft chat was also
+checked at that size with its composer visible. Deleting a project now changes any saved view
+targeting it to Ungrouped. Focused checks: 25 Studio service tests and 27 React interaction tests
+pass; TypeScript/Vite and Ruff checks pass. The macOS Tauri shell passes `cargo check --locked`.
+These are incremental core parity changes, not the final acceptance review.
+
+The `/v1/bootstrap` route now validates a typed Pydantic snapshot. `npm run types:generate`
+generates the TypeScript API declarations from its OpenAPI schema in an isolated temporary Studio
+home; `npm run types:check` detects stale generated declarations. The UI uses generated model
+types for items, projects, saved views, conversations, settings, jobs, and validations. TypeScript
+build, API type freshness, and UI tests pass after this change.
+
+Flat virtual folders are now available as a secondary library filter for scenarios and packs.
+The filter control contains create, rename, and delete actions; each item’s menu can move it to a
+folder. Folder changes touch only SQLite organization metadata and preserve source files. Saved
+views record the folder filter and follow folder renames or deletion. The Python service contract
+test covers these relationships; React tests cover filtering, saving the filter, and creation.
+The live browser preview was refreshed after checking zero active jobs and chats, and the compact
+folder menu was visually inspected. The real CLI checkpoint/suspend/resume smoke suite passed on
+macOS (both default and `sof-elk` targets).
+
+CI now has a required Studio matrix on macOS and Linux. It runs the Studio service tests,
+generated API type freshness check, React interaction tests, production frontend build, and
+`cargo check --locked` for the Tauri shell. Linux installs the system packages listed in the
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). The workflow YAML was parsed
+locally; the new CI lane has not yet run on GitHub.
+
+## Generation progress and resume correction
+
+A live preview run exposed three connected defects. The service emitted job updates for status
+changes but did not broadcast appended CLI progress, so a running card could remain on its initial
+“Queued” phase. Resume switched to a new JSONL file, hiding the progress recorded before the pause.
+The controller also treated any `.eforge-generation` directory as proof of a usable checkpoint and
+kept replaying a persisted Resume instruction. The inspected preview run had progress in its
+original JSONL, but no recovery index or suspension record; repeated CLI attempts reported “no
+generation checkpoint exists.” The first attempt had failed with “Deferred session process
+projection has no unique transport endpoint” before its first checkpoint. Its authored files and
+partial bundle were left intact.
+
+Studio now watches progress file signatures and broadcasts updates without a status change,
+retains earlier progress streams across resumes (including records created before this fix),
+and labels queued, paused, and stopped cards according to job state. A pause is recorded only
+after a durable suspension acknowledgement and recovery pointer exist. Resume is a one-shot
+controller intent, and the UI/API reject a run that has no checkpoint to resume. Focused service
+and controller tests cover appended progress, older saved progress streams, invalid checkpoint
+state, and one-shot resume; React tests cover independent and preserved bars. The focused Python
+suite, React suite, generated API type check, frontend build, and Ruff pass.
+
+## Checkpoint, scenario creation, and stopped-run feedback (September 30)
+
+Jobs settings now saves simulated hours between generation checkpoints, defaulting to the CLI's
+24 hours. New GUI generations and regenerations use this setting unless a caller explicitly
+overrides it. New scenarios ask for a name and optional project before opening chat. Unauthored
+scenarios appear as ordinary library cards with a Draft marker, project assignment, rename, and
+drag-and-drop. Their conversation metadata remains separate from the authored YAML. The first
+Codex turn receives the chosen name as scenario context. The library indexer now accepts
+Scenario 2.0's `scenario_version` field; this was why a fully authored preview scenario remained
+in Drafts. Rescanning linked that existing YAML to its original conversation and displayed it
+in the normal scenario library without changing the file.
+
+Stopped/failed generations without a checkpoint now offer Regenerate and Delete incomplete
+bundle. Regenerate creates a new run ID and output directory from the current authored scenario;
+the original partial run stays until explicitly deleted. Deletion checks the app-owned job marker,
+process identity, status, and absence of a completed manifest or linked evaluation before removing
+the directory and job record. The browser preview's Open bundle action now displays an
+authenticated file browser instead of calling the Tauri-only opener; the native window still
+opens the folder directly. The user's existing stopped 73% run and partial files were preserved.
+
+Verification: 33 Studio service tests, 32 React interaction tests, TypeScript/Vite build, generated
+API type check, and full Ruff checks pass. The refreshed browser preview shows the authored
+Scenario 2.0 card, the existing linked conversation, the stopped run's new actions, and the
+browser bundle file list. The scenario creation dialog shows name and project fields.
+
+## Run card names (September 30)
+
+Generation cards previously used the parent directory of `scenario.yaml` as their title. New
+scenarios authored through Studio live under `studio-<id>` directories, so their run cards showed
+that internal ID instead of the authored scenario name. The React view now resolves each
+generation's title from its indexed scenario, and evaluation cards follow their source
+generation. Existing job records and bundle directories are unchanged. A React regression test
+covers both card types. All 33 React interaction tests and the production frontend build pass;
+the live Job Center shows the authored name for the existing generation and evaluation cards.
+
+## Job Center layout feedback (September 30)
+
+With two generations and one evaluation, the user found the cards hard to distinguish and their
+positions unstable. They proposed compact job rows in collapsible sections by job type, ordered
+oldest first. Job Center and scenario run history now use compact expandable rows in Generations
+and Evaluations sections. Generation records carry an immutable `submitted_at` timestamp, because
+`started_at` changes on resume. Existing records fall back to the output directory's timestamp,
+then a stable ID tie-breaker. Each row keeps status and progress visible while its actions live in
+the expanded detail. Evaluation rows identify and open their source generation, even when the
+Generations section is collapsed. A multiple-generation UI test checks independent progress bars.
+
+## Bundles and library simplification (September 30)
+
+Projects now provide scenario organization, so the scenario library no longer exposes virtual
+folder controls or folder filters. Pack folders remain available. The unlabeled eye icon is gone;
+when hidden scenarios exist, a labeled Hidden count toggles their visibility so they can be
+unhidden. Existing folder metadata was left in the service; authored files were not moved.
+
+A peer Bundles page groups Studio generation records by scenario. It supports search and project
+and completion filters, and rows for complete and incomplete runs. Completed ZIP exports include
+the run, current authored scenario, and linked evaluation reports; inactive incomplete runs can
+be exported as clearly labeled partial ZIPs. The delete action confirms the exact run path and
+removes only output marked as created by that GUI job. Completed-bundle deletion also removes its
+linked evaluation records; active linked evaluations block deletion. Imported or unmanaged
+bundles are not indexed here yet. Bundle ZIP downloads use a one-use, 60-second ticket so the
+browser streams the archive rather than buffering the whole file in JavaScript memory. ZIP
+filenames use the scenario name and run ID; a live browser download was verified and its temporary
+copy removed afterward.
+
+View files now opens a read-only viewer with a file list, explicit per-file download, line numbers,
+and lightweight JSON, YAML, Markdown, and email syntax highlighting. Preview requests are capped
+at 256 KiB and 4,000 lines; binary files show a download prompt. The live browser preview was
+visually reviewed at 712 × 724 and its idle service/Vite processes were refreshed to load the new
+routes. Frontend interaction tests, production build, Studio service tests, and Ruff checks pass.
+
+## Bundle, job, and settings follow-up (October 1)
+
+The bundle file viewer now fills the available window up to 1320 px, with a narrower file list
+beside the preview on wide windows and above it on narrow windows. The evaluation's source link
+opens, focuses, scrolls to, and briefly highlights its generation row so the navigation is clear.
+Settings Save is disabled until a field changes, returns to disabled after a successful save,
+and shows a saved confirmation. Incoming service snapshots preserve unsaved edits.
+
+The Bundles list now shows each run's uncompressed contents size beside its name. An authenticated,
+on-demand service endpoint sums regular files without following symlinks; the Bundles page refreshes
+sizes while generations are running rather than scanning run directories on every snapshot.
+The live 712 px browser preview shows the wider viewer, a 1.4 MB bundle row, the highlighted
+source generation, and the Settings save state. Verification: 38 React tests, 35 Studio service
+tests, frontend build, generated API types check, and full Ruff check and format check pass.
+
+## Copy displayed paths (October 1)
+
+Displayed filesystem paths now have compact copy icons in the scenario and pack workspaces,
+draft header, run history, Bundles viewer and delete dialog, sidebar workspace label, and
+Settings. Editable workspace and output paths can also be copied. Shortened labels always copy
+the full path. The icon changes to a check after success; clipboard failures appear in the app
+notice. A React interaction test covers scenario and bundle paths. In the live browser preview,
+copying the scenario path and pasting into search produced the exact full YAML path.
+The path labels now size to their text, with a bounded width for long paths, so each copy icon
+stays beside the visible label instead of drifting to the far edge of its row. The Bundles and
+Settings layouts were visually reviewed in the live browser preview.
+
+## Native save and export flow (October 1)
+
+The Tauri window now uses a system Save dialog for all three existing download paths: the file
+viewer, run ZIPs (including inactive partial runs), and completed scenario ZIPs. A Rust command
+streams the authenticated local service response to a temporary file beside the selected
+destination, reports byte progress, supports cancellation, and renames only after a complete
+transfer. The browser preview keeps its existing download behavior. Native labels say **Save a
+copy** for one file and **Export ZIP** for archives. The last successful destination folder is
+remembered in SQLite per workspace and offered at the next Save dialog.
+
+The service export-location route has an authorization and workspace isolation test. React tests
+cover the native API call, folder persistence, cancellation, and existing download controls. Rust
+tests cover allowed local routes and atomic handling of a truncated response. Linux smoke review
+remains before cutover. Verification:
+36 Studio service tests, 41 React tests, three Rust unit tests, frontend production build, generated
+API type check, full Ruff check/format check, Cargo check/format check, and a macOS debug `.app`
+bundle succeeded. The optional DMG bundling step failed in this environment; the app-only bundle
+completed successfully.
+
+A direct macOS launch found that Finder-style `.app` startup lacked the shell's Python environment.
+The Tauri command now searches ancestor directories for the source checkout's `.venv` before using
+the system Python; the rebuilt `.app` connected to the Studio service. The same launch reproduced
+the prior red-close failure. Close handling now keeps one current listener instead of racing
+snapshot-driven registrations, and a Rust exit command bounds process shutdown after the
+service's quit policy handoff. Rebuilt `.app` smoke confirmed that the red close button exits.
+The rebuilt macOS app was then launched with an isolated temporary Studio home and a disposable
+completed run. Through the native window, **Save a copy** in the file viewer saved
+`GROUND_TRUTH.md` byte-for-byte, **Export ZIP** in Bundles saved a valid run ZIP, and the scenario
+library exported a valid scenario ZIP. The second Save dialog opened in the previously chosen
+folder. The red close button exited the app. The isolated service and files were removed afterward.
+
+## Outstanding core parity
+
+- Review native Codex sign-in and one actual scenario-authoring turn with a real account. Studio
+  service live-turn, recovery, and conversation tests already pass.
+- Keep detailed pack editing, scenario/pack deletion, and imported incomplete bundles for their
+  later workflow stages. Cloning, hiding, virtual organization, saved views, scorecard detail,
+  and complete-bundle import now work in core parity.
+- Complete native-window hands-on review on macOS and Linux smoke. The source-run guide and
+  platform state paths are documented. Cut over `eforge-desktop` only after acceptance.
+
+## Codex turn and account recovery (October 1)
+
+The installed Codex app-server was probed directly for account, model, skill, and loaded-thread
+methods. Its current schema confirms that `turn/start` returns a turn ID. Studio now returns that ID
+with each turn submission, letting the chat bind its optimistic user message to the authoritative
+turn even if `turn/started` is missed. A timeout after submission is reported as an uncertain
+delivery rather than a failed send, so the user message stays visible while health and history
+reconcile. Fast completion before the submission response is also handled without duplicating
+messages or reactivating the conversation.
+
+Codex status now reports a signed-out but connected process as available, allowing sign-in even
+when model and skill listings require an account. Chat blocks sending while signed out. Settings
+shows a waiting state and polls briefly after starting sign-in so the account identity appears
+without a manual refresh. A timed-out turn with no immediate ID now reconciles against a newly
+completed history turn without leaving a duplicate local message, even if its prompt matches an
+earlier turn. The browser preview opens the authorization URL in a new tab; Tauri uses
+its native opener. A failed notification callback no longer kills the app-server event dispatcher;
+server requests receive an explicit error response if Studio cannot handle them.
+
+Verification: 39 Studio service tests, 40 React tests, frontend build and generated API type check
+passed, as did full Ruff check and formatting. A live app-server turn in a disposable workspace
+returned its turn ID, emitted start and completion events, and produced a completed readable agent
+message in history. A second live smoke used Studio's authenticated conversation routes with a
+disposable scenario: the default scenario skill was handed to Codex, the submission returned its
+turn ID, history showed one completed agent message, and the scenario file stayed untouched.
+Native-window sign-in and an actual file-authoring turn remain review checks.
+
+## Quit handoff and process ownership (October 1)
+
+Studio's **Stop active turns** close choice is now part of the saved controller intent. Closing the
+window returns after the intent is durable; a background task requests Codex interruption without
+holding the native close handler. The eight-second service monitor retries interrupted requests
+while the quit intent remains active. **Finish in background** leaves turns running and still waits
+for user approval/input when Codex asks. A failed stop request appears as a conversation recovery
+note rather than being lost when the window closes.
+
+Process ownership checks now compare the recorded and live process creation times within 10 ms,
+instead of the former two-second window, before terminating jobs or accepting the service/worker
+identity. A process disappearing between ownership verification and POSIX group lookup no longer
+breaks the controller tick. Tests cover a PID with a mismatched start time, that exit race, durable
+authoring choices and prompt close handoff, checkpoint-disabled close choices, and Cancel close
+from the waiting dialog. Verification: 61 Python service/desktop tests, 42 React tests, the
+frontend build, and full Ruff check/format pass.
+
+The browser preview helper and Vite server were restarted after confirming zero active jobs and
+chats. The refreshed helper and preview responded on loopback; no authored files or run bundles
+were changed by the restart.
+
+## Run-linked scorecard detail (October 1)
+
+The scenario overview's saved score now has a direct **View scorecard** action. It opens the
+matching evaluation row in that scenario's run history and highlights it. The row loads a readable
+projection of its saved quality report only when opened: overall result, flags, pillars and
+subscores, acceptance checks, and record counts by source. The full report stays on disk, so
+routine workspace snapshots remain small. The new authenticated route is scoped to the active
+workspace and reads only its app-owned evaluation report path.
+
+Service and React tests cover the exact run link, report rendering, authorization, workspace
+isolation, and invalid reports. The disposable browser preview was restarted after confirming
+zero active jobs and chats; opening the latest score for `lumenforge-drive-by-beacon` visibly
+showed the matching evaluation and its saved detailed report. This improves core parity but is
+not the Stage 6 evidence drill-down or comparison workflow. Verification: 75 focused Python
+service/desktop tests, 42 React tests, generated API type check, frontend build, and full Ruff
+check/format pass.
+
+## Scenario and pack cloning (October 1)
+
+The scenario library and scenario workspace can clone an authored scenario into a new workspace
+folder. The clone copies companion files with the YAML, changes its top-level name, and keeps the
+original's project assignment. It does not inherit conversations, validation, runs, or scores.
+Cloning refuses source links, linked companion files, shared folders with multiple scenarios,
+oversized folders, and an existing destination. The new file gets a fresh catalog identity.
+
+Pack libraries and workspaces can clone an industry or organization pack with the existing
+`eforge pack copy` command, keeping CLI validation and provenance rules authoritative. If no
+publisher is configured, the dialog collects a publisher ID and display name and saves them as a
+workspace publisher identity before copying. The clone preserves the pack's virtual folder and
+gets a fresh catalog identity. Tests use the real CLI against a bundled sample pack in an isolated
+workspace, plus browser interaction tests for both clone dialogs.
+
+## External bundle library (October 1)
+
+The Bundles page can import a complete preexisting CLI or earlier desktop generation folder, or
+find complete bundles under the active workspace's `runs/` directory. Imported bundles get stable
+workspace-scoped SQLite identities, search and status filtering, size and creation time, the same
+readable file viewer, and ZIP export. They remain read-only: **Remove from Studio** deletes only
+the index row, never external files. Studio rejects duplicate imports of its own managed jobs.
+
+Import validates the authoritative generation manifest schema and resolved-scenario digest. Subsequent
+file access checks both again and refuses changed paths; the file viewer bounds its listing and
+does not follow links, while ZIP export refuses linked content. The native app offers a folder
+picker, and browser preview accepts a local path. Disposable service tests cover authorization,
+workspace isolation, import identity, discovery, file viewing, export, changed manifests,
+changed resolved input, and safe removal. React tests cover import, discovery, grouping,
+read-only removal, and the viewer route. Incomplete external bundles remain a roadmap item;
+Studio-owned incomplete jobs already appear in the library.
+
+The browser preview helper was restarted after confirming it had zero active jobs and chats. A
+disposable external bundle was imported through the UI; its scenario group, exact size, read-only
+row, and file viewer appeared as expected. The UI removed its index entry without deleting the
+files. The test fixture was then removed. Visual review also replaced the imported row's opaque
+Studio ID with its folder name and made the file viewer open ground truth first when present.
+`eforge-studio` source-run setup and state locations are now documented in
+`docs/studio-source-run.md` while the Qt entry point remains available for the review gate.
+
+## Chat presentation and scenario operations (October 1)
+
+Agent messages now render Markdown, with highlighted Python, YAML, and JSON fences, readable
+lists, tables, and inline code. Embedded HTML remains disabled; external links retain safe new-tab
+behavior, while filesystem references remain readable text rather than broken browser links.
+The conversation title above the chat has a pencil and inline editing, with Enter to save and
+Escape to cancel. Renaming refreshes the persistent conversation list.
+
+Tool activity keeps its collapsed conversation summary and adds expandable entries with brief
+command previews, execution output, file changes, and Codex-provided reasoning summaries. Started
+and completed events update the same entry. Summary and command-output deltas update live, and new
+turns explicitly request Codex's automatic summaries. Historical reasoning entries with no summary
+say so; raw reasoning content is not displayed.
+
+New scenario and draft-rename inputs validate the canonical letters/numbers/hyphens/underscores
+name contract as the user types. A short red message explains invalid input, submission is disabled,
+and the API applies the same constraint. Scenario workspaces now have separate **Generation** and
+**Scoring** tabs: output-folder setup and generation history in the former; a completed-run picker,
+evaluation action, and saved scorecards in the latter. Scorecard and source-generation links open
+the exact row across those tabs. Responsive fixes contain the tab strip and long names, keep the
+chat composer visible, and reserve adequate room for library status icons.
+
+Verification: 55 React tests and 55 focused Python service/background tests pass. Generated API
+type checks, frontend and debug macOS native builds, and full Ruff check/format pass. Browser review
+confirmed the Scoring setup, rendered Markdown, title editing/cancellation, and command previews.
+Screenshot: `/private/tmp/eforge-studio-chat-review.jpg`. Core parity remains under user review.
+
+## macOS background helper attribution (October 1)
+
+The user's extra Dock entry has the macOS 27 **Running in Background** label. The native window
+process had exited, but macOS continued attributing its detached Python descendants to Studio;
+NSWorkspace did not report a second window application. Apple's macOS 27 support guidance explains
+this attribution: <https://support.apple.com/en-us/125671>.
+
+macOS helper startup now uses a transient, per-data-directory user launchd service instead of an
+app-spawned orphan process. Its mode-0600 plist stays in private Studio state; it adds no login
+item, KeepAlive rule, or automatic startup on subsequent logins. Only runtime-location and
+EvidenceForge environment variables are forwarded, keeping unrelated shell credentials out of
+the plist. Existing live helpers are still reattached, and a stopped registered helper can be
+started again. Linux retains the detached process contract.
+
+A real disposable launchd helper started successfully and served authenticated API requests. The
+updated native app attached to its independent helper, and closing the native window exited the
+shell while retaining the helper. The disposable registrations were removed after confirming no
+active work. The idle platform helper was restarted through launchd, and an idle leftover
+smoke-test helper was stopped; authored files and bundles were preserved. A combined preview/default
+restart was rejected by automatic approval review because it also wrote a token to a publicly
+served frontend file; the completed restart was narrowed to the idle platform helper and private
+state, without changing browser credentials.
+
+The helper currently remains running after tasks finish, until logout/reboot or explicit stop.
+An idle shutdown policy is a possible follow-up, not part of this change. Final Dock presentation
+and the native chat/operations changes need user confirmation.
+
+## 2026-10-01 — Native opening, generation defaults, file rendering, and job cleanup
+
+Addressed the next native-window review:
+
+- Added the missing Tauri `opener:allow-open-path` capability with local path scope for
+  the default application. Scenario/pack YAML and Settings folders can open even when
+  the workspace is outside the default home location, including Linux's hidden XDG
+  directories (opener's dot-path matching is explicitly enabled). Browser previews show an explanatory
+  hint for Open YAML instead of calling an unavailable native bridge.
+- Removed the generation destination input. Generation uses the workspace's saved output
+  parent, falling back to `workspace/runs`; each run retains its automatically constructed
+  directory. Fixed the service queue fallback to honor the saved parent. The API still
+  accepts explicit per-request overrides for other callers.
+- Added explicit information/error notification types. Routine notices disappear after
+  five seconds; errors persist with alert semantics until dismissed. New notices cancel
+  older timers.
+- Markdown bundle files render headings, lists, tables, and highlighted fenced code by
+  default, with a source toggle. Reused the safe chat renderer (no embedded HTML or remote
+  images). XML files and XML Windows logs get tag/attribute/string highlighting. Existing
+  bounded preview and download/copy behavior is preserved.
+- Job center provides Delete job for terminal rows and Clear Completed for each job type.
+  These remove history entries only; bundles, scorecards, scenario status, and scenario
+  run history remain available. Paused/queued/running jobs cannot be removed. Cleanup is
+  workspace-scoped, durable across service restarts, and announced through replayable
+  events. A resumed job returns to Job center; evaluation source links can temporarily
+  reveal a removed generation. Delete bundle remains a separate confirmed operation.
+
+Verification: 62 React interaction/hook tests and 57 Python service/helper tests passed;
+API schema generation/check and full Ruff checks passed. The macOS native debug app builds.
+Native smoke review checked Open YAML (no permission error), the simplified Generation tab,
+job cleanup controls, rendered real GROUND_TRUTH.md, and a generated Windows XML log. Kept
+user job history/files intact. Restarted only the verified idle default helper (no active
+jobs or turns); its connection remains in private app data. Closed the smoke-test window.
+Screenshots: `/private/tmp/eforge-studio-job-cleanup.jpg` and
+`/private/tmp/eforge-studio-markdown-viewer.jpg`. No Linux native window was available here.
+
+## 2026-10-01 — Acceptance status, grouped deletion, unified packs, and scorecard drill-down
+
+Implemented the next feedback round:
+
+- Scenario library and workspace evaluation indicators now follow the saved acceptance
+  verdict, rather than CLI completion. Failed acceptance uses a red X even with a high
+  overall score; missing/indeterminate verdicts use a yellow warning, and stale results
+  retain their clock indicator. Tooltips include the score and acceptance explanation.
+- Reviewed the existing Test_scenario_1 report read-only. Its overall score is 92.35,
+  but required causality checks failed: event presence 75 < 85, indicator accuracy
+  50 < 85, pivot linkability 66.67 < 80, and temporal integrity 75 < 85. No scenario,
+  generation output, evaluator policy, or saved score was changed.
+- Grouped Delete job and Delete bundle in one compact menu at the end of job actions.
+  Descriptions distinguish removing history from removing files. The existing bundle
+  deletion confirmation and job-state eligibility remain in place.
+- Replaced the two pack navigation destinations with Packs, using collapsible Industry
+  then Organization sections and compact rows with exact version, description, timestamp,
+  and per-pack menus. Both types retain authoring workspaces, cloning, folders, hiding,
+  saved views, and YAML-content search. New pack actions specify the authoring type.
+  Existing per-type saved views still work; combined views use kind `packs`.
+- The overview scorecard includes the high-level pillar scores. Pillars expand to their
+  subscores; acceptance checks, flags, and source counts are collapsed by default in the
+  detailed scorecard. The verdict explicitly says Acceptance passed/failed/indeterminate
+  and explains why an aggregate score cannot override required checks.
+- Subscores use small colored check/X/warning icons with keyboard-accessible tooltips.
+  Green means passed; red means failed; yellow means the minimum passed but the
+  aspirational target was missed. Skipped, unavailable, and unknown measures use a gray
+  dash. Saved criteria take precedence, including their historical thresholds. Diagnostic
+  measures without saved criteria are compared with current configured reference targets;
+  their tooltips identify that comparison and preserve the saved acceptance verdict.
+- Added bounded highlighted raw-report preview and original JSON export through the
+  shared native Save dialog / browser download path. The authenticated report route is
+  workspace-scoped, verifies the managed report path, rejects symlinks and invalid/oversized
+  reports, and supports range requests. Raw JSON is not included in routine snapshots.
+
+Verification: 75 React tests, 67 Python service/background tests, and 3 Rust native-export
+contracts passed. Generated API types, frontend build, macOS native debug build, and full
+Ruff checks passed. Native review checked red acceptance indicators, overview and full
+scorecards, subscore expansion and colored icons, raw JSON preview and Save-dialog opening,
+combined pack rows, and the grouped Delete menu. No user jobs, bundles, or reports were
+removed. Restarted only the verified idle platform helper after checking for active work;
+credentials remain in private app data. Closed the smoke-test window. Linux native testing
+was not available on this host.
+
+Review screenshots: `/private/tmp/eforge-studio-packs-review.jpg`,
+`/private/tmp/eforge-studio-delete-menu-review.jpg`, and
+`/private/tmp/eforge-studio-scorecard-icons-review.jpg`.
+
+## 2026-10-01 — Project drops, score summary icons, scenario names, and source YAML
+
+Implemented the next feedback round:
+
+- Disabled Tauri's native file-drop interception for the Studio window so HTML scenario
+  drops can reach the project rail. This behavior on macOS is also documented in the
+  [upstream report](https://github.com/tauri-apps/tauri/issues/14373). Drag identity is retained
+  synchronously, drop targets accept the internal scenario/draft types, and moving over a
+  target's children retains its highlight. Authored and draft scenarios both use the existing
+  workspace-scoped project assignment API; Ungrouped remains a drop destination.
+- Collapsed scorecard pillar rows now have the same small colored check/X/warning icons as
+  their expanded measures. A pillar summarizes its applicable child statuses, rather than
+  treating a high weighted score as a pass. Tooltips explain the counts and preserve the
+  distinction from the saved overall acceptance verdict. Unknown measures remain gray.
+- The scenario workspace name (and draft workspace name) is clickable with a pencil icon.
+  Inline edits use the same live name validation as new scenarios, Enter to save, and Escape
+  or the X to cancel. Save failures keep the edit and show an inline explanation.
+- Authored scenario renaming changes only the top-level YAML name at the displayed source
+  hash. The backend refuses stale edits and active authoring conflicts, preserves comments,
+  other YAML values, line endings, and file mode, and replaces the file atomically. Stable item
+  ID, source path, project, and conversation/run links remain in place. Ambiguous name nodes
+  or alias replacements that would affect other values are refused.
+- Replaced Open YAML with View YAML, using the existing highlighted read-only file viewer
+  for scenarios and packs in both browser and native mode. Source viewing uses the available
+  width without an unnecessary single-file navigation column. The new authenticated source
+  routes expose only the indexed YAML, not neighboring files, reject links, enforce the current
+  workspace, and support bounded range previews. Save a copy follows the native export route.
+- Tauri's menu/ About metadata now uses the product name EvidenceForge Studio, and predefined
+  macOS menu labels replace the Cargo name `evidenceforge-studio` while retaining native actions.
+
+Verification: 83 React tests, 77 Python service/background tests, and three Rust native-export
+contracts passed. Generated API freshness, frontend/native macOS debug app builds, full Ruff,
+Cargo format, and diff whitespace checks passed. The route tests cover authentication, exact-file
+access, ranges, symlinks, and workspace isolation; rename tests cover stale/active conflicts,
+stable identity and project/conversation links, comment/CRLF/flow-style YAML preservation,
+permissions, and alias/duplicate-key rejection. UI tests cover typed/native drop contracts,
+child-target transitions, both scenario kinds, collapsed status icons, inline name validation,
+cancellation and errors, and built-in source previews/exports in browser and native modes.
+
+Restarted only the verified idle default helper after authenticating its snapshot, checking no
+active jobs/chats, and checking PID creation time plus command identity. No user scenarios,
+bundles, conversations, or project assignments were changed during testing. The native visual
+and physical drag review was initially blocked because macOS was locked. After the user
+unlocked, native review verified the About/Hide/Quit product-name labels, the built-in
+full-width highlighted YAML viewer, inline invalid-name explanation and disabled Save,
+rename cancellation without source changes, and colored collapsed scorecard pillar icons.
+Physical project drops remain unverified: the computer-use drag gesture did not produce a
+project assignment, including after checking coordinate input with a regular button click.
+Do not claim native drag success; ask the user for a manual drop check. No authored source or
+project membership was changed. Linux native review remains unavailable on this host.
+
+Native review images: `/private/tmp/eforge-studio-source-yaml-review.jpg` and
+`/private/tmp/eforge-studio-collapsed-scores-review.jpg`.
+
+## 2026-10-01 — Transparent Dock and .app icon
+
+The user preferred the free-standing forge artwork to macOS's light rounded tile:
+
+- Re-extracted the complete forge mark from the tracked official full-color dark logo,
+  with transparent padding. The old mark clipped the hammer and anvil at its edges.
+  Regenerated the desktop ICNS/ICO/PNG assets and favicon with the Tauri icon generator.
+- Bundled macOS launches explicitly apply the transparent PNG as the Dock icon on the
+  main thread. Tauri's corresponding icon override otherwise runs only in development.
+  This uses AppKit's documented `NSApplication.applicationIconImage` property.
+- Added `npm run build:native -- --debug` for the source-run .app. On macOS it builds
+  the app and applies the matching custom Finder icon with `NSWorkspace.setIcon`;
+  this prevents the platform's synthesized light tile on the .app file. The Swift
+  development helper is restricted to a Studio bundle ID and uses a temporary module
+  cache. Runtime code does not modify the app bundle or other apps. Distribution
+  formats, signing, and preservation of custom icon metadata are deferred to packaging.
+  Linux still uses the normal Tauri build and transparent icon assets.
+
+Verification: 83 React tests and three Rust native-export tests passed; full Ruff,
+Cargo check/format, JavaScript syntax, frontend build, and macOS .app build passed.
+The rebuilt app launched successfully. Finder Get Info visibly showed the transparent
+forge icon in its header and preview. Direct Dock screenshot inspection was unavailable
+through the computer-use Dock target, so the user should confirm its appearance. Closed
+the temporary Finder windows; left the Studio library open for the requested manual
+project-drop check. No scenarios, bundles, conversations, or project assignments changed.
+
+Review image: `/private/tmp/eforge-studio-transparent-app-icon-review.jpg`.
+
+## 2026-10-01 — Scenario YAML import dependency design
+
+The user requested a Create/Import split button in New Scenario, with Create as the default
+and the existing live scenario-name validation gating both actions. No import UI or service
+implementation has landed yet; discussion expanded the dependency requirements first.
+
+Agreed requirements:
+
+- Show an explicit dependency review with the same colored status icons as scorecards.
+  Copy the nested scenario include graph and repair local references without changing originals.
+- Offer optional validation of the prepared copy after reference/digest/lock reconciliation.
+  It runs only when requested; findings are advisory and do not prevent scenario import.
+- Look for the exact pack version already available in the destination Studio workspace first.
+  Missing packs do not prevent importing the scenario: persist a dependency error on its workspace
+  with the publisher/type/name/version required and an action to import missing packs.
+- Selected source workspaces supply pack copies into the destination workspace, rather than
+  ongoing external references. Pack import and export belong in the Packs panel as well.
+
+Verified the multi-source question using disposable directories and the real compiler/repository:
+one Scenario 2.0 compiled with direct path industry references in two source workspaces; one
+organization pack validated with locked path industry dependencies in both sources. A project
+reference resolved only against the active workspace and failed when the pack existed only in
+another source. All three probes passed; temporary fixture files were removed automatically.
+
+Design details still to carry into implementation/review:
+
+- Match publisher, type, name, and exact version. Check expected digests where locks or source
+  evidence supply them; a bare scenario reference does not itself pin a digest.
+- Offer multiple explicit source locations or per-dependency Locate actions; never infer another
+  project root by searching scenario ancestors. Rebind imported references to destination-local
+  packs and preserve exact locked dependencies.
+- Digest conflicts are distinct from absence. Pack relocation can change semantic source bytes,
+  so path rewrites and lock updates need a reviewed, deterministic strategy; do not silently
+  overwrite an existing different release under the same identity/version.
+- Dependency health must refresh after pack imports/changes. Scenarios with missing dependencies
+  remain editable; generation needs resolved inputs. Optional validation remains separate.
+- Include referenced non-include assets such as email corpora; present Markdown companions as
+  selectable files. Source project overlays need an explicit handling policy because they can
+  affect output even though the scenario YAML does not reference them.
+- Existing .efpack CLI build/import/hydration supplies closure and conflict-checking foundations;
+  the Studio pack panel currently lacks import/export controls. Add portability tests, especially
+  for path dependencies across source workspaces, rather than assuming existing archive handling
+  makes every such path relocatable.
+
+The user subsequently confirmed that the preceding UI/icon feedback appeared to work. Import
+design remains the active conversation; no user files, app settings, or running jobs were changed
+by these probes.
+
+## 2026-10-01 — Reviewed YAML and pack import
+
+Implemented the approved import flow, including the user's last requirement for automatic
+dependency refresh plus a manual refresh icon:
+
+- New Scenario now has an accessible Create/Import split button, defaulting to Create. Both
+  actions use the same live name validation and project selection. Native import uses a filtered
+  YAML picker; browser preview accepts a local path. Confirmation opens the imported scenario
+  by its stable catalog ID.
+- Scenario preview captures a bounded include graph and copies it into a disposable cache stage.
+  The imported root is `scenarios/<name>/scenario.yaml`; nested fragments use `.sources/` and
+  relative rewritten references. Library discovery excludes these fragments, while resolving
+  root metadata from includes. Imported names live in the root so inline rename and clone work.
+  Referenced email corpora follow the existing bounded, contained asset contract. Nearby Markdown
+  companions are selectable. Original source files and external source workspaces stay untouched.
+- Dependency review uses green readiness, yellow copy/note, and red missing/conflict icons.
+  Workspace exact versions take precedence. Multiple explicit source workspaces can supply an
+  organization and its locked industry dependencies. New organization copies rebind external
+  industry paths to workspace packs, retain industry bytes and locks, and display original and
+  prepared organization digests. Existing conflicting versions are preserved.
+- Optional validation runs only on request, against the prepared copy and destination overlays.
+  Findings are advisory, including schema errors; they do not disable scenario import. Missing
+  packs also do not block import. The workspace shows persistent exact dependency findings and
+  Import packs/refresh controls, and unresolved inputs prevent new generation or regeneration.
+- Packs now have `.efpack`/source-workspace import and an Export pack menu action. Export captures
+  the complete validated lock closure, rebinds external references, and uses deterministic ZIP
+  metadata. Native export uses the existing authenticated Save-dialog route. Import requires
+  acknowledgement of the displayed publisher namespaces and blocks release conflicts.
+- Dependency health is stored in SQLite, refreshed after imports and completed authoring turns,
+  checked during the existing periodic disk scan, and streamed to the UI. Manual refresh reads
+  files immediately. Nested input or pack changes invalidate validation and run status freshness;
+  normal validation records now capture the dependency fingerprint as well as the root hash.
+- Reviews are workspace-bound, expire after 30 minutes, and are limited to eight pending stages.
+  Confirmation rechecks captured source bytes, destination reservations, project identity, and
+  publisher acknowledgement. Publishing never replaces an existing directory. Failed publication
+  rolls back only newly created roots. Cancellation removes the disposable cache stage.
+
+Verification: 108 Python service/import/pack-release/library tests and 90 React interaction tests,
+the three Rust native-export contracts, generated API freshness, full Ruff, Cargo formatting,
+diff checks, and frontend/macOS debug app builds passed. New contracts cover nested metadata and
+includes, assets and selected documents, multiple pack source workspaces, missing and conflicting
+locks, source deletion after copy, deterministic portable release round trips, stale reviews,
+publication rollback, unsafe inputs, workspace/project isolation, optional validation, native
+picker invocation, publisher acknowledgement, immediate import refresh, streamed health, and
+restart persistence. A small imported fixture passes the real CLI before and after publication.
+
+Browser review at 1280×720 and 712×724 verified colored dependency rows, adjacent path-copy
+icons, Create/Import selection, optional validation of a missing dependency, enabled import
+after that advisory finding, and cancellation without publishing. Made the action footer sticky
+so short windows retain Cancel/Confirm while the review scrolls. Saved screenshots:
+`/private/tmp/eforge-studio-import-review.png` and
+`/private/tmp/eforge-studio-import-review-compact.png`. Closed the agent-created review tab and
+discarded its stage; no scenario or pack was imported into the user's workspace during visual QA.
+
+The default helper and isolated preview helper were restarted only after authenticated snapshots
+showed no active/queued jobs or active chats, and PID creation time plus command identity matched.
+The preview's launch agent needed reloading to restore its explicit temporary app-data environment;
+the default helper's environment and user settings were preserved. Native visual/picker testing
+remains pending because macOS is locked. Linux native review is unavailable on this host. Pause
+for the user's real-scenario import and native-picker feedback before advancing the roadmap.
+
+## 2026-10-01 — Native file picker deadlock
+
+- Captured a three-second stack sample of the user's stalled source-run window. Its macOS main
+  thread was parked in `choose_import_file → blocking_pick_file → Receiver::recv`; AppKit could
+  not service the open panel while that synchronous command waited for the panel's completion.
+- Made import and folder commands asynchronous and bridged the dialog plugin's nonblocking
+  callbacks through a shared one-shot receiver. Save dialogs use the same bridge so no dialog
+  waits block the UI thread or consume a runtime worker for the lifetime of the panel.
+- Added native regression tests for yielding while a dialog remains open, selected-path delivery,
+  cancellation, and an unexpectedly dropped callback. All six native tests, all 90 React tests,
+  full Ruff checks, Cargo formatting, diff checks, and the frontend/macOS debug build pass.
+- With macOS unlocked, tested the actual rebuilt `.app`: cancelled and reopened the YAML picker,
+  selected the repository's branch-office YAML, selected a source folder, and cancelled the
+  export Save dialog. Each panel returned to the responsive Studio window. No scenario or pack
+  was published and no export was written during these checks.
+- The development watcher replaced the sampled process after the code changed. Stopped that
+  verified window and watcher, then terminated the separate native test window after verification,
+  as requested. The background helper remains running. Linux native testing is still unavailable
+  on this host; real-scenario import review remains the next user feedback gate.
+
+## 2026-10-01 — Selectable pack imports and project-aware pack authoring
+
+- Pack release and source-workspace reviews now show a visible checkbox for every pack,
+  initially selected, with Select all / Deselect all controls. Selecting an organization keeps
+  its exact locked industry dependencies selected and explains the required relationship.
+  Confirmation expands the same closure in the service, rejects empty/unknown selections,
+  rechecks only relevant captured inputs/reservations, and publishes only selected directories.
+  Unselected conflicts do not block a clean subset; existing pack versions are never replaced.
+- Catalog entries expose publisher ID, display name (shown as Author), compatibility, and
+  workspace/bundled location. Search covers these values and YAML, including `author:`,
+  `publisher:`, `version:`, `type:`, `location:`, and `compatibility:` field scopes. A compact
+  filter popover groups type, author, version, location, and hidden-item choices. Saved pack
+  views retain those criteria and the selected project.
+- Packs use the same workspace Project records and rail as scenarios. Rows support project
+  assignment menus and drag targets; creation/import offer the same project dropdown.
+  Clones retain their project. Refresh/restart preserve assignments, legacy pack drafts inherit
+  their project when promoted, and deleting a project ungroups packs as well as scenarios.
+  Removed the remaining pack-only folder controls from the interface; existing metadata and
+  compatibility routes remain readable.
+- New pack actions open a named creation dialog with live canonical-name validation, required
+  description, optional initial prompt, and project selection. It uses `eforge pack init` for
+  the deterministic 0.1.0 scaffold and records a linked authoring conversation immediately.
+  If no publisher is configured, the dialog asks explicitly for Publisher ID and Author display
+  name and saves them at workspace scope. Empty Details opens chat without starting a turn;
+  nonempty Details is submitted once through the normal turn route with the correct first-turn
+  industry/organization skill. Later turns retain automatic skill selection.
+
+Verification: all 112 Python service/import/library/pack-release tests and 101 React interaction
+contracts pass, plus generated API freshness, full Ruff check/format checks, diff checks, and the
+frontend/macOS debug app build. Added coverage for workspace/archive subset selection, exact
+closure retention, unselected source changes and conflicts, project persistence/isolation and
+project deletion, publisher identity, invalid names, CLI scaffold reuse refusal, author search,
+saved criteria, dialog error recovery, and exactly one optional prompt submission. A fake Codex
+server checks first-turn context and skill selection for scenarios and both pack kinds.
+
+Reviewed the actual UI at 712×724 and 1280×800 using an isolated temporary workspace/frontend
+on port 1422. Verified author filtering, live name errors, creating a named pack without a turn,
+assignment via the project menu, initially checked imports, deselect-all gating, and importing
+only one pack into the selected project. All authored/imported QA files were disposable fixtures;
+no pack or conversation was added to the user's workspace. Browser computer-use drag emitted
+source drag-start but did not deliver drag-over/drop to the target, so pointer-driven native
+pack drag acceptance remains a user review check; the React drag/drop interaction contract passes.
+Temporary diagnostics were removed. Screenshots: `/private/tmp/eforge-pack-project-library.jpg`,
+`/private/tmp/eforge-new-pack-form.jpg`, `/private/tmp/eforge-pack-import-selection.jpg`.
+
+Closed the review tab, reset its viewport override, and stopped both verified temporary review
+processes. Restarted the default launchd helper only after an authenticated snapshot showed zero
+active/queued jobs and zero active turns, verifying PID creation time and command identity first.
+It now serves pack author metadata and the new API. The final macOS app is rebuilt for review;
+Linux native verification is unavailable on this host. Pause for native pack workflow feedback.
+
+## 2026-10-01 — Scenario lists and find/resume preferences
+
+The user approved replacing scenario cards with rows and explicitly authorized continuing into
+additional agreed workflow slices while they are away. Native review may wait for an unlocked
+Mac; that does not prevent implementation and automated/browser checks.
+
+- Scenarios and legacy drafts now share an accessible, consistently sorted list. Each row shows
+  its project beside the name, description, operation icons, version/update time, bundle size,
+  and compact assignment/export/options controls. The existing project menus and drag contracts
+  remain available. Name, updated-time, and project sorting also belong to saved views.
+- Current completed runs show measured bundle size; otherwise a current validation forecast
+  supplies a clearly marked estimate. Missing forecasts remain explicit. Automatic prediction
+  for unvalidated changes is still a later resource-preflight slice.
+- Search results carry bounded matching YAML excerpts, including indexed include content; these
+  snippets are transient search results rather than catalog metadata. Project overviews add
+  counts for scenarios needing attention and active generation work. The command menu offers
+  New scenario and contextual author/validate/generate navigation.
+- Workspace-specific library recall is on by default, configurable in Workspace Settings, and
+  persists scenario and pack selections independently in SQLite. Writes preserve the other
+  library and recall preference atomically. Workspace-bound requests reject stale writes after
+  a switch. Delayed hydration preserves controls edited while preferences load.
+
+Verification: 105 React tests, all 82 service/library tests, the final focused recall/search
+contracts, generated API freshness, full Ruff check/format, diff checks, and frontend/macOS
+native release builds passed. Browser review at 1280×720 and 712×724 verified project labels,
+compact controls, YAML snippets, sorting, and restoring search/sort after reload. Screenshots:
+`/private/tmp/eforge-scenario-list-review.png` and
+`/private/tmp/eforge-scenario-list-review-compact.png`. All visual fixtures use a temporary
+workspace; no user's scenarios or settings were changed. Linux native review remains unavailable.
+
+The existing healthcare generation failure reproduced with the real CLI in disposable output
+at `/private/tmp/eforge-healthcare-repro-20261001`. It raises the same deferred process/transport
+endpoint error through the typed SSH handler. Owning-layer diagnosis is the next reliability task;
+the separate iteration-scenario temporal-integrity investigation remains deferred by the user.
+
+## 2026-10-01 — Healthcare deferred-session endpoint fix
+
+- Reproduced the hour-nine failure with the real CLI and narrowed it to same-host SSH. The
+  network planner counted source and destination roles as two different candidate hosts, and
+  the publication preseal repeated that assumption. Both now require one distinct physical
+  endpoint; ambiguity across different hosts remains rejected. Scenario files were not edited.
+- Added routine real-caller regressions for synchronous and threaded publication, exact SSH
+  session/process output, no artificial network-sensor flow for local traffic, dispatcher cleanup,
+  and rejection before state/output mutation when process ownership names another host.
+- Declared localized generation behavior revision 155 with its updated surface digest.
+
+Verification: 26 loopback/behavior tests, 276 network/session contract tests, and five selected
+slow real SSH/RDP caller contracts pass. The original 14-hour healthcare scenario now completes
+in disposable output at `/private/tmp/eforge-healthcare-fixed-20261001b`; the authoritative
+manifest and all referenced bundle hashes verify. Output is about 295.2 MiB. Full Ruff checks
+and formatting pass. The separate iteration-scenario temporal-integrity investigation remains
+deferred as requested. No existing user bundle was replaced or repaired.
+
+## 2026-10-01 — Environment inspection and exact pack choices
+
+- Added a scenario Environment tab using a fresh deterministic `eforge resolve` process. It
+  shows exact selected versions, publishers and digests, searchable source declarations,
+  composition overrides, and an expandable syntax-highlighted environment/baseline model.
+  Inspection is read-only and does not create resolved files or `.eforge/config`.
+- The accessible pack picker supports multiple industry packs or one organization with its
+  locked industry closure. Search includes author/version/reference. Prepare in chat opens a
+  new scenario-linked conversation with a reviewable request; it does not start a turn or rewrite
+  composition blindly through nested includes. Empty choices are gated and errors retain the
+  selection. Keyboard dismissal restores focus to the trigger.
+- Listed workspace overlays with adjacent path-copy controls and the built-in YAML viewer/export
+  path. Authenticated routes restrict files to known regular overlays in the active workspace;
+  symlinks and traversal are rejected. The interface explicitly states the current workspace-wide
+  scope. GUI project/scenario overlay layering and richer guided editors remain later work.
+- Constrained header action width so a laptop window preserves room for the scenario title and
+  content. Updated the source-run guide to describe shared projects and current environment scope.
+
+Verification: 111 service/import/library/environment tests and all 110 React interaction tests,
+all six Rust tests, generated API types, full Ruff, Cargo formatting, and frontend build passed.
+The native HTTP test needs loopback permission and passed after running with that permission.
+Browser review at 1280×720 and 712×724 verified the actual exact-version report, visible pack
+checkboxes, author/version search, empty-selection gating, and overlay preview. Screenshots:
+`/private/tmp/eforge-environment-review.png`,
+`/private/tmp/eforge-environment-picker-review.png`, and
+`/private/tmp/eforge-environment-picker-compact.png`. All review files and preferences were
+disposable; no user's scenario, pack, overlay, or conversation was changed. Native/Linux
+interaction review is still pending. Continuing into resource prediction under the user's
+authorization to complete additional slices while they are away.
+
+## 2026-10-01 — Read-only resource prediction and automatic Studio forecasts
+
+- Added `eforge resources predict SCENARIO` with `--project-root`, `--destination`,
+  `--checkpoint-hours` (24 by default), and versioned `--json` output. It compiles current
+  inputs and reuses the calibrated workload/resource model without generating logs, performing
+  full validation, creating output directories, or changing authored files. Typed failures are
+  inspectable. Validation remains the correctness and safety check.
+- Studio predicts through a fresh deterministic CLI process, one request at a time outside the
+  UI/event loop. SQLite caches reports across helper restarts. Keys cover scenario and include
+  bytes, exact pack/digest health, workspace overlays, output parent, checkpoint cadence,
+  EvidenceForge/tool identity, and resource-model calibration. In-flight results are discarded
+  if files, workspace, or preferences change. Errors do not launch or block generation.
+- Overlay bytes now participate in dependency freshness, invalidating old validation/run status
+  when workspace configuration changes. Output-parent paths normalize `~` and dot segments so
+  generation and predictions refer to the same directory. Existing user files stay untouched.
+- Scenario rows use a marked data estimate even before validation; a fresh completed bundle
+  still wins with measured size. Overview adds compact metrics; Generation shows estimate ranges,
+  peak memory/disk, capacity warnings, expandable machine/model details, and a refresh icon.
+  Predictions do not reserve resources or implement resource-aware queue scheduling yet.
+- Malformed CLI reports and timeouts produce short actionable messages without raw CLI output.
+  API refresh is authenticated and limited to the active workspace. Stream events update
+  forecasts independently of job progress and Codex health.
+
+Verification: all 124 service/import/library/environment/prediction tests, 114 React tests,
+and 13 relevant CLI contracts pass, alongside API type freshness, full Ruff checks/formatting,
+diff checks, and the frontend/macOS native release build. Real CLI prediction took about
+1.6 seconds for both the minimal fixture and healthcare scenario, including process startup,
+and created no destination directory. Browser review at 1280×720 and 712×724 verified
+automatic estimates without validation, all three metrics/ranges, capacity details, and manual
+refresh. Screenshots: `/private/tmp/eforge-resource-forecast-review.png`,
+`/private/tmp/eforge-resource-forecast-compact.png`, and
+`/private/tmp/eforge-scenario-predictions-review.png`. All review fixtures were disposable.
+Native interaction and Linux review remain pending; the Qt prototype is still available until
+core-parity acceptance. Advanced environment editors, project/scenario overlay layering, isolated
+authoring revisions, and the remaining workflow stages are not claimed complete.
+
+Handoff: restarted the normal launchd helper after an authenticated idle check and exact PID /
+creation-time / command verification. It now serves the current API; settings, projects,
+conversations, and job identities match the pre-restart snapshot. The native release app is
+rebuilt. Closed the agent's temporary browser tab, reset viewport sizing, and stopped the verified
+disposable helper/Vite processes. The user's browser tab and authored files were left intact.
+Next review: native scenario rows/project drag, Environment pack selection, and resource forecasts
+with the user's actual scenarios before wider workflow expansion or Qt cutover.
+
+## 2026-10-02 — Core acceptance, immutable queued inputs, and contextual search
+
+User scope: native review is complete for now; Studio is accepted as the replacement. Complete
+items 1–3 only, then pause before further workflow expansion. The user chose substring search
+with multiple excerpts, a configurable display count, five by default, and an omitted-match count.
+
+- `eforge-desktop` now uses Studio's launcher; `eforge-studio` remains an alias. Removed the Qt
+  interface, bridge, interaction tests, and PySide dependencies. Retained the headless controller,
+  jobs, progress, library, and old-state readers; moved independent lifecycle/ownership tests into
+  `test_desktop_controller.py`. Old app-data files are not deleted. Refreshed README/source-run
+  documentation and reconciled the milestone/backlog.
+- New generations compile a self-contained resolved snapshot before queue publication, capturing
+  exact packs, source/include YAML, workspace overlays, defaults, and embedded email corpora.
+  Private state stores `inputs/<job-id>/RESOLVED_SCENARIO.yaml`; original authored paths remain
+  associations. Root/dependency identities are checked before/after capture. Changed, missing,
+  redirected, or symlinked snapshots fail before process launch. Reopening/resuming an unstarted
+  queue entry keeps that snapshot; Regenerate captures current inputs in a new run. Checkpoint
+  resume still uses the CLI's own recovery contract. UI freshness now compares captured dependency
+  hashes, avoiding false freshness when a queued run starts after a dependency edit.
+- Search indexes includes with root content and returns multiple matching fields/source lines,
+  source file/line and YAML path, highlighted text, and `[and N more]`. Names/descriptions rank
+  first, then scalar values, keys, and comments; word/prefix matches win within each group. This
+  is deterministic ranking, with no LLM calls. Matching values get display priority over location
+  text to keep rows compact. Hover/accessibility exposes the full location. Workspace Settings
+  offers Search matches per item (global preference, default five, range 1–50). Pack rows also
+  render excerpts. Search refreshes after content/include or display-count changes; stored catalog
+  metadata never retains transient search hits. Kind filtering precedes the result limit.
+- CI replaces the Qt job with the complete Studio/headless Python suite, React/type checks, Rust
+  contracts, and actual native shell builds on macOS/Linux. A clean `uv sync` exposed Starlette's
+  new `httpx2` TestClient requirement; recorded it explicitly in development dependencies rather
+  than relying on an untracked local install. Linux native builds are configured but have not
+  been run on this macOS host.
+
+Verification: all 157 Studio/prediction/headless Python tests, then the final 11 snapshot contracts
+(including three added failure cases) and six final search contracts, 118 React tests, six Rust
+shell contracts, complete
+repository test collection, generated type freshness, full Ruff checks and
+formatting, diff checks, and the final macOS release `.app` build pass. Real CLI validation and
+generation succeed from the captured input after deletion of the original scenario, nested
+includes, exact workspace pack, and overlay; a separate corpus contract proves declaring-file
+assets survive deletion. Tests cover mid-capture edits without publication, snapshot integrity,
+restart/queued-pause preservation, edited inputs producing new runs, precise freshness,
+configurable excerpt limits/counts, include refresh, escaped markup, and saved-settings feedback.
+
+Reviewed the live UI at 1280×720 and 712×724 in a disposable workspace. Confirmed highlighted
+values/keys, five visible matches, accurate omitted counts, changing the preference to two,
+returning to the existing search with the updated count, and resetting to five. Screenshots:
+`/private/tmp/eforge-search-matches-review.png` and
+`/private/tmp/eforge-search-matches-compact.png`. Closed the review tab, reset its viewport,
+and stopped the verified temporary helper/frontend after an authenticated idle check.
+
+Handoff: pause after items 1–3. Native core acceptance is already granted; do not re-require that
+review. Deeper environment work, isolated authoring drafts, advanced preflight/queue controls,
+evaluation drill-down/comparison, and delivery presets are still subsequent workflow slices.
+
+Committed implementation as `75d09d0d`. Restarted the normal launchd helper after authenticated
+idle and PID/creation-time/command checks. The new service preserved all existing settings and
+the identities of ten catalog items, one project, three conversations, one job, and imported
+bundles; job status/output associations also match. Confirmed the new search schema and default
+five-match preference are live. The native release app is rebuilt; reopen Studio to attach to
+the refreshed helper. No later workflow slices were started.
+
+## 2026-10-02 — Configuration scope compatibility boundary
+
+The user requires that no Studio-related CLI, skill, or reference changes make traditional
+EvidenceForge use incompatible or harder through native ChatGPT/Claude harnesses or direct CLI
+commands. Treat this as a hard acceptance boundary for the remaining workflows.
+
+Current contract: CWD selects the implicit project root, `--project-root` selects an explicit
+one, `.eforge/config` supplies one overlay, and resolved inputs are self-contained. No ancestor
+search or Studio database lookup may become necessary for traditional use. Preserve the existing
+family-specific merges and policy ownership; later scope does not mean universal replacement.
+
+The user accepted project assignment selecting a project's configured overlay and subsequently
+approved the optional file-based context design. The implementation below supersedes the earlier
+design discussion. Preserve unchanged legacy behavior and the same explicit selection across CLI,
+skills, and Studio as an acceptance boundary.
+
+## 2026-10-02 — Portable configuration contexts and Studio scopes
+
+Approved scope: implement the shared optional foundation and its Studio integration, then pause
+for review before expanding into another workflow tranche.
+
+- Added an explicit versioned YAML context with a declared project root and ordered, named overlay
+  directories. Paths resolve relative to that file. `--context` is available for `info`,
+  `validate-config`, `validate`, `resolve`, `resources predict`, and `generate`. No ancestor search,
+  implicit scenario-location selection, or Studio database dependency was introduced. Ordinary
+  CWD/`--project-root` use retains its existing behavior. Broken selections fail with actionable
+  errors instead of silently falling back. Links, duplicates, unknown fields, unsupported paths,
+  and excessive input sizes are rejected.
+- Retained each configuration family's existing merge rules, including specialized persona and
+  public-identity loading. Extra layer documents and identities are captured in resolved inputs
+  and checkpoints. Empty extra-layer fields are omitted to preserve legacy serialization.
+  Generation behavior revision 156 records an opt-in input change with no legacy rendering impact.
+  Layer/file digests and composition decisions are available; full leaf-level origin tracking
+  across all runtime configuration families is not claimed complete.
+- Studio projects now have an optional shared configuration directory; scenarios have an optional
+  private directory. Both are disabled by default. The Environment tab shows the actual order,
+  paths, file inspection, chat editing, and a public copyable CLI command. Disabling or deleting a
+  virtual project preserves its files. Configured project moves require confirmation. Scenario
+  clones copy private patches, including disabled patches, while project patches remain shared.
+  Stable keys use workspace-relative scenario paths so workspace relocation preserves selection.
+- Validation, resource forecasts, dependency freshness, Codex first/resumed turns, and generation
+  snapshots use the same explicit context. Queue publication freezes the selected inputs; existing
+  runs retain their own captured configuration. Updating a context refreshes instructions for an
+  existing Codex thread without adding hidden text to the user's visible message.
+- Scenario import can explicitly select a source context. Review stages independent copies of its
+  base and additional layers and searches its declared root for exact packs. Source changes after
+  review require review again. Optional staged validation includes destination base/project layers.
+  Bundle export includes portable current authored context/layers when available, separately from
+  the selected run's authoritative resolved input. Missing current configuration is reported in
+  the archive rather than substituted. Canonical config skill/reference instructions document the
+  public contract; refreshed workspace and global installs for both agent harnesses with the
+  installer. The existing unmanaged legacy assess skill remains untouched.
+
+Verification: initial related Python gate passed 180 tests; final focused shared/config/skill gate
+passed 122 tests, and final Studio context/import/service gate passed 108 tests. All 121 React
+tests, generated type freshness, full Ruff checks/formatting, diff checks, generation behavior
+manifest validation, and the macOS native release build pass. Linux native builds were not run
+on this host. New tests cover sequential family merges, declaring-file diagnostics, CLI errors,
+no writes/fallback, serialization compatibility, runtime cache isolation, confirmed project moves,
+private clone behavior, relocation, frozen queue inputs, import review invalidation, independent
+export/import copies, and resumed Codex context changes.
+
+Two disposable real CLI experiments passed: (1) validation, prediction, generation, JSONL progress,
+safe checkpoint suspension, recovery after deleting the original context/layer, and evaluation;
+(2) the same legacy fixture compiled/rendered with the previous commit and current code produced
+identical compiled inputs and identical bytes for its two evidence files. These narrow contracts
+do not claim an exhaustive all-format comparison. Logs are in
+`/private/tmp/eforge-context-real-cli.log` and
+`/private/tmp/eforge-legacy-context-comparison.log`.
+
+Browser review at 1280×900 and 712×724 verified scope toggles, built-in YAML viewing, the public
+CLI disclosure, and the configured-move dialog's placement/Escape cancellation. Screenshots:
+`/private/tmp/eforge-configuration-layers-review.jpg`,
+`/private/tmp/eforge-configuration-layers-compact.jpg`, and
+`/private/tmp/eforge-configuration-move-review.jpg`. Closed the disposable review tab, reset its
+viewport, and stopped its helper/frontend. The normal helper had already exited; started the
+updated launchd service and verified the configuration API plus unchanged saved settings and
+identities for one project and three conversations. The service reports one job and no active
+chats. The native release app is rebuilt; reopen Studio for review.
+
+Three tracked deletions appeared during this work under `scenarios/iteration-test-1_0/`; their
+origin is unconfirmed. They were not part of the approved changes and are excluded from the
+implementation commit. Do not restore or include them without establishing the user's intent.
+
+Handoff: review project/scenario configuration in Studio and its portable public CLI contract.
+Pause for feedback here. Structured configuration editing, complete runtime value-origin views,
+isolated authoring revisions, and later workflow stages remain subsequent slices.
+
+## 2026-10-02 — Make source declarations usable
+
+User feedback: the source-declarations table lacked values or row actions and its long inner
+scroll area intercepted page scrolling. Its purpose is to trace an authored input value to its
+declaring file, rather than to list field names for their own sake.
+
+- Replaced the always-expanded listing with a collapsed, counted inspector. It shows ten rows
+  per page, has no internal vertical scrolling, and searches fields, declared values, layers,
+  and files. Scalars preserve false, zero, empty strings, and null; long/structured values can
+  expand inline. Fields and source links are keyboard-accessible; clicking a row opens YAML.
+- Values come from the exact captured declaring source, not guesses from the final effective
+  model. Organization declarations therefore keep their original values after scenario overrides.
+  The inspector explains that distinction. Added an optional public read-only
+  `eforge resolve --include-declaration-sources --explain-composition --json` flag; ordinary
+  resolution output and compiled identities remain unchanged.
+- The built-in viewer opens captured scenario/include/pack YAML, with a readable file name and
+  an explicit read-only snapshot label. Only known declaring files are served, with authentication,
+  active-workspace checks, and an exact compiled-revision check. Source changes require refreshing
+  Environment before viewing. Snapshot contents are private to the service's inspection result,
+  not duplicated into the REST report or misrepresented as filesystem paths.
+
+Verification: ten Python environment/API/CLI contracts pass, including included-file values,
+  qualified pack catalogs, overridden organization values, optional CLI output compatibility,
+  authorization, traversal/unknown-file rejection, and stale revisions. React's complete run
+  passed 123 tests and exposed one test-only trailing-whitespace matcher issue; after fixing that
+  assertion, all nine Environment interaction tests pass (124 unique React tests verified).
+  Frontend/type generation freshness, full Ruff checks/formatting, diff checks, and the macOS
+  release app build pass. Browser review at 1280×900 and 712×724 verified collapsed defaults,
+  value search, pagination, actual YAML viewing, and that table scroll height equals client height
+  with vertical overflow visible. Screenshots: `/private/tmp/eforge-source-declarations-review.jpg`,
+  `/private/tmp/eforge-source-declarations-compact.jpg`,
+  `/private/tmp/eforge-source-declarations-collapsed.jpg`, and
+  `/private/tmp/eforge-declaring-yaml-review.jpg`.
+
+Handoff: refreshed the normal helper after an authenticated idle/ownership check and verified
+unchanged durable settings, project/chat/job/bundle identities and job associations. Rebuilt the
+native app; reopen Studio to review the revised inspector. Closed the disposable browser tab,
+reset its viewport, and stopped its helper/frontend. Existing unrelated scenario deletions remain
+excluded. This addresses feedback within the configuration tranche; no later workflow was begun.
+
+## 2026-10-02 — Declaration line navigation and folded inspection details
+
+Follow-up feedback: source clicks should locate the exact declaring line with preceding context
+and a visible highlight; similar inspection lists should start collapsed.
+
+- Source-declaration metadata now includes one-based YAML locations from SafeLoader's retained
+  node marks. Structural traversal follows the same mapping/list/dotted-key lookup as declared
+  values, including duplicate text, multiline values, repeated keys, aliases, and merge keys.
+  Included scenario and pack files keep their own locations; compiled CLI inputs are unchanged.
+- Declaration links show `file:line` and open the captured YAML with three preceding lines and
+  a blue highlighted declaration. Only the file viewport scrolls. The initial jump does not
+  override later manual scrolling. Late declarations use bounded source reads and a 4,000-line
+  rendering window with absolute line numbers; unavailable lines are reported explicitly.
+- Added a keyboard-accessible counted inspection section. Selected packs, configuration layers,
+  the resolved model, override details, validation findings, and dependency checks now start
+  collapsed. Status/error summaries and Choose packs/Fix in chat remain visible. Primary
+  scenario/pack/bundle catalogs and job progress lists retain their existing visible behavior;
+  scorecard, completed chat activity, and job detail disclosures were already folded.
+
+Verification: all 129 React tests and 11 Python environment/API/CLI contracts pass. Tests include
+  exact include/pack lines, dotted-key ambiguity, duplicate values/keys, multiline declarations,
+  sequence entries, inherited/overridden/aliased YAML, initial scrolling and subsequent manual
+  scrolling, late bounded previews, unavailable-line feedback, and keyboard folding/repair.
+  Generated API types are fresh; full Ruff check/format, diff checks, and macOS release build pass.
+  Linux native builds were not run on this host. Browser review at 1280×900 and 712×724 verified
+  collapsed counts and modal sizing; declaration 109 had line 106 as its first fully visible
+  context line. Screenshots: `/private/tmp/eforge-declaration-line-jump.jpg`,
+  `/private/tmp/eforge-declaration-line-compact.jpg`, `/private/tmp/eforge-inspection-collapsed.jpg`,
+  and `/private/tmp/eforge-inspection-compact.jpg`.
+
+Refreshed the normal idle helper after authenticating and verifying its PID/create-time/launchd
+  identity. Durable settings and project/chat/job/bundle identities and job associations remained
+  unchanged; the updated API returns declaration lines. Native app rebuilt. Closed the disposable
+  review tab, reset viewport overrides, and stopped its preview/helper. Existing unrelated scenario
+  deletions remain excluded. Reopen Studio to review this configuration-tranche refinement.
+
+## 2026-10-02 — Collapsed project libraries and workspace design review
+
+User requested numbered source pagination, collapsed Packs/Bundles groups, scenario groups by
+project with saved expansion states, and workspace mockups before deciding on another layout.
+
+- Source declarations now have First/Previous, numbered jumps, ellipses, Next/Last, a visible
+  current page, and disabled boundary actions. Filtering resets to the first page; controls wrap
+  in compact windows and the inspector retains its bounded ten-row pages.
+- Scenarios now group matching authored scenarios and drafts beneath their project or Ungrouped.
+  Groups start collapsed, show counts, retain the project picker and row actions, and accept drops
+  on collapsed project headers. Group identities use project IDs, so renames preserve open state.
+- Packs' industry/organization sections and Bundles' scenario groups start collapsed. Their counts,
+  import/create controls, and filters remain available. Scenario/pack saved views record expanded
+  groups along with existing search/filters/sort. Workspace library recall stores these choices
+  separately for each library; older records default to collapsed without a database migration.
+- Prepared three interactive workspace alternatives: Unified lists (inline chat), Focused detail
+  (section list beside a detail pane), and Chat focus (collapsed overview plus a dedicated
+  conversation view within the scenario). Status and actions stay in section headers, generation
+  progress remains visible when folded, and single-source information uses a plain header row.
+  Recommended Chat focus to preserve chat space while replacing the workspace subtabs and duplicate
+  top-level action cluster. No workspace layout replacement was made pending user review.
+  Inline preview: `/Users/dabianco/.codex/visualizations/2026/09/24/01a0d54a-050d-7fe3-87d5-90b9746d7cfa/studio-workspace-options.html`.
+
+Verification: all 133 React tests and all 79 Python service tests pass. New contracts cover
+  numbered/last/first pagination, collapsed defaults, independent expansion, saved-view restoration,
+  recalled expansion persistence across service restart/workspace changes, and drops into collapsed
+  project groups. Generated API types are fresh; full Ruff check/format, diff checks, and the macOS
+  release build pass. Browser review verified native Enter disclosure behavior, saved layout
+  restoration, collapsed pack/bundle defaults, and pagination at 1280×900 and 712×724. Mockups were
+  inspected with the carousel, conversation switching, and compact layouts including 320px; no
+  browser script errors were reported. Linux native build was not run on this macOS host.
+  Screenshots: `/private/tmp/eforge-project-groups-review.jpg`,
+  `/private/tmp/eforge-project-groups-compact.jpg`, `/private/tmp/eforge-pagination-compact.jpg`.
+
+Refreshed the authenticated idle helper after checking process and launchd identity; settings,
+  project/conversation/job/imported-bundle IDs and job associations remained unchanged. Closed
+  review tabs, reset the viewport, and stopped disposable services. The native app is rebuilt for
+  reopening. Existing unrelated iteration-test scenario deletions remain excluded from this work.
+
+## 2026-10-02 — Scenario workspace with dedicated chat focus
+
+User selected Chat focus from the workspace alternatives, requested Continue target the most
+recent active conversation, and moved single-file information into the scenario header.
+
+- Replaced workspace subtabs and the upper action cluster with compact, collapsed Conversations,
+  Environment, Validation, Generation, Scoring, and Bundles sections. Status, counts, forecasts,
+  saved score summaries, and relevant actions remain in headers. Rows without details have no
+  disclosure control. Clone/hide use a compact menu; the project selector remains beside the title.
+- Continue opens the first conversation in a shared, deterministic order: active turns first,
+  descending update time within each group, then stable ID for ties. The list uses the identical
+  order and is scoped to the selected item. Continue never creates a conversation when one exists;
+  the authoring command uses the same target, creating only when the scenario has no conversations.
+- Conversation focus preserves the scenario header, path/copy/View YAML, a persistent conversation
+  rail with rename/delete, model/reasoning controls, and a composer within the window. Back to
+  workspace keeps the chat mounted, retaining its unsent draft, transcript, and event subscription.
+  Previously expanded workspace sections survive the round trip.
+- Scenario/pack YAML paths now sit directly below the summary, with the copy icon immediately
+  adjacent. Long descriptions preview two lines and expand inline when they overflow; there is
+  no separate source-file or description section. Empty validation/scoring/bundle rows stay plain.
+- Every running, queued, or paused generation has its own progress bar even when Generation is
+  folded. Opening its progress row reveals the exact job. Expanded operations keep chronological
+  run history and source-generation navigation without another type accordion. Bundles include
+  owned runs and unambiguously linked imports; their row IDs cannot collide with generation rows.
+  Sizes refresh during active generation; fresh completed data takes precedence over an estimate.
+
+Verification: all 140 React tests pass, including active-first selection, recency/tie ordering,
+  scenario isolation, no duplicate creation, draft/expansion retention, independent folded progress
+  updates, exact source navigation, unique bundle/job row identities, and inline description
+  expansion. Existing chat streaming, manual-scroll, validation repair, source viewing, settings,
+  project, and library tests pass. Generated API types, full Ruff check/format, diff checks, and
+  the macOS release app build pass. No CLI, authored schema, skill, or service contracts changed.
+
+Reviewed the actual browser UI at 1280×900 and 712×724, including keyboard expansion, long text,
+  conversation targeting, and unsent-draft retention. Compact chat document/main heights equal
+  the 724px viewport and the composer ends at 662px. No browser errors were reported. Native
+  Studio connected to the existing helper and rendered a real scenario workspace successfully;
+  the Mac locked before the next native Continue interaction. Browser interaction tests cover
+  that path. Closed only the native process launched for review and restored the library group's
+  pre-review collapsed state. Linux native testing was not available on this macOS host.
+  Screenshots: `/private/tmp/eforge-workspace-chat-focus.jpg`,
+  `/private/tmp/eforge-chat-focus-desktop.jpg`, and `/private/tmp/eforge-chat-focus-compact.jpg`.
+
+The native app is rebuilt for reopening. Disposable review tabs/services are closed; the existing
+  helper remains available. This is a workspace-design refinement in the configuration tranche;
+  later workflow stages await feedback. Unrelated iteration-test source deletions remain excluded.
+
+## 2026-10-02 — Useful collapsed headers and direct YAML viewing
+
+User requested a clickable YAML name/path in place of the separate View YAML action, and useful
+at-a-glance summaries throughout the app, with generation/scoring/bundles following the latest run.
+
+- The workspace YAML path now opens the built-in source viewer directly, with underline, hover,
+  and keyboard focus feedback. The copy icon stays immediately adjacent; the scenario title keeps
+  its existing rename interaction. Both browser and native modes use the same source-view endpoint.
+- Collapsed workspace headers show conversation activity and the Continue target, dependency
+  identities and errors, validation findings/freshness/date, latest generation status/progress/size,
+  the latest generation's linked evaluation outcome/records, and the newest owned/imported bundle.
+  Summaries distinguish measured partial/completed data, estimates, and changed scenario/dependency
+  inputs. Every live generation still has an independent progress bar while folded.
+- Latest means original submission order, with stable ID ties. Resuming an older run cannot make
+  it the summary target. An older score cannot imply that a newer run was evaluated: its action
+  is labeled Previous scorecard, while the newest run's saved report takes priority when available.
+  Library evaluation icons also identify scores belonging to earlier runs rather than remaining
+  green for a newer unevaluated generation.
+- Project groups summarize relevant scenario activity/review needs; pack groups show availability,
+  drafts, authors and updates; job groups show separate status counts and their latest job; bundle
+  groups show newest status, size, date and completeness. Summaries respect matching/visible rows.
+  Environment inspection headers expose selected pack versions, enabled layer/file counts,
+  resolved entity counts, precedence examples, and source file/layer counts. Existing individual
+  job, bundle, pack, scenario, activity and score rows retain their useful collapsed details.
+
+Verification: all 154 React tests pass, including submission/resume ordering, latest-run score
+  association, live summary changes, paused progress/partial size, imported bundle ordering, stale
+  validation/dependencies, acceptance failure despite a high score, and keyboard YAML viewing in
+  browser/native modes. Generated API types are fresh; full Ruff check/format and diff checks pass.
+  The macOS release app builds successfully. No CLI, skill, authored schema or service contract
+  changed. Linux/native runtime interaction was not rerun for this frontend refinement.
+
+Reviewed disposable UI data at 1280×900 and 712×724, including real validation, keyboard opening of
+  source YAML, collapsed workspace/project/pack/bundle headers and job status summaries. Compact
+  layout has no horizontal page overflow; the browser reported no script errors. Screenshots:
+  `/private/tmp/eforge-workspace-summaries.jpg`, `/private/tmp/eforge-workspace-summaries-compact.jpg`,
+  `/private/tmp/eforge-bundle-summaries-compact.jpg`, `/private/tmp/eforge-pack-summaries-compact.jpg`.
+  Closed the review tab, reset viewport and stopped disposable helper/frontend. Unrelated existing
+  iteration-test source deletions remain excluded. Ready for workspace feedback before advancing.
+
+
+## 2026-10-02 — Direct Environment and run-centered Scoring details
+
+User requested an Environment status icon and header refresh, direct pack rows instead of the
+readiness panel, and a Scoring list centered on generation runs rather than a run selector.
+
+- Environment's header uses the shared operation status: green for available exact pack versions
+  and included files, red for missing/conflicting dependencies, neutral before inspection, and
+  working during refresh. The tooltip identifies dependency failures. The header keeps status and
+  counts; exact pack references/versions appear immediately when expanded, including transitive
+  organization-pack industry dependencies. Refresh rechecks dependencies from disk and reloads
+  the compiled inspection, without expanding the section or requiring a fingerprint change.
+- Removed the workspace readiness panel and nested Selected packs disclosure. Known dependency
+  rows appear while compilation is loading; missing file dependencies remain directly visible and
+  Import packs is available beside missing packs. Healthy supporting file checks and the existing
+  configuration/model/declaration/precedence inspectors remain collapsed.
+- Scoring expands directly to runs in stable original submission order, with a Latest marker,
+  captured-input freshness, latest evaluation status/score/record count, and per-run Evaluate or
+  Re-evaluate. Incomplete generations cannot be evaluated; queued/running/paused evaluations block
+  duplicate requests. Queuing one run leaves other run actions available and errors recover the
+  action. Expanding a scored run opens its scorecard directly, including raw report viewing/export.
+  Older evaluations are available within their generation. Exact report navigation retains the
+  run's latest outcome in its header; generation navigation opens the matching generation row.
+
+Verification: all 166 React tests pass. Added direct pack/error/import coverage, collapsed header
+  refresh success/failure recovery and status updates, direct keyboard scorecard expansion,
+  historical-report, repeated scorecard links and delayed-event navigation, stable row order, incomplete/active evaluation
+  gating, per-run request concurrency and recovery. Generated API types, full Ruff check/format,
+  diff checks, TypeScript/frontend compilation, and the macOS release application build pass.
+  No Python service, CLI, authored schema or skill contract changed.
+
+Reviewed the actual UI using disposable data at 1280×900 and 712×724, including a real package
+  organization and its locked industry dependency, direct pack rows, folded header refresh, two
+  run rows, acceptance-failed scorecard expansion, and keyboard interaction. No horizontal page
+  overflow or browser script errors. Screenshots: `/private/tmp/eforge-direct-workspace.jpg`,
+  `/private/tmp/eforge-direct-scoring.jpg`, `/private/tmp/eforge-direct-scoring-compact.jpg`.
+  Rebuilt the native app for reopening; native runtime and Linux interaction were not rerun for
+  this frontend refinement. Closed the review tab, reset the viewport and stopped only the
+  disposable helper/frontend. Unrelated iteration-test source deletions remain excluded.
+
+
+## 2026-10-02 — Run outcome icons and input freshness
+
+User reported a green completed generation row with a grey-clock workspace header, and a 96/100
+acceptance-failed score whose header also showed a clock. Read-only inspection of the local service
+confirmed matching scenario YAML, an older generation without a dependency fingerprint, and a later
+dependency change/check timestamp. The old fallback could not prove changed dependencies, yet the
+header replaced both completed outcomes with a stale icon.
+
+- Workspace generation/scoring and scoring-run icons now describe the recorded outcome regardless
+  of input freshness: completed generation is green, failed required scoring checks are red,
+  indeterminate acceptance is yellow. A high overall score never overrides required checks.
+- Input comparisons distinguish current, known changed, and unverified records. Matching YAML plus
+  missing older dependency metadata is unverified, without claiming the inputs changed. Known
+  YAML/dependency mismatches remain distinct. Missing provenance/current dependency checks also
+  remain conservative for forecasts and current-run selection.
+- Collapsed headers and scoring rows show a separate amber Inputs changed/Inputs unverified notice
+  with hover explanation; expanded scoring shows the same precise explanation. Library statuses
+  warn about unverified success and preserve acceptance failure, rather than falsely claiming an
+  older scenario revision. Existing known-stale library selection remains in place.
+
+Verification: all 171 React tests pass, including the reported one-run legacy-metadata/96-point
+  failure case, independent header outcome/freshness, library failure visibility, actual YAML and
+  pack changes, missing records, failed/passed/indeterminate acceptance, and scoring-row notices.
+  TypeScript/frontend compilation, generated API types, full Ruff check/format and diff checks pass.
+  The macOS release app builds. No persisted user records, service, CLI, skills or schema changed.
+  Reviewed disposable data at 1280×900 and 712×724; no horizontal overflow or browser script errors.
+  Screenshots: `/private/tmp/eforge-outcome-headers.jpg`, `/private/tmp/eforge-outcome-compact.jpg`.
+
+Discussed workspace bundle redundancy: recommend one Runs section combining owned generation and
+  imported-bundle rows, retaining view/export/delete actions, while keeping the global Bundles page
+  for workspace-wide management. This structural proposal awaits user feedback; no bundle sections
+  have been removed. The native app is rebuilt. Disposable review services/tabs are closed and the
+  viewport reset; unrelated iteration-test source deletions remain excluded.
+
+## 2026-10-02 — Unified Runs with the latest saved score
+
+User accepted merging workspace Generation/Scoring/Bundles into Runs, keeping the global Bundles
+page, and retaining only the latest evaluation scores per run. Clarified that an unfinished or
+crashed evaluation preserves the previous report; a completed report failing quality standards
+replaces it normally.
+
+- Runs expands directly to one chronological row per owned generation or imported bundle. Owned
+  rows combine the original submission date, measured size, generation status/progress, latest
+  linked evaluation outcome, and separate input-freshness notice. Resuming an older run cannot
+  change row order or the Latest marker. The header summarizes the latest owned run's generation
+  and evaluation outcomes with independent icons, plus run/import/activity counts. All live
+  generations retain independent progress bars when the section is folded.
+- Expanding an owned run exposes its bundle viewer/export/delete and generation controls, its
+  Evaluate/Re-evaluate action, and the saved scorecard directly. Pillars expand to subscores, and
+  raw report viewing/export remains available. Failed/interrupted retries keep the previous saved
+  card until a new valid report completes. No older-report picker remains. Imported bundle rows
+  retain existing read-only source management. Global Bundles and Job center remain available.
+- Forecast is an accessible dialog beside Generate, so expanded Runs opens immediately to runs.
+  Existing generation/scorecard navigation now resolves the exact row in Runs, including repeated
+  opens and delayed event arrival. Routine updates preserve manual row collapse. Scorecards load
+  only after their run is expanded; one run's queued evaluation does not disable other runs.
+- Studio now rejects duplicate queued/running/paused evaluations of the same run. After a newer
+  completed, validated report is durable, it removes older terminal evaluation records and only
+  their verified Studio-owned report/log files. A completed report with failed required checks
+  replaces an older passing report; malformed or incomplete output cannot remove it. Active
+  attempts, generated data, imported files, external paths, and symlink targets are protected.
+  This retention policy is limited to Studio; CLI/skill evaluator behavior is unchanged.
+
+Verification: all 176 React tests and 94 focused Python tests pass. The explicit Python regression
+  confirms a completed quality-failed report replaces passing scores, while crashed/interrupted
+  retries retain them. Coverage includes direct score/bundle actions, owned/imported order, latest
+  association, per-run queuing and recovery, exact navigation/manual collapse, partial export and
+  confirmed deletion identity, duplicate API requests, report cleanup/retry and deletion boundaries.
+  Generated API types, TypeScript/frontend compilation, full Ruff check/format, diff checks, and
+  the macOS release app build pass. CLI schemas, skills and generation/controller contracts are
+  unchanged. Linux/native runtime interaction was not rerun on this macOS host.
+
+Reviewed the actual UI at 1280×900 and 712×724, including native Enter disclosure behavior,
+  direct saved-score expansion, acceptance-failed icons, and Forecast/Escape/focus return. No
+  horizontal overflow or browser script errors. Screenshots: `/private/tmp/eforge-unified-run-score.jpg`,
+  `/private/tmp/eforge-unified-runs-compact.jpg`, `/private/tmp/eforge-unified-runs-final.png`.
+  Refreshed the authenticated idle helper after verifying process creation time, command and
+  launchd identity and checking all workspaces for active chats/jobs. Settings, projects, chats,
+  scenario IDs, generation associations and imported-bundle identities remained unchanged.
+  Native app rebuilt for reopening. Closed the review tab, reset the viewport, and stopped the
+  disposable services. Unrelated existing scenario deletions remain excluded. Ready for workspace
+  feedback before advancing to later workflow stages.
+
+## 2026-10-02 — Prominent latest-run score and input notices
+
+User accepted Runs and requested the latest run's score and input-status notices in its header,
+while keeping them on individual rows. Read-only inspection confirmed the screenshot's 96/100
+report belongs to the older `a90ee038` generation; newer `2fcb41b4` has no evaluation. The header's
+Not evaluated summary was correctly associated with the newer run, rather than losing the score.
+
+- Runs now has a dedicated, color-coded Score line with acceptance outcome and record count.
+  Inputs unverified/changed appears immediately beside it, wrapping below in compact windows;
+  hover descriptions remain available. Generation/size and run context stay on separate lines.
+  Individual run score/input summaries retain their existing location and behavior.
+- Header score selection uses only evaluations linked to the latest submitted generation. A
+  crashed/interrupted/unreadable retry retains that run's last readable completed score, with an
+  explicit retry-status notice. A completed quality-failed report replaces it normally. The shared
+  readable-report selector is also used by the row's existing saved scorecard.
+
+Verification: all 181 React tests pass, including newest-run isolation, header score styling,
+  unverified/changed notice placement, retained row details, and ongoing/failed/unreadable retries
+  versus completed replacements. Generated API types, TypeScript/frontend compilation, full Ruff
+  check/format, diff checks, and the macOS release build pass. Reviewed actual folded/expanded
+  headers at 1280×900 and 712×724 with score and input warnings visible together. Screenshots:
+  `/private/tmp/eforge-runs-header-review.png`, `/private/tmp/eforge-runs-header-collapsed.png`,
+  `/private/tmp/eforge-runs-header-compact.png`. No service, CLI, schema, skill, or user-state changes;
+  native runtime/Linux were not rerun. Closed the review tab, reset viewport and stopped disposable
+  services. Native app rebuilt for reopening. Unrelated scenario deletions remain excluded.
+
+## 2026-10-02 — Newest-first lists and numeric pack versions
+
+User requested newest-first ordering throughout chronological lists and alphabetical packs with
+versions subsorted. Workspace runs, all generation/evaluation progress lists and Job center now
+use descending original submission time. Bundles interleave owned and imported rows newest first,
+and scenario groups are ordered by their newest visible bundle. Resume does not change position.
+Header and scenario-state selectors share the row tie-breaker, including missing legacy dates.
+Conversations use descending update time; Continue targets the first visible conversation.
+Industry and Organization sections retain their order; pack names sort A–Z, with numeric versions
+newest first within each name (1.10.0 before 1.2.0). Draft packs are alphabetized as well.
+User-selected library sorting, filters, saved views and evaluation replacement rules are unchanged.
+
+Verification: all 184 React tests pass, covering owned/imported interleaving, bundle group order,
+resume stability, latest header consistency, conversations and numeric pack versions. Generated
+API type checks, TypeScript/frontend compilation, full Ruff check/format and diff checks pass.
+The macOS release .app rebuilt successfully. Visually reviewed newest-first workspace rows and
+latest score/input notices; screenshot `/private/tmp/eforge-recent-order-review.png`. Closed the
+temporary preview, reset its viewport and stopped disposable Vite/service processes. Frontend-only
+changes; CLI, skills and service contracts are unchanged. Unrelated scenario deletions excluded.

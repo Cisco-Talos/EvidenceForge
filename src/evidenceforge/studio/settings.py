@@ -1,0 +1,114 @@
+"""Global settings for the local Studio service."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from evidenceforge.desktop.state import AppSettings
+from evidenceforge.studio.paths import StudioPaths, default_workspace
+from evidenceforge.studio.state_io import StudioStateError, atomic_write
+
+
+class QuitSettings(BaseModel):
+    """Actions selected for the next desktop-window close."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["continue", "pause", "kill"] = "continue"
+    continue_queued_generations: bool = True
+    continue_evaluations: Literal["continue", "hold", "manual"] = "continue"
+    pause_close_timing: Literal["handoff", "wait"] = "handoff"
+    pause_evaluations: Literal["finish", "restart"] = "finish"
+    kill_incomplete_bundles: Literal["preserve", "delete"] = "preserve"
+    authoring_turns: Literal["stop", "finish"] = "stop"
+
+
+class StudioSettings(BaseModel):
+    """Persistent user preferences that do not belong in an authored project."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: Path = Field(default_factory=default_workspace)
+    recent_workspaces: list[Path] = Field(default_factory=list)
+    output_parents: dict[str, Path] = Field(default_factory=dict)
+    max_concurrent_generations: int = Field(default=2, ge=1, le=16)
+    search_match_limit: int = Field(default=5, ge=1, le=50)
+    checkpoint_hours: int = Field(default=24, ge=0)
+    quit: QuitSettings = Field(default_factory=QuitSettings)
+    skill_install_scope: Literal["global", "workspace"] = "global"
+    skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
+    codex_path: Path | None = None
+    eforge_path: Path | None = None
+
+    @field_validator("output_parents")
+    @classmethod
+    def resolve_output_parents(cls, value: dict[str, Path]) -> dict[str, Path]:
+        """Use canonical paths for both actual run destinations and cached forecasts."""
+        return {
+            str(Path(workspace).expanduser().resolve()): parent.expanduser().resolve()
+            for workspace, parent in value.items()
+        }
+
+
+class SettingsStore:
+    """Atomically save global settings outside the workspace."""
+
+    def __init__(self, paths: StudioPaths) -> None:
+        from evidenceforge.studio.ownership import validate_private_paths
+
+        validate_private_paths(paths)
+        self.path = paths.settings_file
+
+    def load(self) -> StudioSettings:
+        """Load user preferences or return first-run defaults."""
+        from evidenceforge.studio.state_io import safe_path
+
+        safe_path(self.path)
+        if not self.path.exists():
+            return StudioSettings()
+        if not self.path.is_file():
+            raise StudioStateError("Studio settings must be a regular file; inspect saved state")
+        from evidenceforge.studio.state_upgrade import settings_document
+
+        version, values = settings_document(self.path)
+        if version != 1:
+            raise StudioStateError("Studio settings need a backed-up upgrade before opening")
+        return StudioSettings.model_validate(values)
+
+    def save(self, settings: StudioSettings) -> None:
+        """Write validated settings without leaving a partial document."""
+        if self.path.exists():
+            self.load()  # Do not overwrite an unsupported or unversioned document.
+        atomic_write(
+            self.path,
+            json.dumps(
+                {"schema_version": 1, "settings": settings_payload(settings)}, indent=2
+            ).encode(),
+        )
+
+
+def settings_payload(settings: StudioSettings) -> dict[str, object]:
+    """Return a JSON-compatible settings object for API responses."""
+    return json.loads(settings.model_dump_json())
+
+
+def controller_settings(settings: StudioSettings) -> AppSettings:
+    """Translate shared quit preferences into the CLI controller model."""
+    quit_settings: QuitSettings = settings.quit
+    return AppSettings(
+        close_action=quit_settings.action,
+        continue_queued_generations=quit_settings.continue_queued_generations,
+        continue_evaluations=quit_settings.continue_evaluations,
+        pause_close_timing=quit_settings.pause_close_timing,
+        pause_evaluations=quit_settings.pause_evaluations,
+        kill_incomplete_bundles=quit_settings.kill_incomplete_bundles,
+        skill_install_scope=settings.skill_install_scope,
+        skill_install_agent=settings.skill_install_agent,
+        codex_path=settings.codex_path,
+        eforge_path=settings.eforge_path,
+        max_concurrent_generations=settings.max_concurrent_generations,
+    )

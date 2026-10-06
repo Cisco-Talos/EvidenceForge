@@ -386,6 +386,7 @@ def _gather_lightweight(project_root: Path) -> dict[str, Any]:
 
 # Fields that can be resolved from lightweight data alone
 _LIGHTWEIGHT_PREFIXES = {
+    "configuration_context",
     "version",
     "install_type",
     "config_writable",
@@ -396,7 +397,9 @@ _LIGHTWEIGHT_PREFIXES = {
 }
 
 
-def gather_info(field: str | None = None, project_root: Path | None = None) -> dict[str, Any]:
+def gather_info(
+    field: str | None = None, project_root: Path | None = None, *, context: Path | None = None
+) -> dict[str, Any]:
     """Gather installation info into a single dict.
 
     If ``field`` is provided and it's a lightweight field (version, paths,
@@ -410,14 +413,23 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
     """
     from evidenceforge.composition.compiler import (
         build_management_effective_config,
-        resolve_management_project_root,
     )
+    from evidenceforge.config.context import select_context
     from evidenceforge.config.overlay import overlay_project_root_scope
     from evidenceforge.config.provider import effective_config_scope
     from evidenceforge.models.exceptions import EvidenceForgeError
 
-    resolved_project_root = resolve_management_project_root(project_root)
+    selection = select_context(project_root, context)
+    resolved_project_root = selection.project_root
     data = _gather_lightweight(resolved_project_root)
+    if context is not None:
+        data["configuration_context"] = {
+            "path": str(selection.path),
+            "project_root": str(selection.project_root),
+            "overlays": [
+                {"name": layer.name, "path": str(layer.path)} for layer in selection.overlays
+            ],
+        }
 
     # If requesting a lightweight field, return early — no loaders needed
     if field:
@@ -444,7 +456,7 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
         "packs": lambda: _collect_packs(resolved_project_root),
         "config_families": _collect_config_families,
     }
-    effective_config = build_management_effective_config(resolved_project_root)
+    effective_config = build_management_effective_config(resolved_project_root, context=context)
     expected_errors = (
         EvidenceForgeError,
         OSError,
@@ -456,7 +468,9 @@ def gather_info(field: str | None = None, project_root: Path | None = None) -> d
         AttributeError,
     )
     with (
-        overlay_project_root_scope(resolved_project_root),
+        overlay_project_root_scope(
+            resolved_project_root, tuple(layer.path for layer in selection.overlays)
+        ),
         effective_config_scope(effective_config),
     ):
         for key, collector in inventories.items():

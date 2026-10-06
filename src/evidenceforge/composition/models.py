@@ -14,8 +14,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     ValidationInfo,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -1278,6 +1280,14 @@ class ScenarioV2Document(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ConfigurationOverlayLayer(BaseModel):
+    """One immutable layer of partial YAML; runtime applies each family's own merge."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str = Field(min_length=1, max_length=80)
+    files: dict[str, Any] = Field(default_factory=dict)
+
+
 class EffectiveConfig(BaseModel):
     """Immutable, serializable configuration snapshot for one compilation."""
 
@@ -1285,6 +1295,7 @@ class EffectiveConfig(BaseModel):
     packaged_defaults: dict[str, Any] = Field(default_factory=dict)
     catalogs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     project_overlays: dict[str, Any] = Field(default_factory=dict)
+    overlay_layers: list[ConfigurationOverlayLayer] = Field(default_factory=list)
     families: dict[str, str] = Field(default_factory=dict)
     embedded_yaml_assets: dict[str, str] = Field(default_factory=dict)
     ambient_overlay_compat: bool = Field(
@@ -1296,6 +1307,14 @@ class EffectiveConfig(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_serializer(mode="wrap")
+    def serialize_compatible(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep existing documents and canonical digests unchanged without new layers."""
+        data = handler(self)
+        if not self.overlay_layers:
+            data.pop("overlay_layers", None)
+        return data
 
 
 class SelectedPack(BaseModel):

@@ -12329,7 +12329,7 @@ class EventDispatcher:
                     process_identity = dependent_plan.identity
                     process = dependent_event.process
                     target_host = dependent_event.src_host
-                    endpoint_ips: list[str] = []
+                    endpoint_ips: set[str] = set()
                     state_plan = root.state_plan
                     source_names = {
                         state_plan._source_system,
@@ -12345,18 +12345,18 @@ class EventDispatcher:
                             in {target_host.hostname, target_host.fqdn}
                         )
                     ):
-                        endpoint_ips.append(root.transaction.src_ip)
+                        endpoint_ips.add(root.transaction.src_ip)
                     if (
                         target_host is not None
                         and target_host.hostname == process_identity.hostname
                         and state_plan._hostname in {target_host.hostname, target_host.fqdn}
                     ):
-                        endpoint_ips.append(root.transaction.dst_ip)
+                        endpoint_ips.add(root.transaction.dst_ip)
                     if (
                         target_host is None
                         or target_host.hostname != process_identity.hostname
                         or len(endpoint_ips) != 1
-                        or target_host.ip != endpoint_ips[0]
+                        or target_host.ip not in endpoint_ips
                     ):
                         raise EventContractError(
                             "Deferred-session dependent is not projected on its exact State target"

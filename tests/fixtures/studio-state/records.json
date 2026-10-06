@@ -1,0 +1,228 @@
+{
+  "settings": {
+    "workspace": "@ROOT@/workspace",
+    "recent_workspaces": [
+      "@ROOT@/other"
+    ],
+    "search_match_limit": 9,
+    "output_parents": {
+      "@ROOT@/workspace": "@ROOT@/custom-output"
+    }
+  },
+  "items": [
+    {
+      "id": "scenario-a",
+      "workspace": "@ROOT@/workspace",
+      "kind": "scenario",
+      "path": "@ROOT@/workspace/scenarios/Ünicode/scenario.yaml",
+      "name": "Ünicode scenario",
+      "folder": "Exercises",
+      "project_id": "project-a",
+      "hidden": true,
+      "imported": true
+    }
+  ],
+  "projects": [
+    {
+      "id": "project-a",
+      "workspace": "@ROOT@/workspace",
+      "name": "Health research",
+      "updated_at": 123
+    },
+    {
+      "id": "project-b",
+      "workspace": "@ROOT@/other",
+      "name": "Other",
+      "updated_at": 456
+    }
+  ],
+  "conversations": [
+    {
+      "id": "conversation-a",
+      "workspace": "@ROOT@/workspace",
+      "item_id": "scenario-a",
+      "thread_id": "retained-codex-thread",
+      "title": "Review",
+      "updated_at": 789,
+      "active": false
+    },
+    {
+      "id": "draft-a",
+      "workspace": "@ROOT@/other",
+      "draft_kind": "scenario",
+      "draft_path": "@ROOT@/other/draft",
+      "draft_project_id": "project-b",
+      "thread_id": "draft-thread",
+      "title": "Draft",
+      "updated_at": 790
+    }
+  ],
+  "jobs": [
+    {
+      "id": "job-a",
+      "scenario": "@ROOT@/workspace/scenarios/Ünicode/scenario.yaml",
+      "workspace": "@ROOT@/workspace",
+      "output_root": "@ROOT@/output",
+      "progress_file": "@ROOT@/progress.json",
+      "log_file": "@ROOT@/job.log",
+      "started_at": 123,
+      "status": "paused",
+      "command": [
+        "/retained/runtime/bin/python",
+        "-m",
+        "evidenceforge",
+        "generate",
+        "@ROOT@/immutable.yaml"
+      ],
+      "input_snapshot": "@ROOT@/immutable.yaml",
+      "pid": 0
+    },
+    {
+      "id": "job-queued",
+      "scenario": "@ROOT@/workspace/scenarios/Ünicode/scenario.yaml",
+      "workspace": "@ROOT@/workspace",
+      "output_root": "@ROOT@/custom-output/queued",
+      "progress_file": "@ROOT@/progress.json",
+      "log_file": "@ROOT@/job.log",
+      "started_at": 124,
+      "status": "queued",
+      "command": [
+        "/retained/runtime/bin/python",
+        "-m",
+        "evidenceforge",
+        "generate",
+        "@ROOT@/immutable.yaml"
+      ],
+      "input_snapshot": "@ROOT@/immutable.yaml",
+      "pid": 0,
+      "submitted_at": 101,
+      "progress_history": [
+        "@ROOT@/progress-queued-previous.json"
+      ],
+      "source_sha256": null,
+      "status_message": "Preserved queued status"
+    },
+    {
+      "id": "job-completed",
+      "scenario": "@ROOT@/workspace/scenarios/Ünicode/scenario.yaml",
+      "workspace": "@ROOT@/workspace",
+      "output_root": "@ROOT@/custom-output/completed",
+      "progress_file": "@ROOT@/progress.json",
+      "log_file": "@ROOT@/job.log",
+      "started_at": 125,
+      "status": "completed",
+      "command": [
+        "/retained/runtime/bin/python",
+        "-m",
+        "evidenceforge",
+        "generate",
+        "@ROOT@/immutable.yaml"
+      ],
+      "input_snapshot": "@ROOT@/immutable.yaml",
+      "pid": 0,
+      "submitted_at": 102,
+      "progress_history": [
+        "@ROOT@/progress-completed-previous.json"
+      ],
+      "source_sha256": null,
+      "status_message": "Preserved completed status"
+    },
+    {
+      "id": "job-failed",
+      "scenario": "@ROOT@/workspace/scenarios/Ünicode/scenario.yaml",
+      "workspace": "@ROOT@/workspace",
+      "output_root": "@ROOT@/custom-output/failed",
+      "progress_file": "@ROOT@/progress.json",
+      "log_file": "@ROOT@/job.log",
+      "started_at": 126,
+      "status": "failed",
+      "command": [
+        "/retained/runtime/bin/python",
+        "-m",
+        "evidenceforge",
+        "generate",
+        "@ROOT@/immutable.yaml"
+      ],
+      "input_snapshot": "@ROOT@/immutable.yaml",
+      "pid": 0,
+      "submitted_at": 103,
+      "progress_history": [
+        "@ROOT@/progress-failed-previous.json"
+      ],
+      "source_sha256": null,
+      "status_message": "Preserved failed status"
+    }
+  ],
+  "views": [
+    {
+      "name": "Review hidden",
+      "kind": "scenario",
+      "show_hidden": true,
+      "project_id": "project-a"
+    }
+  ],
+  "library_preferences": {
+    "remember_view": true,
+    "scenarios": {
+      "search": "Ünicode",
+      "show_hidden": true
+    },
+    "packs": {
+      "sort": "updated"
+    }
+  },
+  "imported_bundles": [
+    {
+      "id": "external-a",
+      "workspace": "@ROOT@/workspace",
+      "root": "@ROOT@/external",
+      "scenario_name": "External",
+      "created_at": 999,
+      "size_bytes": 12345,
+      "manifest_sha256": "abc"
+    }
+  ],
+  "evaluation_jobs": [
+    {
+      "id": "evaluation-failed",
+      "generation_id": "job-completed",
+      "workspace": "@ROOT@/other",
+      "output_root": "@ROOT@/custom-output/completed",
+      "result_file": "@ROOT@/quality.json",
+      "log_file": "@ROOT@/evaluation.log",
+      "command": [
+        "/retained/runtime/bin/python",
+        "-m",
+        "evidenceforge",
+        "eval",
+        "@ROOT@/custom-output/completed"
+      ],
+      "created_at": 567,
+      "status": "failed",
+      "pid": 0
+    }
+  ],
+  "control": {
+    "id": "retained-intent",
+    "action": "pause",
+    "settings": {
+      "continue_queued_generations": false
+    },
+    "generation_exceptions": {
+      "job-a": "preserve"
+    }
+  },
+  "validation_cache": {
+    "exit_code": 0,
+    "report": {
+      "valid": true
+    },
+    "error": ""
+  },
+  "dependency_cache": {
+    "ready": true,
+    "fingerprint": "frozen-dependency-fingerprint",
+    "rows": [],
+    "changed_at": 123
+  }
+}

@@ -192,6 +192,9 @@ _compare_handles = _bind(
 )
 _local_free = _bind(_kernel, "LocalFree", wintypes.HLOCAL, [wintypes.HLOCAL])
 _current_process = _bind(_kernel, "GetCurrentProcess", wintypes.HANDLE, [])
+_open_process = _bind(
+    _kernel, "OpenProcess", wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+)
 _open_token = _bind(
     _advapi,
     "OpenProcessToken",
@@ -286,10 +289,10 @@ def _sid(pointer: int | None) -> str:
         _local_free(ctypes.cast(value, wintypes.LPVOID))
 
 
-def _process_token_sid(information_class: int) -> str:
+def _process_token_sid(information_class: int, process: int | None = None) -> str:
     """Read a SID-bearing process token record without interpreting POSIX IDs."""
     token = wintypes.HANDLE()
-    _require(_open_token(_current_process(), 0x8, ctypes.byref(token)))
+    _require(_open_token(process or _current_process(), 0x8, ctypes.byref(token)))
     try:
         size = wintypes.DWORD()
         _token_info(token, information_class, None, 0, ctypes.byref(size))
@@ -303,6 +306,17 @@ def _process_token_sid(information_class: int) -> str:
 def current_user_sid() -> str:
     """Read the process token's actual account SID."""
     return _process_token_sid(1)
+
+
+def process_user_sid(pid: int) -> str:
+    """Read another process's actual TokenUser with limited query rights."""
+    process = _open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not process:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return _process_token_sid(1, process)
+    finally:
+        _close_handle(process)
 
 
 def current_owner_sid() -> str:

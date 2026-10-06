@@ -83,7 +83,116 @@ jobs:
         run: uv sync --all-extras
 
       - name: Run tests without coverage
-        run: uv run pytest --no-cov
+        # Studio's native GUI lifecycle is gated separately on its supported macOS host.
+        run: uv run pytest --no-cov --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+
+  studio:
+    name: Studio (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Install Studio dependencies
+        run: uv sync --extra studio --extra dev
+
+      - name: Install frontend dependencies
+        working-directory: desktop-ui
+        run: npm ci
+
+      - name: Test local service and job lifecycle
+        run: uv run pytest --no-cov tests/unit/test_studio_*.py tests/unit/test_resource_prediction.py tests/unit/test_desktop_*.py
+
+      - name: Check generated API types
+        working-directory: desktop-ui
+        run: npm run types:check
+
+      - name: Test frontend interactions
+        working-directory: desktop-ui
+        run: npm test
+
+      - name: Build frontend
+        working-directory: desktop-ui
+        run: npm run build
+
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Test Tauri shell contracts
+        working-directory: desktop-ui/src-tauri
+        run: cargo +stable test --locked
+
+      - name: Build native Studio window
+        working-directory: desktop-ui
+        run: npm run tauri -- build --debug --no-bundle
+
+      - name: Build standalone Apple Silicon test app
+        run: |
+          rustup target add aarch64-apple-darwin --toolchain stable
+          uv run python scripts/package_studio_macos.py --build-app --skip-dmg
+
+      - name: Verify isolated packaged CLI and resources
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        run: >-
+          uv run python scripts/verify_studio_macos.py
+          "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
+
+      - name: Archive standalone test app
+        run: |
+          mkdir -p dist/macos
+          ditto -c -k --sequesterRsrc --keepParent "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app" "dist/macos/EvidenceForge-Studio-aarch64-test.zip"
+
+      - name: Upload standalone test app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Studio-macOS-Apple-Silicon-test
+          path: dist/macos/*
+          if-no-files-found: error
+
+  studio-state-recovery:
+    name: Studio state recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    steps:
+      - name: Preserve frozen fixture bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra studio --extra dev
+      - name: Preservation and fault tests
+        run: uv run pytest --no-cov tests/integration/test_studio_state_upgrade.py tests/integration/test_studio_state_edges.py tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_migrations.py tests/unit/test_studio_state_durability.py tests/unit/test_studio_state_contracts.py
+      - name: Native helper lifecycle
+        run: uv run pytest --no-cov tests/unit/test_studio_sessions.py tests/integration/test_studio_helper.py tests/unit/test_studio_runtime.py tests/unit/test_studio_ownership.py tests/integration/test_studio_ownership.py
+      - name: Extended native crash matrix
+        run: uv run pytest -m slow --no-cov tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_edges.py tests/integration/test_studio_state_migrations.py
 
   windows-checkpoint-durability:
     name: Windows checkpoint durability
@@ -124,7 +233,7 @@ jobs:
   ci-required:
     name: Required CI
     runs-on: ubuntu-latest
-    needs: [lint, tests, windows-checkpoint-durability]
+    needs: [lint, tests, studio, studio-state-recovery, windows-checkpoint-durability]
     if: always()
 
     steps:
@@ -137,6 +246,15 @@ jobs:
 
           if [ "${{ needs.tests.result }}" != "success" ]; then
             echo "Tests finished with result: ${{ needs.tests.result }}"
+            exit 1
+          fi
+
+          if [ "${{ needs.studio-state-recovery.result }}" != "success" ]; then
+            echo "Studio state recovery gates failed"
+            exit 1
+          fi
+          if [ "${{ needs.studio.result }}" != "success" ]; then
+            echo "Studio finished with result: ${{ needs.studio.result }}"
             exit 1
           fi
 

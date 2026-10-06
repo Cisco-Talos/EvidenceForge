@@ -1,0 +1,14 @@
+{
+  "python_version": "3.12.12",
+  "minimum_macos": "13.0",
+  "runtimes": {
+    "aarch64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251028/cpython-3.12.12%2B20251028-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "194997bc8cc08f1ed19a7e6a72544d8ce6688ef5e8969d61de2848aeb68fbf6c"
+    },
+    "x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251028/cpython-3.12.12%2B20251028-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "722260afaea76351fe57364498bd3f3f399f7359b1c371f8a2209b5889535328"
+    }
+  }
+}

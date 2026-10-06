@@ -15,6 +15,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from evidenceforge.config import get_config_directory
+from evidenceforge.config.context import ConfigurationContextError, SelectedContext, select_context
+from evidenceforge.config.overlay import overlay_project_root_scope
 from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import LoadedSourceGraph, load_scenario_source_graph
@@ -24,10 +26,12 @@ from evidenceforge.utils.paths import read_text_file_beneath
 from evidenceforge.utils.personas import merge_builtin_personas
 from evidenceforge.utils.yaml_loader import load_yaml_file
 
+from .accounts import apply_account_transitions
 from .identity import is_semantic_packaged_default
 from .models import (
     CompiledScenario,
     CompositionSpec,
+    ConfigurationOverlayLayer,
     EffectiveConfig,
     ResolvedScenarioDocument,
     ScenarioV1Document,
@@ -202,6 +206,54 @@ def _load_project_overlays(project_root: Path) -> dict[str, Any]:
     return overlays
 
 
+def _context_layers(selection: SelectedContext) -> list[ConfigurationOverlayLayer]:
+    """Snapshot selected patches while preserving per-family sequential merge semantics."""
+    from evidenceforge.config.overlay_registry import CONFIG_OVERLAY_FAMILIES
+
+    layers: list[ConfigurationOverlayLayer] = []
+    total_bytes = 0
+    for reference in selection.overlays:
+        files: dict[str, Any] = {}
+        for path in sorted(reference.path.rglob("*.yaml")):
+            if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
+                raise ConfigurationContextError(f"Overlay file escapes its directory: {path}")
+            total_bytes += path.stat().st_size
+            if total_bytes > 64 * 1024**2 or len(files) >= 500:
+                raise ConfigurationContextError(
+                    "Selected overlays exceed 64 MiB or 500 files per layer"
+                )
+            relative = logical_path(path.relative_to(reference.path))
+            if relative not in CONFIG_OVERLAY_FAMILIES and not (
+                Path(relative).parent == Path("personas") and Path(relative).suffix == ".yaml"
+            ):
+                raise ConfigurationContextError(
+                    f"Unsupported overlay '{reference.name}/{relative}'; use eforge info config_families"
+                )
+            document = load_yaml_file(path)
+            if not isinstance(document, dict):
+                raise ConfigurationContextError(f"Overlay {path} must contain a YAML mapping")
+            files[relative] = document
+        layers.append(ConfigurationOverlayLayer(name=reference.name, files=files))
+    return layers
+
+
+def _context_provenance(
+    selection: SelectedContext, layers: list[ConfigurationOverlayLayer]
+) -> dict[str, Any]:
+    """Portable layer identity; the immutable effective config owns the actual YAML."""
+    return {
+        "file": selection.path.name if selection.path else None,
+        "layers": [
+            {
+                "name": layer.name,
+                "files": sorted(layer.files),
+                "sha256": _canonical_hash(layer.files),
+            }
+            for layer in layers
+        ],
+    }
+
+
 def _project_pack_adapter_merge_decisions(
     catalogs: dict[str, dict[str, Any]],
     project_overlays: dict[str, Any],
@@ -334,6 +386,8 @@ def _load_packaged_defaults() -> dict[str, Any]:
 
 def build_management_effective_config(
     project_root: Path | None = None,
+    *,
+    context: Path | None = None,
 ) -> EffectiveConfig:
     """Build an isolated configuration snapshot for project-scoped CLI inspection.
 
@@ -342,11 +396,13 @@ def build_management_effective_config(
     inheriting module caches from an earlier command in the same process.
     """
 
-    resolved_project_root = resolve_management_project_root(project_root)
+    selection = select_context(project_root, context)
+    resolved_project_root = selection.project_root
     return EffectiveConfig(
         project_root=".",
         packaged_defaults=_load_packaged_defaults(),
         project_overlays=_load_project_overlays(resolved_project_root),
+        overlay_layers=_context_layers(selection),
         families=CONFIG_FAMILY_REGISTRY,
     )
 
@@ -560,14 +616,21 @@ def compile_scenario(
     *,
     project_root: Path | None = None,
     generation_seed: int | None = None,
+    context: Path | None = None,
 ) -> CompiledScenario:
     """Compile Scenario 1.0, Scenario 2.0, or authoritative resolved YAML."""
 
     graph = load_scenario_source_graph(path)
     raw = copy.deepcopy(graph.data)
     if raw.get("kind") == "evidenceforge.resolved-scenario":
+        if context is not None:
+            raise ConfigurationContextError(
+                "Resolved inputs already contain their configuration; omit --context"
+            )
         return _compile_resolved(raw)
-    resolved_project_root = resolve_project_root(graph.root, project_root)
+    selection = select_context(project_root, context)
+    resolved_project_root = selection.project_root
+    layers = _context_layers(selection)
 
     selected: list[LoadedPack] = []
     catalogs: dict[str, dict[str, Any]] = {}
@@ -657,7 +720,32 @@ def compile_scenario(
         scenario_data = raw
         authored_kind = "scenario-1.0"
 
-    scenario_data = merge_builtin_personas(scenario_data)
+    try:
+        scenario_data, account_effects = apply_account_transitions(scenario_data)
+    except ValueError as exc:
+        raise _ScenarioSchemaValidationError(
+            f"invalid account transitions: {exc}",
+            graph,
+            input_kind=authored_kind,
+            path_prefix="account_transitions",
+        ) from exc
+    merge_decisions.extend(
+        {
+            "path": "account_transitions",
+            "action": effect,
+            "lower_layer": "environment",
+            "higher_layer": "scenario",
+            "winner": "scenario",
+        }
+        for effect in account_effects
+    )
+    if context is not None:
+        with overlay_project_root_scope(
+            resolved_project_root, tuple(layer.path for layer in selection.overlays)
+        ):
+            scenario_data = merge_builtin_personas(scenario_data)
+    else:
+        scenario_data = merge_builtin_personas(scenario_data)
     try:
         scenario = Scenario.model_validate(scenario_data)
         if authored_kind == "scenario-1.0":
@@ -674,11 +762,21 @@ def compile_scenario(
 
     project_overlays = _load_project_overlays(resolved_project_root)
     merge_decisions.extend(_project_pack_adapter_merge_decisions(catalogs, project_overlays))
+    for layer in layers:
+        merge_decisions.extend(
+            {
+                **decision,
+                "higher_layer": layer.name,
+                "winner": layer.name if decision["winner"] != "combined" else "combined",
+            }
+            for decision in _project_pack_adapter_merge_decisions(catalogs, layer.files)
+        )
     effective_config = EffectiveConfig(
         project_root=".",
         packaged_defaults=_load_packaged_defaults(),
         catalogs=catalogs,
         project_overlays=project_overlays,
+        overlay_layers=layers,
         families=CONFIG_FAMILY_REGISTRY,
         embedded_yaml_assets=embedded_yaml_assets,
     )
@@ -737,6 +835,9 @@ def compile_scenario(
             "scenario_over_organization_model": "registered-merge",
         },
     }
+    if context is not None:
+        provenance["configuration_context"] = _context_provenance(selection, layers)
+        provenance["composition_precedence"][4:4] = [layer.name for layer in layers]
     return CompiledScenario(
         scenario=scenario,
         effective_config=effective_config,

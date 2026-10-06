@@ -2,7 +2,7 @@
 
 **Status:** 2.1.2 release preparation; post-v2.1.1 realism fixes merged to dev
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-09-24
+**Last Roadmap Review:** 2026-10-06
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -13,6 +13,12 @@ See [CHANGELOG.md](CHANGELOG.md) for release history and completed-phase details
 ---
 
 ## Completed Milestones
+
+**EvidenceForge Studio core replacement.** Accepted the Tauri/React scenario workspace app
+on October 2, 2026; `eforge-desktop` now launches Studio and the Qt UI/dependency is retired.
+Queued generations capture immutable resolved inputs. The seven workflow stages remain active;
+start with the [current Studio handoff](docs/worklog/2026-10-02-studio-handoff.md), then
+consult the [detailed rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
 
 **2.0.1 cleanup and correctness.** Simplified generation ownership and shared infrastructure,
 corrected foreground lifecycle, resolver selection, and Kerberos timing, and repaired long-run
@@ -58,6 +64,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [x] **P1** Reproduce and fix the `apt-healthcare-breach` preview generation failure at
+  collection hour 9 (`Deferred session process projection has no unique transport endpoint`).
+  Diagnose the owning network/session planner contract and add a focused regression; the run
+  stopped before its first checkpoint. See the
+  [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
 - [x] **P1** Preserve Windows facts in Snare and validate its native representation. All 43 variants
   have typed projections and field-level gates against both frozen SOF-ELK revisions; historical
   ambiguity remains explicit. See the [validation worklog](docs/worklog/2026-09-15-record-validation.md).
@@ -482,11 +493,53 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Medium-Term
 
+- [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
+  suitable test host is available. User explicitly deferred account creation on
+  October 6. UID/SID simulations and same-account native helper/locking tests are implemented;
+  they do not substitute for this cross-account acceptance. Linux and Windows GUI testing is
+  deferred until future platform exploration. See the
+  [isolation worklog](docs/worklog/2026-10-06-studio-user-isolation.md).
+
+- [ ] **P1 — public Studio release gate:** Version Studio-owned SQL/JSON settings and filesystem
+  layouts; require verified backups, interrupted-upgrade recovery, pre-use restoration and
+  native crash/fault gates on macOS, the only currently supported GUI platform. Linux and Windows
+  GUI support and native acceptance are deferred by the October 6 user decision. Engine-owned
+  formats and engine/CLI platform support stay outside this scope change.
+  Implementation and macOS evidence are tracked in the
+  [upgrade worklog](docs/worklog/2026-10-05-studio-state-upgrades.md); see
+  [contracts and test traceability](docs/studio-state-upgrades.md). Require the macOS native GUI
+  gates and existing engine/CLI and release checks before closing this release gate.
+
 - [ ] Automate clean-room scenario-agent acceptance after the 2.0 release, measuring first-draft
   structural validity, passes to zero errors, required-reference loading, warning churn, and
   repair regressions across representative scenario families. Use manual scenario-authoring
   acceptance for the 2.0 release candidates and final release.
-- [ ] Web UI for scenario creation.
+- [ ] Complete the seven Studio workflow stages after accepted core parity. Find/resume has
+  project-aware lists, saved views, contextual search, and a command menu. Environment inspection
+  and exact pack choices are available; optional portable project/scenario overlay contexts are
+  implemented. Guided editing, complete effective-value origins, isolated authoring revisions,
+  deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
+  [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
+  All CLI/skill changes must preserve traditional command-line and native-harness workflows.
+  New configuration scopes must be optional, file-based, independently usable without Studio,
+  and preserve existing root selection and family-specific merge contracts.
+- [ ] Package standalone Studio with a private Python runtime, CLI/service, resources and skills.
+  Initial field test targets Apple Silicon macOS 26; Developer ID signing/notarization are
+  deferred by user decision. Universal macOS delivery is blocked by the locked cryptography
+  dependency's missing Intel wheel. macOS is the only supported GUI platform for now; explore
+  Linux and Windows later, with packaging and native acceptance planned separately before support.
+  Codex remains separately installed. Require native macOS builds and clean-machine acceptance.
+  See the [standalone worklog](docs/worklog/2026-10-03-studio-standalone-macos.md) and
+  [installation instructions](docs/studio-standalone-macos.md); the
+  [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.
+- [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
+  assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
+  import/export with exact versions, selectable reviewed packs, and locked dependency closure;
+  source workspaces supply copies into the destination workspace. See the same Studio worklog for the import design decisions.
+- [ ] Extend Studio's new read-only import of complete CLI and earlier desktop bundles to
+  incomplete external bundles with recognized checkpoints. The Bundles page now indexes complete
+  external bundles by folder or workspace discovery, while Studio-owned incomplete jobs already
+  appear there. Keep external files outside Studio's delete controls.
 - [ ] Streaming output to SIEM/data lakes.
 - [ ] Log format auto-detection from samples.
 - [ ] D3FEND defensive response modeling through scenario defense profiles.

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 154
+current_revision: 158
 history_start_revision: 1
-behavior_surface_sha256: 429907e7b0207b6c11f34ecdf363b60838bb6ecad1cf46bf7d42c22b85397d59
+behavior_surface_sha256: 8587aa35fee18c127955a14ae30a989376606c2534f2df3a4a054c8dd234ae81
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1558,3 +1558,38 @@ changes:
       - bash-history-journal
     formats: []
     summary: Preserve full native file identities in durable Bash history export plans without changing rendered evidence.
+  - revision: 155
+    id: canonical-loopback-deferred-session-process-endpoints
+    impact: localized
+    domains:
+      - network-connection
+      - session-lifecycle
+      - process-lifecycle
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+    summary: Resolve a deferred process to one distinct canonical host and address when a modeled session uses the same endpoint for both transport roles, retaining strict foreign-endpoint rejection.
+  - revision: 156
+    id: explicit-portable-configuration-contexts
+    impact: none
+    domains:
+      - configuration-context
+      - effective-config-snapshot
+    formats: []
+    summary: Add explicitly selected ordered overlay inputs while preserving existing default rendering, serialized legacy inputs, and per-family merge semantics. Opt-in layer changes are captured as input drift rather than a default behavior change.
+  - revision: 157
+    id: studio-staged-pack-revisions
+    impact: none
+    domains:
+      - pack-authoring
+    formats: []
+    summary: Adds validated staged payload revisions to pack copying; existing compilation and log rendering are unchanged.
+  - revision: 158
+    id: authored-account-transitions
+    impact: none
+    domains:
+      - scenario-composition
+    formats: []
+    summary: Adds opt-in account retirement and restoration with reversible directory links before canonical validation. Existing authored inputs and resolved generation behavior are unchanged.
