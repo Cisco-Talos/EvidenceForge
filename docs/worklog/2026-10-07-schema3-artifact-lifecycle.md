@@ -247,3 +247,10 @@ Integration review found a platform-specific test assumption: the include-title 
 asserted a literal Unix permission mode. It now captures the filesystem's actual mode before
 editing and requires that exact mode afterward, preserving the assertion on Windows as well.
 Only the test changed; file-editing behavior is unchanged.
+
+The fresh default backend run completed with 12,437 passes and 49 skips; its sole failure was
+the validation dispatcher's compactness gate (153 lines against a 150-line limit). Condensed
+redundant wording to 150 lines without removing guidance or weakening the gate. Engine and Studio
+code remain unchanged during integration. All 76 focused dispatcher and installer contracts pass
+after the correction; generated local skill conversions were refreshed. The complete work is
+tracked in [PR #441](https://github.com/Cisco-Talos/EvidenceForge/pull/441), targeting `dev`.
