@@ -1,5 +1,5 @@
 ---
-description: "Consume existing packs from an authored Scenario 2.0 document"
+description: "Consume existing packs from an authored Scenario 2.0 or 3.0 document"
 ---
 
 # Scenario Pack Consumption
@@ -8,7 +8,9 @@ Use this reference to select an existing pack. Pack discovery and lifecycle oper
 `/eforge pack`; catalog or model authoring belongs to `/eforge industry-pack` or
 `/eforge organization-pack`. Do not load the pack-authoring contract merely to consume a pack.
 
-Packs are optional. Scenario 1.0 and monolithic Scenario 2.0 need no composition or pack scan.
+Read `/eforge:references:artifact-lifecycle` for draft UUID references, reviewed promotion and immutable publication. The examples below require the actual draft UUID allocated by `eforge scenario new-draft`.
+
+Packs are optional. Scenario 1.0 and monolithic Scenario 2.0/3.0 need no composition or pack scan.
 
 ## Contents
 
@@ -51,7 +53,9 @@ Do not repeat these checkpoints for an established existing scenario.
 Select direct industry packs:
 
 ```yaml
-scenario_version: "2.0"
+schema_version: "3.0"
+status: draft
+draft_id: REPLACE-WITH-A-REAL-UUID
 composition:
   industries:
     - source: package
@@ -63,7 +67,9 @@ composition:
 Or select one organization, which brings its exact locked industry dependencies:
 
 ```yaml
-scenario_version: "2.0"
+schema_version: "3.0"
+status: draft
+draft_id: REPLACE-WITH-A-REAL-UUID
 composition:
   organization:
     source: project

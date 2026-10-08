@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 158
+current_revision: 160
 history_start_revision: 1
-behavior_surface_sha256: 8587aa35fee18c127955a14ae30a989376606c2534f2df3a4a054c8dd234ae81
+behavior_surface_sha256: 0114d1bad6b5748c549a4da2ae71298e4c51b1852c11bfaf0b81e1d0d33cab60
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1593,3 +1593,19 @@ changes:
       - scenario-composition
     formats: []
     summary: Adds opt-in account retirement and restoration with reversible directory links before canonical validation. Existing authored inputs and resolved generation behavior are unchanged.
+  - revision: 159
+    id: schema3-frozen-authored-artifact-lifecycle
+    impact: none
+    domains:
+      - authored-schema-admission
+      - resolved-input-identity
+    formats: []
+    summary: Adds explicit Schema 3 draft and immutable release envelopes and frozen configuration admission; generation fields and rendering stay unchanged for equivalent definitions.
+  - revision: 160
+    id: optional-artifact-display-names
+    impact: none
+    domains:
+      - authored-schema-admission
+      - artifact-display-metadata
+    formats: []
+    summary: Adds optional Schema 3 titles and shared identifier validation while excluding display metadata from generation models and semantic identity. Existing identifiers and deterministic rendering are unchanged.

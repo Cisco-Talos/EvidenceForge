@@ -8,6 +8,19 @@ Packs are optional, deterministic, data-only inputs for Scenario 2.0. They contr
 generation data through a fixed public schema without exposing EvidenceForge's internal config
 filenames.
 
+## Naming metadata
+
+Schema 3 adds optional root `display_name`, a friendly single-line title that permits spaces,
+Unicode, punctuation and capitalization. If absent, use the unchanged `name` identifier.
+Scenario identifiers accept ASCII letters/digits/hyphens/underscores in any position; pack
+identifiers retain lowercase letters/digits/hyphens and begin with a letter or digit. Neither
+CLI nor Studio imposes an 80-character artifact-name cap. Equality and deduplication retain
+exact case-sensitive identifiers, never titles. A title edit does not rename files or references
+and does not affect deterministic generation; source integrity still seals it. Published titles
+require a new draft to edit. Legacy schemas remain unchanged; upgrade to a linked draft before
+adding this metadata. Authoring skills offer this optional field at creation and on edits when
+missing, respecting a user's refusal. See the artifact lifecycle reference for title CLI commands.
+
 ## Table of contents
 
 - [Core invariants](#core-invariants)
@@ -723,6 +736,13 @@ Organization packs add two fixed roots:
 
 ```yaml
 # model/environment.yaml
+
+For Schema 3 draft/published workflows, first read `/eforge:references:artifact-lifecycle`.
+New packs have `pack_schema_version: "3.0"`, `status: draft` and `draft_id`; publisher and
+release version may be absent. Use `pack new-draft`, `draft`, `publish`, `export` and
+`import-release`. The schema 2 manifest and authoring examples below describe legacy
+workspace packs and their continued compatibility; they do not allocate Schema 3 draft versions.
+
 environment:
   description: "Fictional regional care provider."
   timezone:
@@ -873,19 +893,16 @@ project config, working directory, or ambient caches. Do not edit that generated
 
 ## Drafts and semantic versioning
 
-Use a draft-aware policy:
+Schema 3 drafts carry a unique `draft_id` and no allocated release label. Edit the same draft
+across sessions. Published releases are immutable; revising them creates a separate draft.
+Choose X.Y.Z only when publishing, with the first default suggestion `1.0.0`.
 
-- Default an explicitly identified new draft to `0.1.0`.
-- Default the first declared complete pack to `1.0.0`.
-- Permit in-place edits only when the user confirms the version is unshared, unreferenced, and
-  still a draft.
-- Once a version is shared, referenced, or complete, copy it to a new exact version before editing.
+For publication:
 - Use patch for compatible corrections, minor for compatible additions, and major for incompatible
   removals, renames, or behavior changes.
 
-A tailored copy with a different name starts a new identity (`0.1.0` while explicitly draft or
-`1.0.0` when complete). A new version of the same identity keeps `--name` unchanged and advances
-the version, such as `1.0.0` to `1.1.0` for compatible additions.
+A draft with a different name or publisher starts a new identity and retains exact ancestry.
+Release labels do not encode ancestry. Use exact parent identities and digests separately.
 
 Changing an export ID, removing an export, changing an application's connection identity, changing
 a destination service incompatibly, or materially changing expected cadence normally requires a

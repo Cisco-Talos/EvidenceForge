@@ -1,14 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Activity, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, MessageSquareText, Pause, Play, RotateCcw, Trash2, TriangleAlert, X } from "lucide-react";
+import { Activity, MoreHorizontal, Check, ChevronDown, CircleHelp, ClipboardCheck, Download, FolderOpen, Pause, Play, RotateCcw, Trash2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { DropdownMenu, Tooltip } from "radix-ui";
 import { isTauri } from "@tauri-apps/api/core";
 import { StudioApi, StudioJob, ValidationResult, type ExportProgress } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { CopyPathButton } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
+import { BundlePropertiesDialog } from "./ArtifactProperties";
 import { jobSubmittedAt } from "./jobOrder";
 import { jobDisplayStatus } from "./jobOutcomes";
 import { ScorecardPanel } from "./ScorecardPanel";
+
+export function BundleOptionsMenu({ id, onProperties }: { id: string; onProperties: () => void }) {
+  return <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label={`Bundle options for ${id}`} title="Bundle options" onClick={(event) => event.stopPropagation()}><MoreHorizontal size={17} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5} align="end"><DropdownMenu.Item onSelect={onProperties}>Properties…</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>;
+}
 
 export function shortPath(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -43,6 +48,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
   onError: (message: string) => void; onChanged: () => Promise<void>; idPrefix?: string;
   summaryExtra?: ReactNode; detailsExtra?: ReactNode; evaluateAction?: ReactNode; latest?: boolean;
 }) {
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [files, setFiles] = useState<BundleFiles | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [working, setWorking] = useState(false);
@@ -107,7 +113,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     ? `${job.scorecard.overall_score == null ? "N/A" : `${job.scorecard.overall_score.toFixed(0)}/100`} · ${job.scorecard.acceptance_passed === true ? "Pass" : job.scorecard.acceptance_passed === false ? "Fail" : "Indeterminate"}`
     : job.status === "running" ? "Evaluating…" : job.status_message || "Waiting");
   return <details className={`job-row ${summaryExtra ? "workspace-run" : ""} ${highlighted ? "source-highlight" : ""}`} id={`${idPrefix}-${job.id}`} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong>{grouped ? `Run #${job.id.slice(0, 8)}` : name}</strong>{latest && <span className="run-latest">Latest</span>}{grouped && sizeBytes != null && <span className="bundle-size" title="Size of bundle contents on disk; ZIP size may differ">{formatBundleSize(sizeBytes)}</span>}</span><small>{job.kind === "evaluation" ? `Evaluates run #${job.generation_id?.slice(0, 8) || "unknown"}` : grouped ? "Generation" : `Run #${job.id.slice(0, 8)}`}</small></span><time className="job-row-time" title={submitted ? new Date(submitted * 1000).toLocaleString() : undefined}>{submitted ? formatTime(submitted) : "Time unknown"}</time><StatusBadge status={jobDisplayStatus(job)} /><span className="job-row-result">{job.kind === "generation" ? <><span>{phase} · {percent === null ? "Preparing" : `${percent}%`}</span><span className="progress-track" role="progressbar" aria-valuenow={percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${name} generation progress`}><span style={{ width: `${percent ?? 0}%` }} /></span></> : result}</span>{summaryExtra}<ChevronDown size={16} className="job-row-chevron" /></summary>
+    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong>{grouped ? `Run #${job.id.slice(0, 8)}` : name}</strong>{latest && <span className="run-latest">Latest</span>}{grouped && sizeBytes != null && <span className="bundle-size" title="Size of bundle contents on disk; ZIP size may differ">{formatBundleSize(sizeBytes)}</span>}</span><small>{job.kind === "evaluation" ? `Evaluates run #${job.generation_id?.slice(0, 8) || "unknown"}` : grouped ? "Generation" : `Run #${job.id.slice(0, 8)}`}</small></span><time className="job-row-time" title={submitted ? new Date(submitted * 1000).toLocaleString() : undefined}>{submitted ? formatTime(submitted) : "Time unknown"}</time><StatusBadge status={jobDisplayStatus(job)} /><span className="job-row-result">{job.kind === "generation" ? <><span>{phase} · {percent === null ? "Preparing" : `${percent}%`}</span><span className="progress-track" role="progressbar" aria-valuenow={percent ?? 0} aria-valuemin={0} aria-valuemax={100} aria-label={`${name} generation progress`}><span style={{ width: `${percent ?? 0}%` }} /></span></> : result}</span>{summaryExtra}<span className="job-row-controls"><ChevronDown size={16} className="job-row-chevron" />{job.kind === "generation" && <BundleOptionsMenu id={job.id} onProperties={() => setPropertiesOpen(true)} />}</span></summary>
     <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div>
       {job.kind === "generation" && <>{job.input_snapshot && <p className="muted small" title="Includes, exact packs, overlays, and embedded data were captured before this run was queued. Subsequent edits apply to new runs.">Inputs captured {formatTime(submitted)}</p>}<p className="muted small">{detail}</p>{!!progress?.storyline_total && <p className="muted small">Storyline {progress.storyline_event} of {progress.storyline_total}</p>}</>}
       {job.kind === "evaluation" && job.scorecard && !job.scorecard.error && <p className="muted small">{(job.scorecard.total_records || 0).toLocaleString()} records evaluated</p>}
@@ -133,6 +139,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
     {savedExport && <div className="path-with-copy muted small"><span className="path-value" title={savedExport}>Saved to {savedExport}</span><CopyPathButton path={savedExport} label="Copy saved ZIP path" onError={onError} /></div>}
     {expanded && detailsExtra}
     </div>
+    {propertiesOpen && <BundlePropertiesDialog id={job.id} api={api} onClose={() => setPropertiesOpen(false)} />}
     {files && <BundleFileBrowser jobId={job.id} files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
     {confirmDelete && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete bundle"><h2>Delete this bundle?</h2><p>The run directory, linked evaluation reports, and their Studio records will be removed. The authored scenario remains available.</p><div className="path-with-copy"><span className="path-value source-path" title={job.output_root}>{job.output_root}</span><CopyPathButton path={job.output_root} label="Copy bundle path" onError={onError} /></div><div className="close-modal-actions"><button className="button-quiet" onClick={() => setConfirmDelete(false)}>Cancel</button><button className="button-danger" disabled={working} onClick={() => void deleteBundle()}>Delete bundle</button></div></div></div>}
   </details>;
@@ -147,7 +154,7 @@ export function ValidationPanel({ result, onFix, fixing = false, embedded = fals
   const hasWarnings = valid && issues.some((issue) => issue.severity === "warning");
   const scenario = report.scenario as Record<string, unknown> | undefined;
   return <div className="validation-panel">
-    {!embedded && <div className={`validation-summary ${valid ? (hasWarnings ? "warning" : "valid") : "invalid"}`}><div className="validation-icon">{valid ? (hasWarnings ? <TriangleAlert size={20} /> : <Check size={20} />) : <X size={20} />}</div><div className="validation-summary-copy"><h3>{valid ? (issues.length ? "Valid with findings" : "Scenario is valid") : "Needs changes"}</h3><p>{String(scenario?.name || "Scenario")} · {issues.length} finding{issues.length === 1 ? "" : "s"}</p></div>{issues.length > 0 && onFix && <button className="button-quiet validation-fix" disabled={fixing} onClick={onFix} title="Open a new conversation with a prepared request and the current findings"><MessageSquareText size={16} /> Fix in chat</button>}</div>}
+    {!embedded && <div className={`validation-summary ${valid ? (hasWarnings ? "warning" : "valid") : "invalid"}`}><div className="validation-icon">{valid ? (hasWarnings ? <TriangleAlert size={20} /> : <Check size={20} />) : <X size={20} />}</div><div className="validation-summary-copy"><h3>{valid ? (issues.length ? "Valid with findings" : "Scenario is valid") : "Needs changes"}</h3><p>{String(scenario?.name || "Scenario")} · {issues.length} finding{issues.length === 1 ? "" : "s"}</p></div>{issues.length > 0 && onFix && <button className="button-quiet validation-fix" disabled={fixing} onClick={onFix} title="Open a new conversation with a prepared request and the current findings"><Sparkles size={16} aria-hidden="true" /> Fix in chat</button>}</div>}
     {issues.length === 0 ? valid ? <p className="muted">No validation issues found.</p> : <p className="error-text" role="alert">{result.error || `Validation failed without detailed findings (exit code ${result.exit_code}). Revalidate to check the current files.`}</p> : <div className="findings-list" aria-label="Validation findings">{issues.map((issue, index) => <article className="finding" key={`${index}-${issue.field_path}`}><span className={`severity severity-${issue.severity}`}>{String(issue.severity)}</span><div><h4>{String(issue.field_path || "Scenario")}</h4><p>{String(issue.message || "")}</p>{Boolean(issue.suggestion) && <p className="suggestion">Suggested fix: {String(issue.suggestion)}</p>}</div></article>)}</div>}
   </div>;
 }

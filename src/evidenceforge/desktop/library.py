@@ -9,7 +9,8 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.models.exceptions import ConfigurationError, SchemaValidationError
+from evidenceforge.schema import identify_document
 from evidenceforge.utils import load_scenario_source_graph
 
 
@@ -20,6 +21,7 @@ class LibraryItem(BaseModel):
 
     path: Path
     name: str
+    display_name: str | None = None
     description: str = ""
     kind: str = "scenario"
     version: str = ""
@@ -84,11 +86,14 @@ def _scenario_item(path: Path) -> LibraryItem | None:
         except (ConfigurationError, OSError, ValueError):
             # Keep a repairable root visible; dependency health explains missing inputs.
             pass
-    if (
-        "name" not in data
-        or ("version" not in data and "scenario_version" not in data)
-        or not any(key in data for key in ("environment", "composition", "includes", "include"))
-    ):
+    try:
+        contract = identify_document(data)
+    except SchemaValidationError:
+        # A malformed root stays visible for repair; generated documents and fragments do not.
+        if "name" not in data or "schema_version" not in data or "pack_schema_version" in data:
+            return None
+        contract = None
+    if contract is not None and contract.family != "scenario":
         return None
     try:
         search_text, modified_at = _scenario_text(path)
@@ -104,8 +109,14 @@ def _scenario_item(path: Path) -> LibraryItem | None:
     return LibraryItem(
         path=path.resolve(),
         name=str(data["name"]),
+        display_name=data.get("display_name")
+        if isinstance(data.get("display_name"), str)
+        else None,
         description=str(data.get("description") or "").strip(),
-        version=str(data.get("scenario_version", data.get("version", ""))),
+        version=str(data.get("scenario_version", ""))
+        if data.get("schema_version") == "3.0"
+        else str(data.get("scenario_version", data.get("version", ""))),
+        publisher=str(data.get("publisher") or ""),
         users=_count(environment.get("users")),
         systems=_count(environment.get("systems")),
         events=_count(events),
@@ -126,7 +137,7 @@ def matches_search(item: LibraryItem, query: str) -> bool:
     """Match every term against title, description, or authored YAML content."""
     terms = _search_terms(query)
     fields = {
-        "name": item.name.casefold(),
+        "name": (item.name + " " + (item.display_name or "")).casefold(),
         "description": item.description.casefold(),
         "yaml": item.search_folded or item.search_text.casefold(),
     }
@@ -198,6 +209,25 @@ def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[Libr
     """Find authored scenarios without traversing generated bundles."""
     roots = [workspace / "scenarios"]
     paths: set[Path] = {path.expanduser().resolve() for path in imported_paths}
+    artifacts = workspace / ".eforge" / "artifacts"
+    if artifacts.is_dir():
+        import json
+
+        from pydantic import ValidationError
+
+        from evidenceforge.artifacts.lifecycle import RECEIPT, ReleaseReceipt, safe_relative
+
+        for marker in (
+            *artifacts.glob("drafts/scenario/*/*/draft.json"),
+            *artifacts.glob("releases/*/scenario/*/*/release.json"),
+        ):
+            try:
+                raw = json.loads(marker.read_bytes())
+                if marker.name == RECEIPT:
+                    raw = ReleaseReceipt.model_validate(raw).model_dump(mode="json")
+                paths.add(marker.parent / safe_relative(raw["entrypoint"]))
+            except (OSError, ValueError, ValidationError):
+                continue
     for root in roots:
         if not root.is_dir():
             continue
@@ -220,6 +250,21 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
     bundled = Path(__file__).resolve().parents[1] / "config" / "packs"
     roots = [bundled, workspace / ".eforge" / "packs"]
     items: list[LibraryItem] = []
+    artifact_sources: list[Path] = []
+    artifacts = workspace / ".eforge" / "artifacts"
+    import json
+
+    for marker in (
+        *artifacts.glob(f"drafts/{kind}/*/*/draft.json"),
+        *artifacts.glob(f"releases/*/{kind}/*/*/release.json"),
+    ):
+        try:
+            entry = json.loads(marker.read_bytes())["entrypoint"]
+            from evidenceforge.artifacts.lifecycle import safe_relative
+
+            artifact_sources.append(marker.parent / safe_relative(entry))
+        except (OSError, ValueError, KeyError):
+            continue
     for root in roots:
         if not root.is_dir():
             continue
@@ -235,6 +280,9 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
                 LibraryItem(
                     path=path.resolve(),
                     name=str(data.get("name", path.parent.name)),
+                    display_name=data.get("display_name")
+                    if isinstance(data.get("display_name"), str)
+                    else None,
                     description=str(data.get("description") or "").strip(),
                     kind=kind,
                     version=str(data.get("version", "")),
@@ -246,4 +294,32 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
                     modified_at=modified_at,
                 )
             )
-    return sorted(items, key=lambda item: (item.name.casefold(), item.version))
+    for path in artifact_sources:
+        try:
+            data = load_scenario_source_graph(path).data
+            if data.get("type") != kind:
+                continue
+            search_text, modified_at = _scenario_text(path)
+            items.append(
+                LibraryItem(
+                    path=path.resolve(),
+                    name=str(data["name"]),
+                    display_name=data.get("display_name")
+                    if isinstance(data.get("display_name"), str)
+                    else None,
+                    description=str(data.get("description") or ""),
+                    kind=kind,
+                    version=str(data.get("version") or ""),
+                    publisher=str(data.get("publisher") or ""),
+                    publisher_display_name=str(data.get("publisher_display_name") or ""),
+                    pack_source="workspace",
+                    search_text=search_text,
+                    modified_at=modified_at,
+                )
+            )
+        except (OSError, ValueError, ConfigurationError):
+            continue
+    return sorted(
+        items,
+        key=lambda item: ((item.display_name or item.name).casefold(), item.name, item.version),
+    )

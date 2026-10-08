@@ -221,3 +221,11 @@ inventories. No production state or authentication tokens belong in those artifa
 acceptance requires the macOS native GUI gates and applicable backend/frontend, generated-type,
 lint, build and release checks to pass. Local macOS results do not replace CI or establish support
 for Linux or Windows. The existing engine/CLI Linux and Windows gates remain required.
+
+The artifact naming feature adds database migration `studio-db-0002` (1 → 2). It defaults
+`items.display_name` and `conversations.draft_display_name` to null without changing identities,
+source paths, timestamps, projects, threads or runs. Version 1 decoders and migration checksums
+remain frozen; version 2 has a separate frozen reader. Artifact titles remain authoritative in
+portable Schema 3 YAML; the catalog field is a derived cache. The conversation field remembers
+an optional title before the authored file exists. Older Studio readers cannot accept these new
+JSON fields, so upgrading existing state uses the normal reviewed backup/recovery workflow.

@@ -10,9 +10,25 @@ reference only for the section being changed.
 **Contents:** [Documents](#authored-documents) · [Includes](#includes) ·
 [Safe mutation](#safe-mutation) · [Runtime discovery](#runtime-discovery)
 
+## Naming metadata
+
+Schema 3 adds optional root `display_name`, a friendly single-line title that permits spaces,
+Unicode, punctuation and capitalization. If absent, use the unchanged `name` identifier.
+Scenario identifiers accept ASCII letters/digits/hyphens/underscores in any position; pack
+identifiers retain lowercase letters/digits/hyphens and begin with a letter or digit. Neither
+CLI nor Studio imposes an 80-character artifact-name cap. Equality and deduplication retain
+exact case-sensitive identifiers, never titles. A title edit does not rename files or references
+and does not affect deterministic generation; source integrity still seals it. Published titles
+require a new draft to edit. Legacy schemas remain unchanged; upgrade to a linked draft before
+adding this metadata. Authoring skills offer this optional field at creation and on edits when
+missing, respecting a user's refusal. See the artifact lifecycle reference for title CLI commands.
+
 ## Authored documents
 
-- New scenarios use `scenario_version: "2.0"`, even when they are monolithic and select no packs.
+- New scenarios use `schema_version: "3.0"`, `status: draft`, and a CLI-created `draft_id`.
+  Read `/eforge:references:artifact-lifecycle` for publication, notes and linked upgrades.
+  Drafts omit `scenario_version`; published releases use it for their exact X.Y.Z content label.
+- Scenario 2.0 remains supported with `scenario_version: "2.0"`.
 - Existing Scenario 1.0 documents use `version: "1.0"`. Preserve that version unless the user asks
   to migrate; never place both version keys in one document.
 - A generated document starts with `kind: evidenceforge.resolved-scenario`. It is authoritative

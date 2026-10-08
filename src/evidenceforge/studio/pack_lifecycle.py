@@ -5,29 +5,36 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import re
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from evidenceforge.artifacts.lifecycle import (
+    _publication_lock,
+    _safe_path,
+    artifact_root,
+    safe_relative,
+    storage_name,
+)
+from evidenceforge.artifacts.removal import (
+    AffectedItem,
+    delete_artifact_files,
+    retired_artifact_sources,
+)
 from evidenceforge.composition.models import PackReference
 from evidenceforge.composition.packs import (
     PackRepository,
     _bounded_pack_tree,
     _read_regular_file_no_follow,
-    _write_new_file_no_follow,
     parse_pack_cli_reference,
 )
 from evidenceforge.config.context import select_context
 from evidenceforge.desktop.library import discover_packs, discover_scenarios
-from evidenceforge.models.exceptions import ConfigurationError, PackError
+from evidenceforge.models.exceptions import EvidenceForgeError, PackError
 from evidenceforge.studio.contexts import context_path
 from evidenceforge.studio.imports import _scenario_references
 from evidenceforge.utils import load_scenario_source_graph
+from evidenceforge.utils.files import LoadedSourceGraph
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +63,7 @@ class PackDeleteReview(BaseModel):
     files: int
     bytes: int
     consumers: list[str] = Field(default_factory=list)
+    affected: list[AffectedItem] = Field(default_factory=list)
     problems: list[str] = Field(default_factory=list)
     removable: bool
 
@@ -66,14 +74,15 @@ class PackDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    accept_dependents: bool = False
 
 
 class PackDeleted(BaseModel):
-    """Recovery location outside the active pack repository."""
+    """Confirmation of permanent exact-version deletion."""
 
     model_config = ConfigDict(extra="forbid")
 
-    recovery_path: Path
+    deleted_path: Path
 
 
 def review_pack(source: Path, workspace: Path) -> PackReview:
@@ -88,7 +97,9 @@ def review_pack(source: Path, workspace: Path) -> PackReview:
         identity = pack.manifest
         return PackReview(
             valid=True,
-            reference=f"{identity.publisher}:{kind}:{identity.name}@{identity.version}",
+            reference=f"draft:{kind}:{identity.name}@{identity.draft_id}"
+            if identity.status == "draft"
+            else f"{identity.publisher}:{kind}:{identity.name}@{identity.version}",
             digest=pack.digest,
             exports={category: sorted(entries) for category, entries in pack.catalogs.items()},
             dependencies=[
@@ -101,7 +112,7 @@ def review_pack(source: Path, workspace: Path) -> PackReview:
                 "baseline_activity": sorted(pack.baseline_activity),
             },
         )
-    except (OSError, ValueError, ConfigurationError, PackError) as exc:
+    except (OSError, ValueError, EvidenceForgeError) as exc:
         return PackReview(valid=False, error=str(exc))
 
 
@@ -123,15 +134,34 @@ def _snapshot(root: Path) -> tuple[str, int, int]:
 
 
 def _workspace_version(source: Path, workspace: Path) -> tuple[Path, str]:
+    source = _safe_path(source)
     reference, kind = parse_pack_cli_reference(str(source))
     root = workspace.resolve() / ".eforge" / "packs"
-    expected = root / reference.publisher / str(kind) / reference.name / reference.version
-    if source.absolute() != expected / "pack.yaml":
-        raise PackError(
-            "Only exact workspace pack versions can be deleted; bundled packs are protected"
-        )
-    PackRepository(workspace)._assert_project_path_safe(expected)
-    return expected, f"{reference.publisher}:{kind}:{reference.name}@{reference.version}"
+    expected = root / str(reference.publisher) / str(kind) / reference.name / str(reference.version)
+    if source == expected / "pack.yaml":
+        PackRepository(workspace)._assert_project_path_safe(expected)
+        return expected, f"{reference.publisher}:{kind}:{reference.name}@{reference.version}"
+    artifacts = artifact_root(workspace)
+    for parent in source.parents:
+        if not parent.is_relative_to(artifacts):
+            continue
+        relative = parent.relative_to(artifacts).parts
+        marker = None
+        if len(relative) == 4 and relative[:2] == ("drafts", kind):
+            marker = parent / "draft.json"
+        elif len(relative) == 5 and relative[0] == "releases" and relative[2] == kind:
+            marker = parent / "release.json"
+        if marker and marker.is_file():
+            data = json.loads(_read_regular_file_no_follow(marker, max_bytes=8 * 1024 * 1024))
+            if not isinstance(data, dict) or parent / safe_relative(data["entrypoint"]) != source:
+                raise PackError("Choose the pack entrypoint recorded in its receipt")
+            label = (
+                f"Draft {reference.name}"
+                if reference.source == "draft"
+                else (f"{reference.publisher}:{kind}:{reference.name}@{reference.version}")
+            )
+            return parent, label
+    raise PackError("Only exact workspace packs can be deleted; bundled packs are protected")
 
 
 def review_pack_deletion(
@@ -142,16 +172,55 @@ def review_pack_deletion(
 ) -> PackDeleteReview:
     """Inspect actual authored references, including includes and selected contexts."""
     target, identity = _workspace_version(source, workspace)
+    return _review_pack_consumers(
+        source, workspace, target, identity, scenario_paths, organization_paths
+    )
+
+
+def review_pack_identity(
+    source: Path,
+    workspace: Path,
+    scenario_paths: list[Path] | None = None,
+    organization_paths: list[Path] | None = None,
+) -> PackDeleteReview:
+    """Inspect consumers for a name edit, including protected bundled originals."""
+    from evidenceforge.artifacts.lifecycle import inspect_artifact
+
+    current = inspect_artifact(source)
+    return _review_pack_consumers(
+        source,
+        workspace,
+        source.parent.resolve(),
+        current["name"],
+        scenario_paths,
+        organization_paths,
+    )
+
+
+def _review_pack_consumers(
+    source: Path,
+    workspace: Path,
+    target: Path,
+    identity: str,
+    scenario_paths: list[Path] | None,
+    organization_paths: list[Path] | None,
+) -> PackDeleteReview:
+    """Collect exact and indirect consumers without changing any source or reference."""
     revision, files, size = _snapshot(target)
     fingerprints: list[str] = [revision]
     consumers: list[str] = []
+    affected: dict[Path, AffectedItem] = {}
+    organization_roots: set[Path] = set()
+    scenario_graphs: list[tuple[Path, LoadedSourceGraph, Path]] = []
     problems: list[str] = []
 
-    def check(reference: PackReference, kind: str, origin: Path, project: Path) -> bool:
+    def check(
+        reference: PackReference, kind: str, origin: Path, project: Path, selected: Path = target
+    ) -> bool:
         # Resolve locations independently of semantic validity: a broken catalog still owns
         # its consumers and must not make a referenced pack appear safe to remove.
         repository = PackRepository(project)
-        if reference.source == "path":
+        if reference.source in {"path", "draft"}:
             raw = Path(reference.path or "")
             location = raw if raw.is_absolute() else origin.parent / raw
         else:
@@ -162,7 +231,18 @@ def review_pack_deletion(
                 / reference.name
                 / reference.version
             )
-        return location.resolve() == target
+            if reference.source == "project" and not location.is_dir():
+                location = (
+                    artifact_root(project)
+                    / "releases"
+                    / str(reference.publisher)
+                    / kind
+                    / storage_name(reference.name)
+                    / str(reference.version)
+                    / "source"
+                )
+        resolved = location.resolve()
+        return resolved == selected or resolved.is_relative_to(selected)
 
     discovered = {item.path: item.name for item in discover_scenarios(workspace, [])}
     for path in scenario_paths or []:
@@ -174,10 +254,23 @@ def review_pack_deletion(
             selected_context = context_path(scenario_path, workspace)
             selection = select_context(None if selected_context else workspace, selected_context)
             fingerprints.append(str(selection.project_root))
+            scenario_graphs.append((scenario_path, graph, selection.project_root))
             for reference, kind, origin in _scenario_references(graph):
                 if check(reference, kind, origin, selection.project_root):
                     consumers.append(f"Scenario: {scenario_name} ({scenario_path})")
-        except (OSError, ValueError, ConfigurationError, PackError) as exc:
+                    from evidenceforge.schema import identify_document
+
+                    contract = identify_document(graph.data)
+                    lifecycle = contract.lifecycle
+                    affected[scenario_path] = AffectedItem(
+                        kind="scenario",
+                        name=scenario_name,
+                        version=lifecycle.version or "" if lifecycle else "",
+                        publisher=lifecycle.publisher or "" if lifecycle else "",
+                        path=scenario_path,
+                        frozen=bool(lifecycle and lifecycle.status == "published"),
+                    )
+        except (OSError, ValueError, EvidenceForgeError) as exc:
             problems.append(f"Cannot check scenario {scenario_name}: {exc}")
 
     # Organizations are the only pack type allowed to depend on another pack. Inspect
@@ -190,7 +283,7 @@ def review_pack_deletion(
         organizations.update(root.glob("*/organization/*/*/pack.yaml"))
     organizations.update(organization_paths or [])
     for path in sorted(organizations):
-        if path.parent == target:
+        if path.is_relative_to(target):
             continue
         try:
             reference, kind = parse_pack_cli_reference(str(path))
@@ -211,20 +304,52 @@ def review_pack_deletion(
                     raise PackError("An industry dependency has no exact lock")
                 selected = PackReference(
                     source=dependency.source,
-                    publisher=dependency.publisher,
+                    publisher=dependency.publisher if dependency.source != "draft" else None,
                     name=dependency.name,
-                    version=locked.version,
+                    version=locked.version if dependency.source != "draft" else None,
                     path=dependency.path,
+                    draft_id=dependency.draft_id,
                 )
                 if check(
                     selected, "industry", pack.industry_dependency_declaring_files[index], workspace
                 ):
+                    organization_roots.add(pack.root)
+                    affected[path] = AffectedItem(
+                        kind="organization_pack",
+                        name=pack.manifest.name,
+                        version=pack.manifest.version if pack.manifest.status != "draft" else "",
+                        publisher=pack.manifest.publisher
+                        if pack.manifest.status != "draft"
+                        else "",
+                        path=path,
+                        frozen=pack.manifest.status == "published",
+                    )
                     consumers.append(
                         f"Organization pack: {pack.manifest.publisher}/{pack.manifest.name}"
                         f"@{pack.manifest.version}"
                     )
-        except (OSError, ValueError, ConfigurationError, PackError) as exc:
+        except (OSError, ValueError, EvidenceForgeError) as exc:
             problems.append(f"Cannot check organization {path}: {exc}")
+    # Scenarios that select a dependent organization are affected indirectly as well.
+    for path, graph, project in scenario_graphs:
+        for reference, kind, origin in _scenario_references(graph):
+            if kind == "organization" and any(
+                check(reference, kind, origin, project, selected=root)
+                for root in organization_roots
+            ):
+                from evidenceforge.schema import identify_document
+
+                contract = identify_document(graph.data)
+                lifecycle = contract.lifecycle
+                affected[path] = AffectedItem(
+                    kind="scenario",
+                    name=str(graph.data["name"]),
+                    version=lifecycle.version or "" if lifecycle else "",
+                    publisher=lifecycle.publisher or "" if lifecycle else "",
+                    path=path,
+                    frozen=bool(lifecycle and lifecycle.status == "published"),
+                )
+                consumers.append(f"Scenario: {graph.data['name']} ({path})")
     fingerprints.extend(sorted(consumers))
     fingerprints.extend(sorted(problems))
     return PackDeleteReview(
@@ -233,8 +358,18 @@ def review_pack_deletion(
         files=files,
         bytes=size,
         consumers=sorted(set(consumers)),
+        affected=sorted(
+            affected.values(),
+            key=lambda entry: (
+                {"industry_pack": 0, "organization_pack": 1, "scenario": 2}[entry.kind],
+                entry.name.casefold(),
+                tuple(-int(part) for part in entry.version.split(".")) if entry.version else (),
+                entry.publisher,
+                str(entry.path),
+            ),
+        ),
         problems=sorted(set(problems)),
-        removable=not consumers and not problems,
+        removable=not problems,
     )
 
 
@@ -244,129 +379,25 @@ def remove_workspace_pack(
     revision: str,
     scenario_paths: list[Path] | None = None,
     organization_paths: list[Path] | None = None,
+    *,
+    accept_dependents: bool = False,
 ) -> PackDeleted:
-    """Recheck reviewed input and atomically retire a version, retaining its files."""
-    target, _identity = _workspace_version(source, workspace)
-    original = target.stat()
-    review = review_pack_deletion(source, workspace, scenario_paths, organization_paths)
-    if review.revision != revision:
-        raise FileExistsError("Pack files or consumers changed. Review deletion again")
-    if not review.removable:
-        raise PackError(
-            "Update dependent scenarios/packs and resolve inspection errors before deletion"
-        )
-    _workspace_version(source, workspace)
-    recovery = workspace.resolve() / ".eforge" / "deleted-packs"
-    operation = uuid4().hex
-    operation_root = recovery / operation
-    destination = operation_root / "pack"
-    receipt = json.dumps(
-        {"recovery_version": 1, "source": str(source.relative_to(workspace.resolve()))}
-    ).encode()
-    if os.name == "nt":
-        # Native Windows GUI acceptance is deferred. Keep the portable path guarded.
-        if recovery.is_symlink():
-            raise PackError("Pack recovery directory cannot be a symlink")
-        recovery.mkdir(mode=0o700, exist_ok=True)
-        operation_root.mkdir(mode=0o700)
-        _write_new_file_no_follow(operation_root / "deletion.json", receipt)
-        target.rename(destination)
-    else:
-        with _directory_beneath(workspace.resolve(), target.parent) as parent:
-            with _directory_beneath(workspace.resolve(), recovery.parent) as eforge:
-                try:
-                    os.mkdir(recovery.name, mode=0o700, dir_fd=eforge)
-                except FileExistsError:
-                    pass
-                descriptor = os.open(
-                    recovery.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=eforge
-                )
-                try:
-                    os.mkdir(operation, mode=0o700, dir_fd=descriptor)
-                    operation_fd = os.open(
-                        operation, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
-                    )
-                    try:
-                        receipt_fd = os.open(
-                            "deletion.json",
-                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                            mode=0o600,
-                            dir_fd=operation_fd,
-                        )
-                        with os.fdopen(receipt_fd, "wb") as stream:
-                            stream.write(receipt)
-                            stream.flush()
-                            os.fsync(stream.fileno())
-                        os.fsync(operation_fd)
-                        os.fsync(descriptor)
-                        os.fsync(eforge)
-                        current = os.stat(target.name, dir_fd=parent, follow_symlinks=False)
-                        if (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
-                            raise FileExistsError("Pack directory changed. Review deletion again")
-                        os.rename(target.name, "pack", src_dir_fd=parent, dst_dir_fd=operation_fd)
-                        try:
-                            os.fsync(parent)
-                            os.fsync(operation_fd)
-                        except OSError:
-                            os.rename(
-                                "pack", target.name, src_dir_fd=operation_fd, dst_dir_fd=parent
-                            )
-                            raise
-                    finally:
-                        os.close(operation_fd)
-                finally:
-                    os.close(descriptor)
-    logger.info("Removed workspace pack %s; recovery copy at %s", review.reference, destination)
-    return PackDeleted(recovery_path=destination)
+    """Permanently delete a reviewed version after explicit dependency warning acceptance."""
+    with _publication_lock(workspace):
+        target, _identity = _workspace_version(source, workspace)
+        review = review_pack_deletion(source, workspace, scenario_paths, organization_paths)
+        if review.revision != revision:
+            raise FileExistsError("Pack files or consumers changed. Review deletion again")
+        if not review.removable:
+            raise PackError("Resolve inspection errors before deletion")
+        if review.consumers and not accept_dependents:
+            raise PackError("Confirm the dependent scenario/pack warning before permanent deletion")
+        _, kind = parse_pack_cli_reference(str(source))
+        return PackDeleted(deleted_path=delete_artifact_files(source, target, workspace, str(kind)))
 
 
 def retired_pack_sources(workspace: Path) -> set[Path]:
-    """Recover completed retirements whose SQLite cleanup was interrupted."""
-    recovery = workspace.resolve() / ".eforge" / "deleted-packs"
-    if not recovery.is_dir() or any(path.is_symlink() for path in (recovery, *recovery.parents)):
-        return set()
-    sources: set[Path] = set()
-    for operation in recovery.iterdir():
-        if not re.fullmatch(r"[a-f0-9]{32}", operation.name) or operation.is_symlink():
-            continue
-        try:
-            receipt = json.loads(
-                _read_regular_file_no_follow(operation / "deletion.json", max_bytes=4096)
-            )
-            if receipt.get("recovery_version") != 1 or not isinstance(receipt.get("source"), str):
-                continue
-            reference, kind = parse_pack_cli_reference(str(operation / "pack" / "pack.yaml"))
-            source = (
-                workspace.resolve()
-                / ".eforge"
-                / "packs"
-                / reference.publisher
-                / str(kind)
-                / reference.name
-                / reference.version
-                / "pack.yaml"
-            )
-            if (
-                str(source.relative_to(workspace.resolve())) == receipt["source"]
-                and not source.exists()
-            ):
-                sources.add(source)
-        except (OSError, ValueError, PackError, AttributeError):
-            continue
-    return sources
-
-
-@contextmanager
-def _directory_beneath(workspace: Path, path: Path) -> Iterator[int]:
-    """Open each workspace-relative directory without following substituted links."""
-    descriptor = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for component in path.relative_to(workspace).parts:
-            child = os.open(
-                component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
-            )
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
+    """Reconcile completed permanent pack deletions after interrupted index cleanup."""
+    return retired_artifact_sources(workspace, "industry") | retired_artifact_sources(
+        workspace, "organization"
+    )

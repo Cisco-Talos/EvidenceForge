@@ -50,6 +50,7 @@ def semantic_resolved_payload(compiled: CompiledScenario) -> dict[str, Any]:
         "assets": {
             name: hashlib.sha256(content.encode("utf-8")).hexdigest()
             for name, content in sorted(compiled.assets.items())
+            if not (compiled.provenance.get("artifact") and name.startswith(("sources/", "packs/")))
         },
         "effective_config": effective_config,
         "scenario": compiled.scenario.model_dump(mode="json"),

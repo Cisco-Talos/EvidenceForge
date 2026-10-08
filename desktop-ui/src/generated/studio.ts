@@ -447,6 +447,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scenario Deletion Review */
+        get: operations["scenario_deletion_review_v1_scenarios__item_id__deletion_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scenarios/{item_id}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete Scenario */
+        post: operations["delete_scenario_v1_scenarios__item_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/packs/{item_id}/deletion": {
         parameters: {
             query?: never;
@@ -543,6 +577,144 @@ export interface paths {
         get: operations["source_files_v1_items__item_id__files_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/properties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Properties */
+        get: operations["properties_v1_items__item_id__properties_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save Properties */
+        patch: operations["save_properties_v1_items__item_id__properties_patch"];
+        trace?: never;
+    };
+    "/v1/assist/description": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Description Preview */
+        post: operations["description_preview_v1_assist_description_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assist/release-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release Notes Preview */
+        post: operations["release_notes_preview_v1_assist_release_notes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assist/display-name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Display Name Preview */
+        post: operations["display_name_preview_v1_assist_display_name_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/artifacts/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect */
+        get: operations["inspect_v1_artifacts_inspect_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lifecycle */
+        get: operations["lifecycle_v1_items__item_id__lifecycle_get"];
+        put?: never;
+        /** Action */
+        post: operations["action_v1_items__item_id__lifecycle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/items/{item_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export */
+        get: operations["export_v1_items__item_id__release_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/artifacts/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Artifact */
+        post: operations["import_artifact_v1_artifacts_import_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1120,6 +1292,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/properties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Properties */
+        get: operations["job_properties_v1_jobs__job_id__properties_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/history": {
         parameters: {
             query?: never;
@@ -1342,6 +1531,23 @@ export interface paths {
         };
         /** Imported Bundle File */
         get: operations["imported_bundle_file_v1_bundles__bundle_id__files__relative_path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/bundles/{bundle_id}/properties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Imported Properties */
+        get: operations["imported_properties_v1_bundles__bundle_id__properties_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1593,6 +1799,189 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AffectedItem
+         * @description One exact authored consumer shown in a deletion warning.
+         */
+        AffectedItem: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "industry_pack" | "organization_pack" | "scenario";
+            /** Name */
+            name: string;
+            /**
+             * Version
+             * @default
+             */
+            version: string;
+            /**
+             * Publisher
+             * @default
+             */
+            publisher: string;
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /**
+             * Frozen
+             * @default false
+             */
+            frozen: boolean;
+        };
+        /** ArtifactAction */
+        ArtifactAction: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "draft" | "upgrade" | "publish" | "notes" | "recover" | "display-name" | "identity" | "publisher" | "validate";
+            /** Name */
+            name?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Version */
+            version?: string | null;
+            /**
+             * Bump
+             * @default patch
+             * @enum {string}
+             */
+            bump: "patch" | "minor" | "major";
+            /**
+             * Accept Warnings
+             * @default false
+             */
+            accept_warnings: boolean;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Expected Digest */
+            expected_digest?: string | null;
+            /**
+             * Draft If Needed
+             * @description Create a linked draft when saving a title on a non-draft source
+             * @default false
+             */
+            draft_if_needed: boolean;
+        };
+        /**
+         * ArtifactGroup
+         * @description A presentation group; its publisher never replaces a member's recorded publisher.
+         */
+        ArtifactGroup: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Publisher */
+            publisher?: string | null;
+        };
+        /** ArtifactImported */
+        ArtifactImported: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Findings */
+            findings?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /**
+         * ArtifactInfo
+         * @description Computed file authority; no lifecycle fields are persisted in Studio's database.
+         */
+        ArtifactInfo: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Schema Version */
+            schema_version?: string | null;
+            lifecycle?: components["schemas"]["LifecycleMetadata"] | null;
+            /**
+             * Upgrade Available
+             * @default false
+             */
+            upgrade_available: boolean;
+            /** Digest */
+            digest: string;
+            /** Versions */
+            versions?: {
+                [key: string]: unknown;
+            }[];
+            /** Suggested Version */
+            suggested_version?: string | null;
+            /** Name Consumers */
+            name_consumers?: components["schemas"]["AffectedItem"][];
+            /** Name Review Problems */
+            name_review_problems?: string[];
+        };
+        /**
+         * ArtifactProperties
+         * @description Computed properties. Files, rather than an application index, are authoritative.
+         */
+        ArtifactProperties: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Schema Version */
+            schema_version?: string | null;
+            lifecycle?: components["schemas"]["LifecycleMetadata"] | null;
+            /** Digest */
+            digest: string;
+            /** Semantic Digest */
+            semantic_digest?: string | null;
+            /**
+             * Upgrade Available
+             * @default false
+             */
+            upgrade_available: boolean;
+            /** Requires Evidenceforge */
+            requires_evidenceforge?: string | null;
+            validated_with?: components["schemas"]["ValidationProvenance"] | null;
+            /** Dependencies */
+            dependencies?: {
+                [key: string]: unknown;
+            }[];
+            /** Source Files */
+            source_files?: string[];
+            /** History */
+            history?: components["schemas"]["NoteHistoryEntry"][];
+            /** Comparisons */
+            comparisons?: components["schemas"]["ParentComparison"][];
+            /** Findings */
+            findings?: string[];
+        };
+        /**
          * AssetCategory
          * @description Category metadata with counts before search and filtering.
          */
@@ -1779,6 +2168,68 @@ export interface components {
             path: string;
         };
         /**
+         * BundleProperties
+         * @description Captured run provenance and aggregate data inventory, never a host inventory.
+         */
+        BundleProperties: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Data Bytes */
+            data_bytes: number;
+            /** Data Files */
+            data_files: number;
+            /** Complete */
+            complete: boolean;
+            /** Scenario */
+            scenario?: string | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Evidenceforge Version */
+            evidenceforge_version?: string | null;
+            /** Generation Seed */
+            generation_seed?: number | null;
+            /** Output Target */
+            output_target?: string | null;
+            /**
+             * Formats
+             * @description Captured output selections.
+             */
+            formats?: string[];
+            /**
+             * Log Types
+             * @description Concrete types recognized from generated-data filenames, without reading records.
+             */
+            log_types?: string[];
+            /**
+             * Unrecognized Data Files
+             * @default 0
+             */
+            unrecognized_data_files: number;
+            /** Selected Packs */
+            selected_packs?: {
+                [key: string]: unknown;
+            }[];
+            /** Artifact */
+            artifact?: {
+                [key: string]: unknown;
+            };
+            /** Overrides */
+            overrides?: {
+                [key: string]: unknown;
+            };
+            /** Compiled Sha256 */
+            compiled_sha256?: string | null;
+            /** Resolved File Sha256 */
+            resolved_file_sha256?: string | null;
+            /** Findings */
+            findings?: string[];
+        };
+        /**
          * CatalogItem
          * @description Indexed scenario or pack; its source file remains authoritative.
          */
@@ -1802,6 +2253,8 @@ export interface components {
             path: string;
             /** Name */
             name: string;
+            /** Display Name */
+            display_name?: string | null;
             /**
              * Description
              * @default
@@ -2036,6 +2489,8 @@ export interface components {
             draft_project_id?: string | null;
             /** Draft Name */
             draft_name?: string | null;
+            /** Draft Display Name */
+            draft_display_name?: string | null;
             /** Thread Id */
             thread_id?: string | null;
             /**
@@ -2075,6 +2530,8 @@ export interface components {
             project_id?: string | null;
             /** Name */
             name?: string | null;
+            /** Display Name */
+            display_name?: string | null;
         };
         /**
          * ConversationUpdate
@@ -2091,6 +2548,8 @@ export interface components {
             draft_name?: string | null;
             /** Draft Project Id */
             draft_project_id?: string | null;
+            /** Draft Display Name */
+            draft_display_name?: string | null;
         };
         /**
          * DependencyHealth
@@ -2140,6 +2599,56 @@ export interface components {
             digest?: string | null;
             /** Dependencies */
             dependencies?: string[];
+        };
+        /**
+         * DescriptionSuggestion
+         * @description An unsaved overview; notes and publication remain separate.
+         */
+        DescriptionSuggestion: {
+            /** Description */
+            description: string;
+        };
+        /**
+         * DisplayNameContext
+         * @description Bounded descriptive context supplied instead of filesystem access.
+         */
+        DisplayNameContext: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "scenario" | "industry_pack" | "organization_pack";
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Details
+             * @default
+             */
+            details: string;
+        };
+        /**
+         * DisplayNameRequest
+         * @description Suggest for a captured authored source or for an unsaved creation form.
+         */
+        DisplayNameRequest: {
+            /** Item Id */
+            item_id?: string | null;
+            /** Expected Digest */
+            expected_digest?: string | null;
+            context?: components["schemas"]["DisplayNameContext"] | null;
+        };
+        /**
+         * DisplayNameSuggestion
+         * @description An unsaved, single-line title suitable for an editable input.
+         */
+        DisplayNameSuggestion: {
+            /** Display Name */
+            display_name: string;
         };
         /**
          * EnvironmentReport
@@ -2551,6 +3060,59 @@ export interface components {
             expanded_groups?: string[];
         };
         /**
+         * LifecycleMetadata
+         * @description Schema 3 lifecycle envelope, separate from generation-relevant fields.
+         */
+        LifecycleMetadata: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "draft" | "published";
+            /** Draft Id */
+            draft_id?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Parents */
+            parents?: components["schemas"]["ParentReference"][];
+            /** Release Notes */
+            release_notes?: string | null;
+        };
+        /**
+         * NoteHistoryEntry
+         * @description Notes from one available exact release or draft, or an unavailable ancestor.
+         */
+        NoteHistoryEntry: {
+            /** Name */
+            name: string;
+            /** Publisher */
+            publisher?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Draft Id */
+            draft_id?: string | null;
+            /** Source Schema Version */
+            source_schema_version?: string | null;
+            /** Digest */
+            digest: string;
+            /** Status */
+            status: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /**
+             * Available
+             * @default true
+             */
+            available: boolean;
+            /** Path */
+            path?: string | null;
+        };
+        /**
          * OperationRequest
          * @description Bind a maintenance request to the exact prepared operation.
          */
@@ -2575,6 +3137,8 @@ export interface components {
         PackCloneRequest: {
             /** Name */
             name: string;
+            /** Display Name */
+            display_name?: string | null;
             /** Version */
             version: string;
             /** Publisher */
@@ -2589,6 +3153,8 @@ export interface components {
         PackCreateRequest: {
             /** Name */
             name: string;
+            /** Display Name */
+            display_name?: string | null;
             /**
              * Version
              * @default 0.1.0
@@ -2623,6 +3189,11 @@ export interface components {
         PackDeleteRequest: {
             /** Revision */
             revision: string;
+            /**
+             * Accept Dependents
+             * @default false
+             */
+            accept_dependents: boolean;
         };
         /**
          * PackDeleteReview
@@ -2639,6 +3210,8 @@ export interface components {
             bytes: number;
             /** Consumers */
             consumers?: string[];
+            /** Affected */
+            affected?: components["schemas"]["AffectedItem"][];
             /** Problems */
             problems?: string[];
             /** Removable */
@@ -2646,14 +3219,14 @@ export interface components {
         };
         /**
          * PackDeleted
-         * @description Recovery location outside the active pack repository.
+         * @description Confirmation of permanent exact-version deletion.
          */
         PackDeleted: {
             /**
-             * Recovery Path
+             * Deleted Path
              * Format: path
              */
-            recovery_path: string;
+            deleted_path: string;
         };
         /**
          * PackImportRequest
@@ -2716,6 +3289,52 @@ export interface components {
              * @default
              */
             error: string;
+        };
+        /**
+         * ParentComparison
+         * @description Exact-parent availability and bounded source changes, without merging.
+         */
+        ParentComparison: {
+            parent: components["schemas"]["ParentReference"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "unavailable";
+            /** Changed Files */
+            changed_files?: string[];
+            /** Changes */
+            changes?: {
+                [key: string]: string;
+            };
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * ParentReference
+         * @description Exact ancestry; resolving an ancestor is never required to use a release.
+         */
+        ParentReference: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "scenario" | "industry" | "organization";
+            /** Publisher */
+            publisher?: string | null;
+            /** Name */
+            name: string;
+            /** Version */
+            version?: string | null;
+            /** Draft Id */
+            draft_id?: string | null;
+            /** Source Schema Version */
+            source_schema_version?: ("1.0" | "2.0") | null;
+            /** Digest */
+            digest: string;
         };
         /**
          * PredictionRecord
@@ -2788,6 +3407,26 @@ export interface components {
             description?: string | null;
             /** Overlay Enabled */
             overlay_enabled?: boolean | null;
+        };
+        /**
+         * PropertiesEdit
+         * @description A metadata save requires the exact source reviewed in the popup.
+         */
+        PropertiesEdit: {
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Release Notes
+             * @default
+             */
+            release_notes: string;
+            /** Expected Digest */
+            expected_digest: string;
         };
         /**
          * QuitSettings
@@ -2991,6 +3630,31 @@ export interface components {
             effect_fanout: number;
             /** Channel Fanout */
             channel_fanout: number;
+        };
+        /**
+         * ReleaseNotesPreview
+         * @description Proposed notes plus deterministic comparison limitations for review.
+         */
+        ReleaseNotesPreview: {
+            /** Release Notes */
+            release_notes: string;
+            /** Findings */
+            findings?: string[];
+        };
+        /**
+         * ReleaseNotesRequest
+         * @description Request an unsaved preview from a reviewed draft and the current editable notes.
+         */
+        ReleaseNotesRequest: {
+            /** Item Id */
+            item_id: string;
+            /** Expected Digest */
+            expected_digest: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
         };
         /**
          * ResourceForecast
@@ -3243,6 +3907,72 @@ export interface components {
             name: string;
         };
         /**
+         * ScenarioDeleteRequest
+         * @description Explicit acceptance of a current removal review.
+         */
+        ScenarioDeleteRequest: {
+            /** Revision */
+            revision: string;
+            /**
+             * Include Files
+             * @default false
+             */
+            include_files: boolean;
+        };
+        /**
+         * ScenarioDeleteReview
+         * @description The exact files and inclusion consumers of one selected scenario.
+         */
+        ScenarioDeleteReview: {
+            /**
+             * Source
+             * Format: path
+             */
+            source: string;
+            /**
+             * Target
+             * Format: path
+             */
+            target: string;
+            /** Revision */
+            revision: string;
+            /** Files */
+            files: number;
+            /** Bytes */
+            bytes: number;
+            /** Whole Artifact */
+            whole_artifact: boolean;
+            /**
+             * Include Files
+             * @default false
+             */
+            include_files: boolean;
+            /**
+             * Run Count
+             * @default 0
+             */
+            run_count: number;
+            /** Run Paths */
+            run_paths?: string[];
+            /** Consumers */
+            consumers?: string[];
+            /** Problems */
+            problems?: string[];
+            /** Removable */
+            removable: boolean;
+        };
+        /**
+         * ScenarioDeleted
+         * @description Confirmation of permanent removal with no retained source content.
+         */
+        ScenarioDeleted: {
+            /**
+             * Deleted Path
+             * Format: path
+             */
+            deleted_path: string;
+        };
+        /**
          * ScenarioImportRequest
          * @description Explicit source locations and destination choices for one scenario.
          */
@@ -3400,7 +4130,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "package" | "project" | "path";
+            source: "package" | "project" | "path" | "draft";
             /** Publisher */
             publisher: string;
             /**
@@ -3595,6 +4325,10 @@ export interface components {
             paths: components["schemas"]["StudioPaths"];
             /** Items */
             items: components["schemas"]["CatalogItem"][];
+            /** Artifact Groups */
+            artifact_groups?: {
+                [key: string]: components["schemas"]["ArtifactGroup"];
+            };
             /** Projects */
             projects: components["schemas"]["Project"][];
             /** Folders */
@@ -3656,6 +4390,8 @@ export interface components {
             draft_project_id?: string | null;
             /** Draft Name */
             draft_name?: string | null;
+            /** Draft Display Name */
+            draft_display_name?: string | null;
             /** Thread Id */
             thread_id?: string | null;
             /**
@@ -3765,6 +4501,23 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ValidationProvenance
+         * @description Successful canonical validation of exact inputs, not a compatibility promise.
+         */
+        ValidationProvenance: {
+            /** Evidenceforge Version */
+            evidenceforge_version: string;
+            /** Completed At */
+            completed_at: string;
+            /** Input Digest */
+            input_digest: string;
+            /**
+             * Warnings
+             * @default 0
+             */
+            warnings: number;
         };
         /**
          * ValidationRecord
@@ -4760,6 +5513,78 @@ export interface operations {
             };
         };
     };
+    scenario_deletion_review_v1_scenarios__item_id__deletion_get: {
+        parameters: {
+            query?: {
+                include_files?: boolean;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioDeleteReview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_scenario_v1_scenarios__item_id__delete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScenarioDeleted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     pack_deletion_review_v1_packs__item_id__deletion_get: {
         parameters: {
             query?: never;
@@ -4954,6 +5779,354 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceFiles"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    properties_v1_items__item_id__properties_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactProperties"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_properties_v1_items__item_id__properties_patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PropertiesEdit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactImported"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    description_preview_v1_assist_description_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DisplayNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DescriptionSuggestion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_notes_preview_v1_assist_release_notes_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseNotesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseNotesPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    display_name_preview_v1_assist_display_name_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DisplayNameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DisplayNameSuggestion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_v1_artifacts_inspect_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lifecycle_v1_items__item_id__lifecycle_get: {
+        parameters: {
+            query?: {
+                names?: boolean;
+            };
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    action_v1_items__item_id__lifecycle_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactAction"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactImported"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_v1_items__item_id__release_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_artifact_v1_artifacts_import_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactImported"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactImported"];
                 };
             };
             /** @description Validation Error */
@@ -6461,6 +7634,39 @@ export interface operations {
             };
         };
     };
+    job_properties_v1_jobs__job_id__properties_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleProperties"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     remove_job_history_v1_jobs__job_id__history_delete: {
         parameters: {
             query?: never;
@@ -6894,6 +8100,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    imported_properties_v1_bundles__bundle_id__properties_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                bundle_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundleProperties"];
                 };
             };
             /** @description Validation Error */

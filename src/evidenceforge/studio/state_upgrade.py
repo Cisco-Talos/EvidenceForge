@@ -25,6 +25,7 @@ from evidenceforge import __version__
 from evidenceforge.studio.paths import StudioPaths
 from evidenceforge.studio.runtime import runtime_id
 from evidenceforge.studio.state_database import (
+    DATABASE_VERSION,
     MIGRATIONS,
     database_digest,
     decode_record,
@@ -312,7 +313,7 @@ class StateCoordinator:
             target_versions={"workspace_layout": self.layout_target}
             if workspace
             else {
-                "database": 1,
+                "database": DATABASE_VERSION,
                 "settings": 1,
                 "private_layout": 1,
             },
@@ -487,7 +488,7 @@ class StateCoordinator:
                     if self.layout.exists()
                     else 0,
                 }
-                if database == settings == 1 and self.layout.exists():
+                if database == DATABASE_VERSION and settings == 1 and self.layout.exists():
                     self.verify_private_receipts()
                     self.status.state = "ready"
                     return
@@ -495,7 +496,7 @@ class StateCoordinator:
                     self.paths.settings_file.exists()
                     and settings == 0
                     or self.paths.database_file.exists()
-                    and database == 0
+                    and any(entry.incompatible and entry.target > database for entry in MIGRATIONS)
                 )
             if completed_operation:
                 # A later release needs its own package, never the previous successful
@@ -508,14 +509,14 @@ class StateCoordinator:
                 self.status.target_versions = (
                     {"workspace_layout": self.layout_target}
                     if self.workspace
-                    else {"database": 1, "settings": 1, "private_layout": 1}
+                    else {"database": DATABASE_VERSION, "settings": 1, "private_layout": 1}
                 )
                 self.journal = OperationJournal(status=self.status)
             self.status.state = "pending"
             self.status.can_retry = True
             if self.status.incompatible:
                 self.status.warning = (
-                    "Studio will upgrade your saved UI state. Earlier unversioned Studio builds "
+                    "Studio will upgrade your saved UI state. Earlier Studio builds "
                     "cannot safely use it. A verified recovery backup will be kept."
                 )
                 if self.workspace:

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, TriangleAlert, X, XCircle } from "lucide-react";
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, X, XCircle } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { CatalogItem, DependencyRow, ImportResult, ImportReview, Project, StudioApi, ValidationResult } from "./api";
@@ -7,6 +7,7 @@ import { CopyPathButton } from "./CopyPathButton";
 import { ValidationPanel } from "./components";
 import { scenarioNameError } from "./scenarioName";
 import { packSelection } from "./packSelection";
+import { DisplayNameField } from "./DisplayNameField";
 
 export function DependencyRows({ rows, selection, onOpen, canOpen }: { rows: DependencyRow[]; onOpen?: (row: DependencyRow) => void; canOpen?: (row: DependencyRow) => boolean; selection?: {
   selected: Set<string>; requiredBy: Map<string, string[]>; busy: boolean;
@@ -31,10 +32,11 @@ export function DependencyRows({ rows, selection, onOpen, canOpen }: { rows: Dep
 
 export function ImportDialog({ kind, initialProjectId = "", projects = [], api, creating = false, onCreate, onImported, onClose }: {
   kind: "scenario" | "pack"; initialProjectId?: string; projects?: Project[]; api: StudioApi;
-  creating?: boolean; onCreate?: (name: string, projectId: string) => Promise<void>;
+  creating?: boolean; onCreate?: (name: string, projectId: string, displayName?: string) => Promise<void>;
   onImported: (item: CatalogItem | null) => Promise<void>; onClose: () => void;
 }) {
   const [name, setName] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [projectId, setProjectId] = useState(initialProjectId);
   const [action, setAction] = useState<"create" | "import">(kind === "scenario" ? "create" : "import");
   const [sourceMode, setSourceMode] = useState<"file" | "workspace">("file");
@@ -42,6 +44,7 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
   const [configurationContext, setConfigurationContext] = useState("");
   const [sources, setSources] = useState<string[]>([]);
   const [documents, setDocuments] = useState<string[] | null>(null);
+  const [portable, setPortable] = useState<{ name: string; kind: string; schema_version?: string; lifecycle?: { publisher?: string; version?: string; release_notes?: string } } | null>(null);
   const [review, setReview] = useState<ImportReview | null>(null);
   const [packChoices, setPackChoices] = useState<Set<string> | null>(null);
   const [validation, setValidation] = useState<ValidationResult>();
@@ -68,11 +71,15 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
     } catch (failure) { setError(String(failure)); }
   }
   async function preview() {
-    if (nameError || !path.trim()) return;
+    if ((nameError && !/\.(efscenario|efpack)$/i.test(path.trim())) || !path.trim()) return;
     setWorking(true); setError(null); setValidation(undefined);
     try {
       if (review) await api.request(`/v1/imports/${review.id}`, "DELETE");
-      setReview(null);
+      setReview(null); setPortable(null);
+      if (sourceMode === "file" && /\.(efscenario|efpack)$/i.test(path.trim())) {
+        const artifact = await api.request<{ name: string; kind: string; schema_version?: string; lifecycle?: { publisher?: string; version?: string; release_notes?: string } }>(`/v1/artifacts/inspect?path=${encodeURIComponent(path.trim())}`);
+        if (artifact.schema_version === "3.0") { setPortable(artifact); setName(artifact.name); return; }
+      }
       const next = await api.request<ImportReview>(`/v1/imports/${kind}/preview`, "POST", {
         path: path.trim(), source_workspaces: sources.filter((source) => source.trim()).map((source) => source.trim()),
         project_id: projectId || null,
@@ -92,6 +99,16 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
     finally { setWorking(false); }
   }
   async function commit() {
+    if (portable) {
+      setWorking(true); setError(null);
+      try {
+        const result = await api.request<{ path: string }>("/v1/artifacts/import", "POST", { path: path.trim() }, 180000);
+        const items = await api.request<CatalogItem[]>("/v1/items");
+        await onImported(items.find((item) => item.path === result.path) || null);
+      } catch (failure) { setError(String(failure)); }
+      finally { setWorking(false); }
+      return;
+    }
     if (!review || nameError || kind === "pack" && selection.blocked) return;
     setWorking(true); setError(null);
     try {
@@ -114,20 +131,22 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
   function editSources(next: string[]) {
     setSources(next);
     setValidation(undefined);
+    setPortable(null);
     if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); }
   }
   return <Dialog.Root open onOpenChange={(open) => { if (!open) void close(); }}><Dialog.Portal>
     <Dialog.Overlay className="modal-backdrop" />
     <Dialog.Content className={`close-modal import-dialog ${review ? "import-review-dialog" : ""}`} aria-label={kind === "scenario" ? "New scenario" : "Import packs"} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => event.preventDefault()}>
-      <form onSubmit={(event) => { event.preventDefault(); if (review) void commit(); else if (action === "create" && !nameError) void onCreate?.(name, projectId); else void preview(); }}>
-        <Dialog.Title>{review ? "Review import" : kind === "scenario" ? "New scenario" : "Import packs"}</Dialog.Title>
+      <form onSubmit={(event) => { event.preventDefault(); if (review || portable) void commit(); else if (action === "create" && !nameError) void (displayName.trim() ? onCreate?.(name, projectId, displayName.trim()) : onCreate?.(name, projectId)); else void preview(); }}>
+        <Dialog.Title>{review || portable ? "Review import" : kind === "scenario" ? "New scenario" : "Import packs"}</Dialog.Title>
         <Dialog.Description>{review ? "Review the copies and dependency actions before importing. Original files stay in place." : action === "create" ? "Name this scenario now. It will appear in the library while you author it." : kind === "pack" ? "Choose a pack release or source workspace to prepare local copies." : "Choose an existing file to prepare a copy in this workspace."}</Dialog.Description>
-        {!review && <>
-          {kind === "scenario" && <><label className="modal-field">Scenario Name<input name="scenario-name" autoComplete="off" maxLength={80} aria-label="Scenario Name" value={name} disabled={busy} aria-invalid={!!name && !!nameError} aria-describedby={name && nameError ? "new-scenario-name-error" : undefined} onChange={(event) => setName(event.target.value)} /></label>{name && nameError && <p className="field-error" id="new-scenario-name-error" role="status">{nameError}</p>}<label className="modal-field">Project<select aria-label="Project for new scenario" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></>}
+        {portable && <div className="import-destination"><strong>{portable.name} · {portable.lifecycle?.version}</strong><p>Publisher: {portable.lifecycle?.publisher}</p><p>This immutable release includes sources, frozen configuration, dependencies and integrity receipts.</p>{portable.lifecycle?.release_notes && <p>{portable.lifecycle.release_notes}</p>}</div>}
+        {!review && !portable && <>
+          {kind === "scenario" && <><label className="modal-field">Scenario Name<input name="scenario-name" autoComplete="off" aria-label="Scenario Name" value={name} disabled={busy} aria-invalid={!!name && !!nameError} aria-describedby={name && nameError ? "new-scenario-name-error" : undefined} onChange={(event) => setName(event.target.value)} /></label>{name && nameError && <p className="field-error" id="new-scenario-name-error" role="status">{nameError}</p>}{action === "create" && <DisplayNameField label="Scenario display name" value={displayName} onChange={setDisplayName} disabled={busy} placeholder="For example, Healthcare Threat Hunt" api={api} source={nameError ? null : { context: { kind: "scenario", name } }} />}<label className="modal-field">Project<select aria-label="Project for new scenario" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label></>}
           {action === "import" && <>
             {kind === "pack" && <label className="modal-field">Project<select aria-label="Project for imported packs" value={projectId} disabled={busy} onChange={(event) => setProjectId(event.target.value)}><option value="">Ungrouped</option>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
             {kind === "pack" && <label className="modal-field">Import from<select aria-label="Pack import source" value={sourceMode} disabled={busy} onChange={(event) => { setSourceMode(event.target.value as "file" | "workspace"); setPath(""); setPackChoices(null); }}><option value="file">Pack release (.efpack)</option><option value="workspace">Source workspace</option></select></label>}
-            <label className="modal-field">{sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML" : "Pack release"}<div className="import-path-field"><input aria-label={sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML" : "Pack release"} name="import-source-path" autoComplete="off" value={path} disabled={busy} placeholder={kind === "scenario" ? "/path/to/scenario.yaml" : sourceMode === "workspace" ? "/path/to/workspace" : "/path/to/release.efpack"} onChange={(event) => { setPath(event.target.value); setDocuments(null); setPackChoices(null); }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} onClick={() => void chooseFile()}><FolderOpen size={15} /> Browse…</button>}</div></label>
+            <label className="modal-field">{sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"}<div className="import-path-field"><input aria-label={sourceMode === "workspace" ? "Source workspace" : kind === "scenario" ? "Scenario YAML or release" : "Pack release"} name="import-source-path" autoComplete="off" value={path} disabled={busy} placeholder={kind === "scenario" ? "/path/to/scenario.yaml" : sourceMode === "workspace" ? "/path/to/workspace" : "/path/to/release.efpack"} onChange={(event) => { setPath(event.target.value); setDocuments(null); setPackChoices(null); }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} onClick={() => void chooseFile()}><FolderOpen size={15} /> Browse…</button>}</div></label>
             <p className="muted small">{kind === "scenario" ? "Copies YAML, nested includes, referenced assets, and selected Markdown notes. Packs are checked against this workspace first." : "Imports reviewed exact versions and their locked dependencies into this workspace’s pack library."}</p>
           </>}
         </>}
@@ -142,13 +161,15 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
           {review.publishers && review.publishers.length > 0 && <p className="muted small">Confirming imports these publisher namespaces: {selectedPublishers.join(", ") || "none selected"}.</p>}
           {kind === "scenario" && <div className="import-validation"><button type="button" className="button-quiet" disabled={busy} onClick={() => void validate()}><ShieldCheck size={15} /> {working ? "Working…" : "Validate prepared scenario"}</button><small>Optional check. Findings do not block import. If checked, the imported copy is revalidated and its results saved in the workspace.</small>{validation && <ValidationPanel result={validation} />}</div>}
         </>}
-        {action === "import" && kind === "scenario" && <details className="import-locations"><summary>Source configuration (optional)</summary><p className="muted small">Select an explicit context file to copy its workspace and ordered overlays into private scenario layers. Review their effect after destination workspace and project configuration. Missing packs are searched in its declared source root.</p><label className="modal-field">Configuration context<div className="import-path-field"><input aria-label="Configuration context" name="configuration-context-file" autoComplete="off" value={configurationContext} disabled={busy} placeholder="/path/to/context.yaml" onChange={(event) => { setConfigurationContext(event.target.value); if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} aria-label="Browse configuration context" onClick={() => void invoke<string | null>("choose_import_file", { kind: "scenario" }).then((chosen) => { if (chosen) { setConfigurationContext(chosen); if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } } }).catch((failure) => setError(String(failure)))}><FolderOpen size={15} /> Browse…</button>}</div></label></details>}
+        {action === "import" && kind === "scenario" && <details className="import-locations"><summary>Source configuration (optional)</summary><p className="muted small">Select an explicit context file to copy its workspace and ordered overlays into private scenario layers. Review their effect after destination workspace and project configuration. Missing packs are searched in its declared source root.</p><label className="modal-field">Configuration context<div className="import-path-field"><input aria-label="Configuration context" name="configuration-context-file" autoComplete="off" value={configurationContext} disabled={busy} placeholder="/path/to/context.yaml" onChange={(event) => { setConfigurationContext(event.target.value); setPortable(null);
+    if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } }} />{isTauri() && <button type="button" className="button-quiet" disabled={busy} aria-label="Browse configuration context" onClick={() => void invoke<string | null>("choose_import_file", { kind: "scenario" }).then((chosen) => { if (chosen) { setConfigurationContext(chosen); setPortable(null);
+    if (review) { void api.request(`/v1/imports/${review.id}`, "DELETE").catch(() => undefined); setReview(null); setValidation(undefined); } } }).catch((failure) => setError(String(failure)))}><FolderOpen size={15} /> Browse…</button>}</div></label></details>}
         {action === "import" && <details className="import-locations" open={sources.length > 0}><summary>Source workspaces for missing packs</summary><p className="muted small">Add locations to search for exact missing versions. Referenced packs will be copied here.</p>{sources.map((source, index) => <div className="import-path-field" key={index}><input aria-label={`Source workspace ${index + 1}`} name={`source-workspace-${index + 1}`} autoComplete="off" value={source} disabled={busy} onChange={(event) => editSources(sources.map((entry, i) => i === index ? event.target.value : entry))} />{isTauri() && <button type="button" className="icon-button" aria-label={`Browse source workspace ${index + 1}`} disabled={busy} onClick={() => void chooseSource(index)}><FolderOpen size={16} /></button>}<button type="button" className="icon-button" aria-label={`Remove source workspace ${index + 1}`} disabled={busy} onClick={() => editSources(sources.filter((_, i) => i !== index))}><X size={14} /></button></div>)}<button type="button" className="button-quiet" disabled={busy} onClick={() => editSources([...sources, ""])}><Plus size={14} /> Add source workspace</button></details>}
         {error && <p className="field-error" role="alert">{error}</p>}
         <div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={() => void close()}>Cancel</button>
           {review && <button type="button" className="button-quiet" disabled={busy} onClick={() => void preview()}><RefreshCw size={15} /> Refresh review</button>}
-          <div className="scenario-split-button"><button type="submit" className="button-primary" disabled={busy || !!nameError || (action === "import" && (!path.trim() || !!review && (kind === "pack" ? selection.blocked : !review.can_import)))}>{busy ? "Working…" : review ? review.rows.some((row) => row.status === "missing" || row.status === "conflict") && kind === "scenario" ? "Import with dependency errors" : "Confirm import" : action === "create" ? "Create scenario" : kind === "scenario" ? "Import scenario" : "Review packs"}</button>
-            {kind === "scenario" && !review && <DropdownMenu.Root><DropdownMenu.Trigger type="button" className="button-primary split-trigger" aria-label="Choose scenario action" disabled={busy}><ChevronDown size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu import-action-menu" align="end" sideOffset={5}><DropdownMenu.RadioGroup value={action} onValueChange={(value) => setAction(value as "create" | "import")}><DropdownMenu.RadioItem value="create"><span>{action === "create" && <Check size={14} />}</span>Create scenario</DropdownMenu.RadioItem><DropdownMenu.RadioItem value="import"><span>{action === "import" && <Check size={14} />}</span>Import scenario</DropdownMenu.RadioItem></DropdownMenu.RadioGroup></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
+          <div className="scenario-split-button"><button type="submit" className="button-primary" disabled={busy || (!!nameError && (action !== "import" || !/\.(efscenario|efpack)$/i.test(path.trim()))) || (action === "import" && (!path.trim() || !!review && (kind === "pack" ? selection.blocked : !review.can_import)))}>{action === "create" && !review && !portable && <Sparkles size={16} aria-hidden="true" />}{busy ? "Working…" : portable ? "Confirm import" : review ? review.rows.some((row) => row.status === "missing" || row.status === "conflict") && kind === "scenario" ? "Import with dependency errors" : "Confirm import" : action === "create" ? "Create scenario" : kind === "scenario" ? "Import scenario" : "Review packs"}</button>
+            {kind === "scenario" && !review && !portable && <DropdownMenu.Root><DropdownMenu.Trigger type="button" className="button-primary split-trigger" aria-label="Choose scenario action" disabled={busy}><ChevronDown size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu import-action-menu" align="end" sideOffset={5}><DropdownMenu.RadioGroup value={action} onValueChange={(value) => setAction(value as "create" | "import")}><DropdownMenu.RadioItem value="create"><span>{action === "create" && <Check size={14} />}</span>Create scenario</DropdownMenu.RadioItem><DropdownMenu.RadioItem value="import"><span>{action === "import" && <Check size={14} />}</span>Import scenario</DropdownMenu.RadioItem></DropdownMenu.RadioGroup></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
           </div>
         </div>
       </form>

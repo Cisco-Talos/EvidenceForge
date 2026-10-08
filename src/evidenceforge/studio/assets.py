@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -291,6 +292,7 @@ class Inventory:
     conversion_values: dict[str, dict[str, Any]] = field(default_factory=dict)
     conversion_previous_values: dict[str, dict[str, Any]] = field(default_factory=dict)
     conversion_effects: dict[str, list[str]] = field(default_factory=dict)
+    immutable: bool = False
 
     def add(
         self, category: str, key: str, value: dict[str, Any], origins: dict[str, AssetOrigin]
@@ -375,7 +377,12 @@ class Inventory:
         return AssetPage(
             revision=self.revision,
             categories=[
-                AssetCategory(key=key, label=model[0], total=len(self.visible_rows(key)))
+                AssetCategory(
+                    key=key,
+                    label=model[0],
+                    total=len(self.visible_rows(key)),
+                    editable=not self.immutable,
+                )
                 for key, model in self.models.items()
                 if key != "stale_accounts"
             ],
@@ -430,7 +437,7 @@ class Inventory:
         if asset_id and summary is None:
             raise ValueError("Asset no longer exists. Refresh the list")
         next_version = None
-        if self.pack:
+        if self.pack and self.pack.manifest.status != "draft":
             major, minor, patch = map(int, self.pack.manifest.version.split("."))
             next_version = f"{major}.{minor}.{patch + 1}"
         return AssetDetail(
@@ -482,6 +489,9 @@ def build_inventory(source: Path, workspace: Path, is_pack: bool) -> Inventory:
     revision = inventory_revision(source, workspace, is_pack)
     models = {**ENVIRONMENT_MODELS, **(CATALOG_MODELS if is_pack else RUNTIME_MODELS)}
     inventory = Inventory(revision, models)
+    from evidenceforge.artifacts.lifecycle import _receipt_root
+
+    inventory.immutable = _receipt_root(source) is not None
     if is_pack:
         reference, kind = parse_pack_cli_reference(str(source))
         pack = PackRepository(workspace).resolve(reference, expected_type=kind)
@@ -525,7 +535,7 @@ def build_inventory(source: Path, workspace: Path, is_pack: bool) -> Inventory:
             project_root=workspace if context_path(source, workspace) is None else None,
             context=context_path(source, workspace),
         )
-        if compiled.authored_kind == "resolved":
+        if compiled.authored_kind == "resolved" and not inventory.immutable:
             raise ValueError("Open an authored scenario to edit its environment")
         effective = compiled.scenario.model_dump(mode="json")["environment"]
         inventory.choice_values["personas"] = [
@@ -538,7 +548,10 @@ def build_inventory(source: Path, workspace: Path, is_pack: bool) -> Inventory:
         )
         lower: dict[str, Any] = {}
         if organization:
-            if organization.source == "path":
+            if graph.data.get("composition", {}).get("organization", {}).get("source") in {
+                "path",
+                "draft",
+            }:
                 reference = PackReference.model_validate(graph.data["composition"]["organization"])
                 declaring = graph.origins.get(("composition", "organization", "path"), source)
                 reference = reference.model_copy(
@@ -976,6 +989,9 @@ def _restored_value(detail: AssetDetail, edit: AssetEdit) -> dict[str, Any]:
 
 def save_asset(source: Path, workspace: Path, inventory: Inventory, edit: AssetEdit) -> AssetSaved:
     """Validate on staged inputs, then publish scenario files or a new pack version."""
+    from evidenceforge.artifacts.lifecycle import assert_mutable
+
+    assert_mutable(source)
     is_pack = inventory.pack is not None
     if (
         edit.revision != inventory.revision
@@ -1032,8 +1048,10 @@ def save_asset(source: Path, workspace: Path, inventory: Inventory, edit: AssetE
         assert inventory.pack is not None
         pack = inventory.pack
         version = edit.version or detail.next_version
-        if version is None or tuple(map(int, version.split("."))) <= tuple(
-            map(int, pack.manifest.version.split("."))
+        if pack.manifest.status != "draft" and (
+            version is None
+            or tuple(map(int, version.split(".")))
+            <= tuple(map(int, pack.manifest.version.split(".")))
         ):
             raise ValueError("Choose a version greater than the original pack version")
         if edit.category in ENVIRONMENT_MODELS:
@@ -1063,6 +1081,25 @@ def save_asset(source: Path, workspace: Path, inventory: Inventory, edit: AssetE
                 entries[index] = value
         else:
             document.setdefault(edit.category, {})[key] = value
+        if pack.manifest.status == "draft":
+            from evidenceforge.artifacts.lifecycle import _write_files
+
+            staged = Path(tempfile.mkdtemp(prefix=".asset-", dir=pack.root.parent)).resolve()
+            content = yaml.safe_dump(document, sort_keys=False).encode()
+            relative = target.relative_to(pack.root).as_posix()
+            try:
+                files = dict((*pack.semantic_file_bytes, *pack.companion_file_bytes))
+                files[relative] = content
+                _write_files(staged, files)
+                reference, kind = parse_pack_cli_reference(str(staged))
+                repository = PackRepository(workspace)
+                repository.validate_semantics(repository.resolve(reference, expected_type=kind))
+                if inventory_revision(source, workspace, True) != edit.revision:
+                    raise FileExistsError("Draft changed during validation; refresh and review")
+                _write_atomic(target, content)
+            finally:
+                shutil.rmtree(staged)
+            return AssetSaved(path=source)
         path = PackRepository(workspace).copy(
             pack,
             name=pack.manifest.name,

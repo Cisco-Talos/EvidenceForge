@@ -29,6 +29,7 @@ class CatalogItem(BaseModel):
     kind: Literal["scenario", "industry_pack", "organization_pack"]
     path: Path
     name: str
+    display_name: str | None = None
     description: str = ""
     version: str = ""
     publisher: str = ""
@@ -90,6 +91,7 @@ class Conversation(BaseModel):
     draft_path: Path | None = None
     draft_project_id: str | None = None
     draft_name: str | None = None
+    draft_display_name: str | None = None
     thread_id: str | None = None
     title: str = "New conversation"
     model_id: str | None = None
@@ -174,6 +176,7 @@ class StudioStore:
         secure_directory(path.parent)
         from evidenceforge.studio.runtime import runtime_id
         from evidenceforge.studio.state_database import (
+            DATABASE_VERSION,
             inspect_database,
             migrate_database,
             repair_derived,
@@ -181,7 +184,7 @@ class StudioStore:
         from evidenceforge.studio.state_io import StudioStateError
 
         if path.exists():
-            if inspect_database(path) != 1:
+            if inspect_database(path) != DATABASE_VERSION:
                 raise StudioStateError("Studio database needs a backed-up upgrade before opening")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,6 +436,7 @@ class StudioStore:
                 kind=kind,
                 path=source.path,
                 name=source.name,
+                display_name=source.display_name,
                 description=source.description,
                 version=source.version,
                 publisher=source.publisher,
@@ -476,7 +480,12 @@ class StudioStore:
             self._db.execute("DELETE FROM items_fts WHERE rowid=?", (item_row["rowid"],))
             self._db.execute(
                 "INSERT INTO items_fts(rowid, name, description, content) VALUES (?, ?, ?, ?)",
-                (item_row["rowid"], item.name, item.description, content),
+                (
+                    item_row["rowid"],
+                    item.name + " " + (item.display_name or ""),
+                    item.description,
+                    content,
+                ),
             )
         return item
 
@@ -540,7 +549,7 @@ class StudioStore:
             rows = self._db.execute(query, args).fetchall()
         return sorted(
             (CatalogItem.model_validate_json(row["payload"]) for row in rows),
-            key=lambda item: item.name.casefold(),
+            key=lambda item: ((item.display_name or item.name).casefold(), item.name, item.id),
         )
 
     def save_item(self, item: CatalogItem) -> None:
@@ -552,12 +561,19 @@ class StudioStore:
 
     def remove_pack(self, item_id: str) -> None:
         """Remove a retired pack's local associations, preserving Codex and run files."""
+        self._remove_authored_item(item_id, {"industry_pack", "organization_pack"})
+
+    def remove_scenario(self, item_id: str) -> None:
+        """Remove a retired scenario's associations, preserving captured runs and Codex."""
+        self._remove_authored_item(item_id, {"scenario"})
+
+    def _remove_authored_item(self, item_id: str, kinds: set[str]) -> None:
         with self._lock, self._db:
             row = self._db.execute(
                 "SELECT rowid, kind FROM items WHERE id=?", (item_id,)
             ).fetchone()
-            if row is None or row["kind"] not in {"industry_pack", "organization_pack"}:
-                raise ValueError("Choose an indexed pack")
+            if row is None or row["kind"] not in kinds:
+                raise ValueError("Choose an indexed artifact of the correct kind")
             self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))
             self._db.execute("DELETE FROM conversations WHERE item_id=?", (item_id,))
             self._db.execute("DELETE FROM validations WHERE item_id=?", (item_id,))
@@ -668,7 +684,7 @@ class StudioStore:
         for row in rows:
             item = CatalogItem.model_validate_json(row["payload"])
             fields = {
-                "name": item.name.casefold(),
+                "name": (item.name + " " + (item.display_name or "")).casefold(),
                 "description": item.description.casefold(),
                 "yaml": row["content"].casefold(),
                 "author": item.publisher_display_name.casefold(),
@@ -699,6 +715,7 @@ class StudioStore:
                     SearchMatch(field=key.title(), kind="metadata", excerpt=value)
                     for key, value in {
                         "name": item.name,
+                        "display_name": item.display_name or "",
                         "description": item.description,
                         "author": item.publisher_display_name,
                         "publisher": item.publisher,
@@ -742,7 +759,10 @@ class StudioStore:
                 )
                 if len(found) == 200:
                     break
-        return sorted(found, key=lambda item: item.name.casefold())
+        return sorted(
+            found,
+            key=lambda item: ((item.display_name or item.name).casefold(), item.name, item.id),
+        )
 
     def folders(self, workspace: Path) -> list[str]:
         """Return virtual folder names in display order."""

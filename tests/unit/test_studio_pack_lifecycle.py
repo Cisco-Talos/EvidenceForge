@@ -9,11 +9,12 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+from evidenceforge.artifacts.lifecycle import create_draft, publish, suggest_version
 from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.composition.models import PackReference
 from evidenceforge.composition.packs import PackRepository
 from evidenceforge.composition.publisher import PublisherIdentity, set_publisher
-from evidenceforge.desktop.library import discover_packs
+from evidenceforge.desktop.library import LibraryItem, discover_packs
 from evidenceforge.models.exceptions import PackError
 from evidenceforge.studio.contexts import scenario_context_path
 from evidenceforge.studio.pack_lifecycle import (
@@ -65,19 +66,13 @@ def test_create_edit_validate_export_import_consume_and_delete_exact_version(
     )
     app = create_app(_paths(tmp_path / "private"), "pack-test")
     client = TestClient(app)
-    created = client.post(
-        "/v1/packs",
-        headers=HEADERS,
-        json={
-            "kind": f"{kind}_pack",
-            "name": "office",
-            "description": "Reusable office assets",
-            "publisher": "training",
-            "publisher_display_name": "Training",
-        },
+    legacy = _pack(workspace, kind, version="0.1.0")
+    client.post("/v1/library/refresh", headers=HEADERS)
+    original = next(
+        item
+        for item in client.get("/v1/items", headers=HEADERS).json()
+        if item["path"] == str(legacy)
     )
-    assert created.status_code == 200, created.text
-    original = created.json()["item"]
     original_bytes = Path(original["path"]).read_bytes()
     category = "storage_catalog" if kind == "industry" else "users"
     page = client.get(
@@ -157,7 +152,7 @@ def test_create_edit_validate_export_import_consume_and_delete_exact_version(
     compiled = compile_scenario(scenario, project_root=destination)
     assert any(pack.digest == digest for pack in compiled.selected_packs)
     blocked = imported_client.get(f"/v1/packs/{imported['id']}/deletion", headers=HEADERS).json()
-    assert not blocked["removable"] and any("Scenario:" in item for item in blocked["consumers"])
+    assert blocked["removable"] and any("Scenario:" in item for item in blocked["consumers"])
     # The source workspace has no consumers; remove the original exact draft only.
     url = f"/v1/packs/{original['id']}"
     assert client.get(url + "/deletion").status_code == 401
@@ -165,13 +160,13 @@ def test_create_edit_validate_export_import_consume_and_delete_exact_version(
     assert removal["removable"]
     result = client.post(url + "/delete", headers=HEADERS, json={"revision": removal["revision"]})
     assert result.status_code == 200, result.text
-    recovery = Path(result.json()["recovery_path"])
-    assert (recovery / "pack.yaml").read_bytes() == original_bytes
+    deleted = Path(result.json()["deleted_path"])
+    assert not deleted.exists() and not (workspace / ".eforge/deleted-packs").exists()
     assert not Path(original["path"]).exists()
     assert Path(revised["path"]).exists() and release.exists()
     assert app.state.studio.store.item(original["id"]) is None
     assert not app.state.studio.store.conversations(workspace, original["id"])
-    assert all(entry.path.parent != recovery for entry in discover_packs(workspace, kind))
+    assert all(entry.path.parent != deleted for entry in discover_packs(workspace, kind))
     client.close()
     imported_client.close()
     app.state.studio.store.close()
@@ -192,6 +187,10 @@ def test_deletion_rechecks_all_files_and_new_consumers(tmp_path: Path) -> None:
     current = review_pack_deletion(source, tmp_path)
     with pytest.raises(PackError, match="dependent"):
         remove_workspace_pack(source, tmp_path, current.revision)
+    assert current.removable and len(current.affected) == 1
+    removed = remove_workspace_pack(source, tmp_path, current.revision, accept_dependents=True)
+    assert not removed.deleted_path.exists()
+    assert (tmp_path / "scenarios/consumer/scenario.yaml").exists()
 
 
 def test_deletion_distinguishes_other_versions_packages_and_context_roots(tmp_path: Path) -> None:
@@ -210,6 +209,71 @@ def test_deletion_distinguishes_other_versions_packages_and_context_roots(tmp_pa
     foreign_source = _pack(foreign)
     with pytest.raises(PackError, match="workspace"):
         review_pack_deletion(foreign_source, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "kind,name", [("industry", "finance"), ("organization", "northstar-health")]
+)
+def test_built_in_packs_reject_direct_deletion_and_preserve_workspace_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, name: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config = tmp_path / "bundled-runtime/config"
+    shutil.copytree(PackRepository(workspace).package_root, config / "packs")
+    monkeypatch.setattr("evidenceforge.composition.packs.get_config_directory", lambda: config)
+    source = config / "packs/evidenceforge" / kind / name / "1.0.0/pack.yaml"
+    manifest = yaml.safe_load(source.read_text())
+    original = {
+        path.relative_to(config): path.read_bytes() for path in config.rglob("*") if path.is_file()
+    }
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    app = create_app(_paths(tmp_path / "private"), "pack-test")
+    studio = app.state.studio
+    item = studio.store.upsert_item(
+        workspace,
+        f"{kind}_pack",
+        LibraryItem(
+            path=source,
+            name=name,
+            kind=kind,
+            version="1.0.0",
+            publisher="evidenceforge",
+            publisher_display_name=str(manifest["publisher_display_name"]),
+            pack_source="bundled",
+        ),
+    )
+    client = TestClient(app)
+    try:
+        response = client.get(f"/v1/packs/{item.id}/deletion", headers=HEADERS)
+        assert response.status_code == 400 and "bundled packs are protected" in response.text
+        response = client.post(
+            f"/v1/packs/{item.id}/delete",
+            headers=HEADERS,
+            json={"revision": "a" * 64, "accept_dependents": True},
+        )
+        assert response.status_code == 400 and "bundled packs are protected" in response.text
+        with pytest.raises(PackError, match="bundled packs are protected"):
+            remove_workspace_pack(source, workspace, "a" * 64, accept_dependents=True)
+        assert studio.store.item(item.id) is not None
+        assert not (workspace / ".eforge/deletions").exists()
+        # The protection follows its installed location, not the publisher label.
+        copied = workspace / ".eforge/packs/evidenceforge" / kind / name / "1.0.0"
+        shutil.copytree(source.parent, copied)
+        review = review_pack_deletion(copied / "pack.yaml", workspace)
+        assert review.removable
+        remove_workspace_pack(
+            copied / "pack.yaml", workspace, review.revision, accept_dependents=True
+        )
+        assert not copied.exists()
+        assert original == {
+            path.relative_to(config): path.read_bytes()
+            for path in config.rglob("*")
+            if path.is_file()
+        }
+    finally:
+        client.close()
+        studio.store.close()
 
 
 def test_deletion_blocks_locked_organization_and_included_path_consumers(tmp_path: Path) -> None:
@@ -243,6 +307,15 @@ def test_deletion_blocks_locked_organization_and_included_path_consumers(tmp_pat
     data["includes"] = ["packs.yaml"]
     scenario.write_text(yaml.safe_dump(data))
     assert any("Scenario:" in entry for entry in review_pack_deletion(industry, tmp_path).consumers)
+    company_scenario = _consumer(tmp_path, "organization")
+    data = yaml.safe_load(company_scenario.read_text())
+    data["composition"]["organization"]["name"] = "company"
+    data.pop("includes", None)
+    company_scenario.write_text(yaml.safe_dump(data))
+    (company_scenario.parent / "packs.yaml").unlink()
+    affected = review_pack_deletion(industry, tmp_path).affected
+    assert [entry.kind for entry in affected] == ["organization_pack", "scenario"]
+    assert affected[0].name == "company" and affected[1].path == company_scenario
 
 
 def test_corrupt_catalog_can_be_removed_but_unknown_consumers_and_links_refuse(
@@ -282,7 +355,7 @@ def test_unreadable_organization_manifests_cannot_hide_consumers(tmp_path: Path)
     assert any(str(manifest) in problem for problem in review.problems)
 
 
-def test_recovery_path_substitution_and_failed_index_cleanup_preserve_files(
+def test_permanent_deletion_reconciles_failed_index_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -293,23 +366,21 @@ def test_recovery_path_substitution_and_failed_index_cleanup_preserve_files(
     item = app.state.studio.store.upsert_item(workspace, "industry_pack", entry)
     client = TestClient(app)
     review = client.get(f"/v1/packs/{item.id}/deletion", headers=HEADERS).json()
+    original = app.state.studio.store.remove_pack
     monkeypatch.setattr(
         app.state.studio.store,
         "remove_pack",
         lambda _id: (_ for _ in ()).throw(ValueError("Index failure")),
     )
-    result = client.post(
+    response = client.post(
         f"/v1/packs/{item.id}/delete", headers=HEADERS, json={"revision": review["revision"]}
     )
-    assert result.status_code == 400 and source.exists()
-    recovery = workspace / ".eforge/deleted-packs"
-    shutil.rmtree(recovery)
-    foreign = tmp_path / "outside"
-    foreign.mkdir()
-    recovery.symlink_to(foreign, target_is_directory=True)
-    with pytest.raises(OSError):
-        remove_workspace_pack(source, workspace, review["revision"])
-    assert source.exists() and not list(foreign.iterdir())
+    assert response.status_code == 400 and not source.exists()
+    assert app.state.studio.store.item(item.id)
+    monkeypatch.setattr(app.state.studio.store, "remove_pack", original)
+    assert client.post("/v1/library/refresh", headers=HEADERS).status_code == 200
+    assert app.state.studio.store.item(item.id) is None
+    assert not (workspace / ".eforge/deleted-packs").exists()
     client.close()
     app.state.studio.store.close()
 
@@ -320,7 +391,7 @@ def test_explicit_scenario_context_uses_its_selected_pack_root(tmp_path: Path) -
     foreign = tmp_path / "foreign"
     _pack(foreign)
     scenario = _consumer(workspace, "industry")
-    assert not review_pack_deletion(source, workspace).removable
+    assert review_pack_deletion(source, workspace).consumers
     context = scenario_context_path(scenario, workspace)
     context.parent.mkdir(parents=True)
     context.write_text(yaml.safe_dump({"context_version": "1.0", "project_root": str(foreign)}))
@@ -356,12 +427,64 @@ def test_interrupted_retirement_reconciles_index_and_active_authoring_refuses_re
         == 409
     )
     studio.store.delete_conversation(studio.store.conversations(workspace, item.id)[0].id)
-    # Simulate termination after the atomic file move but before the SQLite transaction.
+    # Simulate termination after permanent file removal but before the SQLite transaction.
     removed = remove_workspace_pack(source, workspace, review.revision)
     assert studio.store.item(item.id) is not None
     asyncio.run(studio.scan())
     assert studio.store.item(item.id) is None
-    assert (removed.recovery_path / "pack.yaml").exists()
+    assert not removed.deleted_path.exists()
     assert artifact.read_text() == "immutable captured pack content"
     client.close()
     studio.store.close()
+
+
+@pytest.mark.parametrize("kind", ["industry", "organization"])
+@pytest.mark.parametrize("published", [False, True])
+def test_managed_pack_deletion_preserves_other_drafts_and_reserves_published_labels(
+    tmp_path: Path, kind: str, published: bool
+) -> None:
+    original = _pack(tmp_path, kind)
+    set_publisher(
+        tmp_path,
+        PublisherIdentity(publisher="training", publisher_display_name="Training"),
+        scope="project",
+        force=False,
+    )
+    draft = create_draft(original, project_root=tmp_path, upgrade=True)
+    branch = create_draft(draft, project_root=tmp_path)
+    selected = (
+        publish(draft, project_root=tmp_path, version="2.0.0", accept_warnings=True)
+        if published
+        else draft
+    )
+    review = review_pack_deletion(selected, tmp_path)
+    assert review.removable and not review.consumers
+    result = remove_workspace_pack(selected, tmp_path, review.revision)
+    assert not selected.exists() and not result.deleted_path.exists()
+    assert original.exists() and branch.exists()
+    assert not (tmp_path / ".eforge/deleted-packs").exists()
+    if published:
+        assert suggest_version(tmp_path, kind=kind, name="office", publisher="training") == "2.0.1"
+
+
+def test_frozen_scenario_remains_usable_after_installed_dependency_deletion(tmp_path: Path) -> None:
+    original = _pack(tmp_path)
+    set_publisher(
+        tmp_path,
+        PublisherIdentity(publisher="training", publisher_display_name="Training"),
+        scope="project",
+        force=False,
+    )
+    draft = create_draft(original, project_root=tmp_path, upgrade=True)
+    pack = publish(draft, project_root=tmp_path, version="2.0.0", accept_warnings=True)
+    scenario = _consumer(tmp_path, "industry", "2.0.0")
+    scenario_draft = create_draft(scenario, project_root=tmp_path, upgrade=True)
+    release = publish(scenario_draft, project_root=tmp_path, accept_warnings=True)
+    before = compile_scenario(release, project_root=tmp_path).digests
+    review = review_pack_deletion(pack, tmp_path)
+    assert any(entry.path == scenario_draft for entry in review.affected)
+    # Its portable source references the captured closure, not the installed pack.
+    assert release not in {entry.path for entry in review.affected}
+    remove_workspace_pack(pack, tmp_path, review.revision, accept_dependents=True)
+    assert not pack.exists() and scenario.exists()
+    assert compile_scenario(release, project_root=tmp_path).digests == before

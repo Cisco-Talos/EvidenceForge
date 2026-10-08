@@ -84,7 +84,7 @@ async fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, S
 #[tauri::command]
 async fn choose_import_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
     let extensions: &[&str] = if kind == "scenario" {
-        &["yaml", "yml"]
+        &["yaml", "yml", "efscenario"]
     } else {
         &["efpack"]
     };

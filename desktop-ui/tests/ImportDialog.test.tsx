@@ -10,6 +10,20 @@ import type { ImportReview, StudioApi } from "../src/api";
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => Boolean(window.__TAURI_INTERNALS__), invoke: vi.fn() }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); delete window.__TAURI_INTERNALS__; });
 
+test("scenario creation can preview a title without creating or importing", async () => {
+  const request = vi.fn(async () => ({ display_name: "Northstar Credential Theft" }));
+  const onCreate = vi.fn(async () => undefined);
+  render(<ImportDialog kind="scenario" api={{ request } as unknown as StudioApi} onCreate={onCreate} onImported={async () => undefined} onClose={vi.fn()} />);
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "northstar-credential-theft");
+  await user.click(screen.getByRole("button", { name: "Suggest display name with AI" }));
+  expect(screen.getByRole("textbox", { name: "Scenario display name" })).toHaveValue("Northstar Credential Theft");
+  expect(onCreate).not.toHaveBeenCalled();
+  expect(request).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole("button", { name: "Create scenario" }));
+  expect(onCreate).toHaveBeenCalledWith("northstar-credential-theft", "", "Northstar Credential Theft");
+});
+
 const review: ImportReview = {
   id: "review-1", kind: "scenario", name: "imported", destination: "/workspace/scenarios/imported",
   rows: [
@@ -21,6 +35,7 @@ const review: ImportReview = {
 
 function fixture(kind: "scenario" | "pack" = "scenario", next: ImportReview = review) {
   const request = vi.fn(async (path: string, _method?: string, _body?: unknown) => {
+    if (path.startsWith("/v1/artifacts/inspect")) return { schema_version: "2.0" };
     if (path.endsWith("/preview")) return next;
     if (path.endsWith("/validate")) return { exit_code: 1, report: null, error: "Advisory finding" };
     if (path.endsWith("/commit")) return { item: null, packs: 0 };
@@ -43,7 +58,7 @@ async function openReview() {
   const fixtureState = fixture();
   await fixtureState.user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "imported");
   await selectImport(fixtureState.user);
-  await fixtureState.user.type(screen.getByRole("textbox", { name: "Scenario YAML" }), "/source/scenario.yaml");
+  await fixtureState.user.type(screen.getByRole("textbox", { name: "Scenario YAML or release" }), "/source/scenario.yaml");
   await fixtureState.user.click(screen.getByRole("button", { name: "Import scenario" }));
   await screen.findByRole("heading", { name: "Review import" });
   return fixtureState;
@@ -55,7 +70,7 @@ test("Create is the default and name validation gates both actions", async () =>
   await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "invalid name");
   expect(screen.getByRole("status").textContent).toMatch(/letters|spaces/);
   await selectImport(user);
-  await user.type(screen.getByRole("textbox", { name: "Scenario YAML" }), "/source/scenario.yaml");
+  await user.type(screen.getByRole("textbox", { name: "Scenario YAML or release" }), "/source/scenario.yaml");
   expect((screen.getByRole("button", { name: "Import scenario" }) as HTMLButtonElement).disabled).toBe(true);
   await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
   await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "valid-name");
@@ -135,7 +150,7 @@ test("native scenario browse requests only the YAML picker", async () => {
   await selectImport(user);
   await user.click(screen.getByRole("button", { name: "Browse…" }));
   expect(invoke).toHaveBeenCalledWith("choose_import_file", { kind: "scenario" });
-  expect((screen.getByRole("textbox", { name: "Scenario YAML" }) as HTMLInputElement).value).toBe("/source/selected.yaml");
+  expect((screen.getByRole("textbox", { name: "Scenario YAML or release" }) as HTMLInputElement).value).toBe("/source/selected.yaml");
 });
 
 test("dependency panel provides explicit refresh and missing-pack recovery", async () => {
@@ -208,4 +223,13 @@ test("an unselected conflicting pack no longer blocks a clean subset", async () 
   expect(screen.getByRole("button", { name: "Confirm import" })).toBeDisabled();
   await user.click(screen.getByRole("checkbox", { name: "Import Finance" }));
   expect(screen.getByRole("button", { name: "Confirm import" })).toBeEnabled();
+});
+
+test("creation preserves long identifiers and accepts an optional friendly display name", async () => {
+  const { user, onCreate } = fixture();
+  const name = "_" + "A".repeat(300);
+  await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), name);
+  await user.type(screen.getByRole("textbox", { name: "Scenario display name" }), "Healthcare — Équipe");
+  await user.click(screen.getByRole("button", { name: "Create scenario" }));
+  expect(onCreate).toHaveBeenCalledWith(name, "", "Healthcare — Équipe");
 });

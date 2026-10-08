@@ -100,7 +100,7 @@ test("constrained fields use searchable reference choices and enum selectors", a
   await user.click(await screen.findByRole("option", { name: /engineering/ }));
   await user.click(screen.getByRole("button", { name: "Close choices" }));
   await user.click(screen.getByRole("button", { name: "Review changes" }));
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ value: expect.objectContaining({ primary_system: "HOST-1004", groups: ["sales", "engineering"], browsing_intensity: "heavy" }) }), 180000);
 });
 
@@ -120,7 +120,7 @@ test("application platform dictionaries show nested fields and save exact nested
   await user.click(screen.getAllByText("Edit deployment")[0]);
   expect(await screen.findByRole("combobox", { name: "Platforms / Windows / Deployment definition type" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Review changes" }));
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ value: expect.objectContaining({ platforms: { ...application.value.platforms as object, windows: { ...((application.value.platforms as Record<string, object>).windows), image_path: "C:\\Browser\\browser-v2.exe" } } }) }), 180000);
 });
 
@@ -135,7 +135,7 @@ test("Add Asset explains the selected type and blocks missing required fields", 
   await screen.findByRole("form", { name: "Add user account" });
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   expect(screen.getByRole("alert")).toHaveTextContent("Username is required");
-  expect(screen.queryByRole("button", { name: "Save to scenario" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Save draft" })).not.toBeInTheDocument();
   await user.type(screen.getByRole("textbox", { name: "Username *" }), "new.user");
   await user.type(screen.getByRole("textbox", { name: "Full Name *" }), "New User");
   await user.type(screen.getByRole("textbox", { name: "Email *" }), "invalid-address");
@@ -144,7 +144,7 @@ test("Add Asset explains the selected type and blocks missing required fields", 
   await user.clear(screen.getByRole("textbox", { name: "Email *" }));
   await user.type(screen.getByRole("textbox", { name: "Email *" }), "new@example.com");
   await user.click(screen.getByRole("button", { name: "Review changes" }));
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ asset_id: null, category: "users", key: "new.user", value: expect.objectContaining({ username: "new.user", email: "new@example.com" }) }), 180000);
 });
 
@@ -159,7 +159,7 @@ test("scenario editing reviews a concrete change and submits a revision guard", 
   expect(screen.getByText("Alice Original")).toBeVisible();
   expect(screen.getByText("Alice Local")).toBeVisible();
   expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
   expect(request).toHaveBeenCalledWith("/v1/items/assets-example/assets", "POST", expect.objectContaining({ revision: "revision", category: "users", asset_id: "user-0", value: expect.objectContaining({ full_name: "Alice Local" }), version: null }), 180000);
 });
@@ -200,7 +200,7 @@ test("customized fields are marked and restoring a field previews inherited valu
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   expect(screen.getByText(/marked overrides will be removed/)).toBeVisible();
   expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ restore_fields: ["groups"], value: expect.objectContaining({ groups: ["sales"], full_name: "Alice Local" }) }), 180000);
 });
 
@@ -216,7 +216,7 @@ test("restoring the whole asset is reviewed and subsequent edits preserve other 
   const name = screen.getByRole("textbox", { name: "Full Name *" });
   await user.clear(name); await user.type(name, "Alice revised");
   await user.click(screen.getByRole("button", { name: "Review changes" }));
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   const payload = request.mock.calls.find(([, method]) => method === "POST")?.[2] as unknown as { restore_fields: string[]; value: Record<string, unknown> };
   expect(payload.restore_fields).toContain("groups");
   expect(payload.restore_fields).not.toContain("username");
@@ -258,7 +258,7 @@ test("retirement checks references without saving, then reviews status and direc
   expect(screen.getByText(/Disabled → Stale/)).toBeVisible();
   expect(onChanged).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ preview: true, convert_from: "users", category: "stale_accounts", value: expect.objectContaining({ reason: "Retired test account" }) }), 180000);
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
   const posts = request.mock.calls.filter(([, method]) => method === "POST");
   expect(posts).toHaveLength(2);
@@ -275,7 +275,7 @@ test("restoration fills saved user details and permits choosing active or disabl
   await user.selectOptions(screen.getByRole("combobox", { name: "Account status" }), "true");
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   expect(await screen.findByText(/Stale → Active/)).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Save to scenario" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request.mock.calls.filter(([, method]) => method === "POST")[1][2]).toEqual(expect.objectContaining({ convert_from: "stale_accounts", category: "users", value: expect.objectContaining({ enabled: true, full_name: "Alice Saved", groups: ["sales"], primary_system: "HOST-1" }) }));
 });
 
@@ -287,7 +287,7 @@ test("conversion review shows canonical blockers and disables saving", async () 
   await screen.findByRole("heading", { name: "Mark as stale: alice" });
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   expect(await screen.findByText("storyline.0.actor: Unknown actor alice")).toBeVisible();
-  expect(screen.getByRole("button", { name: "Save to scenario" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(request.mock.calls.filter(([, method]) => method === "POST")).toHaveLength(1);
   expect(onChanged).not.toHaveBeenCalled();

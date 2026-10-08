@@ -59,9 +59,9 @@ def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_pat
     migrations = (
         *MIGRATIONS,
         Migration(
-            id="test-db-0002",
-            source=1,
-            target=2,
+            id="test-db-0003",
+            source=2,
+            target=3,
             description="Rename a historical JSON field",
             sql="CREATE TABLE test_metadata (name TEXT PRIMARY KEY)",
             records=(
@@ -72,9 +72,9 @@ def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_pat
             ),
         ),
         Migration(
-            id="test-db-0003",
-            source=2,
-            target=3,
+            id="test-db-0004",
+            source=3,
+            target=4,
             description="Add a frozen semantic default",
             sql="ALTER TABLE test_metadata ADD COLUMN revision INTEGER DEFAULT 3",
             records=(
@@ -96,7 +96,7 @@ def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_pat
             json.loads(row[0])
             for row in connection.execute("SELECT payload FROM conversations ORDER BY id")
         ]
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
         assert dict(connection.execute("SELECT id,checksum FROM studio_migrations")) == {
             entry.id: entry.checksum for entry in migrations
         }
@@ -105,6 +105,7 @@ def test_consecutive_sql_and_json_transforms_preserve_ids_and_timestamps(tmp_pat
             **{key: value for key, value in old.items() if key != "title"},
             "label": old["title"],
             "archived": False,
+            "draft_display_name": None,
         }
     migrate_database(selected.database_file, "test-runtime", migrations=migrations)
     with closing(sqlite3.connect(selected.database_file)) as connection, connection:
@@ -218,9 +219,9 @@ def test_file_declarations_cannot_include_engine_or_external_paths(path: str) ->
 def test_sql_registry_preserves_semicolons_in_literals_and_trigger_bodies(tmp_path: Path) -> None:
     selected = legacy(tmp_path)
     extra = Migration(
-        id="test-db-0002",
-        source=1,
-        target=2,
+        id="test-db-0003",
+        source=2,
+        target=3,
         description="Exercise SQLite statement boundaries",
         sql="""
         CREATE TABLE test_values(value TEXT);

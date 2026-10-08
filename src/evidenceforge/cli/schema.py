@@ -11,6 +11,8 @@ from typing import Any, get_args
 from pydantic import BaseModel, TypeAdapter
 
 from evidenceforge.models import scenario as scenario_models
+from evidenceforge.schema import LifecycleMetadata, ParentReference
+from evidenceforge.schema.descriptions import PackEnvelope, ScenarioEnvelope
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,43 @@ class SchemaContract:
 
 
 _MODEL_SELECTORS: dict[str, tuple[type[BaseModel], Any]] = {
+    "pack.envelope": (
+        PackEnvelope,
+        {
+            "pack_schema_version": "3.0",
+            "type": "industry",
+            "name": "example",
+            "display_name": "Example Draft",
+            "description": "Example draft",
+            "status": "draft",
+            "draft_id": "00000000-0000-4000-8000-000000000001",
+        },
+    ),
+    "scenario.envelope": (
+        ScenarioEnvelope,
+        {
+            "schema_version": "3.0",
+            "name": "example",
+            "display_name": "Example Draft",
+            "description": "Example draft",
+            "status": "draft",
+            "draft_id": "00000000-0000-4000-8000-000000000001",
+        },
+    ),
+    "lifecycle": (
+        LifecycleMetadata,
+        {"status": "draft", "draft_id": "00000000-0000-4000-8000-000000000001"},
+    ),
+    "lifecycle.parent": (
+        ParentReference,
+        {
+            "kind": "scenario",
+            "publisher": "example",
+            "name": "exercise",
+            "version": "1.0.0",
+            "digest": "0" * 64,
+        },
+    ),
     "environment": (
         scenario_models.Environment,
         {

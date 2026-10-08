@@ -55,6 +55,14 @@ authoritative resolved scenarios, run manifests, sample packs, and pack/resolve 
 workflows. See the
 [scenario composition worklog](docs/worklog/2026-08-14-scenario-pack-composition.md).
 
+**Schema 3 and authored releases.** Shared file services now support independent drafts,
+immutable scenario/pack publication, frozen dependencies/configuration, exact lineage, notes,
+linked upgrades and portable archives through CLI, native skills and Studio. See the
+[artifact lifecycle worklog](docs/worklog/2026-10-07-schema3-artifact-lifecycle.md).
+Studio Properties now consolidates draft metadata, notes history and exact validation provenance;
+bundle details summarize generated data. See the
+[Properties worklog](docs/worklog/2026-10-08-studio-properties.md).
+
 ---
 
 ## Quality Roadmap

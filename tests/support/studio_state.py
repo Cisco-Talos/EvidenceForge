@@ -177,7 +177,19 @@ def inventory(database: Path) -> dict[str, list[tuple[object, ...]]]:
                 if row[1] not in {"search_entries", "dependency_sha256"}
             ]
             query = ",".join(f'"{name}"' for name in columns)
-            result[table] = list(connection.execute(f'SELECT {query} FROM "{table}" ORDER BY 1'))
+            rows = list(connection.execute(f'SELECT {query} FROM "{table}" ORDER BY 1'))
+            # Compare historical facts independently of the reviewed version-2 null defaults.
+            if table in {"items", "conversations"} and "payload" in columns:
+                position = columns.index("payload")
+                field = "display_name" if table == "items" else "draft_display_name"
+                for index, row in enumerate(rows):
+                    payload = json.loads(row[position])
+                    if payload.get(field) is None:
+                        payload.pop(field, None)
+                    values = list(row)
+                    values[position] = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+                    rows[index] = tuple(values)
+            result[table] = rows
     for table in (
         "imported_bundles",
         "removed_job_history",

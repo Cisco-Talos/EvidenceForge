@@ -53,6 +53,7 @@ from pydantic import (
 from evidenceforge.config.compatibility import warn_legacy_config
 from evidenceforge.models.http import HttpMultipartEntitySpec
 from evidenceforge.models.ids import IdsAlertAttachmentSpec
+from evidenceforge.naming import SCENARIO_NAME_PATTERN
 
 MAX_HTTP_RESPONSE_BODY_LEN = 10_000_000_000
 
@@ -3883,7 +3884,7 @@ class Scenario(BaseModel):
         le=2**64 - 1,
         description="Public deterministic seed controlling every generation substream.",
     )
-    name: str = Field(..., pattern="^[a-zA-Z0-9_-]+$")
+    name: str = Field(..., pattern=SCENARIO_NAME_PATTERN)
     description: str
     environment: Environment
     personas: list[Persona] | None = Field(default_factory=list)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -36,6 +37,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.background import BackgroundTask
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from evidenceforge.artifacts.bundle_properties import BundleProperties, inspect_bundle_properties
+from evidenceforge.artifacts.lifecycle import _safe_path
+from evidenceforge.artifacts.lineage import ArtifactGroup
+from evidenceforge.artifacts.removal import (
+    ScenarioDeleted,
+    ScenarioDeleteRequest,
+    ScenarioDeleteReview,
+    deletion_snapshot,
+    remove_scenario,
+    retired_scenario_sources,
+    review_scenario_deletion,
+)
 from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
 from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
 from evidenceforge.composition.publisher import (
@@ -50,7 +63,7 @@ from evidenceforge.desktop.jobs import _eforge_command
 from evidenceforge.desktop.library import discover_packs, discover_scenarios
 from evidenceforge.desktop.progress import GenerationProgress
 from evidenceforge.desktop.skill_setup import skill_targets
-from evidenceforge.desktop.state import GenerationJob
+from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.models.exceptions import (
@@ -59,6 +72,7 @@ from evidenceforge.models.exceptions import (
     PackError,
     PathSafetyError,
 )
+from evidenceforge.naming import PACK_NAME_PATTERN, SCENARIO_NAME_PATTERN, DisplayName, storage_name
 from evidenceforge.studio.assets import (
     AssetChoices,
     AssetDetail,
@@ -156,7 +170,8 @@ from evidenceforge.studio.store import (
 
 def _archive_stem(name: str) -> str:
     """Return a filesystem-safe scenario name for downloaded archives."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or "scenario"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-") or "scenario"
+    return storage_name(stem) if len(stem) > 200 else stem
 
 
 class ExportLocation(BaseModel):
@@ -215,7 +230,7 @@ class ScenarioCloneRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, pattern=SCENARIO_NAME_PATTERN)
 
 
 class PackPublisherStatus(BaseModel):
@@ -234,7 +249,8 @@ class PackCloneRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, pattern=PACK_NAME_PATTERN)
+    display_name: DisplayName | None = None
     version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     publisher: str | None = None
     publisher_display_name: str | None = None
@@ -244,7 +260,7 @@ class PackCreateRequest(PackCloneRequest):
     """Basic identity and purpose for a new editable draft pack."""
 
     kind: Literal["industry_pack", "organization_pack"]
-    name: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=1, pattern=PACK_NAME_PATTERN)
     version: str = Field(default="0.1.0", pattern=r"^\d+\.\d+\.\d+$")
     description: str = Field(min_length=1, max_length=2000)
     project_id: str | None = None
@@ -298,7 +314,9 @@ class ConversationRequest(BaseModel):
     item_id: str | None = None
     draft_kind: Literal["scenario", "industry_pack", "organization_pack"] | None = None
     project_id: str | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str | None = Field(default=None, min_length=1, pattern=SCENARIO_NAME_PATTERN)
+
+    display_name: DisplayName | None = None
 
 
 class ConversationUpdate(BaseModel):
@@ -309,10 +327,9 @@ class ConversationUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     model_id: str | None = None
     reasoning_effort: str | None = None
-    draft_name: str | None = Field(
-        default=None, min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$"
-    )
+    draft_name: str | None = Field(default=None, min_length=1, pattern=SCENARIO_NAME_PATTERN)
     draft_project_id: str | None = None
+    draft_display_name: DisplayName | None = None
 
 
 class TurnRequest(BaseModel):
@@ -381,7 +398,7 @@ class ScenarioRenameRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, pattern=SCENARIO_NAME_PATTERN)
     source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -681,6 +698,7 @@ class StudioSnapshot(BaseModel):
     settings: StudioSettings
     paths: StudioPaths
     items: list[CatalogItem]
+    artifact_groups: dict[str, ArtifactGroup] = Field(default_factory=dict)
     projects: list[Project]
     folders: list[str]
     views: list[SavedView]
@@ -784,6 +802,7 @@ class StudioService:
         self.import_lock = asyncio.Lock()
         self.asset_lock = asyncio.Lock()
         self.library_lock = asyncio.Lock()
+        self.artifact_groups: dict[str, ArtifactGroup] = {}
         self.workspace_selection_lock = asyncio.Lock()
         self.asset_inventories: dict[str, Inventory] = {}
         self.prediction_task: asyncio.Task[None] | None = None
@@ -1121,9 +1140,12 @@ class StudioService:
         workspace = self.settings.workspace
         before = self.store.items(workspace)
         retired = await asyncio.to_thread(retired_pack_sources, workspace)
+        retired_scenarios = await asyncio.to_thread(retired_scenario_sources, workspace)
         for item in before:
             if item.kind != "scenario" and item.path in retired:
                 self.store.remove_pack(item.id)
+            elif item.kind == "scenario" and item.path in retired_scenarios:
+                self.store.remove_scenario(item.id)
 
         def discover() -> list[CatalogItem]:
             items = [
@@ -1169,8 +1191,15 @@ class StudioService:
                 "conversation.updated",
                 json.loads(conversation.model_dump_json()),
             )
+        from evidenceforge.studio.artifact_groups import inspect_groups
+
+        groups = await asyncio.to_thread(inspect_groups, items)
+        groups_changed = groups != self.artifact_groups
+        self.artifact_groups = groups
         self._last_scan = time.monotonic()
-        if {item.id: item for item in items} != {item.id: item for item in before}:
+        if groups_changed or {item.id: item for item in items} != {
+            item.id: item for item in before
+        }:
             await self.emit(str(workspace), "library.refreshed", {"count": len(items)})
         await self.refresh_dependencies(items)
         return items
@@ -1282,6 +1311,11 @@ class StudioService:
             "paths": json.loads(self.paths.model_dump_json()),
             "runtime_cleanup": self.runtime_cleanup.report.model_dump(mode="json"),
             "items": [json.loads(item.model_dump_json()) for item in items],
+            "artifact_groups": {
+                item.id: self.artifact_groups[item.id].model_dump(mode="json")
+                for item in items
+                if item.id in self.artifact_groups
+            },
             "projects": [
                 json.loads(project.model_dump_json()) for project in self.store.projects(workspace)
             ],
@@ -2200,7 +2234,239 @@ def create_app(
         if item.kind == "scenario":
             raise HTTPException(status_code=400, detail="Choose a pack")
         async with studio.asset_lock:
-            return await asyncio.to_thread(review_pack, item.path, item.workspace)
+            result = await asyncio.to_thread(review_pack, item.path, item.workspace)
+            if result.valid:
+                from evidenceforge.artifacts.properties import check_artifact
+
+                try:
+                    await asyncio.to_thread(check_artifact, item.path, project_root=item.workspace)
+                except (EvidenceForgeError, OSError, ValueError) as exc:
+                    logging.getLogger(__name__).debug(
+                        "Pack validation record was not retained: %s", exc
+                    )
+            return result
+
+    def scenario_private_removal_paths(
+        item: CatalogItem,
+        studio: StudioService,
+        generations: list[GenerationJob],
+        evaluations: list[EvaluationJob],
+    ) -> set[Path]:
+        """Select only the exact scenario's private inputs, configuration and job files."""
+        from evidenceforge.studio.contexts import scenario_context_path, scenario_overlay_root
+
+        paths = {
+            scenario_context_path(item.path, item.workspace),
+            scenario_overlay_root(item.path, item.workspace).parent,
+        }
+        private_jobs = studio.jobs.directory / "jobs"
+        for job in [*generations, *evaluations]:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", job.id):
+                raise ValueError("Cannot delete files for an invalid job identity")
+            if isinstance(job, GenerationJob):
+                paths.add(studio.jobs.directory / "inputs" / job.id)
+                files = [job.log_file, job.progress_file, *job.progress_history]
+            else:
+                files = [job.result_file, job.log_file]
+            for path in files:
+                if path.is_relative_to(private_jobs):
+                    if path.parent != private_jobs or not (
+                        path.name.startswith(f"{job.id}.")
+                        or path.name.startswith(f"{job.id}-resume-")
+                    ):
+                        raise ValueError(f"Private job file does not belong to this run: {path}")
+                    paths.add(path)
+        for path in paths:
+            _safe_path(path)
+        return paths
+
+    def scenario_removal_review(
+        item: CatalogItem, studio: StudioService, include_files: bool
+    ) -> ScenarioDeleteReview:
+        review = review_scenario_deletion(
+            item.path,
+            item.workspace,
+            [entry.path for entry in studio.store.items(item.workspace, "scenario")],
+            include_files=include_files,
+        )
+        all_generations = studio.jobs.load_generations()
+        generations = [
+            job
+            for job in all_generations
+            if job.workspace == item.workspace and job.scenario == item.path
+        ]
+        ids = {job.id for job in generations}
+        evaluations = [job for job in studio.jobs.load_evaluations() if job.generation_id in ids]
+        signatures = [review.revision]
+        review.run_count = len(generations)
+        if studio.store.active_conversations() or any(
+            job.status in {"queued", "running", "paused"} for job in [*generations, *evaluations]
+        ):
+            review.problems.append(
+                "Finish or stop active authoring, generation and evaluation before deleting"
+            )
+            review.removable = False
+        if include_files:
+            if any(
+                job.id not in ids and job.output_root.is_relative_to(review.target)
+                for job in all_generations
+            ):
+                raise ValueError("This scenario folder contains another scenario's run")
+            for job in generations:
+                signatures.append(job.model_dump_json())
+                root = job.output_root
+                _safe_path(root)
+                if root.exists():
+                    if any(
+                        entry.path.is_relative_to(root)
+                        for entry in studio.store.items(item.workspace)
+                    ):
+                        raise ValueError(
+                            f"This run folder contains authored scenarios or packs: {root}"
+                        )
+                    if any(
+                        other.id != job.id
+                        and (
+                            other.output_root.is_relative_to(root)
+                            or root.is_relative_to(other.output_root)
+                        )
+                        for other in all_generations
+                    ):
+                        raise ValueError(f"This run folder is shared by another run: {root}")
+                    marker = root / ".eforge-desktop-job.json"
+                    if not job.owned_output or marker.is_symlink() or not marker.is_file():
+                        raise ValueError(f"This run is not verified as owned by Studio: {root}")
+                    if (
+                        marker.stat().st_size > 4096
+                        or json.loads(marker.read_bytes()).get("job_id") != job.id
+                    ):
+                        raise ValueError(f"Run ownership changed: {root}")
+                    signature, files, size = deletion_snapshot(root)
+                    signatures.append(signature)
+                    review.run_paths.append(root)
+                    if not root.is_relative_to(review.target):
+                        review.files += files
+                        review.bytes += size
+            signatures.extend(job.model_dump_json() for job in evaluations)
+            for path in sorted(
+                scenario_private_removal_paths(item, studio, generations, evaluations)
+            ):
+                if path.exists():
+                    signature, files, size = deletion_snapshot(path)
+                    signatures.append(signature)
+                    if not path.is_relative_to(review.target) and not any(
+                        path.is_relative_to(root) for root in review.run_paths
+                    ):
+                        review.files += files
+                        review.bytes += size
+        review.revision = hashlib.sha256("\n".join(signatures).encode()).hexdigest()
+        return review
+
+    def remove_scenario_runs(item: CatalogItem, studio: StudioService) -> None:
+        generations = [
+            job
+            for job in studio.jobs.load_generations()
+            if job.workspace == item.workspace and job.scenario == item.path
+        ]
+        ids = {job.id for job in generations}
+        evaluations = [job for job in studio.jobs.load_evaluations() if job.generation_id in ids]
+        private_paths = scenario_private_removal_paths(item, studio, generations, evaluations)
+        for job in generations:
+            if job.output_root.exists():
+                remove = (
+                    _delete_owned_complete
+                    if (job.output_root / "GENERATION_MANIFEST.json").exists()
+                    else _delete_owned_incomplete
+                )
+                if not remove(job):
+                    raise ValueError(f"Could not safely delete this run: {job.output_root}")
+        for path in sorted(private_paths):
+            _safe_path(path)
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
+        for evaluation in evaluations:
+            studio.store.delete_job(evaluation.id)
+        for job in generations:
+            studio.store.delete_job(job.id)
+
+    @app.get("/v1/scenarios/{item_id}/deletion")
+    async def scenario_deletion_review(
+        item_id: str, include_files: bool = False, studio: StudioService = Depends(authorized)
+    ) -> ScenarioDeleteReview:
+        item = catalog_source(item_id, studio)
+        if item.kind != "scenario":
+            raise HTTPException(status_code=400, detail="Choose a scenario")
+        try:
+            return await asyncio.to_thread(scenario_removal_review, item, studio, include_files)
+        except (OSError, ValueError, KeyError, EvidenceForgeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/v1/scenarios/{item_id}/delete")
+    async def delete_scenario(
+        item_id: str, request: ScenarioDeleteRequest, studio: StudioService = Depends(authorized)
+    ) -> ScenarioDeleted:
+        async with (
+            studio.workspace_selection_lock,
+            studio.asset_lock,
+            studio.import_lock,
+            studio.library_lock,
+        ):
+            item = catalog_source(item_id, studio)
+            if item.kind != "scenario":
+                raise HTTPException(status_code=400, detail="Choose a scenario")
+            try:
+                current = scenario_removal_review(item, studio, request.include_files)
+                if request.revision != current.revision:
+                    raise FileExistsError("Scenario files or runs changed. Review deletion again")
+                if not current.removable:
+                    raise ValueError(
+                        "Finish or stop active work and resolve include references first"
+                    )
+                if request.include_files:
+                    remove_scenario_runs(item, studio)
+                paths = [entry.path for entry in studio.store.items(item.workspace, "scenario")]
+                reviewed = review_scenario_deletion(
+                    item.path, item.workspace, paths, include_files=request.include_files
+                )
+                result = remove_scenario(
+                    item.path,
+                    item.workspace,
+                    reviewed.revision,
+                    paths,
+                    include_files=request.include_files,
+                )
+                if request.include_files:
+                    for bundle in studio.store.imported_bundles(item.workspace):
+                        if not bundle.root.exists() and any(
+                            bundle.root.is_relative_to(root)
+                            for root in [current.target, *current.run_paths]
+                        ):
+                            studio.store.remove_imported_bundle(bundle.id)
+                studio.store.remove_scenario(item.id)
+                studio.asset_inventories.pop(item.id, None)
+            except FileExistsError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except (OSError, ValueError, KeyError, EvidenceForgeError, sqlite3.Error) as exc:
+                detail = str(exc)
+                if not item.path.exists():
+                    detail = (
+                        "Files were permanently deleted. Refresh the library to finish Studio cleanup. "
+                        + detail
+                    )
+                raise HTTPException(status_code=409, detail=detail) from exc
+        await studio.scan()
+        await studio.emit(str(item.workspace), "library.refreshed", {"deleted_scenario": item.id})
+        await studio.emit(item.id, "scenario.deleted", result.model_dump(mode="json"))
+        return result
+
+    def pack_has_active_work(studio: StudioService, review: PackDeleteReview) -> bool:
+        paths = {entry.path for entry in review.affected if entry.kind == "scenario"}
+        return bool(studio.store.active_conversations()) or any(
+            job.scenario in paths and job.status in {"queued", "running", "paused"}
+            for job in studio.jobs.load_generations()
+        )
 
     @app.get("/v1/packs/{item_id}/deletion")
     async def pack_deletion_review(
@@ -2217,11 +2483,13 @@ def create_app(
                 [entry.path for entry in studio.store.items(item.workspace, "scenario")],
                 [entry.path for entry in studio.store.items(item.workspace, "organization_pack")],
             )
-        except (OSError, ValueError, ConfigurationError, PackError) as exc:
+        except (OSError, ValueError, EvidenceForgeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if studio.store.active_conversations():
+        if pack_has_active_work(studio, review):
             review.removable = False
-            review.problems.append("Wait for active authoring turns before deleting packs")
+            review.problems.append(
+                "Finish or stop active authoring and dependent runs before deleting packs"
+            )
         return review
 
     @app.post("/v1/packs/{item_id}/delete")
@@ -2240,6 +2508,19 @@ def create_app(
             if studio.store.active_conversations():
                 raise HTTPException(status_code=409, detail="Wait for active authoring turns")
             try:
+                current = review_pack_deletion(
+                    item.path,
+                    item.workspace,
+                    [entry.path for entry in studio.store.items(item.workspace, "scenario")],
+                    [
+                        entry.path
+                        for entry in studio.store.items(item.workspace, "organization_pack")
+                    ],
+                )
+                if pack_has_active_work(studio, current):
+                    raise FileExistsError(
+                        "Finish or stop dependent active runs before deleting this pack"
+                    )
                 # No await between the final consumer check, retirement and index removal.
                 # Turn submission shares asset_lock; scans share library_lock.
                 result = remove_workspace_pack(
@@ -2251,17 +2532,20 @@ def create_app(
                         entry.path
                         for entry in studio.store.items(item.workspace, "organization_pack")
                     ],
+                    accept_dependents=request.accept_dependents,
                 )
-                try:
-                    studio.store.remove_pack(item.id)
-                except (sqlite3.Error, ValueError):
-                    result.recovery_path.rename(item.path.parent)
-                    raise
+                studio.store.remove_pack(item.id)
                 studio.asset_inventories.pop(item.id, None)
             except FileExistsError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-            except (OSError, ValueError, ConfigurationError, PackError, sqlite3.Error) as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except (OSError, ValueError, EvidenceForgeError, sqlite3.Error) as exc:
+                detail = str(exc)
+                if not item.path.exists():
+                    detail = (
+                        "Files were permanently deleted. Refresh the library to finish Studio cleanup. "
+                        + detail
+                    )
+                raise HTTPException(status_code=400, detail=detail) from exc
         await studio.scan()
         await studio.emit(str(item.workspace), "library.refreshed", {"deleted_pack": item.id})
         await studio.emit(item.id, "pack.deleted", json.loads(result.model_dump_json()))
@@ -2280,13 +2564,20 @@ def create_app(
             reference, kind = parse_pack_cli_reference(str(item.path))
             repository = PackRepository(studio.settings.workspace)
             pack = await asyncio.to_thread(repository.resolve, reference, expected_type=kind)
-            await asyncio.to_thread(build_portable_archive, repository, pack, target)
-        except (OSError, ValueError, PackError) as exc:
+            if pack.manifest.status == "draft":
+                raise PackError("publish the draft before exporting a release")
+            if pack.manifest.status == "published":
+                from evidenceforge.artifacts.portable import export_release
+
+                await asyncio.to_thread(export_release, item.path, target)
+            else:
+                await asyncio.to_thread(build_portable_archive, repository, pack, target)
+        except (OSError, ValueError, EvidenceForgeError) as exc:
             shutil.rmtree(temporary)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return FileResponse(
             target,
-            filename=f"{item.name}-{item.version}.efpack",
+            filename=f"{storage_name(item.name)}-{item.version}.efpack",
             background=BackgroundTask(shutil.rmtree, temporary),
         )
 
@@ -2327,6 +2618,7 @@ def create_app(
                     )
         if (
             item.kind == "scenario"
+            and not any((parent / "release.json").is_file() for parent in item.path.parents)
             and "project_id" in changes
             and changes["project_id"] != item.project_id
         ):
@@ -2368,6 +2660,10 @@ def create_app(
             root=item.path.parent,
             files=[SourceFile(path=item.path.name, size=item.path.stat().st_size)],
         )
+
+    from evidenceforge.studio.artifact_api import register_artifact_routes
+
+    register_artifact_routes(app, authorized, catalog_source)
 
     @app.get("/v1/items/{item_id}/files/{filename:path}")
     def source_file(
@@ -2472,66 +2768,33 @@ def create_app(
             raise HTTPException(status_code=400, detail="Enter both publisher ID and display name")
         try:
             identity, _scope = effective_publisher(workspace)
-            if identity is None:
-                if not request.publisher or not request.publisher_display_name:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Configure a publisher identity before creating a pack",
-                    )
+            if identity is None and request.publisher:
                 identity = PublisherIdentity(
                     publisher=request.publisher,
                     publisher_display_name=request.publisher_display_name,
                 )
                 set_publisher(workspace, identity, scope="project", force=False)
-            elif request.publisher and (
-                identity.publisher != request.publisher
-                or identity.publisher_display_name != request.publisher_display_name
-            ):
+            elif identity and request.publisher and identity.publisher != request.publisher:
                 raise HTTPException(
                     status_code=409, detail="The configured publisher identity changed"
                 )
         except (PackError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         source_kind = "industry" if request.kind == "industry_pack" else "organization"
-
-        def initialize_with_cli() -> Path:
-            completed = subprocess.run(
-                [
-                    *_eforge_command(controller_settings(studio.settings)),
-                    "pack",
-                    "init",
-                    source_kind,
-                    request.name,
-                    "--version",
-                    request.version,
-                    "--project-root",
-                    str(workspace),
-                    "--json",
-                ],
-                cwd=workspace,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=180,
-            )
-            try:
-                result = json.loads(completed.stdout)
-            except json.JSONDecodeError:
-                result = {}
-            if completed.returncode != 0 or not result.get("created"):
-                raise ValueError(
-                    str(result.get("error") or completed.stderr[-1500:] or "Pack creation failed")
-                )
-            path = Path(result["pack"]["location"]) / "pack.yaml"
-            # This is the new CLI-created scaffold, before it has any consumers or locks.
-            manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
-            manifest["description"] = description
-            path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
-            return path
+        from evidenceforge.artifacts.lifecycle import create_new_draft
 
         try:
-            pack_path = await asyncio.to_thread(initialize_with_cli)
-        except (OSError, subprocess.TimeoutExpired, ValueError, yaml.YAMLError) as exc:
+            pack_path = await asyncio.to_thread(
+                create_new_draft,
+                source_kind,
+                request.name,
+                description=description,
+                display_name=request.display_name,
+                project_root=workspace,
+                publisher=identity.publisher if identity else None,
+                publisher_display_name=identity.publisher_display_name if identity else None,
+            )
+        except (EvidenceForgeError, OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         source = next(
             (found for found in discover_packs(workspace, source_kind) if found.path == pack_path),
@@ -2562,82 +2825,29 @@ def create_app(
             or item.workspace.resolve() != workspace.resolve()
         ):
             raise HTTPException(status_code=404, detail="Pack not found in this workspace")
-        if bool(request.publisher) != bool(request.publisher_display_name):
-            raise HTTPException(status_code=400, detail="Enter both publisher ID and display name")
-        try:
-            identity, _scope = effective_publisher(workspace)
-            if identity is None:
-                if not request.publisher or not request.publisher_display_name:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Configure a publisher identity before cloning a pack",
-                    )
-                identity = PublisherIdentity(
-                    publisher=request.publisher,
-                    publisher_display_name=request.publisher_display_name,
-                )
-                set_publisher(workspace, identity, scope="project", force=False)
-            elif request.publisher and (
-                identity.publisher != request.publisher
-                or identity.publisher_display_name != request.publisher_display_name
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="The configured publisher identity differs from this request",
-                )
-        except (PackError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from evidenceforge.artifacts.lifecycle import create_draft
 
-        def copy_with_cli() -> dict[str, Any]:
-            completed = subprocess.run(
-                [
-                    *_eforge_command(controller_settings(studio.settings)),
-                    "pack",
-                    "copy",
-                    str(item.path),
-                    "--name",
-                    request.name,
-                    "--version",
-                    request.version,
-                    "--project-root",
-                    str(workspace),
-                    "--json",
-                ],
-                cwd=workspace,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=180,
+        try:
+            pack_path = await asyncio.to_thread(
+                create_draft,
+                item.path,
+                project_root=workspace,
+                name=request.name,
+                display_name=request.display_name,
+                publisher=request.publisher,
             )
-            try:
-                result = json.loads(completed.stdout)
-            except json.JSONDecodeError:
-                result = {}
-            if completed.returncode != 0 or not result.get("copied"):
-                detail = result.get("error") or completed.stderr[-1500:] or "Pack copy failed"
-                raise ValueError(str(detail))
-            return result
-
-        try:
-            copied = await asyncio.to_thread(copy_with_cli)
-        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        pack_path = Path(copied["pack"]["location"]) / "pack.yaml"
-        source_kind = "industry" if item.kind == "industry_pack" else "organization"
-        source = next(
-            (found for found in discover_packs(workspace, source_kind) if found.path == pack_path),
-            None,
-        )
-        if source is None:
-            raise HTTPException(status_code=500, detail="Copied pack could not be indexed")
-        cloned = studio.store.upsert_item(workspace, item.kind, source)
-        if item.folder is not None:
+            await studio.scan()
+            cloned = next(
+                found for found in studio.store.items(workspace) if found.path == pack_path
+            )
             cloned.folder = item.folder
-        cloned.project_id = item.project_id
-        studio.store.save_item(cloned)
-        await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
-        await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
-        return cloned
+            cloned.project_id = item.project_id
+            studio.store.save_item(cloned)
+            await studio.emit(cloned.id, "item.updated", json.loads(cloned.model_dump_json()))
+            await studio.refresh_dependencies(studio.store.items(workspace, "scenario"))
+            return cloned
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/v1/folders")
     def folders(studio: StudioService = Depends(authorized)) -> list[str]:
@@ -3013,6 +3223,27 @@ def create_app(
             item = studio.store.item(request.item_id)
             if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
                 raise HTTPException(status_code=404, detail="Scenario or pack not found")
+            from evidenceforge.artifacts.lifecycle import _receipt_root, create_draft
+
+            if _receipt_root(item.path) is not None:
+                try:
+                    draft = await asyncio.to_thread(
+                        create_draft, item.path, project_root=item.workspace
+                    )
+                    await studio.scan()
+                    created = next(
+                        (
+                            entry
+                            for entry in studio.store.items(item.workspace)
+                            if entry.path == draft
+                        ),
+                        None,
+                    )
+                    if created is None:
+                        raise ValueError("new draft could not be indexed")
+                    request = request.model_copy(update={"item_id": created.id})
+                except (EvidenceForgeError, OSError, ValueError) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
         if request.project_id:
             if not request.draft_kind:
                 raise HTTPException(
@@ -3031,6 +3262,7 @@ def create_app(
             draft_kind=request.draft_kind,
             draft_project_id=request.project_id,
             draft_name=request.name.strip() if request.name else None,
+            draft_display_name=request.display_name,
         )
         if request.draft_kind == "scenario":
             conversation.draft_path = (
@@ -3365,6 +3597,11 @@ def create_app(
                     if conversation.draft_kind == "scenario" and conversation.draft_name
                     else ""
                 )
+                if conversation.draft_display_name:
+                    draft_name_context += (
+                        f"The optional display_name is {conversation.draft_display_name!r}; "
+                        "write it in the Schema 3 YAML, separately from name. "
+                    )
                 parameters: dict[str, Any] = {
                     "cwd": str(conversation.workspace),
                     "sandbox": "workspace-write",
@@ -3515,6 +3752,25 @@ def create_app(
             lambda: {job.id: _bundle_contents_size(job.output_root) for job in generations}
         )
 
+    @app.get("/v1/jobs/{job_id}/properties")
+    async def job_properties(
+        job_id: str, studio: StudioService = Depends(authorized)
+    ) -> BundleProperties:
+        payload = next(
+            (
+                job
+                for job in studio.store.job_payloads(studio.settings.workspace, "generation")
+                if job["id"] == job_id
+            ),
+            None,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Generation not found in this workspace")
+        try:
+            return await asyncio.to_thread(inspect_bundle_properties, Path(payload["output_root"]))
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.delete("/v1/jobs/{job_id}/history")
     async def remove_job_history(
         job_id: str, studio: StudioService = Depends(authorized)
@@ -3573,45 +3829,48 @@ def create_app(
     async def regenerate(
         job_id: str, studio: StudioService = Depends(authorized)
     ) -> dict[str, Any]:
-        previous = next((job for job in studio.jobs.load_generations() if job.id == job_id), None)
-        if previous is None or previous.workspace != studio.settings.workspace:
-            raise HTTPException(status_code=404, detail="Generation not found")
-        if previous.status not in {"stopped", "failed", "cancelled"}:
-            raise HTTPException(
-                status_code=409, detail="Only stopped generations can be regenerated"
+        async with studio.asset_lock:
+            previous = next(
+                (job for job in studio.jobs.load_generations() if job.id == job_id), None
             )
-        item = next(
-            (
-                item
-                for item in studio.store.items(studio.settings.workspace, "scenario")
-                if item.path.resolve() == previous.scenario.resolve()
-            ),
-            None,
-        )
-        if item is None or not item.path.is_file():
-            raise HTTPException(
-                status_code=409, detail="The source scenario is no longer available"
+            if previous is None or previous.workspace != studio.settings.workspace:
+                raise HTTPException(status_code=404, detail="Generation not found")
+            if previous.status not in {"stopped", "failed", "cancelled"}:
+                raise HTTPException(
+                    status_code=409, detail="Only stopped generations can be regenerated"
+                )
+            item = next(
+                (
+                    item
+                    for item in studio.store.items(studio.settings.workspace, "scenario")
+                    if item.path.resolve() == previous.scenario.resolve()
+                ),
+                None,
             )
-        if not (await studio.refresh_dependencies([item]))[item.id].ready:
-            raise HTTPException(
-                status_code=409,
-                detail="Resolve this scenario's dependency errors before regenerating",
-            )
-        try:
-            job = await asyncio.to_thread(
-                queue_studio_generation,
-                studio.jobs,
-                item.path,
-                studio.settings.workspace,
-                studio.settings,
-                previous.output_root.parent.parent,
-                studio.settings.checkpoint_hours,
-            )
-        except (OSError, ValueError, EvidenceForgeError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        summary = job_summary(json.loads(job.model_dump_json()))
-        await studio.emit(job.id, "job.created", summary)
-        return summary
+            if item is None or not item.path.is_file():
+                raise HTTPException(
+                    status_code=409, detail="The source scenario is no longer available"
+                )
+            if not (await studio.refresh_dependencies([item]))[item.id].ready:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Resolve this scenario's dependency errors before regenerating",
+                )
+            try:
+                job = await asyncio.to_thread(
+                    queue_studio_generation,
+                    studio.jobs,
+                    item.path,
+                    studio.settings.workspace,
+                    studio.settings,
+                    previous.output_root.parent.parent,
+                    studio.settings.checkpoint_hours,
+                )
+            except (OSError, ValueError, EvidenceForgeError) as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            summary = job_summary(json.loads(job.model_dump_json()))
+            await studio.emit(job.id, "job.created", summary)
+            return summary
 
     @app.delete("/v1/jobs/{job_id}/incomplete-bundle")
     async def delete_incomplete_bundle(
@@ -3895,6 +4154,16 @@ def create_app(
             raise HTTPException(status_code=404, detail="Bundle file not found")
         return FileResponse(path, filename=path.name)
 
+    @app.get("/v1/bundles/{bundle_id}/properties")
+    async def imported_properties(
+        bundle_id: str, studio: StudioService = Depends(authorized)
+    ) -> BundleProperties:
+        bundle = external_bundle(studio, bundle_id)
+        try:
+            return await asyncio.to_thread(inspect_bundle_properties, bundle.root)
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/v1/bundles/{bundle_id}/bundle.zip")
     async def export_imported_bundle(
         bundle_id: str, studio: StudioService = Depends(authorized)
@@ -3998,34 +4267,35 @@ def create_app(
     async def create_generation(
         request: GenerationRequest, studio: StudioService = Depends(authorized)
     ) -> dict[str, Any]:
-        item = studio.store.item(request.scenario_id)
-        if item is None or item.kind != "scenario":
-            raise HTTPException(status_code=404, detail="Scenario not found")
-        if item.workspace.resolve() != studio.settings.workspace.resolve():
-            raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
-        health = (await studio.refresh_dependencies([item]))[item.id]
-        if not health.ready:
-            raise HTTPException(
-                status_code=409,
-                detail="Resolve the scenario's missing or conflicting dependencies before generating",
-            )
-        try:
-            job = await asyncio.to_thread(
-                queue_studio_generation,
-                studio.jobs,
-                item.path,
-                studio.settings.workspace,
-                studio.settings,
-                request.output_parent,
-                request.checkpoint_hours
-                if request.checkpoint_hours is not None
-                else studio.settings.checkpoint_hours,
-            )
-        except (OSError, ValueError, EvidenceForgeError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        summary = job_summary(json.loads(job.model_dump_json()))
-        await studio.emit(job.id, "job.created", summary)
-        return summary
+        async with studio.asset_lock:
+            item = studio.store.item(request.scenario_id)
+            if item is None or item.kind != "scenario":
+                raise HTTPException(status_code=404, detail="Scenario not found")
+            if item.workspace.resolve() != studio.settings.workspace.resolve():
+                raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+            health = (await studio.refresh_dependencies([item]))[item.id]
+            if not health.ready:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Resolve the scenario's missing or conflicting dependencies before generating",
+                )
+            try:
+                job = await asyncio.to_thread(
+                    queue_studio_generation,
+                    studio.jobs,
+                    item.path,
+                    studio.settings.workspace,
+                    studio.settings,
+                    request.output_parent,
+                    request.checkpoint_hours
+                    if request.checkpoint_hours is not None
+                    else studio.settings.checkpoint_hours,
+                )
+            except (OSError, ValueError, EvidenceForgeError) as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            summary = job_summary(json.loads(job.model_dump_json()))
+            await studio.emit(job.id, "job.created", summary)
+            return summary
 
     @app.get("/v1/items/{item_id}/bundles/{generation_id}.zip")
     async def download_bundle(
@@ -4219,27 +4489,28 @@ def create_app(
     async def create_evaluation(
         request: EvaluationRequest, studio: StudioService = Depends(authorized)
     ) -> dict[str, Any]:
-        generation = next(
-            (
-                entry
-                for entry in studio.jobs.load_generations()
-                if entry.id == request.generation_id
-            ),
-            None,
-        )
-        if (
-            generation is None
-            or generation.workspace != studio.settings.workspace
-            or generation.status != "completed"
-        ):
-            raise HTTPException(status_code=400, detail="Choose a completed generation")
-        try:
-            job = queue_studio_evaluation(studio.jobs, generation, studio.settings)
-        except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        summary = job_summary(json.loads(job.model_dump_json()))
-        await studio.emit(job.id, "job.created", summary)
-        return summary
+        async with studio.asset_lock:
+            generation = next(
+                (
+                    entry
+                    for entry in studio.jobs.load_generations()
+                    if entry.id == request.generation_id
+                ),
+                None,
+            )
+            if (
+                generation is None
+                or generation.workspace != studio.settings.workspace
+                or generation.status != "completed"
+            ):
+                raise HTTPException(status_code=400, detail="Choose a completed generation")
+            try:
+                job = queue_studio_evaluation(studio.jobs, generation, studio.settings)
+            except ValueError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            summary = job_summary(json.loads(job.model_dump_json()))
+            await studio.emit(job.id, "job.created", summary)
+            return summary
 
     @app.post("/v1/jobs/{job_id}/suspend")
     async def suspend(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, str]:

@@ -7,7 +7,7 @@ import { PackWorkflow } from "../src/PackWorkflow";
 import type { CatalogItem, StudioApi } from "../src/api";
 
 const item = { id: "pack", name: "office", version: "1.0.0", kind: "organization_pack", source_sha256: "source", pack_source: "workspace" } as CatalogItem;
-const removable = { reference: "training:organization:office@1.0.0", revision: "a".repeat(64), files: 9, bytes: 900, removable: true, consumers: [], problems: [] };
+const removable = { reference: "training:organization:office@1.0.0", revision: "a".repeat(64), files: 9, bytes: 900, removable: true, consumers: [], affected: [], problems: [] };
 afterEach(cleanup);
 
 for (const kind of ["industry_pack", "organization_pack"] as const) {
@@ -37,25 +37,29 @@ test("invalid packs keep export disabled and prepare a repair without sending a 
 });
 
 test("deletion requires a reviewed exact version and only runs after confirmation", async () => {
-  const request = vi.fn(async (_path: string, method?: string) => method === "POST" ? { recovery_path: "/workspace/.eforge/deleted-packs/recovery" } : removable);
+  const request = vi.fn(async (_path: string, method?: string) => method === "POST" ? { deleted_path: "/workspace/.eforge/packs/training/organization/office/1.0.0" } : removable);
   const onDeleted = vi.fn(async () => undefined);
   render(<DeletePackDialog item={item} api={{ request } as unknown as StudioApi} onClose={vi.fn()} onDeleted={onDeleted} />);
   await screen.findByText(removable.reference);
   expect(request).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/Codex histories/)).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Delete version" }));
-  await waitFor(() => expect(onDeleted).toHaveBeenCalledWith({ recovery_path: "/workspace/.eforge/deleted-packs/recovery" }));
-  expect(request).toHaveBeenCalledWith("/v1/packs/pack/delete", "POST", { revision: removable.revision });
+  await waitFor(() => expect(onDeleted).toHaveBeenCalledWith({ deleted_path: "/workspace/.eforge/packs/training/organization/office/1.0.0" }));
+  expect(request).toHaveBeenCalledWith("/v1/packs/pack/delete", "POST", { revision: removable.revision, accept_dependents: false });
 });
 
-test("used packs show consumers and block deletion; refreshed reviews can clear them", async () => {
-  const request = vi.fn().mockResolvedValueOnce({ ...removable, removable: false, consumers: ["Scenario: training"] }).mockResolvedValue(removable);
-  render(<DeletePackDialog item={item} api={{ request } as unknown as StudioApi} onClose={vi.fn()} onDeleted={vi.fn()} />);
-  await screen.findByText("Scenario: training");
-  expect(screen.getByRole("button", { name: "Delete version" })).toBeDisabled();
-  await userEvent.click(screen.getByRole("button", { name: "Refresh review" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Delete version" })).toBeEnabled());
-  expect(screen.queryByText("Scenario: training")).not.toBeInTheDocument();
+test("used packs show a collapsed warning and permit explicitly confirmed deletion", async () => {
+  const affected = [{ kind: "scenario" as const, name: "Training", version: "1.0.0", publisher: "", path: "/training", frozen: false }];
+  const request = vi.fn(async (_path: string, method?: string) => method === "POST" ? { deleted_path: "/office" } : { ...removable, consumers: ["Scenario: Training"], affected });
+  render(<DeletePackDialog item={item} api={{ request } as unknown as StudioApi} onClose={vi.fn()} onDeleted={vi.fn(async () => undefined)} />);
+  await screen.findByText("Affected items (1)");
+  expect(document.querySelector("details.affected-items")).not.toHaveAttribute("open");
+  expect(screen.getByRole("button", { name: "Delete version" })).toBeEnabled();
+  expect(screen.getByText(/This cannot be undone/)).toBeVisible();
+  await userEvent.click(screen.getByText("Affected items (1)"));
+  expect(screen.getByText("Training")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Delete version" }));
+  expect(request).toHaveBeenLastCalledWith("/v1/packs/pack/delete", "POST", { revision: removable.revision, accept_dependents: true });
 });
 
 test("stale review rejection requires a new review before retry", async () => {

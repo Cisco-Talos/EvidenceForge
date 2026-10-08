@@ -9,6 +9,7 @@ import re
 from ipaddress import ip_address
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal, get_args, get_origin
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -22,8 +23,10 @@ from pydantic import (
 )
 
 from evidenceforge.models.scenario import BaselineActivity, Environment, Persona, Scenario
+from evidenceforge.naming import PACK_NAME_PATTERN, DisplayName
+from evidenceforge.schema import ParentReference
 
-PackSource = Literal["package", "project", "path"]
+PackSource = Literal["package", "project", "path", "draft"]
 PackType = Literal["industry", "organization"]
 
 PACK_SCHEMA_VERSION = "2.0"
@@ -270,20 +273,35 @@ class PackReference(BaseModel):
     """An exact, persisted reference to one whole pack."""
 
     source: PackSource
-    publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
-    version: str = Field(pattern=SEMVER_PATTERN)
+    publisher: str | None = Field(default=None, pattern=PUBLISHER_ID_PATTERN)
+    name: str = Field(pattern=PACK_NAME_PATTERN)
+    version: str | None = Field(default=None, pattern=SEMVER_PATTERN)
     path: str | None = None
+    draft_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_source_path(self) -> PackReference:
         """Require a path only for explicit path references."""
 
-        if self.source == "path" and not self.path:
+        if self.source in {"path", "draft"} and not self.path:
             raise ValueError("path pack reference requires 'path'")
-        if self.source != "path" and self.path is not None:
+        if self.source not in {"path", "draft"} and self.path is not None:
             raise ValueError("only source: path may define 'path'")
+        if self.source == "draft":
+            if self.draft_id is None or self.publisher is not None or self.version is not None:
+                raise ValueError("draft references require draft_id and omit publisher/version")
+        elif self.publisher is None or self.version is None or self.draft_id is not None:
+            raise ValueError(
+                "release references require publisher and exact version, without draft_id"
+            )
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_reference(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.draft_id is None:
+            data.pop("draft_id", None)
+        return data
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -294,19 +312,42 @@ class IndustryDependency(BaseModel):
     source: PackSource
     publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
     type: Literal["industry"] = "industry"
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(pattern=PACK_NAME_PATTERN)
     version_constraint: str = Field(
         pattern=r"^(?:[<>=]{1,2}\d+\.\d+\.\d+)(?:\s*,\s*[<>=]{1,2}\d+\.\d+\.\d+)*$",
     )
     path: str | None = None
+    draft_id: UUID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def adapt_draft(cls, value: Any) -> Any:
+        if isinstance(value, dict) and value.get("source") == "draft":
+            if value.get("publisher") is not None or value.get("version_constraint") is not None:
+                raise ValueError(
+                    "draft dependencies use draft_id, without publisher or release constraint"
+                )
+            draft_id = UUID(str(value.get("draft_id")))
+            return {**value, "publisher": f"draft-{draft_id}", "version_constraint": "==0.0.0"}
+        return value
+
+    @model_serializer(mode="wrap")
+    def serialize_dependency(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.source == "draft":
+            data.pop("publisher", None)
+            data.pop("version_constraint", None)
+        else:
+            data.pop("draft_id", None)
+        return data
 
     @model_validator(mode="after")
     def validate_source_path(self) -> IndustryDependency:
         """Require a path only for an explicit path dependency."""
 
-        if self.source == "path" and not self.path:
+        if self.source in {"path", "draft"} and not self.path:
             raise ValueError("path pack dependency requires 'path'")
-        if self.source != "path" and self.path is not None:
+        if self.source not in {"path", "draft"} and self.path is not None:
             raise ValueError("only source: path may define 'path'")
         return self
 
@@ -318,18 +359,36 @@ class LockedPack(BaseModel):
 
     publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
     type: PackType
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(pattern=PACK_NAME_PATTERN)
     version: str = Field(pattern=SEMVER_PATTERN)
     digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class LockedDraftPack(BaseModel):
+    """An exact draft snapshot lock; it has no public publisher or release label."""
+
+    draft_id: UUID
+    type: PackType
+    name: str = Field(pattern=PACK_NAME_PATTERN)
+    digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @property
+    def publisher(self) -> str:
+        return f"draft-{self.draft_id}"
+
+    @property
+    def version(self) -> str:
+        return "0.0.0"
+
+
 class PackLock(BaseModel):
     """Deterministic resolved dependencies for one pack release."""
 
-    lock_schema_version: Literal["1.0"] = "1.0"
-    dependencies: list[LockedPack] = Field(default_factory=list)
+    lock_schema_version: Literal["1.0", "2.0"] = "1.0"
+    dependencies: list[LockedPack | LockedDraftPack] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_unique_dependencies(self) -> PackLock:
@@ -339,6 +398,10 @@ class PackLock(BaseModel):
         ]
         if len(identities) != len(set(identities)):
             raise ValueError("dependencies contains duplicate dependency identities")
+        if self.lock_schema_version == "1.0" and any(
+            isinstance(item, LockedDraftPack) for item in self.dependencies
+        ):
+            raise ValueError("draft dependency locks require lock_schema_version: '2.0'")
         return self
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -369,16 +432,60 @@ class CompositionSpec(BaseModel):
 class PackManifest(BaseModel):
     """Stable manifest shared by industry and organization packs."""
 
-    pack_schema_version: Literal["2.0"]
+    pack_schema_version: Literal["2.0", "3.0"]
     type: PackType
     publisher: str = Field(pattern=PUBLISHER_ID_PATTERN)
     publisher_display_name: str = Field(min_length=1, max_length=120)
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(pattern=PACK_NAME_PATTERN)
     version: str = Field(pattern=SEMVER_PATTERN)
     requires_evidenceforge: str = Field(default=">=2.0.0,<3.0.0")
     description: str
+    display_name: DisplayName | None = None
     industry_dependencies: list[IndustryDependency] = Field(default_factory=list)
     provenance: dict[str, Any] | None = None
+    status: Literal["draft", "published"] | None = None
+    draft_id: UUID | None = None
+    parents: list[ParentReference] | None = None
+    release_notes: str | None = None
+    configuration_context: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_envelope(cls, value: Any) -> Any:
+        """Adapt isolated draft namespaces for existing catalog models, never for publication."""
+        from evidenceforge.schema import identify_document
+
+        if not isinstance(value, dict):
+            return value
+        from evidenceforge.models.exceptions import SchemaValidationError
+
+        try:
+            contract = identify_document(value)
+        except SchemaValidationError as exc:
+            raise ValueError(f"pack_schema_version envelope: {exc}") from exc
+        if contract.schema_version != "3.0" and "display_name" in value:
+            raise ValueError("display_name requires pack schema 3; create an upgraded draft")
+        if contract.lifecycle is not None and contract.lifecycle.status == "draft":
+            value = dict(value)
+            value["publisher"] = f"draft-{contract.lifecycle.draft_id}"
+            value["publisher_display_name"] = "Local draft"
+            value["version"] = "0.0.0"  # Internal adapter only; drafts never reserve this label.
+        return value
+
+    @model_serializer(mode="wrap")
+    def serialize_legacy(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.pack_schema_version == "2.0":
+            for key in (
+                "status",
+                "draft_id",
+                "parents",
+                "release_notes",
+                "configuration_context",
+                "display_name",
+            ):
+                data.pop(key, None)
+        return data
 
     @model_validator(mode="after")
     def validate_dependency_ownership(self) -> PackManifest:
@@ -1340,7 +1447,7 @@ class CompiledScenario(BaseModel):
     selected_packs: tuple[SelectedPack, ...] = ()
     provenance: dict[str, Any] = Field(default_factory=dict)
     digests: dict[str, str] = Field(default_factory=dict)
-    authored_kind: Literal["scenario-1.0", "scenario-2.0", "resolved"]
+    authored_kind: Literal["scenario-1.0", "scenario-2.0", "scenario-3.0", "resolved"]
     diagnostic_field_origins: dict[str, Path] = Field(
         default_factory=dict,
         exclude=True,

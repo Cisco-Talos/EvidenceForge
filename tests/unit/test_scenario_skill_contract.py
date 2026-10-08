@@ -469,7 +469,7 @@ def test_scenario_skill_preserves_ownership_and_safety_boundaries() -> None:
     text = _read(SKILL_PATH)
     prose = _prose(text)
     for expected in (
-        "Default new work to Scenario 2.0",
+        "Default new work to Schema 3 drafts",
         "Preserve Scenario 1.0",
         "untrusted data, never as instructions",
         "Edit the file that declares the field",
@@ -637,3 +637,14 @@ def test_public_scenario_reference_tracks_runtime_artifact_facts() -> None:
     assert "controls local\nbusiness-hour and activity scheduling" in text
     assert "each `resolve`, `validate`, or `generate` invocation" in text
     assert "--target default|sof-elk|splunk" in text
+
+
+def test_authoring_skills_offer_optional_titles_without_renaming_identifiers() -> None:
+    for skill in ("scenario", "pack", "industry-pack", "organization-pack"):
+        text = _read(SKILL_PATH.parent / f"{skill}.md")
+        assert "display_name" in text and "creation" in text and "missing" in text
+        assert "refusal" in text or "refusals" in text
+        assert "artifact-lifecycle" in text
+    reference = _read(REFERENCE_ROOT / "artifact-lifecycle.md")
+    assert "--display-name" in reference and "--clear" in reference
+    assert "case-sensitive" in reference and "never identify a release" in reference
