@@ -254,3 +254,17 @@ redundant wording to 150 lines without removing guidance or weakening the gate. 
 code remain unchanged during integration. All 76 focused dispatcher and installer contracts pass
 after the correction; generated local skill conversions were refreshed. The complete work is
 tracked in [PR #441](https://github.com/Cisco-Talos/EvidenceForge/pull/441), targeting `dev`.
+
+The first complete CI run passed lint, Windows checkpoint durability, macOS Studio (including
+native packaging/resource verification), and macOS state recovery. Linux finished with 11,833
+passes and 70 skips, failing only the corrected dispatcher-length gate. Windows finished with
+11,866 passes and 33 skips; besides that gate, four deletion tests expose a shared-file-service
+bug: the writer stores `str(relative_path)` with backslashes, while the portable receipt reader
+rejects backslashes. Deleted-release version reservations and interrupted index reconciliation
+therefore disappear on Windows. These are valid tests and must not be weakened or skipped.
+
+Prepared a one-line `.as_posix()` writer correction and a cross-platform regression outside the
+repository at `/private/tmp/eforge-windows-deletion-fix.patch`. The regression fails on the current
+code and passes against a temporary copy with the proposed correction. Production files remain
+unchanged during integration. Applying the fix and merging await user approval because the user
+explicitly excluded EvidenceForge/Studio fixes from this integration scope.
