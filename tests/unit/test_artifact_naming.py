@@ -145,10 +145,11 @@ def test_title_edit_preserves_includes_comments_and_permissions(project: Path) -
     owner = draft.parent / "title.yaml"
     owner.write_text("# keep title\ndisplay_name: Old # keep comment\n")
     owner.chmod(0o640)
+    original_mode = owner.stat().st_mode & 0o777
     set_display_name(draft, "New Title")
     assert "# keep title" in owner.read_text() and "# keep comment" in owner.read_text()
     assert "# keep root" in draft.read_text()
-    assert owner.stat().st_mode & 0o777 == 0o640
+    assert owner.stat().st_mode & 0o777 == original_mode
     assert inspect_artifact(draft)["display_name"] == "New Title"
 
 

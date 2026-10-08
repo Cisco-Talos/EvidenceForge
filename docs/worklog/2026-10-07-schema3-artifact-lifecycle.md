@@ -242,3 +242,8 @@ behavior declarations, frontend production build and all 287 frontend tests. The
 suite is running with native socket/process access; GitHub's Linux/Windows engine gates and
 macOS Studio/state-recovery gates will also run on the PR. Prior isolated native UI and packaged
 CLI acceptance is recorded above and in the Properties worklog. No user data is part of the PR.
+
+Integration review found a platform-specific test assumption: the include-title permissions test
+asserted a literal Unix permission mode. It now captures the filesystem's actual mode before
+editing and requires that exact mode afterward, preserving the assertion on Windows as well.
+Only the test changed; file-editing behavior is unchanged.
