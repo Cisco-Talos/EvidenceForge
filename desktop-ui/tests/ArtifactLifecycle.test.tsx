@@ -160,4 +160,3 @@ for (const kind of ["scenario", "industry_pack", "organization_pack"] as const) 
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/workspace/release/source/pack.yaml"));
   });
 }
-
