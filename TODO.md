@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a1 preparation on dev; next stable release targets 2.2.0
+**Status:** 2.2.0a1 published from dev; next stable release targets 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-09
 
@@ -92,9 +92,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
   sources separately from their dedicated renderer/parser/validator fixture coverage.
 
-- Prepare the `2.2.0a1` preview from `dev`, with automatic macOS DMG delivery, then target
-  `2.2.0` for the next stable `dev` → `main` release. Retain routine, coverage, slow,
-  checkpoint portability and applicable native acceptance gates. See the
+- Published the `2.2.0a1` preview from `dev` with automatic macOS DMG delivery and passing
+  routine, coverage, slow, checkpoint portability and native macOS gates. Target `2.2.0`
+  for the next stable `dev` → `main` release. Downloaded-installer smoke testing remains with
+  the user; clean-machine acceptance remains open. See the
   [release installer worklog](docs/worklog/2026-10-09-release-installers.md) and
   [release instructions](docs/releases.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
@@ -510,7 +511,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   deferred until future platform exploration. See the
   [isolation worklog](docs/worklog/2026-10-06-studio-user-isolation.md).
 
-- [ ] **P1 — public Studio release gate:** Version Studio-owned SQL/JSON settings and filesystem
+- [x] **P1 — public Studio release gate:** Version Studio-owned SQL/JSON settings and filesystem
   layouts; require verified backups, interrupted-upgrade recovery, pre-use restoration and
   native crash/fault gates on macOS, the only currently supported GUI platform. Linux and Windows
   GUI support and native acceptance are deferred by the October 6 user decision. Engine-owned
@@ -518,7 +519,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   Implementation and macOS evidence are tracked in the
   [upgrade worklog](docs/worklog/2026-10-05-studio-state-upgrades.md); see
   [contracts and test traceability](docs/studio-state-upgrades.md). Require the macOS native GUI
-  gates and existing engine/CLI and release checks before closing this release gate.
+  gates and existing engine/CLI and release checks before closing this release gate. These
+  checks passed for `v2.2.0a1`; see the
+  [release installer worklog](docs/worklog/2026-10-09-release-installers.md).
 
 - [ ] Automate clean-room scenario-agent acceptance after the 2.0 release, measuring first-draft
   structural validity, passes to zero errors, required-reference loading, warning churn, and

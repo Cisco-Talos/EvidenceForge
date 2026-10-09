@@ -148,9 +148,38 @@ cross-account and public Studio acceptance items in TODO.md remain independent r
 - Committed preparation as `34cfac9a`, pushed dev and annotated `v2.2.0a1` on that exact commit.
   Initial run: https://github.com/Cisco-Talos/EvidenceForge/actions/runs/37946950657.
 - The Linux coverage job exhausted its inherited 25-minute routine budget at 77% of 11,945
-  selected tests. Its log reports no failed tests before cancellation. Native macOS Studio,
-  state recovery/crash gates, lint and portability passed; other engine/slow jobs continue.
+  selected tests. Its log reports no failed tests before cancellation. Every other test gate
+  ultimately passed; installer and publication jobs were skipped.
 - Increase only instrumented Linux release coverage to 60 minutes. Add a manual recovery entry
   point using updated workflow definitions while every gate/build/publisher checks out the exact
   validated existing annotated prerelease tag. No application source, product version, immutable
   alpha tag or main change is needed. The recovery repeats all release gates before publication.
+- Recovery definition committed/pushed as `99a0b5e1`; actionlint, full Ruff checks and all 50
+  focused release/version/workflow tests passed. Dispatched `release.yml` on dev with
+  `tag=v2.2.0a1`: https://github.com/Cisco-Talos/EvidenceForge/actions/runs/37951318686.
+  Its version guard passed. The original run finished with every other test gate passing and
+  installer/publication jobs skipped. Remote main remains `fca9666f`; the annotated alpha tag
+  still points to `34cfac9a`.
+- Recovery test gates all passed. Linux routine coverage: 11,875 passed, 70 skipped,
+  2,031 deselected, 74.34% coverage against the required 70%; instrumented runtime was 38m33s.
+  Windows routine: 11,912 passed, 33 skipped, 2,031 deselected. The four slow shards total
+  1,940 passed and five skipped, without coverage. Version, lint, Python checkpoint portability,
+  Windows checkpoint durability, macOS state recovery/crash and native Studio gates also passed.
+  Native Studio includes frontend/service/shell checks, app construction and all isolated
+  packaged-runtime verification checks. The release installer build follows these gates.
+
+## Published alpha
+
+- Recovery run `37951318686` completed successfully, including the release DMG build,
+  packaged-runtime verification, disk-image integrity/checksum checks and GitHub publisher.
+  Published https://github.com/Cisco-Talos/EvidenceForge/releases/tag/v2.2.0a1 at
+  `2026-10-09T16:15:33Z`; it is a public prerelease, not a draft. Latest stable remains `v2.1.2`.
+- Published installer: `EvidenceForge-Studio-2.2.0a1-aarch64.dmg`, 37,689,721 bytes, SHA256
+  `4981a884ba1d2bdb7fb5104fa50659dcc3073976bdc185e794b54c107527577a`, with its 107-byte
+  `.dmg.sha256` companion. The publisher downloaded both uploaded assets and compared their
+  bytes with the verified build before publishing. CI build bytes differ from the earlier local DMG.
+- The immutable annotated alpha tag still resolves to source `34cfac9a`; recovery workflow
+  definitions came from `99a0b5e1`. Remote main remains `fca9666f`, with no merge to main.
+- Reconcile the roadmap with alpha publication and passing public Studio state/native gates.
+  The user will perform the downloaded-installer smoke test. Separate-account and clean-machine
+  acceptance remain open; this publication does not claim either was completed.
