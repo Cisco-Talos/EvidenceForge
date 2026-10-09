@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated prerelease tag to validate, build and publish
+        required: true
+        type: string
   pull_request:
     branches: [main]
   push:
@@ -11,8 +17,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
+
+env:
+  RELEASE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}
+  RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
 jobs:
   validate-release-version:
@@ -29,6 +39,7 @@ jobs:
       - name: Checkout release snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag || github.sha }}
           fetch-depth: 0
           fetch-tags: true
       - name: Install uv
@@ -41,23 +52,28 @@ jobs:
         run: uv sync --frozen
       - name: Validate release entry and version
         id: plan
-        run: uv run --no-sync python -m scripts.release_pipeline prepare
+        run: >-
+          env GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"
+          uv run --no-sync python -m scripts.release_pipeline prepare
 
   release-ci:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: validate-release-version
     uses: ./.github/workflows/ci.yml
     with:
       release-coverage: true
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   release-slow:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: validate-release-version
     uses: ./.github/workflows/release-slow.yml
+    with:
+      source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   build-installers:
     name: Release installer (${{ matrix.platform }})
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: [validate-release-version, release-ci, release-slow]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -105,7 +121,7 @@ jobs:
       - name: Verify DMG and checksum
         run: |
           hdiutil verify "dist/macos/$DMG_NAME"
-          uv run --no-sync python -m scripts.release_pipeline verify-assets --directory dist/macos
+          env GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF" uv run --no-sync python -m scripts.release_pipeline verify-assets --directory dist/macos
       - name: Upload verified installer artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -119,7 +135,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: [validate-release-version, release-ci, release-slow, build-installers]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -148,4 +164,6 @@ jobs:
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
           --pattern 'release-installer-*' --dir dist/release
       - name: Publish complete release or resume its draft
-        run: uv run --no-sync python -m scripts.release_pipeline publish --directory dist/release
+        run: >-
+          env GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"
+          uv run --no-sync python -m scripts.release_pipeline publish --directory dist/release

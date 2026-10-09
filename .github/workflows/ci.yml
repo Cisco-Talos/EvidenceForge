@@ -3,6 +3,9 @@ name: CI
 on:
   workflow_call:
     inputs:
+      source-ref:
+        type: string
+        default: ""
       release-coverage:
         type: boolean
         default: false
@@ -28,6 +31,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.source-ref || github.sha }}
           fetch-depth: 0
 
       - name: Install uv
@@ -50,7 +54,7 @@ jobs:
       - name: Validate generation behavior declaration
         run: >-
           uv run python scripts/check_generation_behavior.py
-          --base-ref "${{ github.event.pull_request.base.sha || (github.ref_type == 'tag' && 'HEAD^') || github.event.before }}"
+          --base-ref "${{ github.event.pull_request.base.sha || (inputs.source-ref && 'HEAD^') || (github.ref_type == 'tag' && 'HEAD^') || github.event.before }}"
 
   tests:
     name: Tests (${{ matrix.os }}, Python 3.12)
@@ -63,7 +67,7 @@ jobs:
             timeout_minutes: 25
           - os: windows-latest
             timeout_minutes: 45
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: ${{ inputs.release-coverage && matrix.os == 'ubuntu-latest' && 60 || matrix.timeout_minutes }}
 
     steps:
       - name: Preserve repository bytes on Windows
@@ -72,6 +76,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -110,6 +116,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -197,6 +205,8 @@ jobs:
       - name: Preserve frozen fixture bytes
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -220,6 +230,8 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0

@@ -301,6 +301,7 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     workflow = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
     triggers = workflow[True]  # PyYAML treats YAML 1.1 'on' as a boolean.
     assert triggers["push"] == {"branches": ["main"], "tags": ["v*"]}
+    assert triggers["workflow_dispatch"]["inputs"]["tag"]["required"] is True
     jobs = workflow["jobs"]
     assert jobs["publish-release"]["needs"] == [
         "validate-release-version",
@@ -309,6 +310,22 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
         "build-installers",
     ]
     assert jobs["release-ci"]["with"]["release-coverage"] is True
+    source = "${{ needs.validate-release-version.outputs.sha }}"
+    for job in ("release-ci", "release-slow"):
+        assert jobs[job]["with"]["source-ref"] == source
+        assert jobs[job]["if"] == "github.event_name != 'pull_request'"
+    assert jobs["validate-release-version"]["steps"][0]["with"]["ref"] == (
+        "${{ inputs.tag || github.sha }}"
+    )
+    for path in ("ci.yml", "release-slow.yml"):
+        called = yaml.safe_load((root / ".github/workflows" / path).read_text())
+        for job in called["jobs"].values():
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    assert step["with"]["ref"] == "${{ inputs.source-ref || github.sha }}"
+    for job in ("validate-release-version", "build-installers", "publish-release"):
+        commands = "\n".join(step.get("run", "") for step in jobs[job]["steps"])
+        assert 'GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"' in commands
     for job in ("build-installers", "publish-release"):
         assert (
             jobs[job]["steps"][0]["with"]["ref"]

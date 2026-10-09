@@ -142,3 +142,15 @@ cross-account and public Studio acceptance items in TODO.md remain independent r
   release-pipeline/version tests pass; workflow contracts are checked separately. Full routine,
   coverage, slow, checkpoint portability and native macOS gates run on the tagged snapshot
   before automatic publication. The final downloaded-installer smoke test belongs to the user.
+
+## Coverage timeout recovery
+
+- Committed preparation as `34cfac9a`, pushed dev and annotated `v2.2.0a1` on that exact commit.
+  Initial run: https://github.com/Cisco-Talos/EvidenceForge/actions/runs/37946950657.
+- The Linux coverage job exhausted its inherited 25-minute routine budget at 77% of 11,945
+  selected tests. Its log reports no failed tests before cancellation. Native macOS Studio,
+  state recovery/crash gates, lint and portability passed; other engine/slow jobs continue.
+- Increase only instrumented Linux release coverage to 60 minutes. Add a manual recovery entry
+  point using updated workflow definitions while every gate/build/publisher checks out the exact
+  validated existing annotated prerelease tag. No application source, product version, immutable
+  alpha tag or main change is needed. The recovery repeats all release gates before publication.

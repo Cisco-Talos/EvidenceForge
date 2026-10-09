@@ -74,6 +74,19 @@ artifacts have expired, recovery requires maintainer inspection rather than auto
 After successful publication, a rerun verifies the existing assets and leaves the release unchanged.
 Historical releases without the pipeline's commit marker require maintainer inspection.
 
+If a failure before asset upload requires a workflow correction, commit that correction on dev.
+The manual recovery entry point uses the updated workflow while checking out the existing
+annotated prerelease tag for every test, installer build and publication step:
+
+```sh
+gh workflow run release.yml --ref dev -f tag=v2.2.0a1
+```
+
+This repeats every release gate and retains the tag's original source commit. It does not move
+the tag or merge main. Instrumented Linux release coverage has a 60-minute job budget; routine
+Linux checks retain their 25-minute budget. Prefer the original run's failed-job retry when a
+draft already contains assets, since rebuilding can change installer bytes.
+
 The build job uses a platform matrix. Future Linux/Windows support should add native build and
 verification entries, versioned installer names and explicit required-asset validation. All enabled
 platforms must succeed before the shared publication job exposes a release. Keep routine PR CI's

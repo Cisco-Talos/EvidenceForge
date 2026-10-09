@@ -217,7 +217,10 @@ or replace published binaries. If publication fails, rerun **failed jobs** in th
 run to reuse the verified build. A partial draft is retained and matching assets are reused;
 differing draft assets fail rather than being overwritten. If a published version needs a change,
 use the next prerelease number or correct stable SemVer bump. Existing historical releases not
-created by this pipeline are not adopted automatically. See [release instructions](docs/releases.md).
+created by this pipeline are not adopted automatically. If a failure before asset upload requires
+a workflow correction, the manual recovery entry point can use the corrected dev workflow against
+the existing annotated prerelease tag. Every gate, build and publisher checks out its validated
+original commit; tags remain immutable. See [release instructions](docs/releases.md).
 The normal stable-release trigger calls the build/publish jobs directly: tags pushed with
 `GITHUB_TOKEN` do not start a second workflow. Linux/Windows packaging can later add build-matrix
 entries and explicit required-asset validation; only macOS Apple Silicon delivery is enabled now.
