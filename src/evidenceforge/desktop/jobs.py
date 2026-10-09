@@ -15,6 +15,7 @@ import psutil
 
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
 from evidenceforge.studio.runtime import command_environment, runtime_root
+from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 _detached_processes: list[subprocess.Popen[bytes]] = []
 
@@ -47,6 +48,7 @@ def _start_process(command: list[str], *, cwd: Path, log_file: Path) -> tuple[in
             stderr=subprocess.STDOUT,
             start_new_session=True,
             env=command_environment(),
+            pass_fds=runtime_worker_fds(),
         )
     _detached_processes[:] = [running for running in _detached_processes if running.poll() is None]
     _detached_processes.append(process)

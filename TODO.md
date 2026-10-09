@@ -55,6 +55,14 @@ authoritative resolved scenarios, run manifests, sample packs, and pack/resolve 
 workflows. See the
 [scenario composition worklog](docs/worklog/2026-08-14-scenario-pack-composition.md).
 
+**Schema 3 and authored releases.** Shared file services now support independent drafts,
+immutable scenario/pack publication, frozen dependencies/configuration, exact lineage, notes,
+linked upgrades and portable archives through CLI, native skills and Studio. See the
+[artifact lifecycle worklog](docs/worklog/2026-10-07-schema3-artifact-lifecycle.md).
+Studio Properties now consolidates draft metadata, notes history and exact validation provenance;
+bundle details summarize generated data. See the
+[Properties worklog](docs/worklog/2026-10-08-studio-properties.md).
+
 ---
 
 ## Quality Roadmap
@@ -517,8 +525,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Complete the seven Studio workflow stages after accepted core parity. Find/resume has
   project-aware lists, saved views, contextual search, and a command menu. Environment inspection
   and exact pack choices are available; optional portable project/scenario overlay contexts are
-  implemented. Guided editing, complete effective-value origins, isolated authoring revisions,
-  deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
+  implemented. Pack creation/editing/import/export and reviewed exact-version deletion are part
+  of Stage 2; see the [pack lifecycle review](docs/worklog/2026-10-06-studio-pack-lifecycle.md).
+  Broader guided editing, complete effective-value origins, isolated scenario **and pack** authoring
+  revisions, deeper preflight, resource-aware scheduling, evaluation comparisons, and delivery presets remain. Review each stage with the user before advancing. See the
   [Studio rebuild worklog](docs/worklog/2026-09-30-studio-rebuild.md).
   All CLI/skill changes must preserve traditional command-line and native-harness workflows.
   New configuration scopes must be optional, file-based, independently usable without Studio,
@@ -532,6 +542,8 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   See the [standalone worklog](docs/worklog/2026-10-03-studio-standalone-macos.md) and
   [installation instructions](docs/studio-standalone-macos.md); the
   [Studio handoff](docs/worklog/2026-10-02-studio-handoff.md) retains workflow-stage decisions.
+  Automatic runtime retention, configurable rollback days, and visible uncertain-removal warnings
+  are implemented; see the [runtime cleanup worklog](docs/worklog/2026-10-06-studio-runtime-cleanup.md).
 - [x] Add Studio scenario YAML import with dependency review, nested includes and supporting
   assets, optional advisory validation, and persistent missing-pack findings. Add pack-panel
   import/export with exact versions, selectable reviewed packs, and locked dependency closure;

@@ -83,7 +83,7 @@ _FINANCE = Path("tests/fixtures/scenarios/finance-industry-pack.yaml")
 _NORTHSTAR = Path("tests/fixtures/scenarios/northstar-health-pack.yaml")
 _NORTHSTAR_LINUX = Path("tests/fixtures/scenarios/northstar-health-linux-pack.yaml")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ITERATION_ARCHIVE = _PROJECT_ROOT / "scenarios/iteration-test-1_0/scenario.yaml"
+_ITERATION_ARCHIVE = _PROJECT_ROOT / "tests/fixtures/scenarios/iteration-test-1_0/scenario.yaml"
 _ITERATION_PACKED = _PROJECT_ROOT / "scenarios/iteration-test/scenario.yaml"
 
 

@@ -36,6 +36,7 @@ from .models import (
     BaselineActivityFragment,
     DestinationCatalogDocument,
     EnvironmentFragment,
+    LockedDraftPack,
     LockedPack,
     PackLock,
     PackManifest,
@@ -158,12 +159,14 @@ class LoadedPack:
             f"{self.source}:{self.manifest.publisher}:{self.manifest.type}:"
             f"{self.manifest.name}@{self.manifest.version}"
         )
+        if self.source == "draft":
+            location = f"draft:{self.manifest.type}:{self.manifest.name}@{self.manifest.draft_id}"
         return SelectedPack(
             source=self.source,
-            publisher=self.manifest.publisher,
+            publisher="" if self.source == "draft" else self.manifest.publisher,
             type=self.manifest.type,
             name=self.manifest.name,
-            version=self.manifest.version,
+            version="" if self.source == "draft" else self.manifest.version,
             digest=self.digest,
             location=location,
         )
@@ -718,7 +721,8 @@ def _load_pack_document(
     except (ConfigurationError, FileNotFoundError, OSError, yaml.YAMLError) as exc:
         raise PackError(f"invalid {relative_path}: {exc}") from exc
     if model is PackManifest and (
-        not isinstance(graph.data, dict) or graph.data.get("pack_schema_version") != "2.0"
+        not isinstance(graph.data, dict)
+        or graph.data.get("pack_schema_version") not in {"2.0", "3.0"}
     ):
         version = graph.data.get("pack_schema_version") if isinstance(graph.data, dict) else None
         raise PackError(
@@ -990,10 +994,11 @@ class PackRepository:
             loaded = self.resolve(
                 PackReference(
                     source=dependency.source,
-                    publisher=dependency.publisher,
+                    publisher=None if dependency.source == "draft" else dependency.publisher,
                     name=dependency.name,
-                    version=selected.version,
+                    version=None if dependency.source == "draft" else selected.version,
                     path=dependency.path,
+                    draft_id=dependency.draft_id,
                 ),
                 expected_type="industry",
                 declaring_file=pack.industry_dependency_declaring_files[index],
@@ -1019,9 +1024,29 @@ class PackRepository:
     def proposed_lock(self, pack: LoadedPack) -> PackLock:
         """Select the highest exact stable release for every declared dependency."""
 
-        selected: list[LockedPack] = []
+        selected: list[LockedPack | LockedDraftPack] = []
         for index, dependency in enumerate(pack.manifest.industry_dependencies):
             declaring_file = pack.industry_dependency_declaring_files[index]
+            if dependency.source == "draft":
+                loaded = self.resolve(
+                    PackReference(
+                        source="draft",
+                        name=dependency.name,
+                        draft_id=dependency.draft_id,
+                        path=dependency.path,
+                    ),
+                    expected_type="industry",
+                    declaring_file=declaring_file,
+                )
+                selected.append(
+                    LockedDraftPack(
+                        draft_id=dependency.draft_id,
+                        type="industry",
+                        name=dependency.name,
+                        digest=loaded.digest,
+                    )
+                )
+                continue
             candidates: list[LoadedPack] = []
             if dependency.source == "path":
                 raw_path = Path(dependency.path or "")
@@ -1082,14 +1107,23 @@ class PackRepository:
                     digest=winner.digest,
                 )
             )
-        return PackLock(dependencies=selected)
+        return PackLock(
+            lock_schema_version="2.0"
+            if any(isinstance(item, LockedDraftPack) for item in selected)
+            else "1.0",
+            dependencies=selected,
+        )
 
     def update_lock(self, pack: LoadedPack, proposed: PackLock) -> None:
         """Atomically replace only a mutable project pack's lock document."""
 
-        if pack.source != "project":
-            raise PackError("pack lock --apply requires an editable project pack")
-        self._assert_project_path_safe(pack.root)
+        from evidenceforge.artifacts.lifecycle import assert_mutable
+
+        assert_mutable(pack.root / "pack.yaml")
+        if pack.source not in {"project", "draft"}:
+            raise PackError("pack lock --apply requires an editable project pack or draft")
+        if pack.source == "project":
+            self._assert_project_path_safe(pack.root)
         path = pack.root / PACK_LOCK_FILENAME
         content = yaml.safe_dump(proposed.model_dump(mode="json"), sort_keys=False).encode("utf-8")
         descriptor, temporary = tempfile.mkstemp(prefix=".pack.lock.", dir=pack.root)
@@ -1158,7 +1192,7 @@ class PackRepository:
     ) -> LoadedPack:
         """Resolve and validate one exact reference."""
 
-        if reference.source == "path":
+        if reference.source in {"path", "draft"}:
             if declaring_file is None:
                 base = self.project_root
             else:
@@ -1186,6 +1220,19 @@ class PackRepository:
                 self.project_pack_root.resolve()
             ):
                 raise PackError(f"project pack path escapes repository root: {root}")
+        if not root.is_dir() and reference.source == "project":
+            from evidenceforge.artifacts.lifecycle import ArtifactError, resolve_reference
+
+            try:
+                published = resolve_reference(
+                    f"project:{reference.publisher}:{expected_type}:{reference.name}@{reference.version}",
+                    self.project_root,
+                )
+            except ArtifactError as exc:
+                raise PackError(
+                    f"project {expected_type} pack {reference.name}@{reference.version} was not found at {root}: {exc}"
+                ) from exc
+            root = published.parent
         if root.is_symlink() or not root.is_dir():
             raise PackError(
                 f"{reference.source} {expected_type} pack "
@@ -1205,6 +1252,11 @@ class PackRepository:
     ) -> LoadedPack:
         """Load and validate a resolved pack directory."""
 
+        from evidenceforge.artifacts.lifecycle import _receipt_root, verify_release
+
+        receipt_root = _receipt_root(root)
+        if receipt_root is not None:
+            verify_release(receipt_root)
         tree_entries = _bounded_pack_tree(root)
         include_budget_state = ScenarioIncludeBudgetState(PACK_SEMANTIC_BUDGET)
         semantic_bytes_by_path: dict[Path, bytes] = {}
@@ -1231,7 +1283,16 @@ class PackRepository:
             raise PackError(
                 f"pack type mismatch: expected {expected_type}, manifest declares {manifest.type}"
             )
-        if (
+        if reference.source == "draft":
+            if (
+                manifest.status != "draft"
+                or manifest.draft_id != reference.draft_id
+                or manifest.name != reference.name
+            ):
+                raise PackError("draft pack reference does not match its isolated draft identity")
+        elif manifest.status == "draft":
+            raise PackError("draft packs require source: draft and their exact draft_id")
+        elif (
             manifest.publisher != reference.publisher
             or manifest.name != reference.name
             or manifest.version != reference.version
@@ -1241,7 +1302,7 @@ class PackRepository:
                 f"requested {reference.publisher}/{reference.name}@{reference.version}, found "
                 f"{manifest.publisher}/{manifest.name}@{manifest.version}"
             )
-        if source != "path":
+        if source not in {"path", "draft"} and receipt_root is None:
             expected_suffix = (
                 Path(manifest.publisher) / expected_type / manifest.name / manifest.version
             )
@@ -1778,11 +1839,12 @@ def parse_pack_cli_reference(value: str) -> tuple[PackReference, PackType | None
         raise PackError(f"invalid pack manifest {manifest_path}: {exc}") from exc
     return (
         PackReference(
-            source="path",
+            source="draft" if manifest.status == "draft" else "path",
             path=str(root),
-            publisher=manifest.publisher,
+            publisher=None if manifest.status == "draft" else manifest.publisher,
             name=manifest.name,
-            version=manifest.version,
+            version=None if manifest.status == "draft" else manifest.version,
+            draft_id=manifest.draft_id,
         ),
         manifest.type,
     )

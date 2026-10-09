@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -30,12 +31,13 @@ from evidenceforge.composition.releases import (
     list_release_library,
     validate_efpack,
 )
-from evidenceforge.models.exceptions import PackError
+from evidenceforge.models.exceptions import EvidenceForgeError, PackError
 
 pack_app = typer.Typer(help="Create, inspect, copy, and validate scenario packs.")
 publisher_app = typer.Typer(help="Configure the publisher identity used for pack authoring.")
 pack_app.add_typer(publisher_app, name="publisher")
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _repository(project_root: Path | None) -> PackRepository:
@@ -49,11 +51,11 @@ def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
 
     return {
         "source": pack.source,
-        "publisher": pack.manifest.publisher,
+        "publisher": None if pack.source == "draft" else pack.manifest.publisher,
         "publisher_display_name": pack.manifest.publisher_display_name,
         "type": pack.manifest.type,
         "name": pack.manifest.name,
-        "version": pack.manifest.version,
+        "version": None if pack.source == "draft" else pack.manifest.version,
         "description": pack.manifest.description,
         "requires_evidenceforge": pack.manifest.requires_evidenceforge,
         "digest": pack.digest,
@@ -334,6 +336,14 @@ def validate_pack(
                 dependency.selected().model_dump(mode="json") for dependency in dependencies
             ],
         }
+        from evidenceforge.artifacts.properties import remember_validation, validation_signature
+
+        try:
+            source = pack.root / "pack.yaml"
+            before = validation_signature(source, repository.project_root)
+            remember_validation(source, repository.project_root, before)
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            logger.debug("Validation record is unavailable: %s", exc)
     except (PackError, ValueError) as exc:
         _fail(
             exc,
@@ -467,8 +477,16 @@ def build_pack(
 
     try:
         repository = _repository(project_root)
-        payload = build_efpack(repository, _resolve_cli_pack(reference, project_root), output)
-    except (PackError, ValueError) as exc:
+        pack = _resolve_cli_pack(reference, project_root)
+        if pack.manifest.status == "draft":
+            raise PackError("publish this draft before exporting a release")
+        if pack.manifest.status == "published":
+            from evidenceforge.artifacts.portable import export_release
+
+            payload = {"path": str(export_release(pack.root / "pack.yaml", output))}
+        else:
+            payload = build_efpack(repository, pack, output)
+    except (EvidenceForgeError, OSError, ValueError) as exc:
         _fail(exc, json_output=json_output, json_payload={"built": False})
     if json_output:
         _emit_json({"built": True, **payload})
@@ -490,17 +508,17 @@ def lock_pack(
     try:
         repository = _repository(project_root)
         pack = _resolve_cli_pack(reference, project_root)
-        if pack.source != "project":
-            raise PackError("pack lock requires an editable project pack reference")
+        if pack.source not in {"project", "draft"}:
+            raise PackError("pack lock requires an editable project pack or draft reference")
         proposed = repository.proposed_lock(pack)
         current = pack.lock.model_dump(mode="json")
         proposed_payload = proposed.model_dump(mode="json")
         current_by_identity = {
-            (item["publisher"], item["type"], item["name"]): item
+            (item.get("publisher", item.get("draft_id")), item["type"], item["name"]): item
             for item in current["dependencies"]
         }
         proposed_by_identity = {
-            (item["publisher"], item["type"], item["name"]): item
+            (item.get("publisher", item.get("draft_id")), item["type"], item["name"]): item
             for item in proposed_payload["dependencies"]
         }
         changes = [
@@ -533,7 +551,7 @@ def lock_pack(
         console.print(f"[green]✓[/green] {action} {len(changes)} lock change(s)")
 
 
-@pack_app.command("inspect")
+@pack_app.command("inspect-legacy")
 def inspect_pack_release(
     archive: Path = typer.Argument(..., help=".efpack archive"),
     json_output: bool = typer.Option(False, "--json", help="Emit stable JSON."),
@@ -574,13 +592,42 @@ def import_pack_release(
             json_payload={"imported": False},
         )
     try:
-        payload = import_efpack(
-            archive,
-            scope=scope,  # type: ignore[arg-type]
-            project_root=resolve_management_project_root(project_root),
-            accepted_publishers=set(accept_publisher),
-        )
-    except (PackError, ValueError) as exc:
+        import zipfile
+
+        with zipfile.ZipFile(archive) as container:
+            formal = "release.json" in container.namelist()
+        if formal:
+            from evidenceforge.artifacts.portable import import_release, read_archive
+
+            receipt, _files = read_archive(archive)
+            if receipt.kind == "scenario":
+                raise PackError("use scenario import-release for a scenario archive")
+            missing = {str(receipt.lifecycle.publisher)} - set(accept_publisher)
+            if missing:
+                raise PackError(
+                    "publisher consent is required; repeat with --accept-publisher "
+                    + next(iter(missing))
+                )
+            target = import_release(
+                archive,
+                project_root=resolve_management_project_root(project_root)
+                if scope == "project"
+                else Path.home(),
+            )
+            payload = {
+                "scope": scope,
+                "path": str(target),
+                "root": receipt.model_dump(mode="json"),
+                "members": [receipt.model_dump(mode="json")],
+            }
+        else:
+            payload = import_efpack(
+                archive,
+                scope=scope,
+                project_root=resolve_management_project_root(project_root),
+                accepted_publishers=set(accept_publisher),
+            )
+    except (EvidenceForgeError, OSError, ValueError, zipfile.BadZipFile) as exc:
         _fail(exc, json_output=json_output, json_payload={"imported": False})
     if json_output:
         _emit_json({"imported": True, **payload})

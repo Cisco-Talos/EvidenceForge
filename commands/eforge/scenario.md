@@ -1,7 +1,7 @@
 ---
 name: eforge-scenario
 description: >
-  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0 YAML and attack-free
+  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0/3.0 YAML and attack-free
   ENVIRONMENT.md briefings. Use when the user wants a threat-hunting exercise, attack simulation,
   synthetic security dataset, or security training scenario. Do not run generation or edit
   generated artifacts, reusable packs, or project configuration.
@@ -9,14 +9,18 @@ description: >
 
 # EvidenceForge Scenario Author
 
-Create or change scenario inputs for deterministic `eforge generate`. Default new work to Scenario
-2.0, including monolithic no-pack scenarios. Preserve Scenario 1.0 when
-editing an existing V1 document unless the user requests migration.
+Default new work to Schema 3 drafts for deterministic `eforge generate`.
+Lifecycle: read `/eforge:references:artifact-lifecycle`.
+Use file-based Properties for metadata and exact validation provenance without Studio.
+Preserve Scenario 1.0/2.0 unless the user requests adoption or upgrade.
 
-In an EvidenceForge source checkout, use `uv run eforge` so authoring exercises that checkout's
-code. Outside a source checkout, use the installed `eforge` command. Read
+In an EvidenceForge source checkout, use `uv run eforge`.
+Outside a source checkout, use the installed `eforge` command. Read
 `/eforge:references:project-context` before selecting project context. Run from the intended working
 directory and omit `--project-root` unless the user explicitly selects a different root.
+
+Offer optional `display_name` at creation and edits when missing; respect refusal.
+Suggest editable titles on request, preserving `name` (`/eforge:references:artifact-lifecycle`).
 
 ## Maintain the trust boundary
 
@@ -27,8 +31,7 @@ execute authored commands or payloads; generation renders them as synthetic evid
 
 ## Establish industry, organization, and content ownership
 
-Before writing artifacts, complete both checkpoints. The prompt or a referenced file may satisfy
-either; do not ask again.
+Before writing artifacts, complete both checkpoints. Use supplied answers without asking again.
 
 1. Establish a named industry, industry pack, or generic/industry-neutral decision. Never infer
    generic.

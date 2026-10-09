@@ -27,6 +27,7 @@ from evidenceforge.studio.ownership import (
 )
 from evidenceforge.studio.paths import StudioPaths, studio_paths
 from evidenceforge.studio.runtime import runtime_id
+from evidenceforge.studio.runtime_cleanup import runtime_lease
 from evidenceforge.studio.service import create_app
 from evidenceforge.studio.state_io import (
     StateLock,
@@ -231,7 +232,7 @@ def serve(paths: StudioPaths | None = None) -> None:
     """Bind a private loopback socket and run the background service."""
     app_paths = paths or studio_paths()
     validate_private_paths(app_paths)
-    with StateLock(app_paths.state / "service-instance.lock"):
+    with runtime_lease(), StateLock(app_paths.state / "service-instance.lock"):
         _serve(app_paths)
 
 

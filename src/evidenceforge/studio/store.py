@@ -29,6 +29,7 @@ class CatalogItem(BaseModel):
     kind: Literal["scenario", "industry_pack", "organization_pack"]
     path: Path
     name: str
+    display_name: str | None = None
     description: str = ""
     version: str = ""
     publisher: str = ""
@@ -90,6 +91,7 @@ class Conversation(BaseModel):
     draft_path: Path | None = None
     draft_project_id: str | None = None
     draft_name: str | None = None
+    draft_display_name: str | None = None
     thread_id: str | None = None
     title: str = "New conversation"
     model_id: str | None = None
@@ -174,6 +176,7 @@ class StudioStore:
         secure_directory(path.parent)
         from evidenceforge.studio.runtime import runtime_id
         from evidenceforge.studio.state_database import (
+            DATABASE_VERSION,
             inspect_database,
             migrate_database,
             repair_derived,
@@ -181,7 +184,7 @@ class StudioStore:
         from evidenceforge.studio.state_io import StudioStateError
 
         if path.exists():
-            if inspect_database(path) != 1:
+            if inspect_database(path) != DATABASE_VERSION:
                 raise StudioStateError("Studio database needs a backed-up upgrade before opening")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -384,17 +387,56 @@ class StudioStore:
         content = "\n".join(sources.values())
         entries = json.dumps([entry.model_dump() for entry in yaml_entries(sources)])
         with self._lock, self._db:
-            row = self._db.execute(
-                "SELECT rowid, payload, content, search_entries FROM items WHERE workspace=? AND kind=? AND path=?",
-                (workspace_key, kind, path_key),
-            ).fetchone()
-            old = CatalogItem.model_validate_json(row["payload"]) if row else None
+            if kind != "scenario" and source.pack_source == "bundled":
+                rows = self._db.execute(
+                    "SELECT rowid, payload, content, search_entries FROM items "
+                    "WHERE workspace=? AND kind=? "
+                    "AND json_extract(payload, '$.pack_source')='bundled' "
+                    "AND json_extract(payload, '$.publisher')=? "
+                    "AND json_extract(payload, '$.name')=? "
+                    "AND json_extract(payload, '$.version')=? ORDER BY rowid",
+                    (workspace_key, kind, source.publisher, source.name, source.version),
+                ).fetchall()
+                # Runtime directories change between builds. Bundled identity does not.
+                # Consolidate preview-era aliases in the same transaction as relocation.
+                row = rows[0] if rows else None
+                old = CatalogItem.model_validate_json(row["payload"]) if row else None
+                if old:
+                    for alias in rows[1:]:
+                        duplicate = CatalogItem.model_validate_json(alias["payload"])
+                        old.project_id = old.project_id or duplicate.project_id
+                        old.folder = old.folder or duplicate.folder
+                        old.hidden = old.hidden or duplicate.hidden
+                        for chat in self._db.execute(
+                            "SELECT payload FROM conversations WHERE item_id=?", (duplicate.id,)
+                        ).fetchall():
+                            conversation = Conversation.model_validate_json(chat["payload"])
+                            conversation.item_id = old.id
+                            self._db.execute(
+                                "UPDATE conversations SET item_id=?, payload=? WHERE id=?",
+                                (old.id, conversation.model_dump_json(), conversation.id),
+                            )
+                        self._db.execute("DELETE FROM items_fts WHERE rowid=?", (alias["rowid"],))
+                        # These are derived caches; the current source owns fresh checks.
+                        for table in ("validations", "dependency_health", "resource_predictions"):
+                            self._db.execute(
+                                f"DELETE FROM {table} WHERE item_id=?", (duplicate.id,)
+                            )
+                        self._db.execute("DELETE FROM items WHERE id=?", (duplicate.id,))
+            else:
+                row = self._db.execute(
+                    "SELECT rowid, payload, content, search_entries FROM items "
+                    "WHERE workspace=? AND kind=? AND path=?",
+                    (workspace_key, kind, path_key),
+                ).fetchone()
+                old = CatalogItem.model_validate_json(row["payload"]) if row else None
             item = CatalogItem(
                 id=old.id if old else uuid4().hex,
                 workspace=workspace,
                 kind=kind,
                 path=source.path,
                 name=source.name,
+                display_name=source.display_name,
                 description=source.description,
                 version=source.version,
                 publisher=source.publisher,
@@ -414,7 +456,7 @@ class StudioStore:
             )
             if (
                 row
-                and item == old
+                and item == CatalogItem.model_validate_json(row["payload"])
                 and content == row["content"]
                 and entries == row["search_entries"]
             ):
@@ -422,7 +464,8 @@ class StudioStore:
             self._db.execute(
                 "INSERT INTO items(id, workspace, kind, path, payload, content, search_entries) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
-                "payload=excluded.payload, content=excluded.content, search_entries=excluded.search_entries",
+                "path=excluded.path, payload=excluded.payload, content=excluded.content, "
+                "search_entries=excluded.search_entries",
                 (
                     item.id,
                     workspace_key,
@@ -437,7 +480,12 @@ class StudioStore:
             self._db.execute("DELETE FROM items_fts WHERE rowid=?", (item_row["rowid"],))
             self._db.execute(
                 "INSERT INTO items_fts(rowid, name, description, content) VALUES (?, ?, ?, ?)",
-                (item_row["rowid"], item.name, item.description, content),
+                (
+                    item_row["rowid"],
+                    item.name + " " + (item.display_name or ""),
+                    item.description,
+                    content,
+                ),
             )
         return item
 
@@ -501,7 +549,7 @@ class StudioStore:
             rows = self._db.execute(query, args).fetchall()
         return sorted(
             (CatalogItem.model_validate_json(row["payload"]) for row in rows),
-            key=lambda item: item.name.casefold(),
+            key=lambda item: ((item.display_name or item.name).casefold(), item.name, item.id),
         )
 
     def save_item(self, item: CatalogItem) -> None:
@@ -510,6 +558,28 @@ class StudioStore:
             self._db.execute(
                 "UPDATE items SET payload=? WHERE id=?", (item.model_dump_json(), item.id)
             )
+
+    def remove_pack(self, item_id: str) -> None:
+        """Remove a retired pack's local associations, preserving Codex and run files."""
+        self._remove_authored_item(item_id, {"industry_pack", "organization_pack"})
+
+    def remove_scenario(self, item_id: str) -> None:
+        """Remove a retired scenario's associations, preserving captured runs and Codex."""
+        self._remove_authored_item(item_id, {"scenario"})
+
+    def _remove_authored_item(self, item_id: str, kinds: set[str]) -> None:
+        with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT rowid, kind FROM items WHERE id=?", (item_id,)
+            ).fetchone()
+            if row is None or row["kind"] not in kinds:
+                raise ValueError("Choose an indexed artifact of the correct kind")
+            self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))
+            self._db.execute("DELETE FROM conversations WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM validations WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM dependency_health WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM resource_predictions WHERE item_id=?", (item_id,))
+            self._db.execute("DELETE FROM items WHERE id=?", (item_id,))
 
     def projects(self, workspace: Path) -> list[Project]:
         """List projects in a workspace without scanning source directories."""
@@ -614,7 +684,7 @@ class StudioStore:
         for row in rows:
             item = CatalogItem.model_validate_json(row["payload"])
             fields = {
-                "name": item.name.casefold(),
+                "name": (item.name + " " + (item.display_name or "")).casefold(),
                 "description": item.description.casefold(),
                 "yaml": row["content"].casefold(),
                 "author": item.publisher_display_name.casefold(),
@@ -645,6 +715,7 @@ class StudioStore:
                     SearchMatch(field=key.title(), kind="metadata", excerpt=value)
                     for key, value in {
                         "name": item.name,
+                        "display_name": item.display_name or "",
                         "description": item.description,
                         "author": item.publisher_display_name,
                         "publisher": item.publisher,
@@ -688,7 +759,10 @@ class StudioStore:
                 )
                 if len(found) == 200:
                     break
-        return sorted(found, key=lambda item: item.name.casefold())
+        return sorted(
+            found,
+            key=lambda item: ((item.display_name or item.name).casefold(), item.name, item.id),
+        )
 
     def folders(self, workspace: Path) -> list[str]:
         """Return virtual folder names in display order."""

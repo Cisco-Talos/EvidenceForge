@@ -31,7 +31,13 @@ from evidenceforge.config.context import (
     context_fingerprint,
     select_context,
 )
-from evidenceforge.models.exceptions import ConfigurationError, PackError, PathSafetyError
+from evidenceforge.models.exceptions import (
+    ConfigurationError,
+    EvidenceForgeError,
+    PackError,
+    PathSafetyError,
+)
+from evidenceforge.naming import SCENARIO_NAME_PATTERN, storage_name
 from evidenceforge.studio.contexts import capture_overlays, context_path, scenario_context_path
 from evidenceforge.studio.environment import overlay_fingerprint
 from evidenceforge.studio.lifecycle import rename_scenario
@@ -49,7 +55,7 @@ class ScenarioImportRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     path: Path
-    name: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, pattern=SCENARIO_NAME_PATTERN)
     project_id: str | None = None
     source_workspaces: list[Path] = Field(default_factory=list, max_length=16)
     pack_locations: dict[str, Path] = Field(default_factory=dict, max_length=64)
@@ -226,14 +232,55 @@ def _scenario_references(graph: LoadedSourceGraph) -> list[tuple[PackReference, 
 
 def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
     """Read actual scenario and pack files, including locked digest checks."""
+    from evidenceforge.artifacts.lifecycle import _receipt_root, verify_release
+
+    published = _receipt_root(path)
+    if published is not None:
+        try:
+            receipt = verify_release(published)
+            return DependencyHealth(
+                ready=True,
+                fingerprint=receipt.digest,
+                rows=[
+                    DependencyRow(
+                        key="release",
+                        kind="document",
+                        label="Frozen release inputs",
+                        status="available",
+                        detail="Sources, configuration and dependency closure verified.",
+                    )
+                ],
+            )
+        except EvidenceForgeError as exc:
+            return DependencyHealth(
+                ready=False,
+                fingerprint=hashlib.sha256(str(exc).encode()).hexdigest(),
+                rows=[
+                    DependencyRow(
+                        key="release",
+                        kind="document",
+                        label="Release integrity",
+                        status="conflict",
+                        detail=str(exc),
+                    )
+                ],
+            )
     rows: list[DependencyRow] = []
     fingerprints: list[str] = []
+    selected_root = workspace
     try:
-        fingerprints.append(overlay_fingerprint(workspace))
-        fingerprints.append(
-            context_fingerprint(select_context(workspace, context_path(path, workspace)))
-        )
-    except (OSError, ValueError, ConfigurationError) as exc:
+        graph = load_scenario_source_graph(path)
+        explicit = context_path(path, workspace)
+        bound = graph.data.get("configuration_context")
+        if explicit is None and bound:
+            explicit = graph.origins.get(("configuration_context",), path).parent / bound
+            selection = select_context(None, explicit)
+        else:
+            selection = select_context(workspace, explicit)
+        selected_root = selection.project_root
+        fingerprints.append(overlay_fingerprint(selected_root))
+        fingerprints.append(context_fingerprint(selection))
+    except (OSError, ValueError, EvidenceForgeError) as exc:
         fingerprints.append(f"overlay: {exc}")
         rows.append(
             DependencyRow(
@@ -244,7 +291,7 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                 detail=str(exc),
             )
         )
-    repository = PackRepository(workspace)
+    repository = PackRepository(selected_root)
     try:
         graph = load_scenario_source_graph(path)
         fingerprints.extend(source.sha256 for source in graph.sources)
@@ -288,6 +335,7 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                                     label=dependency_key,
                                     status="conflict",
                                     detail="Digest does not match the organization's locked dependency",
+                                    source=str(member.root / "pack.yaml"),
                                     digest=locked.digest,
                                     source_digest=member.digest,
                                 )
@@ -325,6 +373,7 @@ def dependency_health(path: Path, workspace: Path) -> DependencyHealth:
                                 label=member_key,
                                 status="available",
                                 detail="Exact pack is available",
+                                source=str(member.root / "pack.yaml"),
                                 digest=member.digest,
                             )
                         )
@@ -693,17 +742,15 @@ def prepare_scenario(
             update={"source_workspaces": [*request.source_workspaces, selection.project_root]}
         )
     graph = load_scenario_source_graph(source)
-    if graph.data.get("kind") == "evidenceforge.resolved-scenario" or not (
-        "name" in graph.data
-        and ("version" in graph.data or "scenario_version" in graph.data)
-        and any(key in graph.data for key in ("environment", "composition"))
-    ):
+    from evidenceforge.schema import identify_document
+
+    if identify_document(graph.data).family != "scenario":
         raise ValueError(
             "Choose an authored scenario YAML, not a fragment or generated resolved scenario"
         )
     plan = PreparedImport(workspace, cache, "scenario", request.name)
     try:
-        destination = Path("scenarios") / request.name
+        destination = Path("scenarios") / storage_name(request.name)
         if (workspace / destination).exists() or (workspace / destination).is_symlink():
             raise FileExistsError("A scenario folder with this name already exists")
         plan.review.destination = workspace / destination

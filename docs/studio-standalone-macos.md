@@ -53,8 +53,28 @@ Before opening a different build, finish or pause active generations/evaluations
 stop active authoring, and close the old window. The new build authenticates and
 replaces an idle helper, checking its PID, creation time, executable, and command.
 An older source helper without the handoff API requires manual shutdown after its
-work finishes. No unrelated process is stopped. Private runtime directories are
-retained in this first package; automatic cleanup and updates are deferred.
+work finishes. No unrelated process is stopped. Automatic application updates remain deferred.
+
+Runtime cleanup runs at successful startup, after background work finishes, and hourly while
+Studio is open. It keeps the current runtime and the previous successfully launched runtime for
+30 days after replacement. Change **Settings → Workspace → Keep previous app runtime (days)**
+to adjust that period (0–3650 days); zero disables the extra rollback period. Other unused
+runtimes have a 24-hour grace period from first discovery. Active launchers, helpers, generation
+and evaluation workers, and Codex authoring retain a shared runtime-use lease regardless of age.
+
+Eligible runtimes are removed only after verifying their identity, ownership, launch-lease
+contract, and lack of process use under the installation lock. If safety cannot be established,
+Studio retains the files and displays a persistent warning with the folder and reason. Builds
+created before the launch-lease contract are retained with this warning when eligible; inspect
+them after quitting older builds and their background work. Cleanup retries automatically and
+does not stop processes. Interrupted removal uses a retired folder and a pinned directory
+identity so it can resume without publishing a partially deleted runtime.
+
+The disposable runtime cache separately versions `runtimes/cleanup-settings.json` and
+`runtimes/usage.json` at schema 1. These are additive cache contracts; they do not change the
+Studio-owned database, settings envelope, or workspace layout. Unsupported or malformed cache
+metadata blocks cleanup and produces a warning rather than resetting it. Authored/imported
+packs, scenarios, conversations, generated bundles, and state-upgrade backups are outside cleanup.
 
 ## Field acceptance on the other Mac
 

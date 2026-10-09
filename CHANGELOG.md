@@ -6,6 +6,55 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ## Unreleased
 
+**Schema 3 and portable authored releases**
+
+- Add shared schema identification, typed lifecycle metadata and deterministic linked upgrades.
+  Legacy scenario schemas 1/2, pack schema 2 and generated/resolved inputs remain readable.
+- Add file-based scenario and pack drafts, exact ancestry, editable release notes, reviewed
+  dependency promotion and atomic local publication without allocating versions while editing.
+- Freeze source files, assets, dependency closure, selected overlays and effective configuration;
+  verify complete portable receipts and reject conflicting imports or modified releases.
+- Export/import `.efscenario` and lifecycle `.efpack` archives without generated logs or
+  checkpoints. Retain existing immutable pack archive workflows.
+- Expose the same services through CLI, installed native chat skills and optional Studio controls,
+  including version browsing, upgrade findings, notes previews and native archive save/import.
+- Verify CLI-only generation/evaluation after original sources disappear, unchanged log bytes for
+  equivalent upgrades and native macOS publication/export/version/run workflows. Application
+  version is unchanged on the feature branch. See the
+  [artifact lifecycle worklog](docs/worklog/2026-10-07-schema3-artifact-lifecycle.md).
+- Recover the iteration assessment's historical scenario and email corpus from Git into permanent
+  test fixtures; the original lineage regression and all 60 related slow checks pass.
+- Add permanent reviewed scenario deletion to Studio library/workspace menus and an optional
+  file-based CLI command, with an all-files choice for dedicated workspace files and owned runs,
+  evaluations and private inputs. Keep shared packs separate and retired release labels reserved;
+  retain no recovery copies.
+- Allow reviewed pack deletion after a direct/indirect dependency warning. Show affected items in
+  one initially collapsed plain list, grouped by industry packs, organization packs and scenarios,
+  sorted by name and then newest version. Protect active work and shared run folders.
+- Refresh the full draft review when opening local publication, so editing separate pack assets
+  or scenario includes does not leave a stale publication review. Preserve confirmation of
+  the captured inputs and offer explicit review refresh if files change afterward.
+- Place shared pack identity headings above version rows, preserving aligned names and details
+  when a pack has multiple versions in the library.
+- Add optional Schema 3 scenario/pack `display_name` titles, shared naming validation and
+  CLI/Studio title editing. Retain case-sensitive identifiers and immutable published metadata;
+  title changes do not affect generation behavior.
+- Remove Studio's artifact-name length cap and scenario clone first-character restriction.
+  Preserve full identifiers in files and references while bounding portable folder/export names.
+  Refresh canonical and installed authoring skills to offer optional titles during creation/edits.
+- Add the reviewed, backed-up Studio database version-2 migration for optional naming metadata.
+  Verify CLI-only naming in the standalone Mac package. See the
+  [artifact naming worklog](docs/worklog/2026-10-08-artifact-naming.md).
+- Consolidate scenario, pack and bundle metadata in a Settings-style Properties popup, with
+  direct draft editing, adjacent assistance, release-note history, exact lineage and portable
+  validation provenance. The CLI and native chat skills expose the same file-based operations.
+- Show specific log types present in bundle files, distinguishing Windows Security, Sysmon,
+  EDR and individual Zeek types from the requested output groups. Keep bundle menus available
+  beside the summary disclosure before expanding a run.
+- Display the latest matching generation size or an automatic forecast in workspace run headers.
+  Preserve configured publisher defaults and group exact recorded draft/release lineage.
+  See the [Studio Properties worklog](docs/worklog/2026-10-08-studio-properties.md).
+
 ## v2.1.2 (2026-09-24)
 
 This patch release closes realism defects found in assessment loops 80 and 83–101. It improves

@@ -62,7 +62,11 @@ fn export_url(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
             && (url.path().contains("/files/") || url.path().ends_with("/bundle.zip")))
         || (url.path().starts_with("/v1/items/")
             && ((url.path().contains("/bundles/") && url.path().ends_with(".zip"))
-                || url.path().contains("/files/")))
+                || url.path().contains("/files/")
+                || url.path().strip_prefix("/v1/items/").is_some_and(|tail| {
+                    tail.strip_suffix("/release")
+                        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+                })))
         || (url.path().starts_with("/v1/packs/") && url.path().ends_with("/export"))
         || (url.path().starts_with("/v1/environment/") && url.path().contains("/files/"));
     if !allowed || url.host_str() != Some("127.0.0.1") || url.port() != base.port() {
@@ -282,6 +286,9 @@ mod tests {
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/bundles/b.zip").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/files/scenario.yaml").is_ok());
         assert!(export_url("http://127.0.0.1:4400", "/v1/packs/a/export").is_ok());
+        assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/release").is_ok());
+        assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/lifecycle").is_err());
+        assert!(export_url("http://127.0.0.1:4400", "/v1/items/a/other/release").is_err());
         assert!(export_url(
             "http://127.0.0.1:4400",
             "/v1/environment/a/files/personas/test.yaml"

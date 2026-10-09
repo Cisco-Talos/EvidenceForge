@@ -72,3 +72,34 @@ test("search excerpt count defaults to five and is saved as a preference", async
   await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/settings", "PUT", expect.objectContaining({ search_match_limit: 8 })));
   await waitFor(() => expect(screen.getByRole("button", { name: "Save settings" }).hasAttribute("disabled")).toBe(true));
 });
+
+test("previous runtime retention defaults to 30 days, saves zero, and preserves edits across refresh", async () => {
+  const settings = {
+    workspace: "/tmp/EvidenceForge", recent_workspaces: [], output_parents: {},
+    max_concurrent_generations: 2, checkpoint_hours: 24, search_match_limit: 5,
+    quit: { action: "continue", continue_queued_generations: true, continue_evaluations: "continue", pause_close_timing: "handoff", pause_evaluations: "finish", kill_incomplete_bundles: "preserve", authoring_turns: "stop" },
+    skill_install_scope: "global", skill_install_agent: "all", codex_path: null, eforge_path: null,
+  } as StudioSettings;
+  const request = vi.fn(async (path: string, _method?: string, body?: unknown) => {
+    if (path === "/v1/runtime/cleanup-settings") return { settings: body, warnings: [] };
+    return body;
+  });
+  const api = { request, libraryPreferences: async () => ({ remember_view: true }) } as unknown as StudioApi;
+  const onSaved = vi.fn(async () => undefined);
+  const props = { settings, paths: { data: "/tmp/data", logs: "/tmp/logs" }, api, onSaved, onError: vi.fn() };
+  const { rerender } = render(<Tooltip.Provider><SettingsView {...props} /></Tooltip.Provider>);
+  const user = userEvent.setup();
+  const input = screen.getByRole("spinbutton", { name: "Keep previous app runtime (days)" });
+  expect((input as HTMLInputElement).value).toBe("30");
+  await user.clear(input);
+  await user.type(input, "12");
+  rerender(<Tooltip.Provider><SettingsView {...props} runtimeCleanup={{ settings: { previous_runtime_days: 45 } }} /></Tooltip.Provider>);
+  expect((input as HTMLInputElement).value).toBe("12");
+  await user.clear(input);
+  await user.type(input, "0");
+  await user.click(screen.getByRole("button", { name: "Save settings" }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/runtime/cleanup-settings", "PUT", { schema_version: 1, previous_runtime_days: 0 }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledOnce());
+  expect((input as HTMLInputElement).value).toBe("0");
+  expect(screen.getByRole("button", { name: "Save settings" }).hasAttribute("disabled")).toBe(true);
+});

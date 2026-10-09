@@ -7,7 +7,8 @@ description: >
 ---
 # EvidenceForge Log Generation
 
-Run deterministic `eforge` against authored Scenario 1.0/2.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM. In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
+Read `/eforge:references:artifact-lifecycle` for Schema 3 drafts, frozen releases and `.efscenario` portability. Evaluation uses captured runs.
+Run deterministic `eforge` against authored Scenario 1.0/2.0/3.0 or authoritative `RESOLVED_SCENARIO.yaml`; generation never calls an LLM. In an EvidenceForge source checkout, use `uv run eforge`. Outside a source checkout, use the installed `eforge` command.
 
 ## Boundaries
 - Route scenario creation or structural repair to `/eforge scenario`.

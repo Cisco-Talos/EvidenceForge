@@ -37,6 +37,7 @@ import time
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import click
 import typer
@@ -63,6 +64,7 @@ from rich.text import Text
 from evidenceforge import __version__
 from evidenceforge.cli.checkpoint_commands import checkpoint_app
 from evidenceforge.cli.generation_interrupt import GenerationInterruptController
+from evidenceforge.cli.lifecycle_commands import register_lifecycle_commands, scenario_app
 from evidenceforge.cli.pack_commands import pack_app
 from evidenceforge.cli.progress_jsonl import ProgressJSONLWriter
 from evidenceforge.cli.resource_commands import resources_app
@@ -338,6 +340,8 @@ app = typer.Typer(
     cls=AbbreviatedGroup,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
+register_lifecycle_commands(pack_app, pack=True)
+app.add_typer(scenario_app, name="scenario")
 app.add_typer(pack_app, name="pack")
 app.add_typer(checkpoint_app, name="checkpoint")
 app.add_typer(resources_app, name="resources")
@@ -1335,6 +1339,10 @@ def _recover_generation_input(
 
     if scenario_file is None:  # pragma: no cover - narrowed by the checks above
         raise typer.Exit(EXIT_INPUT_ERROR)
+    if ":scenario:" in str(scenario_file):
+        from evidenceforge.artifacts.lifecycle import resolve_reference
+
+        scenario_file = resolve_reference(str(scenario_file), Path.cwd())
     if not scenario_file.is_file() or not os.access(scenario_file, os.R_OK):
         console.print(
             f"[bold red]Error:[/bold red] Scenario file not found or unreadable: {scenario_file}",
@@ -1866,6 +1874,17 @@ def generate(
     - 21: Generation error
     - 130: Interrupted (Ctrl+C)
     """
+    if scenario_file is not None and ":scenario:" in str(scenario_file):
+        from evidenceforge.artifacts.lifecycle import resolve_reference
+
+        scenario_file = resolve_reference(str(scenario_file), project_root or Path.cwd())
+    if scenario_file is not None and output is None:
+        from evidenceforge.artifacts.lifecycle import _receipt_root
+
+        if _receipt_root(scenario_file) is not None or scenario_file.suffix == ".efscenario":
+            output = (
+                (project_root or Path.cwd()) / "runs" / f"{scenario_file.stem}-{uuid4().hex[:8]}"
+            )
     resume, overwrite = _prepare_generation_options(
         scenario_file=scenario_file,
         output=output,
@@ -2372,6 +2391,11 @@ def resolve_cmd(
 ) -> None:
     """Compile a scenario into a self-contained authoritative YAML document."""
 
+    if ":scenario:" in str(scenario_file):
+        from evidenceforge.artifacts.lifecycle import resolve_reference
+
+        scenario_file = resolve_reference(str(scenario_file), project_root or Path.cwd())
+
     if not scenario_file.is_file() or not os.access(scenario_file, os.R_OK):
         message = f"scenario file not found or unreadable: {scenario_file}"
         if json_output:
@@ -2533,6 +2557,10 @@ def validate(
     fallback_project_root = (
         project_root.resolve() if project_root is not None else Path.cwd().resolve()
     )
+    if ":scenario:" in str(scenario_file):
+        from evidenceforge.artifacts.lifecycle import resolve_reference
+
+        scenario_file = resolve_reference(str(scenario_file), fallback_project_root)
     if not scenario_file.is_file():
         exc = FileNotFoundError(f"scenario file not found: {scenario_file}")
         if json_output:
@@ -2610,6 +2638,16 @@ def validate(
         if compiled.authored_kind == "resolved"
         else select_context(project_root, context).project_root
     )
+    from evidenceforge.artifacts.properties import remember_validation, validation_signature
+
+    validation_before = None
+    if resolved_project_root is not None:
+        try:
+            validation_before = validation_signature(
+                scenario_file, resolved_project_root, context, compiled=compiled
+            )
+        except (EvidenceForgeError, OSError, ValueError) as exc:
+            logging.getLogger(__name__).debug("Validation record is unavailable: %s", exc)
     if not json_output:
         console.print(f"[green]✓[/green] Schema valid: {scenario.name}")
         console.print(f"  Users: {len(scenario.environment.users)}")
@@ -2644,6 +2682,21 @@ def validate(
             console.print(Text(f"Configuration validation failed: {exc}", style="red"))
         raise typer.Exit(EXIT_SCHEMA_VALIDATION) from exc
     issues.extend(_legacy_public_identity_deprecation_issues(compiled))
+    if (
+        validation_before
+        and resolved_project_root
+        and not any(issue.severity == "error" for issue in issues)
+    ):
+        try:
+            remember_validation(
+                scenario_file,
+                resolved_project_root,
+                validation_before,
+                sum(issue.severity == "warning" for issue in issues),
+                context=context,
+            )
+        except (OSError, EvidenceForgeError, ValueError) as exc:
+            logging.getLogger(__name__).warning("Validation record was not retained: %s", exc)
 
     from evidenceforge.config.provider import effective_config_scope
 

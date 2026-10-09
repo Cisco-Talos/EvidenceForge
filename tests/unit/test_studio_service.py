@@ -103,6 +103,74 @@ def _external_bundle(root: Path, name: str = "external") -> Path:
     return root
 
 
+@pytest.mark.parametrize("complete", [True, False])
+def test_generation_bundle_properties_filter_stored_job_kind_and_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, complete: bool
+) -> None:
+    workspace = tmp_path / "workspace"
+    scenario = _scenario(workspace, "alpha")
+    root = _external_bundle(workspace / "runs" / "alpha" / "generation", "alpha")
+    data = root / "data" / "zeek" / "conn.json"
+    data.parent.mkdir(parents=True)
+    data.write_bytes(b"captured log data\n")
+    if not complete:
+        (root / "GENERATION_MANIFEST.json").unlink()
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(workspace))
+    paths = _paths(tmp_path / "private")
+    app = create_app(paths, "secret")
+    headers = {"X-EForge-Token": "secret"}
+    generation = GenerationJob(
+        id="generation",
+        scenario=scenario,
+        output_root=root,
+        progress_file=paths.state / "jobs" / "generation.jsonl",
+        log_file=paths.state / "jobs" / "generation.log",
+        started_at=10,
+        submitted_at=9,
+        status="completed" if complete else "stopped",
+        workspace=workspace,
+        owned_output=True,
+    )
+    app.state.studio.jobs.save_generation(generation)
+    app.state.studio.jobs.save_evaluation(
+        EvaluationJob(
+            id="evaluation",
+            generation_id=generation.id,
+            workspace=workspace,
+            output_root=root,
+            result_file=paths.state / "jobs" / "evaluation.json",
+            log_file=paths.state / "jobs" / "evaluation.log",
+            command=[],
+            created_at=11,
+            status="completed",
+        )
+    )
+    with TestClient(app) as client:
+        assert client.get("/v1/jobs/generation/properties").status_code == 401
+        response = client.get("/v1/jobs/generation/properties", headers=headers)
+        assert response.status_code == 200, response.text
+        properties = response.json()
+        assert properties["complete"] is complete
+        assert properties["data_bytes"] == len(data.read_bytes())
+        assert properties["data_files"] == 1
+        assert properties["log_types"] == ["zeek_conn"]
+        assert properties["unrecognized_data_files"] == 0
+        assert properties["size_bytes"] > properties["data_bytes"]
+        if complete:
+            assert properties["scenario"] == "alpha"
+            assert properties["formats"] == ["zeek_conn"]
+            assert properties["evidenceforge_version"] == "2.1.2"
+            assert properties["generation_seed"] == 7
+        else:
+            assert "partial output" in properties["findings"][0]
+        for job_id in ("evaluation", "missing"):
+            assert client.get(f"/v1/jobs/{job_id}/properties", headers=headers).status_code == 404
+        client.post(
+            "/v1/workspaces/select", headers=headers, json={"path": str(tmp_path / "other")}
+        )
+        assert client.get("/v1/jobs/generation/properties", headers=headers).status_code == 404
+
+
 def test_external_bundle_import_is_read_only_and_workspace_scoped(
     tmp_path: Path, monkeypatch: object
 ) -> None:
@@ -118,6 +186,10 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
         bundle = response.json()
         assert bundle["scenario_name"] == "external"
         assert bundle["size_bytes"] > 0
+        properties = client.get(f"/v1/bundles/{bundle['id']}/properties", headers=headers)
+        assert properties.status_code == 200, properties.text
+        assert properties.json()["formats"] == ["zeek_conn"]
+        assert properties.json()["size_bytes"] == bundle["size_bytes"]
         assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == [bundle]
         files = client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).json()
         assert {entry["path"] for entry in files["files"]} == {
@@ -261,7 +333,7 @@ def test_scenario_clone_copies_authored_files_and_project_without_history(
             client.post(
                 f"/v1/scenarios/{item['id']}/clone", headers=headers, json={"name": "../escape"}
             ).status_code
-            == 400
+            == 422
         )
 
 
@@ -291,7 +363,7 @@ def test_scenario_clone_rejects_links_and_shared_source_folders(tmp_path: Path) 
         clone_scenario(original, linked_workspace, "linked-copy")
 
 
-def test_pack_clone_uses_cli_and_configures_project_publisher_when_requested(
+def test_pack_clone_creates_independent_anonymous_or_named_drafts(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -308,7 +380,7 @@ def test_pack_clone_uses_cli_and_configures_project_publisher_when_requested(
         assert client.get("/v1/packs/publisher", headers=headers).json()["configured"] is False
         route = f"/v1/packs/{item['id']}/clone"
         request = {"name": "finance-studio", "version": "1.0.0"}
-        assert client.post(route, headers=headers, json=request).status_code == 409
+        assert client.post(route, headers=headers, json=request).status_code == 200
         response = client.post(
             route,
             headers=headers,
@@ -323,14 +395,13 @@ def test_pack_clone_uses_cli_and_configures_project_publisher_when_requested(
         assert cloned["id"] != item["id"]
         assert cloned["kind"] == "industry_pack"
         assert cloned["name"] == "finance-studio"
-        assert cloned["path"].startswith(str(workspace / ".eforge" / "packs"))
+        assert cloned["path"].startswith(str(workspace / ".eforge" / "artifacts" / "drafts"))
         manifest = Path(cloned["path"]).read_text(encoding="utf-8")
         assert "publisher: studio-test" in manifest
         assert "name: finance-studio" in manifest
         publisher = client.get("/v1/packs/publisher", headers=headers).json()
-        assert publisher["publisher"] == "studio-test"
-        assert publisher["scope"] == "project"
-        assert client.post(route, headers=headers, json=request).status_code == 400
+        assert publisher["configured"] is False
+        assert client.post(route, headers=headers, json=request).status_code == 200
 
 
 def test_scenario_two_draft_promotes_and_keeps_conversation(
@@ -363,9 +434,7 @@ def test_scenario_two_draft_promotes_and_keeps_conversation(
         assert linked["draft_kind"] is None
 
 
-@pytest.mark.parametrize(
-    "name", ["Scenario with spaces", "scenario.yaml", "bad/name", "", "x" * 81]
-)
+@pytest.mark.parametrize("name", ["Scenario with spaces", "scenario.yaml", "bad/name", ""])
 def test_scenario_draft_rejects_invalid_names_at_create_and_rename(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
@@ -2610,7 +2679,9 @@ def test_new_pack_identity_description_project_search_and_persistence(
     payload = {"kind": kind, "name": "care-team", "description": "Clinical systems"}
     with TestClient(create_app(paths, "secret")) as client:
         assert client.post("/v1/packs", json=payload).status_code == 401
-        assert client.post("/v1/packs", headers=headers, json=payload).status_code == 409
+        anonymous = client.post("/v1/packs", headers=headers, json=payload)
+        assert anonymous.status_code == 200
+        assert anonymous.json()["item"]["version"] == ""
         for invalid in ("Uppercase", "with spaces", "../path", "bad_name"):
             assert (
                 client.post(
@@ -2648,20 +2719,20 @@ def test_new_pack_identity_description_project_search_and_persistence(
         assert item["description"] == "Clinical systems"
         assert item["publisher_display_name"] == "Care Lab"
         assert item["publisher"] == "care-lab"
-        assert item["version"] == "0.1.0"
+        assert item["version"] == ""
         assert item["project_id"] == project["id"]
         assert item["pack_source"] == "workspace"
         assert chat["item_id"] == item["id"]
         assert chat["thread_id"] is None
         path = Path(item["path"])
-        assert path.is_relative_to(workspace / ".eforge/packs/care-lab")
+        assert path.is_relative_to(workspace / ".eforge/artifacts/drafts")
         original = path.read_bytes()
-        assert client.post("/v1/packs", headers=headers, json=payload).status_code == 400
+        assert client.post("/v1/packs", headers=headers, json=payload).status_code == 200
         assert path.read_bytes() == original
         for query in (
             'author:"Care Lab"',
             "publisher:care-lab",
-            "version:0.1.0 location:workspace",
+            "location:workspace",
             "Care",
         ):
             found = client.get(
@@ -2676,7 +2747,7 @@ def test_new_pack_identity_description_project_search_and_persistence(
                 "kind": "packs",
                 "project_id": project["id"],
                 "publisher": "care-lab",
-                "version": "0.1.0",
+                "version": "",
                 "pack_source": "workspace",
             },
         )

@@ -42,10 +42,10 @@ fn studio_connection(app: tauri::AppHandle) -> Result<serde_json::Value, String>
     let _ = app;
     let mut command = std::process::Command::new(studio_python());
     #[cfg(target_os = "macos")]
-    if let Some(runtime) = runtime {
-        command = std::process::Command::new(runtime.python);
+    if let Some(runtime) = runtime.as_ref() {
+        command = std::process::Command::new(&runtime.python);
         command.args(["-I", "-B"]);
-        command.env("EFORGE_STUDIO_RUNTIME_ROOT", runtime.root);
+        command.env("EFORGE_STUDIO_RUNTIME_ROOT", &runtime.root);
         command.env_remove("PYTHONHOME");
         command.env_remove("PYTHONPATH");
     }
@@ -84,7 +84,7 @@ async fn choose_bundle_folder(app: tauri::AppHandle) -> Result<Option<String>, S
 #[tauri::command]
 async fn choose_import_file(app: tauri::AppHandle, kind: String) -> Result<Option<String>, String> {
     let extensions: &[&str] = if kind == "scenario" {
-        &["yaml", "yml"]
+        &["yaml", "yml", "efscenario"]
     } else {
         &["efpack"]
     };

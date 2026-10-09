@@ -12,6 +12,29 @@ one change without loading this entire document. `eforge info` reports installat
 project-dependent inventories. Use `eforge schema <selector> --json` for an exact focused
 installed-version contract and executable minimal example.
 
+## Naming metadata
+
+Schema 3 adds optional root `display_name`, a friendly single-line title that permits spaces,
+Unicode, punctuation and capitalization. If absent, use the unchanged `name` identifier.
+Scenario identifiers accept ASCII letters/digits/hyphens/underscores in any position; pack
+identifiers retain lowercase letters/digits/hyphens and begin with a letter or digit. Neither
+CLI nor Studio imposes an 80-character artifact-name cap. Equality and deduplication retain
+exact case-sensitive identifiers, never titles. A title edit does not rename files or references
+and does not affect deterministic generation; source integrity still seals it. Published titles
+require a new draft to edit. Legacy schemas remain unchanged; upgrade to a linked draft before
+adding this metadata. Authoring skills offer this optional field at creation and on edits when
+missing, respecting a user's refusal. See the artifact lifecycle reference for title CLI commands.
+
+Studio's Properties popup edits draft display names, descriptions and current release notes directly.
+CLI `scenario properties` / `pack properties` inspect the same file authority; `edit-properties`
+saves reviewed draft metadata without changing identity or versions. Both kinds show **Validated with**
+only when a successful record matches their exact inputs. Publication seals its validation engine
+record; legacy releases without one remain supported. This provenance does not imply support on
+older engines. Existing pack compatibility declarations remain advanced metadata, not inferred feature
+compatibility. Generated-bundle properties expose captured log selections, the specific log types
+present, and aggregate log/disk sizes. Selected groups do not imply every supported source produced
+a file; the present-types inventory uses recognized filenames without scanning individual records.
+
 ## Contents
 
 - [Overview](#overview), [top-level structure](#top-level-structure), and [includes](#includes)
@@ -25,6 +48,16 @@ installed-version contract and executable minimal example.
 ## Overview
 
 Scenario files are YAML documents that define the environment, users, systems, personas, and storyline for log generation. All fields marked "Phase 2.4+" are optional and backward compatible with Phase 1 scenarios.
+
+Schema 3 uses `schema_version: "3.0"`, with `status: draft` and a unique `draft_id` during
+editing. Published content uses `scenario_version: "X.Y.Z"` and a publisher namespace.
+Draft editing never increments a release version. See
+[artifact lifecycle operations](../../commands/eforge/references/artifact-lifecycle.md)
+for CLI/skills, local publication, notes, lineage, upgrades and `.efscenario` archives.
+Draft creation retains an explicitly selected or recorded publisher, otherwise uses the configured
+project-over-user identity when available. Without configuration drafts may remain anonymous.
+Publication records the exact finalized draft snapshot without rewriting that editable draft or
+its legacy original. Studio can group these linked entries without assigning historical ownership.
 
 Scenario 1.0 remains fully supported and is the compatibility format shown throughout this field
 reference. Scenario 2.0 uses `scenario_version: "2.0"` and may remain monolithic or explicitly

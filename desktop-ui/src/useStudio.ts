@@ -75,6 +75,8 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
     next.imported_bundles = snapshot.imported_bundles.filter((entry) => entry.id !== event.entity_id);
   } else if (event.kind === "settings.updated") {
     next.settings = event.payload as unknown as StudioSettings;
+  } else if (event.kind === "runtime.cleanup") {
+    next.runtime_cleanup = event.payload as unknown as StudioSnapshot["runtime_cleanup"];
   } else if (event.kind === "scenario.validated") {
     next.validations = {
       ...snapshot.validations,

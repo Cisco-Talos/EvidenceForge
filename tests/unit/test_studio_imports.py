@@ -186,10 +186,11 @@ def test_missing_pack_can_import_and_later_resolve(tmp_path: Path) -> None:
         initial = dependency_health(path, workspace)
         assert not initial.ready
         assert discover_scenarios(workspace, [])[0].path == path
-        _pack(workspace, "industry", "healthcare")
+        pack = _pack(workspace, "industry", "healthcare")
         updated = dependency_health(path, workspace)
         assert updated.ready
         assert updated.fingerprint != initial.fingerprint
+        assert updated.rows[0].source == str(pack.root / "pack.yaml")
     finally:
         plan.close()
 
@@ -506,12 +507,19 @@ def test_health_names_missing_and_conflicting_locked_industry(tmp_path: Path) ->
         },
     )
     manifest = industries[0].root / "pack.yaml"
+    available = dependency_health(source, tmp_path)
+    assert available.ready
+    assert {row.source for row in available.rows if row.kind == "pack"} == {
+        str(pack.root / "pack.yaml") for pack in [organization, *industries]
+    }
     original = manifest.read_text()
     manifest.write_text(original + "\n# changed locked bytes\n")
     health = dependency_health(source, tmp_path)
     assert not health.ready
     assert any(
-        row.key == "evidenceforge:industry:healthcare@1.0.0" and row.status == "conflict"
+        row.key == "evidenceforge:industry:healthcare@1.0.0"
+        and row.status == "conflict"
+        and row.source == str(manifest)
         for row in health.rows
     )
     shutil.rmtree(industries[0].root)

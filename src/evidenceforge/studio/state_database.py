@@ -19,12 +19,13 @@ from evidenceforge.studio.state_migrations import (
     LAYOUT_MIGRATIONS,
     SETTINGS_MIGRATIONS,
     ContractMigration,
+    JsonChange,
     RecordChange,
     ordered_chain,
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -71,6 +72,23 @@ MIGRATIONS = (
                 table="validations",
                 column="dependency_sha256",
                 declaration="TEXT NOT NULL DEFAULT ''",
+            ),
+        ),
+    ),
+    Migration(
+        id="studio-db-0002",
+        source=1,
+        target=2,
+        description="Preserve optional artifact titles and pre-authoring scenario titles",
+        affected=("items", "conversations"),
+        sql="",
+        records=(
+            RecordChange(
+                table="items", changes=(JsonChange(action="default", field="display_name"),)
+            ),
+            RecordChange(
+                table="conversations",
+                changes=(JsonChange(action="default", field="draft_display_name"),),
             ),
         ),
     ),
@@ -129,7 +147,7 @@ def inspect_database(path: Path) -> int:
         if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
             raise StudioStateError("Studio database is damaged; restore a verified backup")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, DATABASE_VERSION):
+        if version not in range(DATABASE_VERSION + 1):
             raise StudioStateError(
                 f"Unsupported Studio database version {version}; use a compatible release"
             )
@@ -166,13 +184,15 @@ def inspect_database(path: Path) -> int:
                     for key in found
                 ):
                     raise StudioStateError(f"Unrecognized Studio column contract: {table}")
-            if version == DATABASE_VERSION:
+            if version >= 1:
                 if expected - actual - DERIVED_TABLES:
                     raise StudioStateError("Versioned Studio database is missing required tables")
                 if "studio_migrations" not in tables(connection):
                     raise StudioStateError("Studio migration ledger is missing")
                 recorded = dict(connection.execute("SELECT id, checksum FROM studio_migrations"))
-                required = {entry.id: entry.checksum for entry in MIGRATIONS}
+                required = {
+                    entry.id: entry.checksum for entry in MIGRATIONS if entry.target <= version
+                }
                 known = {
                     entry.id: entry.checksum
                     for entry in (*MIGRATIONS, *SETTINGS_MIGRATIONS, *LAYOUT_MIGRATIONS)
@@ -189,6 +209,8 @@ def inspect_database(path: Path) -> int:
                     ):
                         valid = False
                     if known.get(declaration) != checksum:
+                        valid = False
+                    if declaration.startswith("studio-db-") and declaration not in required:
                         valid = False
                 if not valid:
                     raise StudioStateError(
@@ -211,6 +233,9 @@ def validate_records(connection: sqlite3.Connection) -> None:
         Project,
         SavedView,
     )
+
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 2:
+        from evidenceforge.studio.state_records_v2 import CatalogItem, Conversation
 
     models: dict[str, type[BaseModel]] = {
         "items": CatalogItem,

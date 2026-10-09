@@ -61,6 +61,11 @@ test("live service connection and Codex health update independently", async () =
     result: { available: false, error: "Missing exact pack", destination: "/workspace/runs", checkpoint_hours: 24 },
   } }));
   expect(result.current.snapshot?.forecasts?.scenario.result.error).toBe("Missing exact pack");
+  const warning = { path: "/private/old-runtime", message: "Cannot verify process ownership." };
+  act(() => onEvent?.({ seq: 7, entity_id: "runtime", kind: "runtime.cleanup", payload: { warnings: [warning] } }));
+  expect(result.current.snapshot?.runtime_cleanup?.warnings).toEqual([warning]);
+  act(() => onEvent?.({ seq: 8, entity_id: "runtime", kind: "runtime.cleanup", payload: { warnings: [] } }));
+  expect(result.current.snapshot?.runtime_cleanup?.warnings).toEqual([]);
   unsubscribe();
   act(() => onDisconnect?.());
   expect(result.current.liveState).toBe("disconnected");

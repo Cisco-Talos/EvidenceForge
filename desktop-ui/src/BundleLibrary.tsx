@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { BundlePropertiesDialog } from "./ArtifactProperties";
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { ArrowUpRight, ChevronRight, ChevronDown, Download, FolderOpen, FolderPlus, Search, Trash2 } from "lucide-react";
 import type { CatalogItem, ImportedBundle, StudioApi, StudioJob, StudioSnapshot } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { CopyPathButton } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
-import { formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
+import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
 import { recentJobs } from "./jobOrder";
 import { bundleSummary, orderedBundles } from "./workspaceSummaries";
 import { HeaderSummary } from "./WorkspaceSection";
@@ -13,6 +14,7 @@ import { HeaderSummary } from "./WorkspaceSection";
 export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
   bundle: ImportedBundle; api: StudioApi; onError: (message: string) => void; onChanged: () => Promise<void>;
 }) {
+  const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [files, setFiles] = useState<BundleFiles | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [working, setWorking] = useState(false);
@@ -42,8 +44,9 @@ export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
     finally { setWorking(false); }
   }
   return <details className="job-row imported-bundle-row" id={`bundle-${bundle.id}`}>
-    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><StatusBadge status="Completed" /><span className="job-row-result">Read-only in Studio</span><ChevronDown size={16} className="job-row-chevron" /></summary>
+    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><StatusBadge status="Completed" /><span className="job-row-result">Read-only in Studio</span><span className="job-row-controls"><ChevronDown size={16} className="job-row-chevron" /><BundleOptionsMenu id={bundle.id} onProperties={() => setPropertiesOpen(true)} /></span></summary>
     <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={bundle.root}>{bundle.root}</span><CopyPathButton path={bundle.root} label="Copy bundle path" onError={onError} /></div><p className="muted small">Studio did not create this bundle. Removing it from the library leaves its files on disk.</p><div className="job-actions"><button className="button-quiet" onClick={() => void openFiles()}><FolderOpen size={16} /> View files</button><button className="button-quiet" disabled={working} onClick={() => void exportZip()}><Download size={16} /> {working ? "Exporting…" : isTauri() ? "Export ZIP" : "Download ZIP"}</button><button className="button-quiet" disabled={working} onClick={() => setConfirmRemove(true)}><Trash2 size={16} /> Remove from Studio</button></div>{working && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}{savedPath && <div className="path-with-copy muted small"><span className="path-value">Saved to {savedPath}</span><CopyPathButton path={savedPath} label="Copy saved ZIP path" onError={onError} /></div>}</div>
+    {propertiesOpen && <BundlePropertiesDialog id={bundle.id} imported api={api} onClose={() => setPropertiesOpen(false)} />}
     {files && <BundleFileBrowser jobId={bundle.id} kind="bundles" files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
     {confirmRemove && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Remove imported bundle"><h2>Remove from Studio?</h2><p>This bundle will disappear from the library. Its files remain at their current path and can be imported again.</p><div className="close-modal-actions"><button className="button-quiet" onClick={() => setConfirmRemove(false)}>Cancel</button><button className="button-danger" disabled={working} onClick={() => void remove()}>Remove from Studio</button></div></div></div>}
   </details>;

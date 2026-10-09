@@ -4,12 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
 import { afterEach, expect, test, vi } from "vitest";
 import { EnvironmentView } from "../src/EnvironmentView";
-import type { AssetPage, CatalogItem, EnvironmentReport, StudioApi } from "../src/api";
+import type { AssetPage, CatalogItem, DependencyRow, EnvironmentReport, StudioApi } from "../src/api";
 
 const item = { id: "scenario", kind: "scenario", source_sha256: "source", name: "Example" } as CatalogItem;
 const report: EnvironmentReport = {
   source_sha256: "source", project_root: "/workspace", valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
-  selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "/workspace/office" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "/package" }],
+  selected_packs: [{ source: "project", publisher: "team", type: "organization", name: "office", version: "2.0.0", digest: "d".repeat(64), location: "project:team:organization:office@2.0.0" }, { source: "package", publisher: "evidenceforge", type: "industry", name: "healthcare", version: "1.0.0", digest: "a".repeat(64), location: "package:evidenceforge:industry:healthcare@1.0.0" }],
   effective_scenario: { environment: { users: [{ name: "alice" }] } }, field_origins: { description: "sources/brief.yaml" }, organization_model_origins: { "network.segments": "office/pack.yaml" }, catalog_origins: {}, catalog_field_origins: { "personas.analyst": "healthcare/pack.yaml" }, merge_decisions: [{ path: "users", action: "replace", lower_layer: "organization", higher_layer: "scenario", winner: "scenario" }],
   declarations: [{ path: "description", layer: "Scenario", source: "brief.yaml", source_key: "sources/brief.yaml", source_size: 70, line: 5, value: "Clinic exercise", value_found: true }, { path: "environment.network.segments", layer: "Organization", source: "office/pack.yaml", source_key: "packs/office/pack.yaml", value: [], value_found: true }, { path: "persona_catalog.analyst", layer: "Pack catalog", source: "healthcare/pack.yaml", source_key: "packs/healthcare/pack.yaml", value: false, value_found: true }],
   configuration: { context_path: null, cli_command: "eforge generate /workspace/scenario.yaml --project-root /workspace", scopes: [{ id: "workspace", name: "Workspace", root: "/workspace/.eforge/config", enabled: true, files: [{ path: "activity/dns_registry.yaml", size: 20 }] }, { id: "scenario", name: "Scenario", root: "/workspace/scenario-config", enabled: false, files: [] }] },
@@ -263,4 +263,61 @@ test("source pages provide first, last, numbered jumps and accessible current-pa
   expect(screen.getByText("1–1 of 1 fields")).toBeVisible();
   expect(within(pages).getAllByRole("button", { name: /^Declarations page/ })).toHaveLength(1);
   expect(within(pages).getByRole("button", { name: "Last declarations page" })).toBeDisabled();
+});
+
+test("environment dependency links open the exact industry and organization packs by keyboard and click", async () => {
+  const { props, rerender } = setup();
+  const onOpenPack = vi.fn();
+  const office = { ...packs[0], id: "office-exact", path: "/workspace/office/pack.yaml", hidden: true };
+  const industry = { ...packs[2], id: "industry-exact", path: "/package/pack.yaml" };
+  const candidates = [
+    { ...office, id: "newer-office", version: "3.0.0", path: "/workspace/newer/pack.yaml" },
+    { ...industry, id: "workspace-copy", pack_source: "workspace" as const, path: "/workspace/copy/pack.yaml" },
+    { ...industry, id: "other-publisher", publisher: "other", path: "/other/pack.yaml" },
+    office, industry,
+  ];
+  const rows: DependencyRow[] = report.selected_packs.map((pack) => ({ key: `${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`, kind: "pack", label: `${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`, status: "available", detail: "Exact pack is available", digest: pack.digest }));
+  rows.push({ key: "team:organization:office@9.0.0", kind: "pack", label: "team:organization:office@9.0.0", status: "missing", detail: "Import exact version", digest: "missing" });
+  rerender(<Tooltip.Provider><EnvironmentView {...props} packs={candidates} onOpenPack={onOpenPack} dependencyHealth={{ ready: false, fingerprint: "deps", changed_at: 0, rows }} /></Tooltip.Provider>);
+  const orgLink = await screen.findByRole("button", { name: "Open team:organization:office@2.0.0 pack workspace" });
+  orgLink.focus();
+  await userEvent.setup().keyboard("{Enter}");
+  expect(onOpenPack).toHaveBeenLastCalledWith(office);
+  await userEvent.setup().click(screen.getByRole("button", { name: "Open evidenceforge:industry:healthcare@1.0.0 pack workspace" }));
+  expect(onOpenPack).toHaveBeenLastCalledWith(industry);
+  expect(screen.getByText("team:organization:office@9.0.0")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Open .*office@9/ })).toBeNull();
+});
+
+test("resolved pack cards link to indexed locations and never substitute another copy for an external path", async () => {
+  const selected = [
+    { ...report.selected_packs[0], source: "path" as const, location: "/external/office" },
+    report.selected_packs[1],
+  ];
+  const { props, rerender } = setup(vi.fn(async () => ({ ...report, selected_packs: selected })));
+  const onOpenPack = vi.fn();
+  const industry = { ...packs[2], id: "bundled", path: "/package/pack.yaml" };
+  rerender(<Tooltip.Provider><EnvironmentView {...props} packs={[{ ...packs[0], id: "office", path: "/workspace/office/pack.yaml" }, industry]} onOpenPack={onOpenPack} /></Tooltip.Provider>);
+  await userEvent.setup().click(await screen.findByRole("button", { name: "Open evidenceforge:industry:healthcare@1.0.0 pack workspace" }));
+  expect(onOpenPack).toHaveBeenCalledWith(industry);
+  expect(screen.getByText("/external/office")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Open team:organization:office@2.0.0 pack workspace" })).toBeNull();
+});
+
+test("resolved dependency locations stay navigable when composition fails and distinguish identical pack identities", async () => {
+  const { props, rerender } = setup(vi.fn(async () => ({ ...report, valid: false, selected_packs: [], error: "An unrelated include is missing" })));
+  const onOpenPack = vi.fn();
+  const industry = { ...packs[2], id: "selected", path: "/package/pack.yaml" };
+  const rows: DependencyRow[] = [
+    { key: "evidenceforge:industry:healthcare@1.0.0", kind: "pack", label: "evidenceforge:industry:healthcare@1.0.0", status: "available", detail: "Exact pack is available", source: industry.path },
+    { key: "team:organization:office@2.0.0", kind: "pack", label: "team:organization:office@2.0.0", status: "conflict", detail: "Digest mismatch", source: "/workspace/office/pack.yaml" },
+  ];
+  const office = { ...packs[0], id: "office", path: "/workspace/office/pack.yaml" };
+  rerender(<Tooltip.Provider><EnvironmentView {...props} packs={[{ ...industry, id: "workspace-copy", pack_source: "workspace", path: "/workspace/copy/pack.yaml" }, { ...industry, id: "other-root", path: "/other-package/pack.yaml" }, industry, office]} onOpenPack={onOpenPack} dependencyHealth={{ ready: false, fingerprint: "deps", rows }} /></Tooltip.Provider>);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Open evidenceforge:industry:healthcare@1.0.0 pack workspace" }));
+  expect(onOpenPack).toHaveBeenLastCalledWith(industry);
+  await screen.findByText(/An unrelated include is missing/);
+  await user.click(screen.getByRole("button", { name: "Open team:organization:office@2.0.0 pack workspace" }));
+  expect(onOpenPack).toHaveBeenLastCalledWith(office);
 });

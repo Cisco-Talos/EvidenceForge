@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from evidenceforge.studio.runtime import command_environment, discover_codex
+from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,13 @@ class CodexClient:
         binary: Path | None,
         on_event: CodexEvent,
         on_request: CodexRequest,
+        *,
+        config_overrides: tuple[str, ...] = (),
     ) -> None:
         self.binary = binary
         self.on_event = on_event
         self.on_request = on_request
+        self.config_overrides = config_overrides
         self.process: asyncio.subprocess.Process | None = None
         self.reader_task: asyncio.Task[None] | None = None
         self.stderr_task: asyncio.Task[None] | None = None
@@ -77,11 +81,13 @@ class CodexClient:
                 self.process = await asyncio.create_subprocess_exec(
                     command,
                     "app-server",
+                    *(arg for override in self.config_overrides for arg in ("-c", override)),
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     limit=MAX_PROTOCOL_LINE_BYTES,
                     env=command_environment(),
+                    pass_fds=runtime_worker_fds(),
                 )
             except OSError as error:
                 raise CodexUnavailableError(f"Could not start Codex: {error}") from error

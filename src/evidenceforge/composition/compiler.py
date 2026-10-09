@@ -19,6 +19,8 @@ from evidenceforge.config.context import ConfigurationContextError, SelectedCont
 from evidenceforge.config.overlay import overlay_project_root_scope
 from evidenceforge.models.exceptions import PackError, SchemaValidationError
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.schema import identify_document
+from evidenceforge.schema import scenario_payload as authored_payload
 from evidenceforge.utils import LoadedSourceGraph, load_scenario_source_graph
 from evidenceforge.utils.assets import EMAIL_CORPUS_MAX_SOURCE_BYTES
 from evidenceforge.utils.host_paths import logical_path
@@ -620,15 +622,56 @@ def compile_scenario(
 ) -> CompiledScenario:
     """Compile Scenario 1.0, Scenario 2.0, or authoritative resolved YAML."""
 
+    from evidenceforge.artifacts.lifecycle import frozen_scenario_input
+
+    if ":scenario:" in str(path) and not Path(path).is_file():
+        from evidenceforge.artifacts.lifecycle import resolve_reference
+
+        path = resolve_reference(str(path), project_root or Path.cwd())
+
+    frozen = frozen_scenario_input(Path(path))
+    if frozen is not None:
+        if context is not None:
+            raise ConfigurationContextError(
+                "Published inputs contain frozen configuration; omit --context"
+            )
+        compiled = _compile_resolved(frozen)
+        if generation_seed is not None:
+            compiled = with_runtime_scenario(
+                compiled, compiled.scenario.model_copy(update={"generation_seed": generation_seed})
+            )
+        return compiled
     graph = load_scenario_source_graph(path)
     raw = copy.deepcopy(graph.data)
-    if raw.get("kind") == "evidenceforge.resolved-scenario":
+    contract = identify_document(raw)
+    if contract.family == "resolved":
         if context is not None:
             raise ConfigurationContextError(
                 "Resolved inputs already contain their configuration; omit --context"
             )
-        return _compile_resolved(raw)
-    selection = select_context(project_root, context)
+        compiled = _compile_resolved(raw)
+        if generation_seed is not None:
+            compiled = with_runtime_scenario(
+                compiled, compiled.scenario.model_copy(update={"generation_seed": generation_seed})
+            )
+        return compiled
+    if contract.family != "scenario":
+        raise SchemaValidationError(
+            f"scenario schema validation failed: expected an authored scenario, found {contract.family}"
+        )
+    if contract.lifecycle and contract.lifecycle.status == "published":
+        raise SchemaValidationError(
+            "published sources require a complete integrity receipt; import the portable release"
+        )
+    bound_context = raw.get("configuration_context") if contract.schema_version == "3.0" else None
+    if bound_context is not None and context is None:
+        if not isinstance(bound_context, str):
+            raise ConfigurationContextError("configuration_context must name a context YAML file")
+        declaring = graph.origins.get(("configuration_context",), graph.root)
+        context = declaring.parent / bound_context
+        selection = select_context(None, context)
+    else:
+        selection = select_context(project_root, context)
     resolved_project_root = selection.project_root
     layers = _context_layers(selection)
 
@@ -639,7 +682,7 @@ def compile_scenario(
     organization_model_origins: dict[str, str] = {}
     merge_decisions: list[dict[str, str]] = []
     authored_kind: str
-    if raw.get("scenario_version") == "2.0":
+    if contract.schema_version in {"2.0", "3.0"}:
         try:
             composition = CompositionSpec.model_validate(raw.get("composition") or {})
         except ValidationError as exc:
@@ -649,17 +692,8 @@ def compile_scenario(
                 input_kind="scenario-2.0",
                 path_prefix="composition",
             ) from exc
-        authored = {
-            key: value
-            for key, value in raw.items()
-            if key not in {"scenario_version", "composition"}
-        }
-        if "version" in authored:
-            raise _ScenarioSchemaValidationError(
-                "Scenario 2.0 uses scenario_version: '2.0'; remove the legacy version field",
-                graph,
-                input_kind="scenario-2.0",
-            )
+        authored = authored_payload(raw, contract)
+        authored.pop("composition", None)
         ScenarioV2Document(
             scenario_version="2.0",
             composition=composition,
@@ -708,7 +742,7 @@ def compile_scenario(
                 if path and path[0] in {"environment", "baseline_activity"}
             )
         scenario_data["version"] = "2.0"
-        authored_kind = "scenario-2.0"
+        authored_kind = f"scenario-{contract.schema_version}"
     else:
         version = raw.get("version", "1.0")
         if version != "1.0":
@@ -717,7 +751,8 @@ def compile_scenario(
                 graph,
                 input_kind="scenario-1.0",
             )
-        scenario_data = raw
+        scenario_data = authored_payload(raw, contract)
+        scenario_data["version"] = "1.0"
         authored_kind = "scenario-1.0"
 
     try:
@@ -838,6 +873,13 @@ def compile_scenario(
     if context is not None:
         provenance["configuration_context"] = _context_provenance(selection, layers)
         provenance["composition_precedence"][4:4] = [layer.name for layer in layers]
+    if contract.lifecycle is not None:
+        provenance["artifact"] = {
+            "kind": "scenario",
+            "name": raw["name"],
+            **({"display_name": raw["display_name"]} if raw.get("display_name") else {}),
+            **contract.lifecycle.model_dump(mode="json", exclude_none=True),
+        }
     return CompiledScenario(
         scenario=scenario,
         effective_config=effective_config,

@@ -11,8 +11,19 @@ description: >
 
 # EvidenceForge Organization Pack Author
 
+For new work, use Schema 3 drafts through `eforge pack new-draft --kind organization`.
+Read `/eforge:references:artifact-lifecycle` before changing published files, assigning versions,
+upgrading, adding notes or publishing. Draft industries are supported for testing; publish and
+review their dependency promotion before publishing this organization.
+
 Author reusable organization context on top of exact locked industry packs. Default to a
 self-contained environment and baseline that a small Scenario 2.0 wrapper can consume directly.
+
+Offer optional Schema 3 `display_name` during creation and edits when missing; accept refusal
+without repeating the question or blocking authoring. Keep `name` unchanged. Read the naming
+section in `/eforge:references:artifact-lifecycle` for rules, title operations and legacy upgrades.
+If the user wants a suggestion, propose an editable title from known descriptions; apply it
+only after their choice. See the lifecycle reference for optional AI naming assistance.
 
 ## Establish context
 
@@ -61,16 +72,10 @@ duplicating them.
 
 ## Initialize or fork
 
-Use `0.1.0` for an explicitly identified draft and `1.0.0` for the first complete pack when the
-user supplies no version. Edit only a confirmed unshared draft in place. Fork any shared,
-referenced, or complete pack: patch for compatible corrections, minor for compatible additions,
-major for incompatible changes.
-
-```bash
-eforge pack init organization <name> --version <version> --json
-
-eforge pack copy <exact-organization-ref-or-path> --name <name> --version <version> --json
-```
+Create a new scaffold with `eforge pack new-draft <name> --kind organization --json`.
+Fork a source with `eforge pack draft <exact-ref-or-path> --name <name> --json`.
+Edit the returned draft path across sessions; preserve its draft ID. Choose X.Y.Z only at
+publication. Legacy `pack init`/`copy` remain available when explicitly working in schema 2.
 
 Never edit a packaged pack or overwrite an existing project version. After a renamed copy, confirm
 that local self-references use the new namespace while dependency references are unchanged.

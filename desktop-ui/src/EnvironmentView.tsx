@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Download, RefreshCw, Search, SquarePen } from "lucide-react";
+import { ArrowUpRight, Check, Download, RefreshCw, Search, Sparkles } from "lucide-react";
 import { Dialog } from "radix-ui";
 import type { CatalogItem, DependencyHealth, EnvironmentReport, SelectedPack, StudioApi } from "./api";
 import { AssetBrowser } from "./AssetBrowser";
@@ -8,6 +8,7 @@ import { ChatMarkdown } from "./ChatMarkdown";
 import { SourceDeclarations } from "./SourceDeclarations";
 import { InspectionSection } from "./InspectionSection";
 import { DependencyRows } from "./ImportDialog";
+import { dependencyPackItem, selectedPackItem } from "./environmentPackLinks";
 
 export function packReference(pack: Pick<SelectedPack, "source" | "publisher" | "type" | "name" | "version" | "location">): string {
   return pack.source === "path" ? pack.location : `${pack.source}:${pack.publisher}:${pack.type}:${pack.name}@${pack.version}`;
@@ -24,7 +25,7 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   const [selected, setSelected] = useState(initial);
   const [query, setQuery] = useState("");
   const [working, setWorking] = useState(false);
-  const choices: PackChoice[] = packs.filter((pack) => pack.publisher && pack.version).map((pack) => {
+  const choices: PackChoice[] = packs.filter((pack) => !pack.hidden && pack.publisher && pack.version).map((pack) => {
     const source = pack.pack_source === "bundled" ? "package" : "project";
     const kind = pack.kind === "industry_pack" ? "industry" : "organization";
     const reference = `${source}:${pack.publisher}:${kind}:${pack.name}@${pack.version}`;
@@ -52,13 +53,14 @@ function PackPicker({ report, packs, onClose, onPrepare, onError, onReturnFocus 
   return <Dialog.Root open onOpenChange={(open) => !open && !working && onClose()}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker" aria-describedby="pack-picker-help" onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}><Dialog.Title>Choose environment packs</Dialog.Title><Dialog.Description id="pack-picker-help">Choose exact versions. This prepares a request in a new conversation so you can review how the packs fit your scenario.</Dialog.Description>
     <fieldset className="pack-mode"><legend>Composition</legend>{(["none", "industries", "organization"] as const).map((choice) => <label key={choice}><input type="radio" name="composition-mode" checked={mode === choice} onChange={() => setMode(choice)} />{choice === "none" ? "No packs" : choice === "industries" ? "Industry packs" : "One organization"}</label>)}</fieldset>
     {mode !== "none" && <><div className="search-box"><Search size={15} /><input aria-label="Search environment packs" placeholder="Search name, author, or version…" value={query} onChange={(event) => setQuery(event.target.value)} /></div><ul className="pack-choice-list">{choices.filter((choice) => choice.kind === activeKind && `${choice.label} ${choice.author} ${choice.version} ${choice.reference}`.toLowerCase().includes(query.toLowerCase())).map((choice) => <li key={choice.key}><label><input type={mode === "organization" ? "radio" : "checkbox"} name={mode === "organization" ? "organization-pack" : undefined} checked={selected.includes(choice.key)} onChange={(event) => setSelected(mode === "organization" ? [choice.key] : event.target.checked ? [...selected, choice.key] : selected.filter((key) => key !== choice.key))} /><span><strong>{choice.label} <small>{choice.version}</small></strong><small>{choice.author} · {choice.source}</small><code>{choice.reference}</code></span></label></li>)}</ul>{!active.length && <p className="muted">Select {mode === "organization" ? "an organization" : "at least one industry pack"}.</p>}</>}
-    <footer><Dialog.Close className="button-quiet" disabled={working}>Cancel</Dialog.Close><button className="button-primary" disabled={working || (mode !== "none" && !active.length)} onClick={() => void prepare()}><SquarePen size={15} /> {working ? "Preparing…" : "Prepare in chat"}</button></footer>
+    <footer><Dialog.Close className="button-quiet" disabled={working}>Cancel</Dialog.Close><button className="button-primary" disabled={working || (mode !== "none" && !active.length)} onClick={() => void prepare()}><Sparkles size={15} /> {working ? "Preparing…" : "Prepare in chat"}</button></footer>
   </Dialog.Content></Dialog.Portal></Dialog.Root>;
 }
 
-export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onChanged, api, onPrepare, onError, embedded = false }: {
+export function EnvironmentView({ item, packs, dependencyFingerprint, dependencyHealth, refreshVersion = 0, onImportPacks, onOpenPack, onChanged, api, onPrepare, onError, embedded = false }: {
   item: CatalogItem; packs: CatalogItem[]; dependencyFingerprint?: string; dependencyHealth?: DependencyHealth;
   refreshVersion?: number; onImportPacks?: () => void; onChanged?: () => Promise<void>; api: StudioApi;
+  onOpenPack?: (pack: CatalogItem) => void;
   onPrepare: (prompt: string) => Promise<void>; onError: (message: string) => void; embedded?: boolean;
 }) {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
@@ -80,8 +82,12 @@ export function EnvironmentView({ item, packs, dependencyFingerprint, dependency
   return <div className="workspace-content environment-view">
     {!embedded && <div className="section-heading"><h2>Environment</h2><button className="icon-button" aria-label="Refresh environment" title="Read current scenario, packs, and overlays" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={17} className={loading ? "spinning" : ""} /></button></div>}
     <section className="environment-direct-packs" aria-label="Environment packs">
-      <header><h3>Packs <small>{packCount}</small></h3>{onImportPacks && packRows.some((row) => ["missing", "conflict"].includes(row.status)) && <button className="button-quiet" onClick={onImportPacks}><Download size={15} /> Import packs</button>}<button ref={pickerTrigger} className="button-quiet" disabled={!report || loading} onClick={() => setPicker(true)}><SquarePen size={15} /> Choose packs</button></header>
-      {packRows.length ? <DependencyRows rows={packRows} /> : report?.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span><strong>{pack.name} <small>{pack.version}</small></strong><code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>)}</ul> : report && <p className="muted">{report.valid ? "This scenario uses its inline environment; no packs are selected." : "Selected packs could not be resolved."}</p>}
+      <header><h3>Packs <small>{packCount}</small></h3>{onImportPacks && packRows.some((row) => ["missing", "conflict"].includes(row.status)) && <button className="button-quiet" onClick={onImportPacks}><Download size={15} /> Import packs</button>}<button ref={pickerTrigger} className="button-quiet" disabled={!report || loading} onClick={() => setPicker(true)}><Sparkles size={15} /> Choose packs</button></header>
+      {packRows.length ? <DependencyRows rows={packRows} canOpen={(row) => !!onOpenPack && !!dependencyPackItem(row, report?.selected_packs || [], packs)} onOpen={(row) => { const target = dependencyPackItem(row, report?.selected_packs || [], packs); if (target) onOpenPack?.(target); }} /> : report?.selected_packs.length ? <ul className="environment-pack-list">{report.selected_packs.map((pack) => {
+        const target = selectedPackItem(pack, packs);
+        const title = <strong>{pack.name} <small>{pack.version}</small></strong>;
+        return <li key={`${pack.source}:${pack.publisher}:${pack.type}:${pack.name}:${pack.version}`}><Check size={15} /><span>{target && onOpenPack ? <button type="button" className="environment-pack-link" aria-label={`Open ${pack.publisher}:${pack.type}:${pack.name}@${pack.version} pack workspace`} title="Open pack workspace" onClick={() => onOpenPack(target)}>{title}<ArrowUpRight size={14} aria-hidden="true" /></button> : title}<code>{packReference(pack)}</code><small>{pack.type} · {pack.publisher} · Digest {pack.digest.slice(0, 12)}</small></span></li>;
+      })}</ul> : report && <p className="muted">{report.valid ? "This scenario uses its inline environment; no packs are selected." : "Selected packs could not be resolved."}</p>}
       {fileErrors.length > 0 && <div className="environment-file-errors"><h3>Files needing attention</h3><DependencyRows rows={fileErrors} /></div>}
       {otherRows.length > fileErrors.length && <InspectionSection title="Included files and dependencies" count={`${otherRows.length - fileErrors.length} checks`}><DependencyRows rows={otherRows.filter((row) => !fileErrors.includes(row))} /></InspectionSection>}
     </section>

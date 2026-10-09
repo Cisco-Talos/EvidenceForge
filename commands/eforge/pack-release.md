@@ -5,6 +5,10 @@ description: Build, inspect, import, hydrate, and verify immutable EvidenceForge
 
 # EvidenceForge Pack Release Operations
 
+For Schema 3 draft/published operations, read `/eforge:references:artifact-lifecycle` and use
+`pack publish`, `export` and `import-release`. The older workflow below remains supported for
+existing `.efpack` releases. Publication and export are separate operations.
+
 Use this skill for immutable pack release operations, not substantive catalog or organization edits.
 Use `/eforge pack` to discover/copy packs and the industry or organization skills to edit them.
 Read `/eforge:references:project-context` and `/eforge:references:pack-reference` before

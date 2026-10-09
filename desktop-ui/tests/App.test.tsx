@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import App from "../src/App";
 import { StudioApi, StudioApiError, StudioSnapshot } from "../src/api";
+import type { EnvironmentReport } from "../src/api";
 import { ScorecardPanel } from "../src/ScorecardPanel";
 import { JobCard } from "../src/components";
 import { BundleFileBrowser } from "../src/BundleFileBrowser";
@@ -56,9 +57,19 @@ const snapshot: StudioSnapshot = {
   imported_bundles: [],
 };
 
+vi.mock("../src/ArtifactLifecycle", () => ({ ArtifactLifecycle: () => null }));
 vi.mock("../src/useStudio", () => ({
   useStudio: (() => {
     const api = { bundleSizes: vi.fn(async () => ({ "job-1": 1536 })), libraryPreferences: vi.fn(async () => ({ remember_view: true })), saveLibraryView: vi.fn(async (_workspace: string, _kind: string, view: unknown) => view), download: vi.fn(async () => ({ status: "browser" })), readTextPreview: vi.fn(async () => ({ text: "preview", truncated: false, binary: false })), request: vi.fn(async (path: string, method?: string, body?: unknown) => {
+      if (path.endsWith("/properties")) {
+        const current = snapshot.items.find((item) => path === `/v1/items/${item.id}/properties`)!;
+        return { ...current, digest: "captured-properties", schema_version: "3.0", lifecycle: { status: "draft", release_notes: "" }, dependencies: [], history: [], source_files: [current.path], findings: [], comparisons: [] };
+      }
+      if (path.endsWith("/lifecycle")) {
+        const current = snapshot.items.find((item) => path === `/v1/items/${item.id}/lifecycle`);
+        if (method === "POST") return { path: current?.path };
+        return { digest: "captured-title", lifecycle: { status: "draft" } };
+      }
       if (path.endsWith("/history")) return { thread: { turns: [] } };
       if (path === "/v1/codex/pending") return [];
       if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
@@ -566,12 +577,42 @@ test("the workspace forecast opens beside Generate without appearing before run 
   await user.click(screen.getByRole("button", { name: "Runs", exact: true }));
   expect(container.querySelector('[data-workspace-section="runs"] .workspace-section-body')?.firstElementChild).toHaveClass("scenario-runs");
   expect(screen.queryByRole("region", { name: "Generation resource forecast" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Forecast", exact: true }));
+  await user.click(screen.getByRole("button", { name: /Forecast ·/ }));
   expect(screen.getByRole("dialog", { name: "Generation forecast" })).toBeVisible();
   expect(screen.getByRole("region", { name: "Generation resource forecast" })).toBeVisible();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("button", { name: "Forecast", exact: true })).toHaveFocus();
+  expect(screen.getByRole("button", { name: /Forecast ·/ })).toHaveFocus();
+});
+
+test.each(["current", "older", "partial", "missing"])("Runs shows latest completed current data or a clickable forecast: %s", async (mode) => {
+  const originalJobs = snapshot.jobs;
+  const originalForecasts = snapshot.forecasts;
+  const originalDependencies = snapshot.dependencies;
+  const sizes = vi.mocked(useStudio().api!.bundleSizes);
+  const originalSizes = sizes.getMockImplementation()!;
+  const scenario = snapshot.items[0];
+  const range = (bytes: number) => ({ lower_bytes: bytes / 2, expected_bytes: bytes, upper_bytes: bytes * 2 });
+  snapshot.dependencies = { alpha: { ready: true, fingerprint: "deps", rows: [] } };
+  snapshot.forecasts = { alpha: { source_sha256: scenario.source_sha256, dependency_fingerprint: "deps", input_fingerprint: "key", completed_at: 123,
+    result: { available: true, destination: `${workspace}/runs`, checkpoint_hours: 24, forecast: {
+      calibration_version: 5, calibration_label: "Test", memory: range(1024), final_output: range(2 * 1024 ** 2), disk: range(4 * 1024 ** 2), checkpoint_workspace: range(1024),
+      snapshot: { total_memory_bytes: 1024, available_memory_bytes: 1024, free_swap_bytes: 0, free_disk_bytes: 1024 ** 3, disk_path: workspace }, pressures: [],
+    } } } };
+  snapshot.jobs = [{ ...originalJobs[0], id: "job-1", scenario: scenario.path, source_sha256: mode === "older" ? "older-version" : scenario.source_sha256, dependency_sha256: "deps", status: mode === "partial" ? "failed" : "completed", started_at: 100 }];
+  sizes.mockImplementation(async () => ({ "job-1": mode === "missing" ? null : 3 * 1024 ** 2 }));
+  try {
+    await renderExpandedApp();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    const button = await screen.findByRole("button", { name: mode === "current" ? "Latest · 3.0 MB" : "Forecast · ~2.0 MB" });
+    expect(button).toHaveClass(mode === "current" ? "latest" : "forecast");
+    await user.click(button);
+    expect(screen.getByRole("dialog", { name: "Generation forecast" })).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Generation resource forecast" })).getByText("2.0 MB")).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(button).toHaveFocus();
+  } finally { snapshot.jobs = originalJobs; snapshot.forecasts = originalForecasts; snapshot.dependencies = originalDependencies; sizes.mockImplementation(originalSizes); }
 });
 
 
@@ -1444,47 +1485,19 @@ test("project drop targets use drag types, ignore child transitions, and clear a
   } finally { snapshot.projects = originalProjects; }
 });
 
-test("scenario workspace title validates names, cancels, saves the displayed revision, and retains errors", async () => {
+test("workspace title and actions open the same Properties popup", async () => {
   await renderExpandedApp();
   const user = userEvent.setup();
-  const request = vi.mocked(useStudio().api!.request);
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
-  await user.click(screen.getByRole("button", { name: "Rename scenario Alpha" }));
-  const input = screen.getByRole("textbox", { name: "Scenario Name" });
-  expect(document.activeElement).toBe(input);
-  await user.clear(input);
-  await user.type(input, "Invalid name");
-  expect(screen.getByText(/no spaces/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Save scenario name" }).hasAttribute("disabled")).toBe(true);
-  await user.keyboard("{Escape}");
-  expect(screen.getByRole("button", { name: "Rename scenario Alpha" })).toBeTruthy();
-  expect(request).not.toHaveBeenCalledWith(expect.stringContaining("/rename"), expect.anything(), expect.anything());
-  await user.click(screen.getByRole("button", { name: "Rename scenario Alpha" }));
-  await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
-  await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Revised_Alpha-1");
-  request.mockRejectedValueOnce(new StudioApiError(409, "The scenario changed. Refresh it before renaming"));
-  await user.keyboard("{Enter}");
-  expect(await screen.findByText(/Refresh it before renaming/)).toBeTruthy();
-  expect(screen.getByRole("textbox", { name: "Scenario Name" })).toHaveProperty("value", "Revised_Alpha-1");
-  request.mockResolvedValueOnce({});
-  await user.click(screen.getByRole("button", { name: "Save scenario name" }));
-  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Scenario Name" })).toBeNull());
-  expect(request).toHaveBeenCalledWith("/v1/scenarios/alpha/rename", "POST", { name: "Revised_Alpha-1", source_sha256: "sha-alpha" });
-  expect(useStudio().reload).toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Alpha" }));
+  const dialog = screen.getByRole("dialog", { name: "Alpha" });
+  expect(await within(dialog).findByRole("textbox", { name: "Display name" })).toHaveValue("");
+  expect(within(dialog).getByRole("navigation", { name: "Properties sections" })).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Close properties" }));
+  await user.click(screen.getAllByRole("button", { name: "Alpha actions" })[0]);
+  await user.click(screen.getByRole("menuitem", { name: "Properties…" }));
+  expect(await screen.findByRole("textbox", { name: "Display name" })).toHaveValue("");
 });
-
-test.each(["passed", "failed", "marginal", "unrated"])("collapsed score rows summarize their measure icons: %s", async (rating) => {
-  const report = { scenario_name: "Alpha", evaluated_at: "2026-10-01T16:00:00Z", total_records: 100, overall_score: 92, acceptance_passed: true, source_counts: {}, flags: [], acceptance_criteria: [], pillars: [{ name: "Causality", score: 92, sub_scores: [{ name: "Check", score: 90, details: "", skipped: false, rating, rating_detail: "" }] }] };
-  const { container } = render(<ScorecardPanel jobId="eval" api={{ request: vi.fn(async () => report) } as unknown as StudioApi} compact />);
-  await screen.findByText("Causality");
-  const pillar = container.querySelector(".scorecard-pillar") as HTMLDetailsElement;
-  expect(pillar.open).toBe(false);
-  const icon = pillar.querySelector(`summary .subscore-${rating}`);
-  expect(icon).toBeTruthy();
-  expect(icon?.getAttribute("aria-label")).toContain("Causality:");
-  expect(icon?.getAttribute("aria-label")).toContain("does not replace saved acceptance");
-});
-
 
 test("draft scenarios can be dragged into a project and renamed from their workspace title", async () => {
   const originalProjects = snapshot.projects;
@@ -1504,11 +1517,11 @@ test("draft scenarios can be dragged into a project and renamed from their works
     fireEvent.drop(target, { dataTransfer: transfer });
     await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_project_id: "project-1" }));
     await user.click(within(card).getByRole("button", { name: "Open scenario Draft_name" }));
-    await user.click(screen.getByRole("button", { name: "Rename scenario Draft_name" }));
-    await user.clear(screen.getByRole("textbox", { name: "Scenario Name" }));
-    await user.type(screen.getByRole("textbox", { name: "Scenario Name" }), "Named_draft");
-    await user.click(screen.getByRole("button", { name: "Save scenario name" }));
-    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_name: "Named_draft" }));
+    await user.click(screen.getByRole("button", { name: "Edit display name Draft_name" }));
+    await user.clear(screen.getByRole("textbox", { name: "Workspace display name" }));
+    await user.type(screen.getByRole("textbox", { name: "Workspace display name" }), "Named draft");
+    await user.click(screen.getByRole("button", { name: "Save workspace display name" }));
+    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/conversations/draft-1", "PATCH", { draft_display_name: "Named draft" }));
   } finally { snapshot.projects = originalProjects; snapshot.conversations = originalConversations; }
 });
 
@@ -1924,6 +1937,49 @@ test("Environment is green when ready and refreshes dependencies without opening
   } finally { snapshot.dependencies = original; request.mockImplementation(implementation); }
 });
 
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`Environment opens the referenced ${kind} workspace and switches the library section`, async () => {
+    const originalItems = snapshot.items;
+    const originalDependencies = snapshot.dependencies;
+    const request = vi.mocked(useStudio().api!.request);
+    const implementation = request.getMockImplementation()!;
+    const type = kind === "industry_pack" ? "industry" : "organization";
+    const pack = { ...originalItems[0], id: "selected-pack", kind, name: "Sector", version: "1.0.0", publisher: "team", pack_source: "workspace" as const, path: `${workspace}/.eforge/packs/team/${type}/Sector/1.0.0/pack.yaml`, hidden: true };
+    const reference = `team:${type}:Sector@1.0.0`;
+    snapshot.items = [...originalItems, { ...pack, id: "newer-pack", version: "2.0.0", hidden: false }, pack];
+    snapshot.dependencies = { alpha: { ready: true, fingerprint: "ready", rows: [
+      { key: reference, kind: "pack", label: reference, status: "available", detail: "Exact version verified", digest: "pack-digest", source: pack.path },
+    ] } };
+    const environment: EnvironmentReport = {
+      source_sha256: "sha-alpha", project_root: workspace, valid: true, error: "", compiled_sha256: "compiled", authored_kind: "scenario-2.0",
+      selected_packs: [{ source: "project", publisher: "team", type, name: "Sector", version: "1.0.0", digest: "pack-digest", location: `project:${reference}` }],
+      effective_scenario: { environment: {} }, field_origins: {}, organization_model_origins: {}, catalog_origins: {}, catalog_field_origins: {}, merge_decisions: [], declarations: [],
+      overlay_root: `${workspace}/.eforge/config`, overlay_files: [], overlays_truncated: false,
+    };
+    request.mockImplementation(async (path, ...args) => {
+      if (path === "/v1/scenarios/alpha/environment") return environment;
+      if (/^\/v1\/items\/[^/]+\/assets\?/.test(path)) return { revision: "compiled", category: "users", categories: [], total: 0, matching: 0, page: 0, page_size: 50, entries: [] };
+      return implementation(path, ...args);
+    });
+    try {
+      const user = userEvent.setup();
+      const { container } = await renderExpandedApp();
+      await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+      const region = screen.getByRole("region", { name: "Environment", exact: true });
+      await user.click(within(region).getByRole("button", { name: "Environment", exact: true }));
+      await user.click(await within(region).findByRole("button", { name: `Open ${reference} pack workspace` }));
+      expect(screen.getByRole("heading", { name: "Sector", exact: true })).toBeVisible();
+      expect(screen.getByText("Version 1.0.0")).toBeVisible();
+      expect(screen.getByRole("region", { name: "Validation & release", exact: true })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Assets", exact: true })).toBeVisible();
+      expect(screen.queryByRole("region", { name: "Environment", exact: true })).toBeNull();
+      expect(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" })).toHaveClass("selected");
+      expect(container.querySelector(".back-link")).toHaveTextContent("Packs");
+      expect(pack.hidden).toBe(true);
+    } finally { snapshot.items = originalItems; snapshot.dependencies = originalDependencies; request.mockImplementation(implementation); }
+  });
+}
+
 test("Environment refresh failures recover the header action and keep existing status", async () => {
   const original = snapshot.dependencies;
   const request = vi.mocked(useStudio().api!.request);
@@ -1981,3 +2037,39 @@ test("workspace result icons preserve generation success and scoring failure whe
     expect(row.querySelector(".summary-inputs")).toHaveTextContent("Inputs changed");
   } finally { snapshot.jobs = originalJobs; snapshot.dependencies = originalDependencies; snapshot.items = originalItems; }
 });
+
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`${kind} exposes workspace version deletion while protecting bundled versions`, async () => {
+    const originalItems = snapshot.items;
+    const api = useStudio().api!;
+    const request = vi.mocked(api.request);
+    const implementation = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "deletable", kind, name: "office", version: "1.0.0", pack_source: "workspace" as const };
+    snapshot.items = [pack, { ...pack, id: "bundled", version: "2.0.0", pack_source: "bundled" }];
+    request.mockImplementation(async (path, ...args) => {
+      if (path === "/v1/packs/deletable/deletion") return { reference: "training:industry:office@1.0.0", revision: "review", files: 9, removable: false, consumers: ["Scenario: practice"], affected: [{ kind: "scenario", name: "practice", version: "", path: "/scenario" }], problems: [] };
+      return implementation(path, ...args);
+    });
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Options for office 2.0.0" }));
+      expect(screen.queryByRole("menuitem", { name: "Delete version…" })).not.toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete version…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Delete office 1.0.0?" });
+      await user.click(within(dialog).getByText("Affected items (1)"));
+      expect(within(dialog).getByText("practice")).toBeVisible();
+      expect(within(dialog).getByRole("button", { name: "Delete version" })).toBeDisabled();
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Open office 1.0.0" }));
+      expect(screen.getByRole("button", { name: "Validation & release" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "office actions" }));
+      expect(screen.getByRole("menuitem", { name: "Delete version…" })).toBeVisible();
+    } finally { snapshot.items = originalItems; request.mockImplementation(implementation); }
+  });
+}

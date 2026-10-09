@@ -131,7 +131,9 @@ EXPECTED_CHATGPT_REFERENCES = {
 }
 
 EXPECTED_CHATGPT_REFERENCES = {
-    name: refs | {"references/record-validation.md"}
+    name: refs
+    | {"references/record-validation.md"}
+    | ({"references/artifact-lifecycle.md"} if name != "config" else set())
     for name, refs in EXPECTED_CHATGPT_REFERENCES.items()
 }
 
@@ -498,6 +500,7 @@ class TestInstallChatGPTSkills:
             set(_CHATGPT_REFERENCES_BY_SKILL["generate"]) == EXPECTED_CHATGPT_REFERENCES["generate"]
         )
         assert set(_CHATGPT_REFERENCES_BY_SKILL["validate"]) == {
+            "references/artifact-lifecycle.md",
             "references/record-validation.md",
             "references/project-context.md",
             "references/validation-safety.md",

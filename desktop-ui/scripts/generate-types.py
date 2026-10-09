@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from evidenceforge.naming import NAMING_RULES
 from evidenceforge.studio.paths import StudioPaths
 from evidenceforge.studio.service import create_app
 
@@ -20,6 +21,17 @@ def main() -> None:
         raise SystemExit("Usage: generate-types.py [--check]")
     ui_directory = Path(__file__).resolve().parents[1]
     target = ui_directory / "src" / "generated" / "studio.ts"
+    naming_target = target.with_name("naming.ts")
+    naming = (
+        "// Generated from evidenceforge.naming; do not edit.\nexport const namingRules = "
+        + json.dumps({kind: rule.model_dump() for kind, rule in NAMING_RULES.items()}, indent=2)
+        + " as const;\n"
+    )
+    if check:
+        if not naming_target.is_file() or naming_target.read_text() != naming:
+            raise SystemExit("Studio naming rules are stale; run npm run types:generate")
+    else:
+        naming_target.write_text(naming)
     with tempfile.TemporaryDirectory(prefix="eforge-studio-schema-") as temporary:
         root = Path(temporary)
         os.environ["EFORGE_STUDIO_DEFAULT_WORKSPACE"] = str(root / "workspace")

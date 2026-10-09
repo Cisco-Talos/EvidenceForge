@@ -12,10 +12,19 @@ description: >
 
 # EvidenceForge Pack Manager
 
-Manage the safe lifecycle of data-only Scenario 2.0 packs. Keep catalog and model authoring in the
+Manage the file-based lifecycle of data-only packs. Read `/eforge:references:artifact-lifecycle`
+for Schema 3 drafts, publication, notes, lineage, upgrades and portable releases. Keep catalog and model authoring in the
 specialized industry- or organization-pack skill.
+The same reference covers `pack properties`, reviewed `pack edit-properties`, validation provenance
+and consolidated available notes. These operations use files and CLI in any supported chat client.
 
 Route immutable release build, inspection, import, and hydration to `/eforge pack-release`.
+
+Offer optional Schema 3 `display_name` during creation and edits when missing; accept refusal
+without repeating the question or blocking authoring. Keep `name` unchanged. Read the naming
+section in `/eforge:references:artifact-lifecycle` for rules, title operations and legacy upgrades.
+If the user wants a suggestion, propose an editable title from known descriptions; apply it
+only after their choice. See the lifecycle reference for optional AI naming assistance.
 
 ## Establish the execution boundary
 
@@ -81,54 +90,12 @@ location as diagnostic metadata, not as the scenario-consumption interface.
 
 ## Create or fork safely
 
-First inspect `eforge pack publisher show --json`. Configure either the user default or project
-override with `eforge pack publisher set <id> --display-name <name> --scope user|project --json`.
-Project scope wins. There is no derived fallback, and replacement requires `--force`.
-
-Choose one operation:
-
-- Start a new pack with `pack init`.
-- Tailor an existing pack with `pack copy`.
-- Edit an existing version in place only when the user confirms it is an unshared draft.
-- Fork a shared, referenced, or complete pack to a new version before changing semantics.
-
-Use these defaults when the user has not supplied a version:
-
-- `0.1.0` for an explicitly identified draft.
-- `1.0.0` for the first complete pack.
-- Patch for compatible corrections, minor for compatible additions, and major for incompatible
-  changes to a shared or complete pack.
-
-A renamed tailored copy is a new identity: start it at `0.1.0` while explicitly draft or `1.0.0`
-when complete. To evolve an existing identity, keep `--name` unchanged and advance its version.
-For example:
-
-```bash
-# New complete tailored identity.
-eforge pack copy package:evidenceforge:industry:finance@1.0.0 \
-  --name regional-finance --version 1.0.0 --json
-
-# Compatible addition to that shared identity.
-eforge pack copy project:evidenceforge:industry:regional-finance@1.0.0 \
-  --name regional-finance --version 1.1.0 --json
-```
-
-Run lifecycle commands in JSON mode:
-
-```bash
-eforge pack init industry <name> --version <version> --json
-
-eforge pack init organization <name> --version <version> --json
-
-eforge pack copy <exact-ref-or-path> --name <name> --version <version> --json
-```
-
-Do not overwrite an existing destination, hand-copy a package pack, or construct a pack path from
-unchecked input. After copy, confirm that the returned publisher/name and rewritten typed
-self-references use the configured publisher namespace while dependency namespaces remain unchanged.
-
-Route the created skeleton or fork to the matching authoring skill rather than filling substantive
-catalogs here.
+Create new work with `pack new-draft <name> --kind industry|organization --json`.
+Fork or adopt with `pack draft <source> --json`; use the returned independent draft path.
+Drafts do not require publisher configuration or release labels. Preserve the draft ID across
+editing sessions. Publication requires an explicitly configured publisher and chooses X.Y.Z.
+Read `/eforge:references:artifact-lifecycle` for review, promotion, publication and export.
+Legacy `pack init` and `pack copy` remain supported for explicit Schema 2 workflows.
 
 ## Validate and diagnose
 
@@ -174,7 +141,10 @@ order to choose a winner.
   package, project, or explicitly referenced path repositories.
 - Never treat the absence of packs as an error or warning for Scenario 1.0 or monolithic Scenario
   2.0.
-- Never delete a pack on the user's behalf; no public pack-delete workflow exists.
+- The CLI has no pack-delete command. Do not remove pack directories on the user's behalf.
+  Studio's explicit Delete version review can remove one workspace version after checking consumers,
+  with retained recovery files. Pack deletion must go through that reviewed workflow when requested;
+  bundled packs remain protected.
 
 ## Report
 

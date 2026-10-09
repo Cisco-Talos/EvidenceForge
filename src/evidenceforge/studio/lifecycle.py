@@ -16,10 +16,10 @@ from pydantic import ValidationError
 
 from evidenceforge.composition.models import GenerationManifestDocument
 from evidenceforge.desktop.library import discover_scenarios
+from evidenceforge.naming import storage_name, validate_name
 from evidenceforge.studio.store import ImportedBundle
 
 _SCENARIO_NAME = re.compile(r"(?m)^name[ \t]*:[^\n]*(?:\n|$)")
-_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}")
 _MAX_CLONE_BYTES = 1024**3
 _MAX_MANIFEST_BYTES = 8 * 1024**2
 _MAX_RESOLVED_BYTES = 64 * 1024**2
@@ -32,8 +32,7 @@ def rename_scenario(source: Path, name: str, expected_sha256: str) -> None:
     authored values. Replace the file atomically so indexing never sees a
     partially written scenario.
     """
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", name):
-        raise ValueError("Use 1–80 letters, digits, hyphens, or underscores; no spaces")
+    validate_name(name, "scenario")
     if source.is_symlink() or not source.is_file():
         raise ValueError("The authored scenario must be a regular file, not a link")
     if source.stat().st_size > _MAX_MANIFEST_BYTES:
@@ -69,6 +68,9 @@ def rename_scenario(source: Path, name: str, expected_sha256: str) -> None:
             "The scenario YAML could not be parsed; repair it before renaming"
         ) from exc
 
+    from evidenceforge.artifacts.lifecycle import assert_mutable
+
+    assert_mutable(source)
     descriptor, temporary_name = tempfile.mkstemp(prefix=".eforge-name-", dir=source.parent)
     temporary = Path(temporary_name)
     try:
@@ -140,8 +142,14 @@ def clone_scenario(source: Path, workspace: Path, name: str) -> Path:
     selected source folder. A failed copy removes only the destination this
     operation created.
     """
-    if not _SLUG.fullmatch(name):
-        raise ValueError("Use a name of 1–80 letters, digits, hyphens, or underscores")
+    from evidenceforge.artifacts.lifecycle import create_draft
+    from evidenceforge.schema import identify_document
+    from evidenceforge.utils import load_scenario_source_graph
+
+    contract = identify_document(load_scenario_source_graph(source).data)
+    if contract.lifecycle is not None:
+        return create_draft(source, project_root=workspace, name=name)
+    validate_name(name, "scenario")
     if (workspace / "scenarios").is_symlink():
         raise ValueError("The workspace scenarios directory must not be a link")
     root = (workspace / "scenarios").resolve()
@@ -150,7 +158,7 @@ def clone_scenario(source: Path, workspace: Path, name: str) -> Path:
         raise ValueError("The source scenario must be inside this workspace")
     if not original.is_file() or source.is_symlink():
         raise ValueError("The source scenario file is unavailable or is a link")
-    destination = root / name
+    destination = root / storage_name(name)
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"A scenario folder already exists: {destination}")
 

@@ -57,6 +57,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/config-validation.md",
     ),
     "evaluate": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/evidence-endpoint-linux.md",
         "references/evidence-network-ids.md",
@@ -65,6 +66,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "generate": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/checkpoint-recovery.md",
@@ -75,6 +77,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "industry-pack": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/pack-reference.md",
@@ -86,6 +89,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-smb.md",
     ),
     "organization-pack": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/pack-reference.md",
@@ -98,16 +102,19 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-smb.md",
     ),
     "pack": (
+        "references/artifact-lifecycle.md",
         "references/project-context.md",
         "references/pack-reference.md",
         "references/record-validation.md",
     ),
     "pack-release": (
+        "references/artifact-lifecycle.md",
         "references/project-context.md",
         "references/pack-reference.md",
         "references/record-validation.md",
     ),
     "scenario": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/evidence-endpoint-linux.md",
@@ -132,6 +139,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-storyline.md",
     ),
     "validate": (
+        "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/validation-safety.md",
