@@ -34,6 +34,14 @@ set`; never derive identity from a username, hostname, repository, or pack name.
 
 `.efpack` files are local release artifacts; this skill does not upload to a registry or remote host.
 
+`pack inspect` preserves the archive-validation JSON contract: `valid`, `root` and `members`,
+with `valid: false`, `error` and exit code 2 for an invalid archive. Pack Schema 2 archives retain
+their exact root and dependency-member identities. Schema 3 archives return the verified portable
+receipt as `root` and its single captured release as `members`; that receipt inventories frozen
+dependencies along with the source files. Use `pack inspect-artifact <path-or-reference> --json`
+for draft/release metadata, schema, notes, lineage and a digest for reviewed edits. The
+`inspect-legacy` alias remains available.
+
 ## Validation policy
 
 Read `/eforge:references:record-validation` when explaining input checks, evidence acceptance,

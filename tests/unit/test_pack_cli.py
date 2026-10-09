@@ -94,7 +94,11 @@ def test_pack_release_build_inspect_and_import_have_stable_json(tmp_path: Path) 
     assert built_payload["root"]["name"] == "metrolink-specialty-care"
     assert len(built_payload["members"]) == 2
     assert inspected.exit_code == 0, inspected.stdout
-    assert json.loads(inspected.stdout)["valid"] is True
+    assert json.loads(inspected.stdout) == {
+        "valid": True,
+        "root": built_payload["root"],
+        "members": built_payload["members"],
+    }
     assert imported.exit_code == 0, imported.stdout
     imported_payload = json.loads(imported.stdout)
     assert imported_payload["imported"] is True

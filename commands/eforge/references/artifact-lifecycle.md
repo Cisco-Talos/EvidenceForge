@@ -40,8 +40,12 @@ published releases remain usable. Bundled engine packs and other installed versi
 
 ## Select the source and state
 
-Use `eforge scenario inspect <path-or-reference> --json` or `eforge pack inspect ...` before
-editing. Ordinary Scenario 1/2 and Pack Schema 2 workspace files remain usable and unclassified.
+Use `eforge scenario inspect <path-or-reference> --json` or
+`eforge pack inspect-artifact <path-or-reference> --json` before editing. These commands expose
+schema, lifecycle, notes, lineage and the digest needed for reviewed edits, including for portable
+archives. `eforge pack inspect <archive> --json` retains the archive-validation contract:
+`valid`, `root` and `members` on success; `valid: false`, an `error` and exit code 2 on failure.
+Ordinary Scenario 1/2 and Pack Schema 2 workspace files remain usable and unclassified.
 Do not infer publication from their version field. Generated resolved inputs and bundles are
 not authored documents and must never be upgraded or edited.
 

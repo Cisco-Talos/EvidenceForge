@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import zipfile
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -25,6 +26,7 @@ from evidenceforge.composition.publisher import (
     set_publisher,
 )
 from evidenceforge.composition.releases import (
+    EFPACK_MANIFEST,
     build_efpack,
     hydrate_release,
     import_efpack,
@@ -551,6 +553,7 @@ def lock_pack(
         console.print(f"[green]✓[/green] {action} {len(changes)} lock change(s)")
 
 
+@pack_app.command("inspect")
 @pack_app.command("inspect-legacy")
 def inspect_pack_release(
     archive: Path = typer.Argument(..., help=".efpack archive"),
@@ -559,16 +562,37 @@ def inspect_pack_release(
     """Validate an .efpack without modifying a library."""
 
     try:
-        payload = validate_efpack(archive)
-    except PackError as exc:
+        from evidenceforge.artifacts.lifecycle import RECEIPT
+
+        with zipfile.ZipFile(archive) as container:
+            names = container.namelist()
+            formal = RECEIPT in names and EFPACK_MANIFEST not in names
+        if formal:
+            from evidenceforge.artifacts.portable import read_archive
+
+            receipt, _files = read_archive(archive)
+            if receipt.kind == "scenario":
+                raise PackError("use scenario inspect for a scenario archive")
+            root = receipt.model_dump(mode="json")
+            result = {"valid": True, "root": root, "members": [root]}
+            publisher, name = receipt.lifecycle.publisher, receipt.name
+        else:
+            payload = validate_efpack(archive)
+            result = {"valid": True, "root": payload.root, "members": list(payload.members)}
+            publisher, name = payload.root["publisher"], payload.root["name"]
+    except zipfile.BadZipFile as exc:
+        _fail(
+            PackError(f"invalid .efpack ZIP archive: {exc}"),
+            json_output=json_output,
+            json_payload={"valid": False},
+            exit_code=2,
+        )
+    except (EvidenceForgeError, OSError, ValueError, RuntimeError) as exc:
         _fail(exc, json_output=json_output, json_payload={"valid": False}, exit_code=2)
-    result = {"valid": True, "root": payload.root, "members": list(payload.members)}
     if json_output:
         _emit_json(result)
     else:
-        console.print(
-            f"[green]✓[/green] Valid .efpack for {payload.root['publisher']}/{payload.root['name']}"
-        )
+        console.print(f"[green]✓[/green] Valid .efpack for {publisher}/{name}")
 
 
 @pack_app.command("import")
@@ -592,8 +616,6 @@ def import_pack_release(
             json_payload={"imported": False},
         )
     try:
-        import zipfile
-
         with zipfile.ZipFile(archive) as container:
             formal = "release.json" in container.namelist()
         if formal:

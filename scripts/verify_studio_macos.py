@@ -21,6 +21,7 @@ def run_cli(
     environment: dict[str, str],
     *,
     timeout: int = 30,
+    expected_exit_code: int = 0,
 ) -> str:
     """Run the standalone CLI without development dependencies or Studio state."""
     result = subprocess.run(
@@ -31,7 +32,7 @@ def run_cli(
         text=True,
         timeout=timeout,
     )
-    if result.returncode != 0:
+    if result.returncode != expected_exit_code:
         raise RuntimeError(f"Packaged CLI failed: {arguments}\n{result.stderr}\n{result.stdout}")
     return result.stdout
 
@@ -90,6 +91,39 @@ def main() -> None:
             "--expected-digest" in lifecycle_reference and "scenario rename" in lifecycle_reference
         )
         assert "configured project-over-user publisher" in lifecycle_reference
+        assert "pack inspect-artifact" in lifecycle_reference
+        pack_archive = workspace / "received.efpack"
+        built = json.loads(
+            run_cli(
+                cli,
+                [
+                    "pack",
+                    "build",
+                    "package:evidenceforge:organization:metrolink-specialty-care@1.0.0",
+                    "--output",
+                    str(pack_archive),
+                    "--json",
+                ],
+                workspace,
+                environment,
+            )
+        )
+        inspected = json.loads(
+            run_cli(cli, ["pack", "inspect", str(pack_archive), "--json"], workspace, environment)
+        )
+        assert inspected == {"valid": True, "root": built["root"], "members": built["members"]}
+        invalid_archive = workspace / "invalid.efpack"
+        invalid_archive.write_bytes(b"not a ZIP archive")
+        invalid = json.loads(
+            run_cli(
+                cli,
+                ["pack", "inspect", str(invalid_archive), "--json"],
+                workspace,
+                environment,
+                expected_exit_code=2,
+            )
+        )
+        assert set(invalid) == {"valid", "error"} and invalid["valid"] is False
         run_cli(
             cli,
             [
@@ -115,6 +149,7 @@ def main() -> None:
             ("pack", "industry", "native-industry-" + "a" * 300),
             ("pack", "organization", "native-organization-" + "a" * 300),
         ):
+            inspect_command = "inspect-artifact" if group == "pack" else "inspect"
             draft = json.loads(
                 run_cli(
                     cli,
@@ -133,7 +168,7 @@ def main() -> None:
                 )
             )["path"]
             inspected = json.loads(
-                run_cli(cli, [group, "inspect", draft, "--json"], workspace, environment)
+                run_cli(cli, [group, inspect_command, draft, "--json"], workspace, environment)
             )
             assert inspected["name"] == name
             assert inspected["display_name"] == "Friendly Native Title — Équipe"
@@ -172,7 +207,7 @@ def main() -> None:
             )
             assert renamed["path"] == draft
             checked = json.loads(
-                run_cli(cli, [group, "inspect", draft, "--json"], workspace, environment)
+                run_cli(cli, [group, inspect_command, draft, "--json"], workspace, environment)
             )
             assert checked["name"] == f"renamed-{kind}" and checked["display_name"] is None
             assert checked["lifecycle"]["draft_id"] == cleared["lifecycle"]["draft_id"]
@@ -279,6 +314,7 @@ def main() -> None:
                 "runtime_checksum": "passed",
                 "isolated_cli": "passed",
                 "bundled_skills_and_references": "passed",
+                "pack_inspection": "passed",
                 "artifact_naming": "passed",
                 "artifact_properties": "passed",
                 "bundle_data_properties": "passed",

@@ -339,7 +339,7 @@ def register_lifecycle_commands(app: typer.Typer, *, pack: bool = False) -> None
 
         _emit(operation, json_output)
 
-    @app.command("inspect")
+    @app.command("inspect-artifact" if pack else "inspect")
     def inspect(
         source: str,
         project_root: Path | None = typer.Option(None, "--project-root"),
