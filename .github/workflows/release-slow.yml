@@ -1,6 +1,7 @@
 name: Release Slow Tests
 
 on:
+  workflow_call:
   pull_request:
     branches: [main]
 
@@ -8,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-slow-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-release-slow-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

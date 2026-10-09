@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      release-coverage:
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -10,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,7 +50,7 @@ jobs:
       - name: Validate generation behavior declaration
         run: >-
           uv run python scripts/check_generation_behavior.py
-          --base-ref "${{ github.event.pull_request.base.sha || github.event.before }}"
+          --base-ref "${{ github.event.pull_request.base.sha || (github.ref_type == 'tag' && 'HEAD^') || github.event.before }}"
 
   tests:
     name: Tests (${{ matrix.os }}, Python 3.12)
@@ -82,7 +87,14 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
+      - name: Run release coverage gate
+        if: inputs.release-coverage && runner.os == 'Linux'
+        run: >-
+          uv run pytest --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
+          --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
       - name: Run tests without coverage
+        if: ${{ !inputs.release-coverage || runner.os != 'Linux' }}
         # Studio's native GUI lifecycle is gated separately on its supported macOS host.
         run: uv run pytest --no-cov --ignore-glob='**/test_studio_*.py' --ignore-glob='**/test_desktop_*.py'
 

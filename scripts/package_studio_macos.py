@@ -237,8 +237,9 @@ def build_app(
     architectures: list[str],
     *,
     skip_dmg: bool = False,
+    release: bool = False,
 ) -> None:
-    """Build a native shell and optionally create a drag-to-Applications test DMG."""
+    """Build a native shell and optionally create a drag-to-Applications DMG."""
     if sys.platform != "darwin":
         raise RuntimeError("The macOS application must be built on macOS")
     lock = RuntimeLock.model_validate_json(
@@ -308,25 +309,62 @@ def build_app(
     (volume / "Applications").symlink_to("/Applications", target_is_directory=True)
     version: str = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     label = "universal" if len(architectures) == 2 else architectures[0]
-    dmg = destination / f"EvidenceForge-Studio-{version}-{label}-test.dmg"
+    suffix = "" if release else "-test"
+    dmg = destination / f"EvidenceForge-Studio-{version}-{label}{suffix}.dmg"
+    writable_dmg = build / "installer-writable.dmg"
+    mount = build / "installer-mount"
+    mount.mkdir(exist_ok=True)
+    icon_command = [
+        "xcrun",
+        "swift",
+        "-module-cache-path",
+        str(build / "swift-cache"),
+        str(frontend / "scripts/set-macos-dmg-icon.swift"),
+    ]
+    icon = str(frontend / "src-tauri/icons/icon.icns")
     run(
         [
             "hdiutil",
             "create",
             "-ov",
             "-format",
-            "UDZO",
+            "UDRW",
             "-volname",
             "EvidenceForge Studio",
             "-srcfolder",
             str(volume),
-            str(dmg),
+            str(writable_dmg),
         ],
         root,
         environment,
     )
+    run(
+        [
+            "hdiutil",
+            "attach",
+            "-nobrowse",
+            "-noautoopen",
+            "-mountpoint",
+            str(mount),
+            str(writable_dmg),
+        ],
+        root,
+        environment,
+    )
+    try:
+        run([*icon_command, str(mount), icon], root, environment)
+    finally:
+        run(["hdiutil", "detach", str(mount)], root, environment)
+    run(
+        ["hdiutil", "convert", str(writable_dmg), "-format", "UDZO", "-ov", "-o", str(dmg)],
+        root,
+        environment,
+    )
+    # This local Finder metadata is useful on the build machine. The volume icon
+    # above is inside the DMG and survives ordinary downloads without metadata.
+    run([*icon_command, str(dmg), icon], root, environment)
     (dmg.with_suffix(".dmg.sha256")).write_text(f"{digest(dmg)}  {dmg.name}\n")
-    print(f"Standalone app: {app}\nTest DMG: {dmg}", flush=True)
+    print(f"Standalone app: {app}\nDMG: {dmg}", flush=True)
 
 
 def main() -> None:
@@ -337,6 +375,7 @@ def main() -> None:
     )
     parser.add_argument("--build-app", action="store_true")
     parser.add_argument("--skip-dmg", action="store_true", help="Build the app without a DMG")
+    parser.add_argument("--release", action="store_true", help="Use release installer filenames")
     parser.add_argument("--build-directory", type=Path)
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -344,7 +383,14 @@ def main() -> None:
     architectures = list(dict.fromkeys(arguments.architectures))
     configuration = assemble(root, build, architectures)
     if arguments.build_app:
-        build_app(root, build, configuration, architectures, skip_dmg=arguments.skip_dmg)
+        build_app(
+            root,
+            build,
+            configuration,
+            architectures,
+            skip_dmg=arguments.skip_dmg,
+            release=arguments.release,
+        )
 
 
 if __name__ == "__main__":

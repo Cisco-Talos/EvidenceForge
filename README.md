@@ -68,6 +68,21 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
+## What's New in 2.2.0a1 (Alpha)
+
+- **EvidenceForge Studio:** A desktop workspace for authoring scenarios and packs,
+  generating logs, and reviewing evaluations.
+- **Standalone macOS app:** An Apple Silicon DMG bundles Python, the engine,
+  resources, and skills. Codex-assisted authoring requires you to install Codex
+  yourself; it is not included with EvidenceForge.
+- **Portable authored releases:** Version, freeze, export, and share scenarios
+  and packs with their dependencies and release history.
+
+Existing CLI and chat-skill workflows are still supported.
+EvidenceForge Studio is a supplement, not a replacement.
+
+See the [Studio guide](docs/studio.md) for installation, workflows, and backup/restore.
+
 ## What's New in 2.0
 
 - **Greater realism across sources**. Endpoint, identity, network, application, and IDS evidence
@@ -142,6 +157,9 @@ the [Output Target Ingest Guides](docs/output-targets/README.md) for target-spec
 parser support.
 
 ## Quick Start
+
+For the packaged desktop app, follow the [Studio guide](docs/studio.md#install-and-open-studio).
+The commands below cover the traditional source-checkout CLI and chat-skill workflow.
 
 macOS and Linux are the primary supported host platforms. Native Windows runs Python directly,
 without WSL; generation output, checkpoint workspaces, and temporary storage must use local NTFS
@@ -322,8 +340,8 @@ uv run eforge eval ./output
 EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
 The GUI currently supports **macOS only**; Linux and Windows GUI support is deferred for later
 exploration. This does not change the engine or CLI platform support described above.
-Run it with `uv run eforge-desktop` after following the
-[Studio source-run guide](docs/studio-source-run.md).
+Run it with `uv run eforge-desktop` after following
+[Studio development in CONTRIBUTING.md](CONTRIBUTING.md#studio-development-on-macos).
 
 ```bash
 uv sync --all-extras
@@ -337,6 +355,10 @@ coverage gate, coding conventions, and external-parser validation requirements.
 
 ## Documentation
 
+- [Studio Guide](docs/studio.md) — Installation, authoring, generation, evaluation, updates,
+  and backup/restore
+- [Authored Artifact Lifecycle](commands/eforge/references/artifact-lifecycle.md) — Drafts,
+  immutable local releases, linked upgrades, and portable scenario/pack archives
 - [Scenario Reference](docs/reference/scenario-reference.md) — Scenario fields, includes, typed
   events, and validation rules
 - [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) — Output layout, log types,

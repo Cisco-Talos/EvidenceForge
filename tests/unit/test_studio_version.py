@@ -1,13 +1,9 @@
 """Shared product release identity and cross-ecosystem prerelease contracts."""
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-import yaml
 from scripts.sync_studio_version import studio_version, synchronize
 
 
@@ -105,69 +101,3 @@ def test_studio_release_sync_rejects_engine_drift_before_writes(tmp_path: Path) 
 def test_studio_version_rejects_noncanonical_release_versions(version: str) -> None:
     with pytest.raises(ValueError, match="must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN"):
         studio_version(version)
-
-
-@pytest.fixture(params=["validate-release-version", "publish-release"])
-def release_guard_script(request: pytest.FixtureRequest) -> str:
-    workflow = Path(__file__).resolve().parents[2] / ".github/workflows/release.yml"
-    steps = yaml.safe_load(workflow.read_text())["jobs"][request.param]["steps"]
-    command = next(step["run"] for step in steps if step.get("name") == "Read release version")
-    return command.removeprefix("python - <<'PY'\n").removesuffix("PY\n")
-
-
-@pytest.mark.parametrize("version", ["2.2.0", "2.2.0a1", "2.2.0b2", "2.2.0rc1"])
-def test_release_workflow_guard_accepts_prereleases_and_preserves_tag_identity(
-    tmp_path: Path, release_guard_script: str, version: str
-) -> None:
-    release_tree(tmp_path, version)
-    output = tmp_path / "github-output"
-    result = subprocess.run(
-        [sys.executable, "-c", release_guard_script],
-        cwd=tmp_path,
-        env={**os.environ, "GITHUB_OUTPUT": str(output)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert output.read_text().splitlines() == [f"version={version}", f"tag=v{version}"]
-
-
-@pytest.mark.parametrize("version", ["2.2.0a", "2.2.0-alpha.1", "2.2.0a01"])
-def test_release_workflow_guard_rejects_noncanonical_prereleases(
-    tmp_path: Path, release_guard_script: str, version: str
-) -> None:
-    release_tree(tmp_path, version)
-    output = tmp_path / "github-output"
-    result = subprocess.run(
-        [sys.executable, "-c", release_guard_script],
-        cwd=tmp_path,
-        env={**os.environ, "GITHUB_OUTPUT": str(output)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "version must be" in result.stdout
-    assert not output.exists()
-
-
-@pytest.mark.parametrize("relative", ["src/evidenceforge/__init__.py", "uv.lock"])
-def test_release_workflow_guard_rejects_prerelease_version_drift(
-    tmp_path: Path, release_guard_script: str, relative: str
-) -> None:
-    release_tree(tmp_path, "2.2.0a1")
-    path = tmp_path / relative
-    path.write_text(path.read_text().replace("2.2.0a1", "2.2.0a2"))
-    output = tmp_path / "github-output"
-    result = subprocess.run(
-        [sys.executable, "-c", release_guard_script],
-        cwd=tmp_path,
-        env={**os.environ, "GITHUB_OUTPUT": str(output)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode != 0
-    assert "does not match pyproject.toml" in result.stdout
-    assert not output.exists()

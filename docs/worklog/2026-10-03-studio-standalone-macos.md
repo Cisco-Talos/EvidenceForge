@@ -56,7 +56,7 @@ on `codex/gui` at session start.
   Developer ID signing. Existing macOS Studio CI now builds/uploads the test image
   and verifies its packaged CLI/resources on Apple Silicon runners. Remote CI has
   not been run in this session.
-- [Install/build instructions](../studio-standalone-macos.md) explain first launch,
+- [Studio guide](../studio.md) and [developer build instructions](../../CONTRIBUTING.md#build-the-standalone-apple-silicon-app) explain first launch,
   data locations, helper lifetime, updates, and acceptance on the other Mac.
 
 ### Architecture limitation

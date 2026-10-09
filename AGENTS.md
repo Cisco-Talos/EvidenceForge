@@ -178,12 +178,14 @@ bump or publication; wait for an explicit release request.
 require a different SemVer target. Increment the stage number for each new published snapshot;
 never overwrite a published tag or replace its build. Synchronize all Python and Studio versions,
 and commit the changelog with the version bump on `dev` (for example,
-`chore: bump version to 2.2.0a1`). Build and verify artifacts from that exact committed snapshot,
-then create an annotated tag and a GitHub Release marked **pre-release**, with **latest** disabled.
-Attach the DMG and its checksum before publishing. Document supported platforms, external
+`chore: bump version to 2.2.0a1`). Push the versioned source to `dev`, then push an annotated tag pointing to that exact snapshot.
+The Release workflow validates the tag/version and `dev` ancestry, runs release gates, builds
+and verifies the installer, attaches the DMG and checksum to a draft, then publishes it marked
+**pre-release**, with **latest** disabled. Document supported platforms, external
 requirements, signing/notarization status, known limitations, and validation evidence. Retain
 the applicable release and native acceptance gates; alpha status does not close outstanding gates.
-This flow is manual; the current release workflow does not publish from `dev` or build release DMGs.
+Pushing the prerelease tag starts publication automatically; only push it when the release is
+authorized. A normal push to `dev` does not publish a release.
 When the stable release is ready, remove the prerelease suffix (for example, `2.2.0rc1` → `2.2.0`)
 on `dev` and follow the normal `dev` → `main` release path. Do not increase the base version again
 solely because prereleases were published.
@@ -195,141 +197,35 @@ chore: bump version to X.Y.Z
 
 **Changelog update (required with every version bump):** as part of the same bump commit, prepend a new `## vX.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md` summarizing every commit since the previous version entry. Drive the summary from `git log main..dev --oneline` (or `git log vPREV..HEAD --oneline` if tagged). Group related commits into themed subsections (e.g., "Explicit proxy path modeling", "TLS & X.509 realism", "CLI & config"), cite the short SHAs inline in parentheses, and skip pure merge commits and unrelated dependabot bumps. Version-bump-only releases (no code changes) still get an entry noting that. The changelog entry and the version bump land in the same commit.
 
-**Release automation:** `.github/workflows/release.yml` enforces release hygiene
-for every PR to `main` and every push to `main`. On PRs targeting `main`, it
-verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
-all declare the same canonical stable, alpha, beta, or RC version, then checks that the matching remote tag does
-not already exist. It also requires the corresponding Studio npm/Tauri/Cargo versions and lockfiles
-to match. On pushes to `main`, it repeats those checks, creates an
-annotated tag on the merged commit, pushes the tag, and creates the GitHub
-Release entry so it appears under Releases. Remote tags are immutable release
-history; never use `git tag -f`, `git push --force`, or delete/recreate a
-release tag to repair a missed bump. If the tag already exists, bump to the next
-correct SemVer version before merging to `main`.
+**Release automation:** `.github/workflows/release.yml` checks stable release PRs to `main`.
+It rejects prerelease versions on that entry point and reused tags. On pushes to `main`, it
+publishes the stable version from the exact merged commit, creating its annotated tag after the
+build succeeds. Annotated `vX.Y.ZaN`, `vX.Y.ZbN`, and `vX.Y.ZrcN` tag pushes publish prereleases
+from commits reachable on `origin/dev`; tag names must match the canonical product version.
+Both paths require synchronized Python/Studio metadata and a nonempty versioned changelog entry.
 
-**Manual release tag guard (fallback only):** if the release workflow is
-unavailable and a maintainer must validate a `main` PR by hand, run:
+The workflow calls the existing CI and slow/portability workflows on the exact snapshot, with
+70% Linux routine coverage, native macOS Studio/state-recovery gates, and slow tests without
+coverage. It builds the Apple Silicon DMG and checksum on a native macOS runner, verifies the
+packaged CLI/resources and DMG integrity, then publishes only after every required job succeeds.
+Publication uses this run's installer artifacts, creates/resumes a commit-bound draft, downloads
+and verifies uploaded bytes, and publishes the complete release. Only the publication job has
+repository write permission. Existing published releases are verified and left unchanged.
 
-```
-VERSION=$(python - <<'PY'
-import ast
-import re
-import tomllib
-from pathlib import Path
+Remote tags are immutable release history. Never force, delete/recreate, or move a release tag,
+or replace published binaries. If publication fails, rerun **failed jobs** in the original Actions
+run to reuse the verified build. A partial draft is retained and matching assets are reused;
+differing draft assets fail rather than being overwritten. If a published version needs a change,
+use the next prerelease number or correct stable SemVer bump. Existing historical releases not
+created by this pipeline are not adopted automatically. See [release instructions](docs/releases.md).
+The normal stable-release trigger calls the build/publish jobs directly: tags pushed with
+`GITHUB_TOKEN` do not start a second workflow. Linux/Windows packaging can later add build-matrix
+entries and explicit required-asset validation; only macOS Apple Silicon delivery is enabled now.
 
-pyproject_version = tomllib.loads(
-    Path("pyproject.toml").read_text(encoding="utf-8")
-)["project"]["version"]
-
-init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
-init_version = None
-for node in init_tree.body:
-    if not isinstance(node, ast.Assign):
-        continue
-    for target in node.targets:
-        if isinstance(target, ast.Name) and target.id == "__version__":
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                init_version = node.value.value
-
-lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-lock_version = None
-for package in lock.get("package", []):
-    if package.get("name") == "evidence-forge":
-        lock_version = package.get("version")
-        break
-
-if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
-    raise SystemExit(
-        "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
-        f"got {pyproject_version!r}"
-    )
-if init_version != pyproject_version:
-    raise SystemExit(
-        "src/evidenceforge/__init__.py __version__ "
-        f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
-    )
-if lock_version != pyproject_version:
-    raise SystemExit(
-        f"uv.lock evidence-forge version ({lock_version!r}) "
-        f"does not match pyproject.toml ({pyproject_version!r})"
-    )
-print(pyproject_version)
-PY
-)
-TAG="v${VERSION}"
-git ls-remote --exit-code --tags origin "$TAG" && {
-  echo "Remote release tag $TAG already exists; bump the version before opening the main PR."
-  exit 1
-}
-```
-
-**Manual release tagging (fallback only):** if the release workflow did not run
-after a `dev` → `main` PR was merged, create an annotated tag on the merge commit
-that landed on `main`, push it, and create the GitHub Release entry from that tag
-so it appears under Releases.
-
-```
-git fetch origin main:refs/remotes/origin/main --tags
-VERSION=$(python - <<'PY'
-import ast
-import re
-import tomllib
-from pathlib import Path
-
-pyproject_version = tomllib.loads(
-    Path("pyproject.toml").read_text(encoding="utf-8")
-)["project"]["version"]
-
-init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
-init_version = None
-for node in init_tree.body:
-    if not isinstance(node, ast.Assign):
-        continue
-    for target in node.targets:
-        if isinstance(target, ast.Name) and target.id == "__version__":
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                init_version = node.value.value
-
-lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-lock_version = None
-for package in lock.get("package", []):
-    if package.get("name") == "evidence-forge":
-        lock_version = package.get("version")
-        break
-
-if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
-    raise SystemExit(
-        "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
-        f"got {pyproject_version!r}"
-    )
-if init_version != pyproject_version:
-    raise SystemExit(
-        "src/evidenceforge/__init__.py __version__ "
-        f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
-    )
-if lock_version != pyproject_version:
-    raise SystemExit(
-        f"uv.lock evidence-forge version ({lock_version!r}) "
-        f"does not match pyproject.toml ({pyproject_version!r})"
-    )
-print(pyproject_version)
-PY
-)
-TAG="v${VERSION}"
-MERGE_SHA=$(git rev-parse origin/main)
-test -z "$(git tag --list "$TAG")" || {
-  echo "Local tag $TAG already exists; inspect it instead of overwriting it."
-  exit 1
-}
-git ls-remote --exit-code --tags origin "$TAG" && {
-  echo "Remote tag $TAG already exists; inspect it instead of overwriting it."
-  exit 1
-}
-git tag -a "$TAG" "$MERGE_SHA" -m "EvidenceForge $TAG"
-git push origin "$TAG"
-gh release create "$TAG" --repo Cisco-Talos/EvidenceForge --title "EvidenceForge $TAG" \
-  --verify-tag --fail-on-no-commits --generate-notes
-```
+**Manual recovery (fallback only):** inspect the failed run and draft before taking any action.
+Prefer rerunning failed jobs. If Actions is unavailable, build and verify from the exact intended
+release commit, retain all required gates and immutable tags, and attach every verified installer
+before publishing a draft. Do not create a release containing only source archives as a shortcut.
 
 The version on `dev` between stable releases may represent an unreleased bump or a published
 prerelease of the next stable version. `main` remains at the previous stable release until the

@@ -55,7 +55,8 @@ Workspaces are prepared on selection, so unavailable unrelated workspaces do not
 a supported workspace.
 
 Packages live in `studio-upgrades/` beneath the private data directory, outside cache and runtime
-installations. Platform data locations are listed in the [source-run guide](studio-source-run.md).
+installations. User data locations and routine backup instructions are listed in the
+[Studio guide](studio.md#workspace-and-saved-studio-data).
 Each operation has its own package containing original and proposed images, a sealed manifest,
 and a durable journal. SQLite snapshots use the backup API and include committed WAL data but
 exclude uncommitted transactions. Both complete image checksums and logical database fingerprints

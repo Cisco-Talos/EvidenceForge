@@ -152,6 +152,44 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
+### Studio development on macOS
+
+Studio development requires macOS, uv, Node.js 22/npm, stable Rust, and Xcode command-line tools.
+Install Codex separately if testing assisted authoring. From the repository root:
+
+```bash
+uv sync --frozen --extra studio --extra dev
+npm --prefix desktop-ui ci
+rustup toolchain install stable --profile minimal
+rustup target add aarch64-apple-darwin --toolchain stable
+```
+
+Run Studio from the checkout with `uv run --no-sync eforge-desktop`.
+For app installation and user workflows, see the [Studio guide](docs/studio.md).
+
+#### Build the standalone Apple Silicon app
+
+```bash
+uv run --no-sync python scripts/package_studio_macos.py --build-app
+uv run --no-sync python scripts/verify_studio_macos.py \
+  "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
+```
+
+The DMG and checksum are written to `dist/macos/` with a `-test` filename suffix.
+Add `--skip-dmg` to build only the app. Release builds and publication are covered in
+[release instructions](docs/releases.md).
+
+For frontend changes, also run:
+
+```bash
+npm --prefix desktop-ui test
+npm --prefix desktop-ui run types:check
+npm --prefix desktop-ui run build
+```
+
+State-upgrade, backup, recovery, and persistence changes require the additional checks in
+[Studio state upgrades and recovery](docs/studio-state-upgrades.md).
+
 ### Test Markers
 
 - `@pytest.mark.slow`: extended release-gate tests, excluded by default and run with

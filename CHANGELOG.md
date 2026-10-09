@@ -4,56 +4,98 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## Unreleased
+## v2.2.0a1 (2026-10-09)
 
-**Schema 3 and portable authored releases**
+First alpha of the planned 2.2.0 release. Introduces EvidenceForge Studio,
+a standalone macOS application, and portable scenario and pack releases.
+Existing CLI and native chat-skill workflows remain available. Log generation
+remains deterministic and makes no LLM calls.
 
-- Add shared schema identification, typed lifecycle metadata and deterministic linked upgrades.
-  Legacy scenario schemas 1/2, pack schema 2 and generated/resolved inputs remain readable.
-- Add file-based scenario and pack drafts, exact ancestry, editable release notes, reviewed
-  dependency promotion and atomic local publication without allocating versions while editing.
-- Freeze source files, assets, dependency closure, selected overlays and effective configuration;
-  verify complete portable receipts and reject conflicting imports or modified releases.
-- Export/import `.efscenario` and lifecycle `.efpack` archives without generated logs or
-  checkpoints. Retain existing immutable pack archive workflows.
-- Expose the same services through CLI, installed native chat skills and optional Studio controls,
-  including version browsing, upgrade findings, notes previews and native archive save/import.
-- Verify CLI-only generation/evaluation after original sources disappear, unchanged log bytes for
-  equivalent upgrades and native macOS publication/export/version/run workflows. Application
-  version is unchanged on the feature branch. See the
-  [artifact lifecycle worklog](docs/worklog/2026-10-07-schema3-artifact-lifecycle.md).
-- Recover the iteration assessment's historical scenario and email corpus from Git into permanent
-  test fixtures; the original lineage regression and all 60 related slow checks pass.
-- Add permanent reviewed scenario deletion to Studio library/workspace menus and an optional
-  file-based CLI command, with an all-files choice for dedicated workspace files and owned runs,
-  evaluations and private inputs. Keep shared packs separate and retired release labels reserved;
-  retain no recovery copies.
-- Allow reviewed pack deletion after a direct/indirect dependency warning. Show affected items in
-  one initially collapsed plain list, grouped by industry packs, organization packs and scenarios,
-  sorted by name and then newest version. Protect active work and shared run folders.
-- Refresh the full draft review when opening local publication, so editing separate pack assets
-  or scenario includes does not leave a stale publication review. Preserve confirmation of
-  the captured inputs and offer explicit review refresh if files change afterward.
-- Place shared pack identity headings above version rows, preserving aligned names and details
-  when a pack has multiple versions in the library.
-- Add optional Schema 3 scenario/pack `display_name` titles, shared naming validation and
-  CLI/Studio title editing. Retain case-sensitive identifiers and immutable published metadata;
-  title changes do not affect generation behavior.
-- Remove Studio's artifact-name length cap and scenario clone first-character restriction.
-  Preserve full identifiers in files and references while bounding portable folder/export names.
-  Refresh canonical and installed authoring skills to offer optional titles during creation/edits.
-- Add the reviewed, backed-up Studio database version-2 migration for optional naming metadata.
-  Verify CLI-only naming in the standalone Mac package. See the
-  [artifact naming worklog](docs/worklog/2026-10-08-artifact-naming.md).
-- Consolidate scenario, pack and bundle metadata in a Settings-style Properties popup, with
-  direct draft editing, adjacent assistance, release-note history, exact lineage and portable
-  validation provenance. The CLI and native chat skills expose the same file-based operations.
-- Show specific log types present in bundle files, distinguishing Windows Security, Sysmon,
-  EDR and individual Zeek types from the requested output groups. Keep bundle menus available
-  beside the summary disclosure before expanding a run.
-- Display the latest matching generation size or an automatic forecast in workspace run headers.
-  Preserve configured publisher defaults and group exact recorded draft/release lineage.
-  See the [Studio Properties worklog](docs/worklog/2026-10-08-studio-properties.md).
+**EvidenceForge Studio**
+
+- Introduce a desktop workspace for authoring scenarios and packs, validating
+  inputs, running generation, inspecting bundles, and reviewing evaluations.
+  Studio uses a Tauri/React interface with a durable local service
+  (`a271102f`, `75d09d0d`).
+- Add project-aware libraries, folders, filters, saved views, contextual
+  search, cloning, and remembered disclosure states. Keep authoring conversations
+  attached to their scenarios (`3a76eac7`, `eaf3666b`, `f900abab`, `36b67ffc`,
+  `a2586655`, `656bb749`).
+- Add environment inspection, exact pack-version selection, guided asset
+  editing, and optional project/scenario configuration contexts
+  (`d81719fc`, `d61fb65c`, `388ac686`, `5ce4338f`).
+- Import scenarios and portable packs with dependency review, and discover
+  existing generation bundles produced outside Studio
+  (`0d7bacc7`, `8c4e4e7d`, `46d9ab70`).
+- Improve authoring controls, model selection, validation feedback, native file
+  dialogs, source navigation, and visibility of chat failures
+  (`e2d0b0a6`, `53c89678`, `87dd6258`, `53d0681a`, `f52d3f8f`).
+
+**Generation and evaluation**
+
+- Freeze generation inputs when jobs are queued and maintain durable job
+  histories, keeping run outcomes separate from subsequent input changes
+  (`85c25f43`, `75d09d0d`, `c33f6f93`).
+- Bring runs, bundles, and evaluation results together in scenario workspaces.
+  Link scores to saved evaluation details and show recent outcomes without
+  requiring every run to be expanded (`1e7ececd`, `973b5996`, `b21ab793`,
+  `111947dd`, `c27c5b24`).
+- Predict generation resource requirements and reuse cached forecasts. Show
+  recorded generation sizes and the specific log types present in bundles
+  (`d5fbae3c`, `46cccbd1`).
+
+**Portable scenario and pack releases**
+
+- Introduce Schema 3 lifecycle metadata, editable drafts, immutable local
+  releases, exact ancestry, release notes, and linked upgrades. Earlier
+  scenario schemas 1/2 and pack schema 2 remain readable (`46cccbd1`).
+- Freeze source files, supporting assets, pack dependencies, and effective
+  configuration when publishing authored releases. Verify imported contents
+  and reject conflicting or modified releases (`46cccbd1`).
+- Export and import portable `.efscenario` and lifecycle `.efpack` archives.
+  These archives carry authored content and dependencies; generated logs and
+  checkpoints remain separate (`46cccbd1`).
+- Expose lifecycle operations through the CLI, native chat skills, and Studio.
+  Add optional display titles and a Properties interface for metadata, release
+  history, lineage, and validation provenance (`46cccbd1`).
+- Add reviewed scenario and pack deletion with dependency warnings and
+  protections for active work. Preserve portable paths in deletion receipts
+  (`4555ee68`, `46cccbd1`, `cf0afd1b`).
+
+**Standalone macOS application**
+
+- Package Studio with a private Python runtime, the EvidenceForge engine,
+  supporting resources, and native authoring skills. Using the packaged app
+  does not require a separate Python installation (`105f1478`).
+- Add backed-up Studio state upgrades and recovery, account isolation, and
+  configurable retention and cleanup of installed runtimes
+  (`86d5f6f0`, `77b2d51b`).
+- Preserve bundled pack identity across runtime upgrades and share the product
+  version between Studio and its engine (`7a8a0fb8`, `17364e8f`).
+
+**Release automation and fixes**
+
+- Build and attach the macOS DMG and SHA256 checksum automatically through
+  GitHub Actions. Require release checks and installer verification before
+  publishing the complete GitHub Release.
+- Support numbered alpha, beta, and release-candidate versions. Prereleases
+  can publish from annotated tags on dev while main retains the previous
+  stable release (`1b991359`).
+- Fix same-host deferred SSH process endpoint resolution and restore the
+  portable pack archive inspection contract (`5fc5d751`, `ab09dbcf`).
+- Improve platform-specific permission and Windows path tests, desktop
+  presentation, and authoring-skill guidance
+  (`c0e5c5c3`, `7bc56cea`, `9072839b`, `90ccbd80`, `46849810`).
+
+**Alpha availability and limitations**
+
+- The standalone installer targets Apple Silicon macOS. Intel macOS, Linux,
+  and Windows installers are not included in this alpha.
+- The macOS application is unsigned and has not been notarized.
+- Codex must be installed separately to use Codex-assisted authoring.
+- Studio GUI platform support is separate from existing engine/CLI support.
+- Clean-machine installation and testing under separate OS accounts remain
+  outstanding acceptance checks.
 
 ## v2.1.2 (2026-09-24)
 

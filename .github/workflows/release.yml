@@ -5,6 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -16,206 +17,135 @@ concurrency:
 jobs:
   validate-release-version:
     name: Release version guard
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      dmg_name: ${{ steps.plan.outputs.dmg_name }}
     steps:
-      - name: Checkout code
+      - name: Checkout release snapshot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           fetch-tags: true
-
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen
+      - name: Validate release entry and version
+        id: plan
+        run: uv run --no-sync python -m scripts.release_pipeline prepare
 
-      - name: Check shared Studio release version
-        run: python scripts/sync_studio_version.py --check
+  release-ci:
+    if: github.event_name == 'push'
+    needs: validate-release-version
+    uses: ./.github/workflows/ci.yml
+    with:
+      release-coverage: true
 
-      - name: Read release version
-        id: version
+  release-slow:
+    if: github.event_name == 'push'
+    needs: validate-release-version
+    uses: ./.github/workflows/release-slow.yml
+
+  build-installers:
+    name: Release installer (${{ matrix.platform }})
+    if: github.event_name == 'push'
+    needs: [validate-release-version, release-ci, release-slow]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-aarch64
+            runner: macos-26
+    env:
+      DMG_NAME: ${{ needs.validate-release-version.outputs.dmg_name }}
+    steps:
+      - name: Checkout exact validated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.validate-release-version.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Require native Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+      - name: Install locked dependencies
         run: |
-          python - <<'PY'
-          import ast
-          import os
-          import re
-          import tomllib
-          from pathlib import Path
-
-          def fail(message: str) -> None:
-              print(f"::error::{message}")
-              raise SystemExit(1)
-
-          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          pyproject_version = pyproject["project"]["version"]
-
-          init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
-          init_version = None
-          for node in init_tree.body:
-              if not isinstance(node, ast.Assign):
-                  continue
-              for target in node.targets:
-                  if isinstance(target, ast.Name) and target.id == "__version__":
-                      if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                          init_version = node.value.value
-
-          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-          lock_version = None
-          for package in lock.get("package", []):
-              if package.get("name") == "evidence-forge":
-                  lock_version = package.get("version")
-                  break
-
-          if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
-              fail(
-                  "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
-                  f"got {pyproject_version!r}"
-              )
-          if init_version != pyproject_version:
-              fail(
-                  "src/evidenceforge/__init__.py __version__ "
-                  f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
-              )
-          if lock_version != pyproject_version:
-              fail(
-                  f"uv.lock evidence-forge version ({lock_version!r}) "
-                  f"does not match pyproject.toml ({pyproject_version!r})"
-              )
-
-          tag = f"v{pyproject_version}"
-          print(f"Release version: {pyproject_version}")
-          print(f"Release tag: {tag}")
-
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              print(f"version={pyproject_version}", file=output)
-              print(f"tag={tag}", file=output)
-          PY
-
-      - name: Verify release tag is unused
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
+          uv sync --frozen --extra studio --extra dev
+          npm --prefix desktop-ui ci
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-apple-darwin --toolchain stable
+      - name: Build standalone release DMG
+        run: uv run --no-sync python scripts/package_studio_macos.py --build-app --release
+      - name: Verify isolated packaged CLI and resources
+        run: >-
+          uv run --no-sync python scripts/verify_studio_macos.py
+          "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
+      - name: Verify DMG and checksum
         run: |
-          set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::Release tag ${TAG} already exists. Bump the version before merging to main."
-            exit 1
-          fi
-          echo "Release tag ${TAG} is available."
+          hdiutil verify "dist/macos/$DMG_NAME"
+          uv run --no-sync python -m scripts.release_pipeline verify-assets --directory dist/macos
+      - name: Upload verified installer artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-installer-${{ matrix.platform }}
+          path: |
+            dist/macos/*.dmg
+            dist/macos/*.dmg.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
   publish-release:
     name: Publish GitHub Release
     if: github.event_name == 'push'
+    needs: [validate-release-version, release-ci, release-slow, build-installers]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: write
-
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout code
+      - name: Checkout exact validated commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ needs.validate-release-version.outputs.sha }}
           fetch-depth: 0
           fetch-tags: true
-
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.12"
-
-      - name: Check shared Studio release version
-        run: python scripts/sync_studio_version.py --check
-
-      - name: Read release version
-        id: version
-        run: |
-          python - <<'PY'
-          import ast
-          import os
-          import re
-          import tomllib
-          from pathlib import Path
-
-          def fail(message: str) -> None:
-              print(f"::error::{message}")
-              raise SystemExit(1)
-
-          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-          pyproject_version = pyproject["project"]["version"]
-
-          init_tree = ast.parse(Path("src/evidenceforge/__init__.py").read_text(encoding="utf-8"))
-          init_version = None
-          for node in init_tree.body:
-              if not isinstance(node, ast.Assign):
-                  continue
-              for target in node.targets:
-                  if isinstance(target, ast.Name) and target.id == "__version__":
-                      if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                          init_version = node.value.value
-
-          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-          lock_version = None
-          for package in lock.get("package", []):
-              if package.get("name") == "evidence-forge":
-                  lock_version = package.get("version")
-                  break
-
-          if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
-              fail(
-                  "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
-                  f"got {pyproject_version!r}"
-              )
-          if init_version != pyproject_version:
-              fail(
-                  "src/evidenceforge/__init__.py __version__ "
-                  f"({init_version!r}) does not match pyproject.toml ({pyproject_version!r})"
-              )
-          if lock_version != pyproject_version:
-              fail(
-                  f"uv.lock evidence-forge version ({lock_version!r}) "
-                  f"does not match pyproject.toml ({pyproject_version!r})"
-              )
-
-          tag = f"v{pyproject_version}"
-          print(f"Release version: {pyproject_version}")
-          print(f"Release tag: {tag}")
-
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              print(f"version={pyproject_version}", file=output)
-              print(f"tag={tag}", file=output)
-          PY
-
-      - name: Verify release tag is unused
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::Release tag ${TAG} already exists. Refusing to overwrite release history."
-            exit 1
-          fi
-          echo "Release tag ${TAG} is available."
-
-      - name: Create annotated release tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" "${GITHUB_SHA}" -m "EvidenceForge ${TAG}"
-          git push origin "refs/tags/${TAG}"
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          gh release create "${TAG}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "EvidenceForge ${TAG}" \
-            --verify-tag \
-            --fail-on-no-commits \
-            --generate-notes
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen
+      - name: Download this run's verified installers
+        run: >-
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          --pattern 'release-installer-*' --dir dist/release
+      - name: Publish complete release or resume its draft
+        run: uv run --no-sync python -m scripts.release_pipeline publish --directory dist/release

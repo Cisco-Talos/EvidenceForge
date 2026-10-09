@@ -33,4 +33,5 @@ its Dock icon. This avoids macOS adding a rounded background to the legacy icon.
 The bundled ICNS and other platform icons also contain the full mark with alpha;
 the original full-color sidebar logos remain unchanged. This is a development
 bundle. For the standalone Apple Silicon app/DMG, use the
-[macOS packaging instructions](../docs/studio-standalone-macos.md).
+[standalone packaging instructions](../CONTRIBUTING.md#build-the-standalone-apple-silicon-app).
+The [Studio guide](../docs/studio.md) covers installation and user workflows.
