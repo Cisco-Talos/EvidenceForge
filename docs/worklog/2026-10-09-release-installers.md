@@ -181,5 +181,6 @@ cross-account and public Studio acceptance items in TODO.md remain independent r
 - The immutable annotated alpha tag still resolves to source `34cfac9a`; recovery workflow
   definitions came from `99a0b5e1`. Remote main remains `fca9666f`, with no merge to main.
 - Reconcile the roadmap with alpha publication and passing public Studio state/native gates.
-  The user will perform the downloaded-installer smoke test. Separate-account and clean-machine
-  acceptance remain open; this publication does not claim either was completed.
+  The user confirmed on October 9 that the downloaded-installer smoke test passed, completing
+  step 5 of the alpha release workflow. Separate-account and clean-machine acceptance remain
+  open; the reported smoke test does not establish either.

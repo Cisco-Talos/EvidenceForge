@@ -94,8 +94,8 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 - Published the `2.2.0a1` preview from `dev` with automatic macOS DMG delivery and passing
   routine, coverage, slow, checkpoint portability and native macOS gates. Target `2.2.0`
-  for the next stable `dev` → `main` release. Downloaded-installer smoke testing remains with
-  the user; clean-machine acceptance remains open. See the
+  for the next stable `dev` → `main` release. The user confirmed that the downloaded-installer
+  smoke test passed on October 9; clean-machine acceptance remains open. See the
   [release installer worklog](docs/worklog/2026-10-09-release-installers.md) and
   [release instructions](docs/releases.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
