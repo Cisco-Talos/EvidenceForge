@@ -291,7 +291,7 @@ def delete_artifact_files(source: Path, target: Path, workspace: Path, kind: str
             canonical_bytes(
                 {
                     "deletion_version": 1,
-                    "source": str(source.relative_to(workspace)),
+                    "source": source.relative_to(workspace).as_posix(),
                     "kind": kind,
                     "release": identity,
                 }

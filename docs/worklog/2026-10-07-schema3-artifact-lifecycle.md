@@ -268,3 +268,14 @@ repository at `/private/tmp/eforge-windows-deletion-fix.patch`. The regression f
 code and passes against a temporary copy with the proposed correction. Production files remain
 unchanged during integration. Applying the fix and merging await user approval because the user
 explicitly excluded EvidenceForge/Studio fixes from this integration scope.
+
+The user subsequently approved that exact correction and regression, with CI monitoring and a
+green-only merge still authorized. Applied `.as_posix()` only at deletion-receipt serialization;
+portable path validation, immutable-release protections, and all existing deletion assertions
+remain unchanged. The documentation-only CI rerun passed Linux and both macOS gates, leaving
+only the four Windows deletion failures that this correction addresses.
+
+All 60 focused deletion/lifecycle/pack regressions pass after applying the correction, including
+the Windows-style receipt reproducer, retired-version reservations and interrupted index cleanup.
+Full Ruff lint/format and generation behavior revision 160 checks pass. No validation assertions
+were removed, no generation behavior changed, and the application version remains 2.1.2.
