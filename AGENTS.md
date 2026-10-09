@@ -131,13 +131,24 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 ### Versioning (Semantic Versioning)
 
 The version is declared in three places that must always match:
-- `pyproject.toml` → `version = "X.Y.Z"` or the PEP 440 release-candidate form `"X.Y.ZrcN"`
+- `pyproject.toml` → `version = "X.Y.Z"` or a canonical PEP 440 prerelease
+  (`"X.Y.ZaN"`, `"X.Y.ZbN"`, or `"X.Y.ZrcN"`)
 - `src/evidenceforge/__init__.py` → the same exact version
 - `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
 
-For a release candidate, use Python's canonical PEP 440 spelling (for example,
-`2.0.0rc1`) and the matching tag `v2.0.0rc1`. Do not use `2.0.0-rc1`; build
-tooling normalizes that spelling and would make the three source declarations disagree.
+For prereleases, use Python's canonical PEP 440 spelling and a tag with the same version:
+
+| Stage | Python version / About | Git tag | Studio npm/Cargo/Tauri version |
+|-------|------------------------|---------|-------------------------------|
+| Alpha | `2.2.0a1` | `v2.2.0a1` | `2.2.0-alpha.1` |
+| Beta | `2.2.0b1` | `v2.2.0b1` | `2.2.0-beta.1` |
+| Release candidate | `2.2.0rc1` | `v2.2.0rc1` | `2.2.0-rc.1` |
+
+Always include the prerelease number. Do not use bare `2.2.0a`, alternate Python spellings such
+as `2.2.0-alpha.1` or `2.2.0-rc1`, or leading zeroes in version components or prerelease numbers;
+build tooling normalizes those spellings and would make the source declarations disagree.
+The synchronizer owns the SemVer conversion. Storage schema versions and private runtime
+identities remain independent of the product release version.
 
 **Bump rules (SemVer):**
 
@@ -147,7 +158,27 @@ tooling normalizes that spelling and would make the three source declarations di
 | Any non-breaking `feat:` commit | MINOR (`x.y+1.0`) |
 | Only `fix:` / `docs:` / `test:` / `refactor:` / `chore:` | PATCH (`x.y.z+1`) |
 
-**When to bump:** Once per PR from `dev` to `main`, on the `dev` branch, as the last commit before opening that PR. Do not bump on feature branches or per-commit.
+**When to bump:** For a stable release, once per PR from `dev` to `main`, on the `dev` branch,
+as the last commit before opening that PR. Prereleases are an explicit exception: alpha, beta,
+and RC versions may be prepared and published from `dev` without merging into `main`.
+Make one version/changelog commit for each prerelease snapshot. Do not bump on feature branches
+or per implementation commit. Preparing guards or packaging does not itself authorize a version
+bump or publication; wait for an explicit release request.
+
+**Prerelease flow:** Choose the upcoming stable version using the SemVer bump rules, then append
+`aN`, `bN`, or `rcN`. Keep that base version through the prerelease series unless scope changes
+require a different SemVer target. Increment the stage number for each new published snapshot;
+never overwrite a published tag or replace its build. Synchronize all Python and Studio versions,
+and commit the changelog with the version bump on `dev` (for example,
+`chore: bump version to 2.2.0a1`). Build and verify artifacts from that exact committed snapshot,
+then create an annotated tag and a GitHub Release marked **pre-release**, with **latest** disabled.
+Attach the DMG and its checksum before publishing. Document supported platforms, external
+requirements, signing/notarization status, known limitations, and validation evidence. Retain
+the applicable release and native acceptance gates; alpha status does not close outstanding gates.
+This flow is manual; the current release workflow does not publish from `dev` or build release DMGs.
+When the stable release is ready, remove the prerelease suffix (for example, `2.2.0rc1` → `2.2.0`)
+on `dev` and follow the normal `dev` → `main` release path. Do not increase the base version again
+solely because prereleases were published.
 
 **How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all four (three version artifacts + CHANGELOG.md, see below) with:
 ```
@@ -159,7 +190,7 @@ chore: bump version to X.Y.Z
 **Release automation:** `.github/workflows/release.yml` enforces release hygiene
 for every PR to `main` and every push to `main`. On PRs targeting `main`, it
 verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
-all declare the same `X.Y.Z` or `X.Y.ZrcN` version, then checks that the matching remote tag does
+all declare the same canonical stable, alpha, beta, or RC version, then checks that the matching remote tag does
 not already exist. On pushes to `main`, it repeats those checks, creates an
 annotated tag on the merged commit, pushes the tag, and creates the GitHub
 Release entry so it appears under Releases. Remote tags are immutable release
@@ -198,9 +229,9 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
     raise SystemExit(
-        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
         f"got {pyproject_version!r}"
     )
 if init_version != pyproject_version:
@@ -257,9 +288,9 @@ for package in lock.get("package", []):
         lock_version = package.get("version")
         break
 
-if not re.fullmatch(r"\d+\.\d+\.\d+(?:rc\d+)?", pyproject_version):
+if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?", pyproject_version):
     raise SystemExit(
-        "pyproject.toml version must be X.Y.Z or X.Y.ZrcN, "
+        "pyproject.toml version must be X.Y.Z, X.Y.ZaN, X.Y.ZbN or X.Y.ZrcN with canonical numbers, "
         f"got {pyproject_version!r}"
     )
 if init_version != pyproject_version:
@@ -291,7 +322,9 @@ gh release create "$TAG" --repo Cisco-Talos/EvidenceForge --title "EvidenceForge
   --verify-tag --fail-on-no-commits --generate-notes
 ```
 
-The version on `dev` between releases will be ahead of `main` by one unreleased bump — this is expected and correct. Feature branches never touch the version.
+The version on `dev` between stable releases may represent an unreleased bump or a published
+prerelease of the next stable version. `main` remains at the previous stable release until the
+stable release PR lands. Feature branches never touch the version.
 
 ### Linting
 - **Before committing:** always run `uv run ruff check .` and `uv run ruff format --check .` and fix any errors. A `pre-commit` hook enforces this, but verify manually when in doubt.
