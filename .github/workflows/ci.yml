@@ -121,6 +121,9 @@ jobs:
         working-directory: desktop-ui
         run: npm ci
 
+      - name: Check shared Studio release version
+        run: uv run python scripts/sync_studio_version.py --check
+
       - name: Test local service and job lifecycle
         run: uv run pytest --no-cov tests/unit/test_studio_*.py tests/unit/test_resource_prediction.py tests/unit/test_desktop_*.py
 

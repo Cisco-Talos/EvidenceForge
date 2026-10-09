@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "about",
+  "description": "Close the About window without workspace or file permissions",
+  "windows": ["about"],
+  "permissions": ["core:window:allow-close"]
+}

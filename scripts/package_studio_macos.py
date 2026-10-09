@@ -88,10 +88,14 @@ def pack_payload(root: Path, destination: Path) -> None:
 
 def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
     """Assemble selected runtime payloads from the lockfile and built project wheel."""
+    run([sys.executable, str(root / "scripts/sync_studio_version.py")], root, dict(os.environ))
     lock = RuntimeLock.model_validate_json(
         (root / "desktop-ui/packaging/runtime-lock.json").read_bytes()
     )
     version: str = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    native_version: str = json.loads((root / "desktop-ui/src-tauri/tauri.conf.json").read_text())[
+        "version"
+    ]
     environment = {
         **os.environ,
         "UV_CACHE_DIR": str(build / "uv-cache"),
@@ -213,7 +217,7 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
     configuration.write_text(
         json.dumps(
             {
-                "version": version,
+                "version": native_version,
                 "bundle": {
                     "resources": {str(resources): "runtime"},
                     "macOS": {"minimumSystemVersion": lock.minimum_macos},

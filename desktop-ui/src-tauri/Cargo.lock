@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "evidenceforge-studio"
-version = "0.1.0"
+version = "2.1.2"
 dependencies = [
  "libc",
  "objc2",

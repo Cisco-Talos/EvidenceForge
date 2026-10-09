@@ -1,3 +1,4 @@
+mod about;
 #[cfg(target_os = "macos")]
 mod macos_icon;
 mod native_dialog;
@@ -112,12 +113,25 @@ pub fn run() {
         })
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
-            #[cfg(target_os = "macos")]
             for entry in menu.items()? {
                 if let Some(submenu) = entry.as_submenu() {
-                    for item in submenu.items()? {
+                    for (position, item) in submenu.items()?.iter().enumerate() {
                         if let Some(predefined) = item.as_predefined_menuitem() {
                             let text = predefined.text()?;
+                            if text == "About" || text.starts_with("About ") {
+                                submenu.remove(predefined)?;
+                                submenu.insert(
+                                    &tauri::menu::MenuItem::with_id(
+                                        app,
+                                        "studio_about",
+                                        "About EvidenceForge Studio",
+                                        true,
+                                        None::<&str>,
+                                    )?,
+                                    position,
+                                )?;
+                                continue;
+                            }
                             if text.contains("evidenceforge-studio") {
                                 predefined.set_text(
                                     text.replace("evidenceforge-studio", "EvidenceForge Studio"),
@@ -128,6 +142,16 @@ pub fn run() {
                 }
             }
             Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "studio_about" {
+                if let Err(error) = about::show(app) {
+                    app.dialog()
+                        .message(format!("Could not open About: {error}"))
+                        .title("EvidenceForge Studio")
+                        .show(|_| {});
+                }
+            }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())

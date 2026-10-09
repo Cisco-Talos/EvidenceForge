@@ -1,6 +1,6 @@
 [package]
 name = "evidenceforge-studio"
-version = "0.1.0"
+version = "2.1.2"
 description = "Local EvidenceForge scenario and run studio"
 authors = ["Cisco Talos"]
 edition = "2021"

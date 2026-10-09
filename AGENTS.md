@@ -130,11 +130,19 @@ Use `uv` for all dependency management (never `pip`). `pyproject.toml` is the so
 
 ### Versioning (Semantic Versioning)
 
-The version is declared in three places that must always match:
+`pyproject.toml` is the authoritative EvidenceForge product version. Studio and its bundled engine
+share the same release. The Python version is declared in three places that must always match:
 - `pyproject.toml` → `version = "X.Y.Z"` or a canonical PEP 440 prerelease
   (`"X.Y.ZaN"`, `"X.Y.ZbN"`, or `"X.Y.ZrcN"`)
 - `src/evidenceforge/__init__.py` → the same exact version
 - `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
+
+After updating these, run `uv run python scripts/sync_studio_version.py` to synchronize Studio's
+`desktop-ui/package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `Cargo.toml` and
+`Cargo.lock`. Include these derived artifacts in the same release bump commit. Source launches
+and app builds synchronize automatically; Studio CI and release publishing reject mismatches via
+`uv run python scripts/sync_studio_version.py --check`. Compatible features and fixes in Studio
+also count toward the product's minor/patch bump under the rules below.
 
 For prereleases, use Python's canonical PEP 440 spelling and a tag with the same version:
 
@@ -180,7 +188,7 @@ When the stable release is ready, remove the prerelease suffix (for example, `2.
 on `dev` and follow the normal `dev` → `main` release path. Do not increase the base version again
 solely because prereleases were published.
 
-**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both version files, run `uv sync` to regenerate `uv.lock`, and commit all four (three version artifacts + CHANGELOG.md, see below) with:
+**How:** Before running `gh pr create` targeting `main`, inspect `git log main..dev --oneline`, determine the correct bump, update both Python version files, run `uv sync` to regenerate `uv.lock`, then run `uv run python scripts/sync_studio_version.py`. Commit the Python and derived Studio version artifacts together with CHANGELOG.md (see below) with:
 ```
 chore: bump version to X.Y.Z
 ```
@@ -191,7 +199,8 @@ chore: bump version to X.Y.Z
 for every PR to `main` and every push to `main`. On PRs targeting `main`, it
 verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
 all declare the same canonical stable, alpha, beta, or RC version, then checks that the matching remote tag does
-not already exist. On pushes to `main`, it repeats those checks, creates an
+not already exist. It also requires the corresponding Studio npm/Tauri/Cargo versions and lockfiles
+to match. On pushes to `main`, it repeats those checks, creates an
 annotated tag on the merged commit, pushes the tag, and creates the GitHub
 Release entry so it appears under Releases. Remote tags are immutable release
 history; never use `git tag -f`, `git push --force`, or delete/recreate a

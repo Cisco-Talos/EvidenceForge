@@ -7,6 +7,14 @@ deterministic worker.
 The GUI currently supports macOS only. Linux and Windows GUI builds and native
 acceptance are deferred for later exploration; engine/CLI platform support is unchanged.
 
+Studio and its bundled engine share one EvidenceForge release version. `pyproject.toml` is the
+source of truth. `npm run version:sync` updates npm/Tauri/Cargo metadata and lockfiles; source
+launches and app builds run it automatically. `npm run version:check` verifies consistency without
+writes and is required in Studio CI and release publishing. Python release candidates such as
+`2.2.0rc1` map to `2.2.0-rc.1` in SemVer metadata, while About displays the canonical product version.
+About uses the main window's logo and Studio branding and includes the build commit for support.
+Storage schema versions and private runtime identities remain independent of the product version.
+
 From the repository root, install the Python dependencies with
 `uv sync --extra studio --extra dev`. Then run `npm ci` in this directory and
 `uv run eforge-studio` from the repository root for the native window. For a

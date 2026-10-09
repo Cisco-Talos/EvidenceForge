@@ -1,9 +1,15 @@
 {
   "name": "desktop-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "2.1.2",
   "type": "module",
   "scripts": {
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "predev": "npm run version:sync",
+    "prebuild": "npm run version:sync",
+    "prebuild:native": "npm run version:sync",
+    "pretauri": "npm run version:sync",
     "dev": "vite",
     "build": "tsc && vite build",
     "build:native": "node scripts/build-native.mjs",

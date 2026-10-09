@@ -33,6 +33,7 @@ import { ImportDialog } from "./ImportDialog";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { useStudio } from "./useStudio";
 import { useNotice } from "./useNotice";
+import { StudioBrand } from "./StudioBrand";
 import "./App.css";
 
 type Section = "scenarios" | "packs" | "bundles" | "jobs" | "settings";
@@ -719,7 +720,7 @@ function App() {
   const showLibrary = ["scenarios", "packs"].includes(section);
   return <Tooltip.Provider><div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><img className="brand-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><img className="brand-mini" src="/brand/icon-32.png" alt="" /><small>STUDIO</small></div>
+      <StudioBrand compact />
       <nav className="primary-nav" aria-label="Main navigation">
         <button className={section === "scenarios" ? "selected" : ""} onClick={() => { setSection("scenarios"); setSelectedId(null); setDraftConversationId(null); }}><FileCode2 size={18} /> Scenarios</button>
         <button className={section === "packs" ? "selected" : ""} onClick={() => { setSection("packs"); setSelectedId(null); setDraftConversationId(null); }}><Layers3 size={18} /> Packs</button>
@@ -727,7 +728,7 @@ function App() {
         <div className="nav-rule" />
         <button className={section === "jobs" ? "selected" : ""} onClick={() => { setSection("jobs"); setSelectedId(null); setDraftConversationId(null); }}><Activity size={18} /> Job center {activeJobs > 0 && <span className="nav-count">{activeJobs}</span>}</button>
       </nav>
-      <div className="sidebar-bottom"><button className={section === "settings" ? "selected" : ""} onClick={() => { setSection("settings"); setSelectedId(null); setDraftConversationId(null); }}><Settings2 size={18} /> Settings</button><span>LOCAL STUDIO · MAC & LINUX</span></div>
+      <div className="sidebar-bottom"><button className={section === "settings" ? "selected" : ""} onClick={() => { setSection("settings"); setSelectedId(null); setDraftConversationId(null); }}><Settings2 size={18} /> Settings</button></div>
     </aside>
     <main className={`main-area ${showLibrary && ((item && workspaceTarget === "conversations") || draftConversationId) ? "chat-main" : ""}`}>
       <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="icon-button" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}><RefreshCw size={17} /></button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
