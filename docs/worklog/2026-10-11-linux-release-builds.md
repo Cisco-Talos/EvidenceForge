@@ -31,7 +31,36 @@ Product version remains `2.2.0a2`; no version bump is part of this work.
 
 ## Validation and handoff
 
-Pending: final local checks, native build-only CI, artifact download and user desktop acceptance.
+Local validation: repository-wide Ruff check/format, whitespace and product-version synchronization
+passed. actionlint 1.7.12 validates all three edited workflows. Release-contract tests cover each
+installer's absence, corruption, wrong checksum filename, symlinks and duplicates; publication
+also checks each platform's downloaded bytes and rejects partial-release CLI options.
+
+The shared packaged-runtime verifier passed against the existing macOS 2.2.0a2 app, including
+behavior identity, relocated isolated CLI, skills/catalogs, artifact operations and
+checkpoint-enabled generation.
+
+Implementation commit `a21b7272` was pushed to `dev` without a tag. Build-only run:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/38164593678.
+Both native Linux builders passed helper/state recovery and Rust contracts before assembly.
+Manual x86_64 dispatch was proven with run `38164684862`, then that duplicate was canceled;
+the original all-platform run continues.
+
+Pending: native installer assembly/verification, artifact download and user desktop acceptance.
 No tag, GitHub Release or publication workflow should run before explicit user approval after
 testing the x86_64 preview. Ubuntu 24.04/glibc 2.39 remains the build baseline; other distro and
 clean-machine acceptance are separate work.
+
+
+## First native run: x86_64 bundle-name correction
+
+Run `38164593678` passed Linux helper/state recovery and Rust shell contracts on both native
+architectures. x86_64 compilation and AppImage bundling succeeded (132.49 MiB), but copying the
+installer failed: Tauri names its x64 output `..._amd64.AppImage`, while the original local
+builder searched for `..._x86_64.AppImage`. The ARM64-only local build had not exercised this.
+
+Corrected discovery to use Tauri's `amd64` spelling only for the native x64 bundle, retaining
+`x86_64` in the public installer filename and runtime identity. Added regression checks using
+both real Tauri filename conventions and both preview/release names. Extended publication tests
+to corrupt each downloaded platform image and to reject builder-only flags in publication.
+No generation algorithm, dependency pin or product version changed.

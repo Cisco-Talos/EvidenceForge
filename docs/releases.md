@@ -4,7 +4,8 @@ EvidenceForge and Studio share the version in `pyproject.toml`. The Release work
 the macOS Apple Silicon DMG and native Linux ARM64/x86_64 AppImages, each with a SHA256 file.
 Codex remains a separate install for authoring. The macOS installer has no Developer ID signature
 or notarization; Intel macOS and Windows installers are not enabled. Linux publication is prepared
-for 2.2.0a2 and remains on hold until the user's x86_64 acceptance passes. See [Studio installation](studio.md#macos-installation).
+for 2.2.0a2 and remains on hold until the user's x86_64 acceptance passes.
+See [Studio installation](studio.md#macos-installation).
 
 ## Prepare the source
 
@@ -55,7 +56,8 @@ latest. Do not manually push a stable tag to initiate this path.
 
 The publisher requires all six assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
 `EvidenceForge-Studio-VERSION-aarch64.AppImage`, `EvidenceForge-Studio-VERSION-x86_64.AppImage`,
-and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix. The release build command is:
+and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix.
+The macOS release build command is:
 
 ```sh
 uv run python scripts/package_studio_macos.py --build-app --release

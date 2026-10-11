@@ -177,8 +177,8 @@ def github(
             destination = Path(command[command.index("--dir") + 1])
             for path in uploaded.iterdir():
                 shutil.copyfile(path, destination / path.name)
-            if state.get("corrupt_download"):
-                (destination / plan.dmg_name).write_bytes(b"transfer corruption")
+            if name := state.get("corrupt_download"):
+                (destination / name).write_bytes(b"transfer corruption")
         elif command[:3] == ["gh", "release", "edit"]:
             state["release"]["draft"] = False
         elif command[:2] == ["git", "push"]:
@@ -224,11 +224,12 @@ def test_upload_failure_leaves_draft_unpublished(
     assert not any("edit" in command for command in github["commands"])
 
 
+@pytest.mark.parametrize("platform", list(release.INSTALLER_TARGETS))
 def test_corrupt_uploaded_installer_prevents_publication(
-    tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any]
+    tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any], platform: str
 ) -> None:
     (tmp_path / "CHANGELOG.md").write_text("## v2.2.0a1 (2026-10-09)\n\nAlpha changes.\n")
-    github["corrupt_download"] = True
+    github["corrupt_download"] = plan.installer_names(platform)[0]
     with pytest.raises(ValueError, match="checksum"):
         release.publish(tmp_path, assets, plan, "testing/project")
     assert github["release"]["draft"]
@@ -409,3 +410,18 @@ def test_linux_installer_corruption_prevents_publication(
     with pytest.raises(ValueError, match="checksum"):
         release.publish(tmp_path, assets, plan, "testing/project")
     assert github["commands"] == []
+
+
+@pytest.mark.parametrize("command", ["prepare", "verify-assets", "publish"])
+@pytest.mark.parametrize("option", [["--platform", "linux-x86_64"], ["--preview"]])
+def test_cli_cannot_use_builder_options_to_publish_or_verify_a_partial_release(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    option: list[str],
+) -> None:
+    monkeypatch.setattr("sys.argv", ["release_pipeline", command, *option])
+    with pytest.raises(SystemExit) as error:
+        release.main()
+    assert error.value.code == 1
+    assert "only valid for verify-installer" in capsys.readouterr().err

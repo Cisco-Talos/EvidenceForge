@@ -10,7 +10,10 @@ import sys
 import tomllib
 from pathlib import Path
 
-from package_studio_macos import assemble, digest, run
+if __package__:
+    from .package_studio_macos import assemble, digest, run
+else:
+    from package_studio_macos import assemble, digest, run
 
 
 def build_appimage(
@@ -46,9 +49,11 @@ def build_appimage(
     native_version = tomllib.loads((root / "desktop-ui/src-tauri/Cargo.toml").read_text())[
         "package"
     ]["version"]
+    # Tauri names x86_64 Linux bundles with Debian's amd64 architecture spelling.
+    bundle_architecture = "amd64" if architecture == "x86_64" else architecture
     artifacts = list(
         (build / "target" / target / "release/bundle/appimage").glob(
-            f"*_{native_version}_{architecture}.AppImage"
+            f"*_{native_version}_{bundle_architecture}.AppImage"
         )
     )
     if len(artifacts) != 1:
