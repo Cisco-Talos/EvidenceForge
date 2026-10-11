@@ -1,0 +1,161 @@
+name: Installer Builds
+
+on:
+  workflow_call:
+    inputs:
+      source-ref:
+        type: string
+        default: ""
+      platform:
+        type: string
+        default: all
+      release:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native installer to build for testing (never publishes)
+        type: choice
+        options: [all, macos-aarch64, linux-aarch64, linux-x86_64]
+        default: linux-x86_64
+  push:
+    branches: [dev]
+    paths:
+      - .github/workflows/installers.yml
+      - scripts/package_studio_*.py
+      - scripts/verify_studio_*.py
+      - scripts/release_pipeline.py
+      - desktop-ui/packaging/**
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Select native builders
+        id: matrix
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          targets = [
+              {"platform": "macos-aarch64", "runner": "macos-26", "os": "macos", "architecture": "aarch64", "host_arch": "arm64", "target": "aarch64-apple-darwin"},
+              {"platform": "linux-aarch64", "runner": "ubuntu-24.04-arm", "os": "linux", "architecture": "aarch64", "host_arch": "aarch64", "target": "aarch64-unknown-linux-gnu"},
+              {"platform": "linux-x86_64", "runner": "ubuntu-24.04", "os": "linux", "architecture": "x86_64", "host_arch": "x86_64", "target": "x86_64-unknown-linux-gnu"},
+          ]
+          selected = os.environ["SELECTED_PLATFORM"]
+          matrix = [target for target in targets if selected in ("all", target["platform"])]
+          if not matrix:
+              raise SystemExit("Unknown installer platform")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print("matrix=" + json.dumps({"include": matrix}), file=output)
+          PY
+
+  build:
+    name: Installer (${{ matrix.platform }})
+    needs: plan
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      INSTALLER_PLATFORM: ${{ matrix.platform }}
+      INSTALLER_DIRECTORY: dist/${{ matrix.os }}
+      BUILD_RELEASE: ${{ inputs.release && 'true' || 'false' }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/build/studio-${{ matrix.os }}/target
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - name: Checkout exact source snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+      - name: Require native builder architecture
+        env:
+          EXPECTED_HOST_ARCH: ${{ matrix.host_arch }}
+        run: test "$(uname -m)" = "$EXPECTED_HOST_ARCH"
+      - name: Install Linux build and verification dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-tools libfuse2t64
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+      - name: Install locked dependencies and native Rust target
+        env:
+          RUST_TARGET: ${{ matrix.target }}
+        run: |
+          uv sync --frozen --extra studio --extra dev
+          npm --prefix desktop-ui ci
+          rustup toolchain install stable --profile minimal
+          rustup target add "$RUST_TARGET" --toolchain stable
+          uv run --no-sync python scripts/sync_studio_version.py --check
+      - name: Linux helper lifecycle and state recovery
+        if: runner.os == 'Linux'
+        run: >-
+          uv run --no-sync pytest --no-cov
+          tests/unit/test_studio_runtime.py tests/unit/test_studio_ownership.py
+          tests/integration/test_studio_helper.py tests/integration/test_studio_ownership.py
+          tests/integration/test_studio_state_upgrade.py tests/integration/test_studio_state_edges.py
+          tests/integration/test_studio_state_crashes.py tests/integration/test_studio_state_migrations.py
+          tests/unit/test_studio_state_durability.py tests/unit/test_studio_state_contracts.py
+      - name: Test native shell contracts
+        working-directory: desktop-ui/src-tauri
+        run: cargo +stable test --locked
+      - name: Build standalone installer
+        env:
+          INSTALLER_OS: ${{ matrix.os }}
+          INSTALLER_ARCH: ${{ matrix.architecture }}
+        run: |
+          release_flags=()
+          if [ "$BUILD_RELEASE" = true ]; then release_flags=(--release); fi
+          if [ "$INSTALLER_OS" = macos ]; then
+            uv run --no-sync python scripts/package_studio_macos.py --build-app "${release_flags[@]}"
+          else
+            uv run --no-sync python scripts/package_studio_linux.py --architecture "$INSTALLER_ARCH" "${release_flags[@]}"
+          fi
+      - name: Verify actual macOS app and disk image
+        if: runner.os == 'macOS'
+        run: |
+          uv run --no-sync python scripts/verify_studio_macos.py \
+            "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
+          hdiutil verify dist/macos/*.dmg
+      - name: Verify actual AppImage runtime, resources and GStreamer
+        if: runner.os == 'Linux'
+        run: uv run --no-sync python scripts/verify_studio_linux.py dist/linux/*.AppImage
+      - name: Verify exact installer and checksum set
+        run: |
+          preview_flags=()
+          if [ "$BUILD_RELEASE" != true ]; then preview_flags=(--preview); fi
+          uv run --no-sync python -m scripts.release_pipeline verify-installer \
+            --platform "$INSTALLER_PLATFORM" --directory "$INSTALLER_DIRECTORY" "${preview_flags[@]}"
+      - name: Upload verified installer and checksum
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.release && 'release' || 'preview' }}-installer-${{ matrix.platform }}
+          path: dist/${{ matrix.os }}/*
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14

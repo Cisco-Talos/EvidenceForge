@@ -123,11 +123,12 @@ def plan() -> release.ReleasePlan:
 def assets(tmp_path: Path, plan: release.ReleasePlan) -> Path:
     directory = tmp_path / "artifacts"
     directory.mkdir()
-    image = directory / plan.dmg_name
-    image.write_bytes(b"verified installer fixture")
-    (directory / f"{image.name}.sha256").write_text(
-        f"{hashlib.sha256(image.read_bytes()).hexdigest()}  {image.name}\n"
-    )
+    for name in plan.installer_names():
+        image = directory / name
+        image.write_bytes(b"verified installer fixture")
+        (directory / f"{image.name}.sha256").write_text(
+            f"{hashlib.sha256(image.read_bytes()).hexdigest()}  {image.name}\n"
+        )
     return directory
 
 
@@ -198,7 +199,7 @@ def test_publishes_only_after_upload_and_download_verification(
     commands = github["commands"]
     assert commands[-1][:3] == ["gh", "release", "edit"]
     assert "--latest=false" in commands[-1] and "--prerelease=true" in commands[-1]
-    assert sum(command[:3] == ["gh", "release", "upload"] for command in commands) == 2
+    assert sum(command[:3] == ["gh", "release", "upload"] for command in commands) == 6
     assert "--draft" in next(command for command in commands if "create" in command)
     assert any(command[:3] == ["gh", "release", "download"] for command in commands)
 
@@ -240,8 +241,8 @@ def test_stable_publication_creates_tag_after_verifying_build_and_marks_latest(
     stable = plan.model_copy(update={"version": "2.2.0", "tag": "v2.2.0", "prerelease": False})
     for path in assets.iterdir():
         path.rename(path.with_name(path.name.replace(plan.version, stable.version)))
-    checksum = assets / f"{stable.dmg_name}.sha256"
-    checksum.write_text(checksum.read_text().replace(plan.version, stable.version))
+    for checksum in assets.glob("*.sha256"):
+        checksum.write_text(checksum.read_text().replace(plan.version, stable.version))
     (tmp_path / "CHANGELOG.md").write_text("## v2.2.0 (2026-10-09)\n\nStable changes.\n")
     github["tag_sha"] = None
     release.publish(tmp_path, assets, stable, "testing/project")
@@ -257,7 +258,8 @@ def test_partial_draft_retry_uploads_only_missing_asset(
     shutil.copyfile(assets / plan.dmg_name, github["uploaded"] / plan.dmg_name)
     release.publish(tmp_path, assets, plan, "testing/project")
     uploads = [command for command in github["commands"] if "upload" in command]
-    assert len(uploads) == 1 and uploads[0][4].endswith(".sha256")
+    assert len(uploads) == 5
+    assert plan.dmg_name not in {Path(command[4]).name for command in uploads}
 
 
 def test_foreign_release_is_not_adopted(
@@ -323,14 +325,87 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
             for step in job.get("steps", []):
                 if step.get("uses", "").startswith("actions/checkout@"):
                     assert step["with"]["ref"] == "${{ inputs.source-ref || github.sha }}"
-    for job in ("validate-release-version", "build-installers", "publish-release"):
+    for job in ("validate-release-version", "publish-release"):
         commands = "\n".join(step.get("run", "") for step in jobs[job]["steps"])
         assert 'GITHUB_EVENT_NAME="$RELEASE_EVENT" GITHUB_REF="$RELEASE_REF"' in commands
-    for job in ("build-installers", "publish-release"):
-        assert (
-            jobs[job]["steps"][0]["with"]["ref"]
-            == "${{ needs.validate-release-version.outputs.sha }}"
-        )
-    build = "\n".join(step.get("run", "") for step in jobs["build-installers"]["steps"])
-    assert "--build-app --release" in build and "--skip-dmg" not in build
+    assert jobs["publish-release"]["steps"][0]["with"]["ref"] == source
+    assert jobs["build-installers"]["uses"] == "./.github/workflows/installers.yml"
+    assert jobs["build-installers"]["with"] == {"source-ref": source, "release": True}
+    assert jobs["build-installers"]["needs"] == [
+        "validate-release-version",
+        "release-ci",
+        "release-slow",
+    ]
+    installers = yaml.safe_load((root / ".github/workflows/installers.yml").read_text())
+    build = "\n".join(step.get("run", "") for step in installers["jobs"]["build"]["steps"])
+    assert "--build-app" in build and "--release" in build and "--skip-dmg" not in build
     assert "hdiutil verify" in build and "verify_studio_macos.py" in build
+    assert "verify_studio_linux.py" in build and "verify-installer" in build
+    assert installers["permissions"] == {"contents": "read"}
+    assert installers["jobs"]["build"]["steps"][0]["with"]["ref"] == (
+        "${{ inputs.source-ref || github.sha }}"
+    )
+    assert "publish" not in build and "git push" not in build
+    assert installers[True]["workflow_call"]["inputs"]["release"]["default"] is False
+    assert "release" not in installers[True]["workflow_dispatch"]["inputs"]
+    matrix = installers["jobs"]["plan"]["steps"][0]["run"]
+    assert "ubuntu-24.04-arm" in matrix and "ubuntu-24.04" in matrix
+    ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    for name in ("studio", "studio-state-recovery"):
+        assert ci["jobs"][name]["strategy"]["matrix"]["os"] == [
+            "macos-latest",
+            "ubuntu-24.04",
+            "ubuntu-24.04-arm",
+        ]
+
+
+@pytest.mark.parametrize("platform", list(release.INSTALLER_TARGETS))
+@pytest.mark.parametrize("damage", ["missing", "corrupt", "filename", "symlink", "duplicate"])
+def test_each_platform_installer_is_required_and_verified(
+    assets: Path, plan: release.ReleasePlan, platform: str, damage: str
+) -> None:
+    name = plan.installer_names(platform)[0]
+    image = assets / name
+    checksum = assets / f"{name}.sha256"
+    if damage == "missing":
+        image.unlink()
+        checksum.unlink()
+    elif damage == "corrupt":
+        image.write_bytes(b"corrupted")
+    elif damage == "filename":
+        checksum.write_text(checksum.read_text().replace(name, "other.AppImage"))
+    elif damage == "symlink":
+        saved = assets.parent / "saved-image"
+        image.rename(saved)
+        image.symlink_to(saved)
+    else:
+        duplicate = assets / "duplicate"
+        duplicate.mkdir()
+        shutil.copyfile(image, duplicate / name)
+    with pytest.raises(ValueError):
+        release.verify_assets(assets, plan)
+
+
+@pytest.mark.parametrize("platform", list(release.INSTALLER_TARGETS))
+@pytest.mark.parametrize("preview", [False, True])
+def test_single_builder_verification_does_not_weaken_complete_release_contract(
+    tmp_path: Path, plan: release.ReleasePlan, platform: str, preview: bool
+) -> None:
+    image = tmp_path / plan.installer_names(platform, preview=preview)[0]
+    image.write_bytes(b"native installer")
+    image.with_name(f"{image.name}.sha256").write_text(
+        f"{hashlib.sha256(image.read_bytes()).hexdigest()}  {image.name}\n"
+    )
+    assert len(release.verify_assets(tmp_path, plan, platform, preview=preview)) == 2
+    with pytest.raises(ValueError, match="exactly"):
+        release.verify_assets(tmp_path, plan)
+
+
+def test_linux_installer_corruption_prevents_publication(
+    tmp_path: Path, assets: Path, plan: release.ReleasePlan, github: dict[str, Any]
+) -> None:
+    image = assets / plan.installer_names("linux-x86_64")[0]
+    image.write_bytes(b"broken Linux image")
+    with pytest.raises(ValueError, match="checksum"):
+        release.publish(tmp_path, assets, plan, "testing/project")
+    assert github["commands"] == []

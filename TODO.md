@@ -98,6 +98,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   smoke test passed on October 9; clean-machine acceptance remains open. See the
   [release installer worklog](docs/worklog/2026-10-09-release-installers.md) and
   [release instructions](docs/releases.md).
+- [ ] **P1 — 2.2.0a2 Linux installer acceptance:** Native Ubuntu 24.04 ARM64 and x86_64
+  AppImage builders, packaged verification and Studio recovery CI are being integrated. The user
+  must test the x86_64 preview before release publication. Other distro/clean-machine acceptance
+  remains open. See the [Linux release build worklog](docs/worklog/2026-10-11-linux-release-builds.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
   Windows/Linux routine CI and local macOS validation in PR #419. Existing POSIX implementations
   remain in place. See [platform details](docs/design/native-windows-filesystem.md) and the

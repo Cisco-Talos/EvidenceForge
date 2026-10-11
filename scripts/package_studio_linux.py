@@ -13,7 +13,9 @@ from pathlib import Path
 from package_studio_macos import assemble, digest, run
 
 
-def build_appimage(root: Path, build: Path, configuration: Path, architecture: str) -> Path:
+def build_appimage(
+    root: Path, build: Path, configuration: Path, architecture: str, *, release: bool = False
+) -> Path:
     """Bundle on the native architecture, keeping installer outputs out of the checkout."""
     target = f"{architecture}-unknown-linux-gnu"
     environment = {
@@ -56,7 +58,8 @@ def build_appimage(root: Path, build: Path, configuration: Path, architecture: s
     version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     destination = root / "dist/linux"
     destination.mkdir(parents=True, exist_ok=True)
-    installer = destination / f"EvidenceForge-Studio-{version}-{architecture}-test.AppImage"
+    suffix = "" if release else "-test"
+    installer = destination / f"EvidenceForge-Studio-{version}-{architecture}{suffix}.AppImage"
     # A preview may still be mounted or running; preserve its inode until users close it.
     temporary = installer.with_suffix(".AppImage.part")
     shutil.copy2(artifacts[0], temporary)
@@ -73,6 +76,7 @@ def main() -> None:
     parser.add_argument("--architecture", choices=["aarch64", "x86_64"])
     parser.add_argument("--build-directory", type=Path)
     parser.add_argument("--assemble-only", action="store_true")
+    parser.add_argument("--release", action="store_true", help="Use release installer filenames")
     arguments = parser.parse_args()
     if sys.platform != "linux":
         parser.error("Build AppImages on a native Linux machine")
@@ -89,7 +93,7 @@ def main() -> None:
     build = (arguments.build_directory or root / "build/studio-linux").resolve()
     configuration = assemble(root, build, [architecture], platform="linux")
     if not arguments.assemble_only:
-        build_appimage(root, build, configuration, architecture)
+        build_appimage(root, build, configuration, architecture, release=arguments.release)
 
 
 if __name__ == "__main__":

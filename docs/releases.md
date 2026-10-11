@@ -1,9 +1,10 @@
 # Product releases and installers
 
 EvidenceForge and Studio share the version in `pyproject.toml`. The Release workflow delivers
-the macOS Apple Silicon DMG and its SHA256 file automatically. Codex remains a separate install
-for authoring. Current installers have no Developer ID signature or notarization; Intel macOS,
-Linux and Windows installers are not enabled. See [Studio installation](studio.md#macos-installation).
+the macOS Apple Silicon DMG and native Linux ARM64/x86_64 AppImages, each with a SHA256 file.
+Codex remains a separate install for authoring. The macOS installer has no Developer ID signature
+or notarization; Intel macOS and Windows installers are not enabled. Linux publication is prepared
+for 2.2.0a2 and remains on hold until the user's x86_64 acceptance passes. See [Studio installation](studio.md#macos-installation).
 
 ## Prepare the source
 
@@ -12,7 +13,7 @@ numbered canonical suffix: `2.2.0a1`, `2.2.0b1`, or `2.2.0rc1`. Update `pyprojec
 `src/evidenceforge/__init__.py`, run `uv sync`, and run
 `uv run python scripts/sync_studio_version.py`. Commit all Python and derived Studio version
 files together with a nonempty `## vVERSION (YYYY-MM-DD)` section in `CHANGELOG.md`. Each release
-uses its checked-in changelog section as its release notes, plus macOS installation limitations.
+uses its checked-in changelog section as its release notes, plus platform installation limitations.
 
 Keep the release snapshot clean and commit all required source changes before tagging. Run the
 applicable local release and native acceptance checks. Pushing a release tag authorizes the
@@ -44,15 +45,17 @@ latest. Do not manually push a stable tag to initiate this path.
 ## What the pipeline requires
 
 1. Version/metadata consistency, a matching changelog entry and valid source/tag provenance.
-2. Routine CI, 70% Linux routine coverage, native macOS Studio/state recovery, all four slow
-   shards without coverage, and Python checkpoint portability on the release snapshot.
-3. An Apple Silicon macOS build with locked Python/npm/Cargo dependencies, packaged CLI/resource
-   verification, DMG integrity and checksum checks.
+2. Routine CI, 70% Linux routine coverage, native macOS and both Linux architectures' Studio/state
+   recovery, all four slow shards without coverage, and Python checkpoint portability.
+3. Native macOS Apple Silicon and Ubuntu 24.04 ARM64/x86_64 builds with locked Python/npm/Cargo
+   dependencies, isolated packaged CLI/resource and checkpoint-enabled generation verification,
+   bundled GStreamer appsink/scanner checks for AppImages, DMG integrity and all checksums.
 4. Downloading this run's installer artifacts, staging a draft release, uploading missing assets,
    downloading and verifying them against the build, then publishing.
 
-Released filenames are `EvidenceForge-Studio-VERSION-aarch64.dmg` and the corresponding
-`.dmg.sha256`. Developer test builds retain the `-test` suffix. The release build command is:
+The publisher requires all six assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
+`EvidenceForge-Studio-VERSION-aarch64.AppImage`, `EvidenceForge-Studio-VERSION-x86_64.AppImage`,
+and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix. The release build command is:
 
 ```sh
 uv run python scripts/package_studio_macos.py --build-app --release
@@ -63,8 +66,10 @@ packaging policy. Signing/notarization and additional platform acceptance are se
 
 ## Local Linux AppImage builds
 
-Linux installer publication is not enabled in the release workflow. Local builds use the
-unpublished `-test` filename and native architecture; building does not tag or upload anything.
+Local builds use the unpublished `-test` filename and native architecture; building does not
+tag or upload anything. Use `--architecture x86_64` on a native x86_64 builder or
+`--architecture aarch64` on a native ARM64 builder. `--release` removes the test filename suffix
+but does not publish.
 On the Ubuntu 24.04 builder, after `uv sync --frozen --extra studio --extra dev` and
 `npm --prefix desktop-ui ci`, install the AppImage plugin build requirements and run:
 
@@ -81,10 +86,32 @@ Payload assembly verifies the source behavior manifest, rejects macOS transfer m
 wheel, and checks the installed package against its generation behavior declaration before
 creating runtime archives. The same integrity gates apply to local macOS assembly.
 Native `aarch64` and `x86_64` builds are supported by the script;
-the current local builder/acceptance target is ARM64. Cross-compiling ARM AppImages is not
+CI uses `ubuntu-24.04-arm` and `ubuntu-24.04` respectively. Cross-compiling ARM AppImages is not
 supported by the upstream bundler. The build baseline is Ubuntu 24.04/glibc 2.39; other distro
-acceptance, x64 build evidence and automatic Linux release assets remain separate gates.
+acceptance remains open. Manual x86_64 desktop acceptance must pass before the 2.2.0a2 release.
 See [Tauri's native ARM requirement](https://v2.tauri.app/distribute/appimage/#appimages-for-arm-based-devices).
+
+## Build-only CI artifacts
+
+`installers.yml` shares the same native builders and packaged verification with Release, with
+read-only repository permissions and no tag or publication steps. Packaging changes pushed to
+`dev` build all three preview installers automatically. Manual builds select one platform:
+
+```sh
+gh workflow run installers.yml --ref dev -f platform=linux-x86_64
+```
+
+The workflow must first be registered by its `dev` push. Download the completed run's
+`preview-installer-linux-x86_64` artifact (AppImage plus SHA256) from its Actions page, or:
+
+```sh
+gh run download RUN_ID --name preview-installer-linux-x86_64 --dir dist/linux
+```
+
+Preview Linux builders gate native helper lifecycle and state recovery, Rust shell contracts,
+then inspect the actual AppImage without requiring FUSE. The extracted private runtime runs
+without checkout/Python PATH entries in an isolated temporary home. The same runtime checks run
+for macOS. These automated checks do not replace the user's desktop acceptance.
 
 ## Failed runs and retries
 

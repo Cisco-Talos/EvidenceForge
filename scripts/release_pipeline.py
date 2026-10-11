@@ -18,6 +18,12 @@ from tempfile import TemporaryDirectory
 from pydantic import BaseModel, ConfigDict
 from scripts.sync_studio_version import studio_version, synchronize
 
+INSTALLER_TARGETS: dict[str, tuple[str, str]] = {
+    "macos-aarch64": ("aarch64", "dmg"),
+    "linux-aarch64": ("aarch64", "AppImage"),
+    "linux-x86_64": ("x86_64", "AppImage"),
+}
+
 
 class ReleasePlan(BaseModel):
     """Validated immutable identity shared by the build and publication jobs."""
@@ -30,8 +36,17 @@ class ReleasePlan(BaseModel):
 
     @property
     def dmg_name(self) -> str:
-        """Return the current supported installer name."""
+        """Return the Apple Silicon installer name."""
         return f"EvidenceForge-Studio-{self.version}-aarch64.dmg"
+
+    def installer_names(self, platform: str | None = None, *, preview: bool = False) -> list[str]:
+        """Return the exact artifact contract for one builder or the complete release."""
+        targets = INSTALLER_TARGETS if platform is None else {platform: INSTALLER_TARGETS[platform]}
+        suffix = "-test" if preview else ""
+        return [
+            f"EvidenceForge-Studio-{self.version}-{architecture}{suffix}.{extension}"
+            for architecture, extension in targets.values()
+        ]
 
     @property
     def marker(self) -> str:
@@ -119,22 +134,26 @@ def prepare(root: Path, event: str, ref: str) -> ReleasePlan:
     return plan
 
 
-def verify_assets(directory: Path, plan: ReleasePlan) -> list[Path]:
-    """Require exactly the supported installer and its valid, filename-bound SHA256."""
+def verify_assets(
+    directory: Path, plan: ReleasePlan, platform: str | None = None, *, preview: bool = False
+) -> list[Path]:
+    """Require the exact installer set and valid, filename-bound checksums for every image."""
     files = sorted(path for path in directory.rglob("*") if path.is_file())
-    expected = {plan.dmg_name, f"{plan.dmg_name}.sha256"}
+    names = plan.installer_names(platform, preview=preview)
+    expected = {name for image in names for name in (image, f"{image}.sha256")}
     if len(files) != len(expected) or {path.name for path in files} != expected:
         raise ValueError(f"Release artifacts must contain exactly {sorted(expected)}.")
-    image = next(path for path in files if path.name == plan.dmg_name)
-    checksum = next(path for path in files if path.name.endswith(".sha256"))
-    if image.is_symlink() or checksum.is_symlink() or image.stat().st_size == 0:
-        raise ValueError("Release assets must be nonempty regular files.")
-    with image.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    if checksum.read_text(encoding="utf-8") != f"{digest}  {image.name}\n":
-        raise ValueError(
-            "DMG checksum or its recorded filename does not match the release installer."
-        )
+    for name in names:
+        image = next(path for path in files if path.name == name)
+        checksum = next(path for path in files if path.name == f"{name}.sha256")
+        if image.is_symlink() or checksum.is_symlink() or image.stat().st_size == 0:
+            raise ValueError("Release assets must be nonempty regular files.")
+        with image.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if checksum.read_text(encoding="utf-8") != f"{digest}  {image.name}\n":
+            raise ValueError(
+                f"Installer checksum or recorded filename does not match {image.name}."
+            )
     return files
 
 
@@ -215,6 +234,12 @@ def publish(root: Path, directory: Path, plan: ReleasePlan, repository: str) -> 
             "separately for authoring. This build has no Developer ID signature or notarization. "
             "See docs/studio.md in the tagged source for installation and "
             "tested-platform limitations. Verify the download using the companion SHA256 file.\n"
+            "\n### Linux AppImages\n\n"
+            "Native ARM64 and x86_64 builds, including Python and the EvidenceForge runtime. "
+            "Ubuntu 24.04/glibc 2.39 is the build and primary acceptance baseline; "
+            "other distributions are not certified. Codex is installed separately for authoring. "
+            "Make the matching AppImage executable and verify its companion SHA256 file. "
+            "See docs/studio.md in the tagged source for external requirements.\n"
         )
         with TemporaryDirectory(prefix="eforge-release-notes-") as temporary:
             path = Path(temporary) / "notes.md"
@@ -252,7 +277,9 @@ def publish(root: Path, directory: Path, plan: ReleasePlan, repository: str) -> 
                     raise ValueError(
                         "Draft asset differs; rerun failed jobs using the original build artifacts."
                     )
-            else:
+        # Compare the complete retained set before uploading any missing sibling installer.
+        for path in files:
+            if not (prior / path.name).exists():
                 run(root, ["gh", "release", "upload", plan.tag, str(path), "--repo", repository])
         with TemporaryDirectory(prefix="eforge-release-verify-") as downloaded:
             run(
@@ -287,11 +314,29 @@ def publish(root: Path, directory: Path, plan: ReleasePlan, repository: str) -> 
 def main() -> None:
     """Expose read-only preparation/verification and explicitly requested publication."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["prepare", "verify-assets", "publish"])
+    parser.add_argument(
+        "command", choices=["prepare", "verify-assets", "verify-installer", "publish"]
+    )
     parser.add_argument("--directory", type=Path, default=Path("dist/release"))
+    parser.add_argument("--platform", choices=list(INSTALLER_TARGETS))
+    parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
     root = Path.cwd().resolve()
     try:
+        if args.command == "verify-installer":
+            if args.platform is None:
+                raise ValueError("verify-installer requires --platform")
+            version = synchronize(root, check=True)
+            plan = ReleasePlan(
+                version=version,
+                tag=f"v{version}",
+                sha=run(root, ["git", "rev-parse", "HEAD"]),
+                prerelease="-" in studio_version(version),
+            )
+            verify_assets(args.directory.resolve(), plan, args.platform, preview=args.preview)
+            return
+        if args.platform is not None or args.preview:
+            raise ValueError("--platform and --preview are only valid for verify-installer")
         plan = prepare(root, os.environ["GITHUB_EVENT_NAME"], os.environ["GITHUB_REF"])
         if args.command == "prepare":
             output = os.environ.get("GITHUB_OUTPUT")

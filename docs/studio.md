@@ -5,7 +5,7 @@ generating logs, and reviewing evaluations. Existing CLI and native chat-skill w
 supported. Studio is a supplement, not a replacement.
 
 **The published Studio installer currently supports macOS only.** It targets Apple Silicon;
-local Linux ARM64 AppImage builds are available for evaluation on Ubuntu 24.04. Linux x64,
+Linux ARM64 and x86_64 preview AppImage builders target Ubuntu 24.04. Linux x64 acceptance,
 Windows, and Intel macOS installers have not been accepted. Engine and CLI platform support is
 unchanged. The alpha field-test target is macOS 26; native local checks also ran on macOS 27.0.1.
 Although the configured deployment floor is macOS 13, older systems have not been accepted.
@@ -40,12 +40,13 @@ terminal and downloads no additional runtime. Application updates are manual; se
 
 ### Linux AppImage (local previews)
 
-The `2.2.0a2` local preview is built natively on Ubuntu 24.04 ARM64. It includes a private Python
+The `2.2.0a2` previews are built natively on Ubuntu 24.04 for ARM64 and x86_64. It includes a private Python
 runtime, the engine/CLI, resources and skills; the source checkout and its virtual environment
 are not needed to run the AppImage. It is not a published GitHub release.
 
-Use it on an ARM64 (`aarch64`) desktop. This image cannot run natively on an x64 (`x86_64`)
-machine; a separate x64 build is planned. Keep the AppImage and its adjacent checksum file in a
+Choose `aarch64` for an ARM64 desktop or `x86_64` for an x64 desktop; the images are not
+interchangeable. The examples below use ARM64; substitute `x86_64` in every filename on x64.
+Manual x64 acceptance is required before publication. Keep the AppImage and its adjacent checksum file in a
 folder you intend to retain, then open a terminal in that folder:
 
 ```sh

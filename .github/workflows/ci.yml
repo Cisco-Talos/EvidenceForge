@@ -107,11 +107,11 @@ jobs:
   studio:
     name: Studio (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest]
+        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
 
     steps:
       - name: Checkout code
@@ -133,6 +133,13 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop-ui/package-lock.json
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Install Studio dependencies
         run: uv sync --extra studio --extra dev
@@ -171,6 +178,7 @@ jobs:
         run: npm run tauri -- build --debug --no-bundle
 
       - name: Build standalone Apple Silicon test app
+        if: runner.os == 'macOS'
         run: |
           rustup target add aarch64-apple-darwin --toolchain stable
           uv run python scripts/package_studio_macos.py --build-app --skip-dmg
@@ -182,11 +190,13 @@ jobs:
           "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app"
 
       - name: Archive standalone test app
+        if: runner.os == 'macOS'
         run: |
           mkdir -p dist/macos
           ditto -c -k --sequesterRsrc --keepParent "build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app" "dist/macos/EvidenceForge-Studio-aarch64-test.zip"
 
       - name: Upload standalone test app
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Studio-macOS-Apple-Silicon-test
@@ -200,7 +210,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest]
+        os: [macos-latest, ubuntu-24.04, ubuntu-24.04-arm]
     steps:
       - name: Preserve frozen fixture bytes
         run: git config --global core.autocrlf false
