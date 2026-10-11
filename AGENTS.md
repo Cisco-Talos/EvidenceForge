@@ -205,9 +205,10 @@ from commits reachable on `origin/dev`; tag names must match the canonical produ
 Both paths require synchronized Python/Studio metadata and a nonempty versioned changelog entry.
 
 The workflow calls the existing CI and slow/portability workflows on the exact snapshot, with
-70% Linux routine coverage, native macOS Studio/state-recovery gates, and slow tests without
-coverage. It builds the Apple Silicon DMG and checksum on a native macOS runner, verifies the
-packaged CLI/resources and DMG integrity, then publishes only after every required job succeeds.
+70% Linux routine coverage, native macOS and both Linux architectures' Studio/state-recovery
+gates, and slow tests without coverage. It builds the Apple Silicon DMG and native Ubuntu 24.04 ARM64/x86_64 AppImages with checksums,
+verifies isolated packaged CLI/resources, checkpoint-enabled generation, AppImage GStreamer
+plugins and DMG integrity, then publishes only after every required job succeeds.
 Publication uses this run's installer artifacts, creates/resumes a commit-bound draft, downloads
 and verifies uploaded bytes, and publishes the complete release. Only the publication job has
 repository write permission. Existing published releases are verified and left unchanged.
@@ -222,8 +223,10 @@ a workflow correction, the manual recovery entry point can use the corrected dev
 the existing annotated prerelease tag. Every gate, build and publisher checks out its validated
 original commit; tags remain immutable. See [release instructions](docs/releases.md).
 The normal stable-release trigger calls the build/publish jobs directly: tags pushed with
-`GITHUB_TOKEN` do not start a second workflow. Linux/Windows packaging can later add build-matrix
-entries and explicit required-asset validation; only macOS Apple Silicon delivery is enabled now.
+`GITHUB_TOKEN` do not start a second workflow. Publication requires the macOS DMG, both Linux AppImages and all three SHA256 files.
+The read-only Installer Builds workflow also creates preview artifacts without tagging or
+publishing; Linux x86_64 desktop acceptance remains a user gate before 2.2.0a2 publication.
+Windows packaging is not enabled.
 
 **Manual recovery (fallback only):** inspect the failed run and draft before taking any action.
 Prefer rerunning failed jobs. If Actions is unavailable, build and verify from the exact intended

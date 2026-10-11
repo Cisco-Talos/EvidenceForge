@@ -46,7 +46,8 @@ Both native Linux builders passed helper/state recovery and Rust contracts befor
 Manual x86_64 dispatch was proven with run `38164684862`, then that duplicate was canceled;
 the original all-platform run continues.
 
-Pending: native installer assembly/verification, artifact download and user desktop acceptance.
+The corrected native results and downloaded artifact are recorded below. User desktop acceptance
+remains pending.
 No tag, GitHub Release or publication workflow should run before explicit user approval after
 testing the x86_64 preview. Ubuntu 24.04/glibc 2.39 remains the build baseline; other distro and
 clean-machine acceptance are separate work.
@@ -64,3 +65,41 @@ Corrected discovery to use Tauri's `amd64` spelling only for the native x64 bund
 both real Tauri filename conventions and both preview/release names. Extended publication tests
 to corrupt each downloaded platform image and to reject builder-only flags in publication.
 No generation algorithm, dependency pin or product version changed.
+
+
+The first run's macOS and ARM64 jobs completed successfully. ARM64 packaged acceptance passes
+runtime checksum/behavior identity, isolated CLI, bundled skills/references, packs/artifact
+properties, validation, checkpoint-enabled generation and bundled GStreamer appsink/scanner.
+Each native Linux helper/state suite passed 227 tests (one skipped, 145 slow tests deselected),
+and each Rust shell suite passed 12 tests.
+
+Correction commit `52918e62` is on `dev`; all 62 local release/publication and Linux filename
+regressions pass, with repository Ruff and whitespace checks. Corrected native build-only run:
+https://github.com/Cisco-Talos/EvidenceForge/actions/runs/38165473020.
+
+
+## Corrected x86_64 artifact
+
+The x86_64 job in run `38165473020` completed successfully. Native helper/state tests passed
+227 tests (one skipped, 145 slow tests deselected), and the Rust shell passed 12 tests. The actual
+AppImage passed all packaged runtime/resource/behavior checks, checkpoint-enabled generation,
+bundled GStreamer appsink/scanner loading, and the exact preview image/checksum contract.
+
+Downloaded the verified Actions artifact and placed its two files in `dist/linux/`:
+
+- `EvidenceForge-Studio-2.2.0a2-x86_64-test.AppImage`: **138926584 bytes (132.49 MiB)**.
+- SHA256: `7b95f82d4a69de910e24d6ce242eee63ea046e6a9cb100b9b8aeff52a173d776`.
+- Adjacent `.AppImage.sha256` matches after download and copying. The AppImage is executable;
+  its ELF header identifies native x86_64. Builder-subset verification also passed locally.
+- Built source: `52918e622a2fe53efaa7b2e739c611ef630e25f1` on `dev`.
+
+User must test the x86_64 desktop preview before release. No release tag, GitHub Release or
+publication job ran. Full release coverage/slow/portability gates will still be required for the
+later authorized release snapshot; preview build checks do not replace those gates.
+
+
+The corrected run finished **successfully across all three native installer jobs**. Both Linux
+architectures and macOS have packaged-runtime acceptance and exact installer/checksum uploads
+from the same source commit. Preview artifacts remain in that run for 14 days. Source changes,
+local regression tests and native build results are complete; the remaining release hold is
+user x86_64 desktop testing and the later full release/acceptance gates.
