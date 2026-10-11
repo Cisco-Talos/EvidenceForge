@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import { ArtifactLifecycle } from "../src/ArtifactLifecycle";
-import type { CatalogItem, StudioApi } from "../src/api";
+import { StudioApiError, type CatalogItem, type StudioApi } from "../src/api";
 
 afterEach(() => cleanup());
 const item = { id: "draft", kind: "scenario", name: "test", path: "/workspace/scenario.yaml", version: "", source_sha256: "snapshot" } as CatalogItem;
@@ -24,6 +24,59 @@ function fixture(metadata: unknown = lifecycle, upgrade = false, findings: unkno
   render(<ArtifactLifecycle item={item} api={{ request, download } as unknown as StudioApi} onChanged={onChanged} onOpen={onOpen} />);
   return { request, download, onChanged, onOpen, user: userEvent.setup() };
 }
+
+test("failed publication shows readable fields only in its dialog and Cancel clears them", async () => {
+  const request = vi.fn(async (_path: string, method?: string) => {
+    if (method === "POST") throw new StudioApiError(409, { message: "Scenario needs changes before publication.", issues: [{ severity: "error", field_path: "environment.users", message: "List should have at least 1 item after validation, not 0" }] });
+    return { lifecycle, digest: "reviewed", versions: [] };
+  });
+  render(<ArtifactLifecycle item={item} api={{ request } as unknown as StudioApi} onChanged={async () => undefined} />);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Publish locally…" }));
+  const dialog = screen.getByRole("dialog");
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Publish locally" })).toBeEnabled());
+  await user.click(within(dialog).getByRole("button", { name: "Publish locally" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("environment.users");
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Publish locally…" }));
+  await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("button", { name: "Publish locally" })).toBeEnabled());
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("settled inspection disables starter publication and source edits enable it again", async () => {
+  let finishRead!: (value: object) => void;
+  const request = vi.fn(() => new Promise<object>((resolve) => { finishRead = resolve; }));
+  const api = { request } as unknown as StudioApi;
+  const view = (revision: string) => <ArtifactLifecycle item={{ ...item, source_sha256: revision }} api={api} onChanged={async () => undefined} />;
+  const rendered = render(view("starter"));
+  await act(async () => finishRead({ lifecycle, digest: "starter", starter_draft: true }));
+  expect(screen.getByRole("button", { name: "Publish locally…" })).toBeDisabled();
+  expect(screen.queryByRole("alert")).toBeNull();
+  rendered.rerender(view("authored"));
+  await act(async () => finishRead({ lifecycle, digest: "authored", starter_draft: false }));
+  expect(screen.getByRole("button", { name: "Publish locally…" })).toBeEnabled();
+});
+
+test("a failed lifecycle inspection remains visible after publication review is cancelled", async () => {
+  let reads = 0;
+  const request = vi.fn(async () => {
+    if (++reads === 2) throw new Error("Cannot inspect missing include");
+    return { lifecycle, digest: "reviewed", versions: [] };
+  });
+  const api = { request } as unknown as StudioApi;
+  const view = (revision: string) => <ArtifactLifecycle item={{ ...item, source_sha256: revision }} api={api} onChanged={async () => undefined} />;
+  const rendered = render(view("one"));
+  await screen.findByRole("button", { name: "Publish locally…" });
+  rendered.rerender(view("two"));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Cannot inspect missing include");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "Publish locally…" }));
+  const dialog = screen.getByRole("dialog");
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Publish locally" })).toBeEnabled());
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Cannot inspect missing include");
+});
 
 test("publication waits for a current review before enabling confirmation", async () => {
   let finishReview: ((value: object) => void) | undefined;
@@ -109,7 +162,8 @@ test("publication is explicit and no release number is assigned while editing", 
   await screen.findByRole("button", { name: "Publish locally…" });
   expect(screen.queryByRole("button", { name: "Upgrade to latest schema" })).toBeNull();
   await user.click(screen.getByRole("button", { name: "Publish locally…" }));
-  expect(screen.getByRole("textbox", { name: "Release version" })).toHaveValue("");
+  expect(screen.getByRole("textbox", { name: "Release version" })).toHaveValue("1.0.0");
+  await user.clear(screen.getByRole("textbox", { name: "Release version" }));
   await user.type(screen.getByRole("textbox", { name: "Release version" }), "2.0.0");
   await user.click(screen.getByRole("button", { name: "Publish locally" }));
   expect(request).toHaveBeenCalledWith("/v1/items/draft/lifecycle", "POST", { action: "publish", version: "2.0.0", accept_warnings: false, expected_digest: "captured-digest" }, 180000);

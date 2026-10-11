@@ -419,7 +419,7 @@ def test_scenario_two_draft_promotes_and_keeps_conversation(
         ).json()
         assert draft["draft_name"] == "My-new-scenario"
         target = Path(draft["draft_path"])
-        target.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             "scenario_version: '2.0'\nname: authored-two\nenvironment:\n  users: []\n  systems: []\n",
             encoding="utf-8",
@@ -850,7 +850,7 @@ def test_projects_group_scenarios_without_moving_files(tmp_path: Path, monkeypat
         )
         client.post("/v1/workspaces/select", headers=headers, json={"path": str(workspace)})
         removed = client.delete(f"/v1/projects/{project_id}", headers=headers)
-        assert removed.json() == {"status": "deleted", "ungrouped": 1}
+        assert removed.json() == {"status": "deleted", "ungrouped": 2}
         saved_view = client.get("/v1/views", headers=headers).json()[0]
         assert saved_view["project_id"] is None
         assert saved_view["ungrouped"]
@@ -999,11 +999,11 @@ def test_draft_conversation_links_authored_file_and_project(
         assert created.status_code == 200, created.text
         draft = created.json()
         target = Path(draft["draft_path"])
-        assert draft["item_id"] is None
-        assert draft["draft_project_id"] == project["id"]
+        assert draft["item_id"] is not None
+        assert draft["draft_project_id"] is None
         assert draft["draft_name"] == "New-case"
-        assert target.parent.parent == workspace / "scenarios"
-        assert not target.exists()
+        assert target.is_relative_to(workspace / ".eforge/artifacts/drafts/scenario")
+        assert target.is_file()
         assert (
             client.post(
                 "/v1/conversations",
@@ -1020,7 +1020,7 @@ def test_draft_conversation_links_authored_file_and_project(
             ).status_code
             == 400
         )
-        target.parent.mkdir(parents=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
             "name: new-case\nversion: '1.0'\nenvironment:\n  users: []\n  systems: []\n",
             encoding="utf-8",
@@ -1747,8 +1747,9 @@ def test_signed_out_codex_stays_available_for_login(tmp_path: Path, monkeypatch:
         assert calls == ["account/read"]
 
 
+@pytest.mark.parametrize("legacy_pending", [False, True])
 def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
-    tmp_path: Path, monkeypatch: object
+    tmp_path: Path, monkeypatch: object, legacy_pending: bool
 ) -> None:
     workspace = tmp_path / "workspace"
     calls = tmp_path / "codex-calls.jsonl"
@@ -1781,9 +1782,19 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
     app = create_app(_paths(tmp_path / "private"), "local-secret")
     headers = {"X-EForge-Token": "local-secret"}
     with TestClient(app) as client:
-        draft = client.post(
-            "/v1/conversations", headers=headers, json={"draft_kind": "scenario"}
-        ).json()
+        if legacy_pending:
+            pending = Conversation(
+                workspace=workspace,
+                draft_kind="scenario",
+                draft_name="preview-draft",
+                draft_path=workspace / "scenarios/studio-preview/scenario.yaml",
+            )
+            app.state.studio.store.save_conversation(pending)
+            draft = json.loads(pending.model_dump_json())
+        else:
+            draft = client.post(
+                "/v1/conversations", headers=headers, json={"draft_kind": "scenario"}
+            ).json()
         response = client.post(
             f"/v1/conversations/{draft['id']}/turns",
             headers=headers,
@@ -1791,10 +1802,24 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         )
         assert response.status_code == 200, response.text
         assert response.json()["active"] is False
-        assert not Path(draft["draft_path"]).exists()
+        draft = json.loads(app.state.studio.store.conversation(draft["id"]).model_dump_json())
+        assert Path(draft["draft_path"]).is_file()
+        assert Path(draft["draft_path"]).is_relative_to(
+            workspace / ".eforge/artifacts/drafts/scenario"
+        )
+        resumed = client.post(
+            f"/v1/conversations/{draft['id']}/turns",
+            headers=headers,
+            json={"text": "Review this draft"},
+        )
+        assert resumed.status_code == 200, resumed.text
     records = [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()]
     started = next(record for record in records if record["method"] == "thread/start")
     assert draft["draft_path"] in started["params"]["developerInstructions"]
+    assert "Do not run new-draft again" in started["params"]["developerInstructions"]
+    resumed = next(record for record in records if record["method"] == "thread/resume")
+    assert draft["draft_path"] in resumed["params"]["developerInstructions"]
+    assert "Do not run new-draft" in resumed["params"]["developerInstructions"]
     turn = next(record for record in records if record["method"] == "turn/start")
     assert turn["params"]["input"][1]["name"] == "eforge-scenario"
     assert turn["params"]["summary"] == "auto"

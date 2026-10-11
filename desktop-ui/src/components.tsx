@@ -10,6 +10,7 @@ import { BundlePropertiesDialog } from "./ArtifactProperties";
 import { jobSubmittedAt } from "./jobOrder";
 import { jobDisplayStatus } from "./jobOutcomes";
 import { ScorecardPanel } from "./ScorecardPanel";
+import { JobDiagnostics } from "./JobDiagnostics";
 
 export function BundleOptionsMenu({ id, onProperties }: { id: string; onProperties: () => void }) {
   return <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label={`Bundle options for ${id}`} title="Bundle options" onClick={(event) => event.stopPropagation()}><MoreHorizontal size={17} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5} align="end"><DropdownMenu.Item onSelect={onProperties}>Properties…</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>;
@@ -121,6 +122,7 @@ export function JobCard({ job, name: scenarioName, grouped = false, sizeBytes, h
       {showScorecard && job.kind === "evaluation" && <ScorecardPanel jobId={job.id} api={api} />}
       {job.kind === "evaluation" && job.generation_id && onShowSource && <button className="job-source-link" onClick={() => onShowSource(job.generation_id!)}>Jump to generation #{job.generation_id.slice(0, 8)}</button>}
       {job.status_message && job.kind === "generation" && <p className="job-message">{job.status_message}</p>}
+      {expanded && <JobDiagnostics job={job} api={api} onError={onError} />}
     <div className="job-actions">
       <button className="button-quiet" onClick={() => void openBundle()}><FolderOpen size={16} /> View files</button>
       {job.kind === "generation" && !["running", "queued"].includes(job.status) && <button className="button-quiet" disabled={exporting} onClick={() => void exportBundle()}><Download size={16} /> {exporting ? "Exporting…" : job.status === "completed" ? (isTauri() ? "Export ZIP" : "Download ZIP") : (isTauri() ? "Export partial ZIP" : "Download partial ZIP")}</button>}

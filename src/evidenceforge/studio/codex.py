@@ -6,10 +6,12 @@ import asyncio
 import json
 import logging
 import sqlite3
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.studio.linux_sandbox import linux_sandbox_notice
 from evidenceforge.studio.runtime import command_environment, discover_codex
 from evidenceforge.studio.runtime_cleanup import runtime_worker_fds
 
@@ -74,6 +76,8 @@ class CodexClient:
             ):
                 return
             await self._stop_transport()
+            if sys.platform == "linux":
+                await self.on_event("codex/linuxSandboxReset", {})
             command = discover_codex(self.binary)
             if not command:
                 raise CodexUnavailableError("Codex CLI was not found; set its path in Settings")
@@ -286,4 +290,11 @@ class CodexClient:
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None
         while line := await process.stderr.readline():
-            self.stderr_tail = (self.stderr_tail + line.decode("utf-8", "replace"))[-2000:]
+            text = line.decode("utf-8", "replace")
+            self.stderr_tail = (self.stderr_tail + text)[-2000:]
+            if sys.platform == "linux" and self.notifications is not None:
+                notice = linux_sandbox_notice(text)
+                if notice is not None:
+                    self.notifications.put_nowait(
+                        ("event", None, "codex/linuxSandboxWarning", notice.model_dump())
+                    )

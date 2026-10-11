@@ -341,7 +341,9 @@ def test_actual_census_protects_unleased_process_and_reports_access_denial(
     monkeypatch.setattr(cleanup.psutil, "process_iter", lambda: [inaccessible])
     assert cleanup._process_use(root) == (
         False,
-        "Cannot inspect process 123 to verify this runtime is unused.",
+        "Cannot rule out runtime use by processes 123: ownership, executable, "
+        "or command-line information is unavailable. Quit older Studio builds and their "
+        "background work before checking again.",
     )
 
 

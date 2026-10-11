@@ -288,7 +288,45 @@ def main() -> None:
         descriptor = connect_or_start()
     except (OSError, RuntimeError, ValueError, StudioStateError) as error:
         raise SystemExit(str(error)) from None
-    print(json.dumps({"url": descriptor.url, "token": descriptor.token}))
+    connection: dict[str, str | int | float] = {
+        "url": descriptor.url,
+        "token": descriptor.token,
+    }
+    if "--desktop" in sys.argv[1:]:
+        # The native shell directly launches this short-lived bootstrap process.
+        # Track that shell, not the renderer, bootstrap, or detached helper.
+        try:
+            parent = psutil.Process(os.getppid())
+            if process_account(parent) != current_account():
+                raise StudioStateError("Studio's application belongs to another OS account")
+            connection["app_pid"] = parent.pid
+            connection["app_created_at"] = parent.create_time()
+            connection["app_session"] = (
+                f"native-{parent.pid}-{int(parent.create_time() * 1_000_000)}"
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, StudioStateError):
+            raise SystemExit(
+                "Could not verify Studio's application process; reopen Studio"
+            ) from None
+        # Claim ownership immediately, before the renderer loads. Reopening a
+        # shell cancels any pending idle exit on a reused helper.
+        request = urllib.request.Request(
+            f"{descriptor.url}/v1/session/heartbeat",
+            method="POST",
+            headers={
+                "X-EForge-Token": descriptor.token,
+                "X-EForge-Session": str(connection["app_session"]),
+                "X-EForge-App-Pid": str(connection["app_pid"]),
+                "X-EForge-App-Created-At": str(connection["app_created_at"]),
+            },
+            data=b"",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=2):
+                pass
+        except (OSError, urllib.error.URLError, TimeoutError):
+            raise SystemExit("Studio's helper could not attach the app; reopen Studio") from None
+    print(json.dumps(connection))
 
 
 if __name__ == "__main__":

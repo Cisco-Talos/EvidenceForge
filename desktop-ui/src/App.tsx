@@ -13,6 +13,8 @@ import { JobSections } from "./JobSections";
 import { completedSuccessfully } from "./jobOutcomes";
 import { SettingsView } from "./SettingsView";
 import { RuntimeCleanupNotice } from "./RuntimeCleanupNotice";
+import { LinuxSandboxNotice } from "./LinuxSandboxNotice";
+import { PublisherSetup } from "./PublisherSetup";
 import { ChatView } from "./ChatView";
 import { artifactFilename, artifactTitle, draftTitle } from "./artifactNaming";
 import { packNameError } from "./packName";
@@ -28,6 +30,8 @@ import { PackFilters, emptyPackFilters } from "./PackFilters";
 import { ArtifactPropertiesDialog, type PropertiesSection } from "./ArtifactProperties";
 import { ArtifactTitle } from "./ArtifactTitle";
 import { ScenarioWorkspace, type WorkspaceTarget } from "./ScenarioWorkspace";
+import { MissingScenarioSource } from "./MissingScenarioSource";
+import { belongsToScenario } from "./scenarioSources";
 import { workspaceConversations } from "./workspaceConversations";
 import { ImportDialog } from "./ImportDialog";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
@@ -146,8 +150,8 @@ function App() {
   const savedViews = snapshot?.views.filter((view) => section === "packs" ? view.kind !== "scenario" : view.kind === kind) || [];
   const hiddenCount = snapshot?.items.filter((entry) => (entry.kind === kind || (kind === "packs" && entry.kind !== "scenario")) && entry.hidden).length || 0;
   const conversations = selectedId ? workspaceConversations(snapshot?.conversations || [], selectedId) : [];
-  const itemGenerationIds = new Set(snapshot?.jobs.filter((job) => job.kind === "generation" && job.scenario === item?.path).map((job) => job.id) || []);
-  const itemJobs = snapshot?.jobs.filter((job) => item && ((job.kind === "generation" && job.scenario === item.path) || (job.kind === "evaluation" && !!job.generation_id && itemGenerationIds.has(job.generation_id)))) || [];
+  const itemGenerationIds = new Set(snapshot?.jobs.filter((job) => item && belongsToScenario(job, item, snapshot)).map((job) => job.id) || []);
+  const itemJobs = snapshot?.jobs.filter((job) => item && (belongsToScenario(job, item, snapshot) || (job.kind === "evaluation" && !!job.generation_id && itemGenerationIds.has(job.generation_id)))) || [];
   function jobScenarioName(job: StudioJob): string | undefined {
     const generation = job.kind === "evaluation"
       ? snapshot?.jobs.find((candidate) => candidate.id === job.generation_id)
@@ -213,7 +217,7 @@ function App() {
   }
 
   function completedRuns(target: CatalogItem): StudioJob[] {
-    return (snapshot?.jobs || []).filter((job) => job.kind === "generation" && job.scenario === target.path && job.status === "completed")
+    return (snapshot?.jobs || []).filter((job) => snapshot && belongsToScenario(job, target, snapshot) && job.status === "completed")
       .sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
   }
 
@@ -545,8 +549,9 @@ function App() {
       });
       setNewScenarioForm(null);
       await studio.reload();
-      setSelectedId(null);
-      setDraftConversationId(created.id);
+      setSelectedId(created.item_id || null);
+      setDraftConversationId(created.item_id ? null : created.id);
+      if (created.item_id) { setSelectedConversation(created.id); setWorkspaceTarget("conversations"); }
     } catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
   }
@@ -647,7 +652,10 @@ function App() {
   }, [draftConversationId, draftConversation, snapshot?.items]);
 
   const submitClose = useCallback(async (options?: { confirm_delete?: boolean; generation_exceptions?: Record<string, string> }) => {
-    if (!api) return;
+    if (!api) {
+      await invoke("studio_exit");
+      return;
+    }
     if (!snapshot) {
       await api.request("/v1/session/detach", "POST").catch(() => undefined);
       await invoke("studio_exit");
@@ -677,7 +685,7 @@ function App() {
   closeHandler.current = submitClose;
 
   useEffect(() => {
-    if (!api || !window.__TAURI_INTERNALS__) return;
+    if (!window.__TAURI_INTERNALS__) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWindow().onCloseRequested(async (event) => {
@@ -686,7 +694,7 @@ function App() {
     }).then((dispose) => { if (disposed) dispose(); else unlisten = dispose; })
       .catch((error) => setNotice(`Could not register close handling: ${String(error)}`));
     return () => { disposed = true; unlisten?.(); };
-  }, [Boolean(api), Boolean(snapshot)]);
+  }, []);
 
   useEffect(() => {
     if (!api || closeProblem?.type !== "waiting") return;
@@ -715,7 +723,7 @@ function App() {
   }, []);
 
   if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
-  if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p><button onClick={() => window.location.reload()}>Retry</button></div>;
+  if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p>{studio.error && <button onClick={() => window.location.reload()}>Retry</button>}</div>;
 
   const showLibrary = ["scenarios", "packs"].includes(section);
   return <Tooltip.Provider><div className="app-shell">
@@ -734,6 +742,8 @@ function App() {
       <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="icon-button" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}><RefreshCw size={17} /></button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
 
       <RuntimeCleanupNotice report={snapshot.runtime_cleanup} />
+      <LinuxSandboxNotice notice={snapshot.linux_sandbox_notice} onError={setNotice} />
+      <PublisherSetup key={snapshot.settings.workspace} workspace={snapshot.settings.workspace} status={snapshot.publisher_status} api={api} onSaved={studio.reload} notice hidden={section === "settings"} />
       {showLibrary && !item && !draftConversationId && <div className="page library-page">
         <div className="page-intro"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>{sectionTitles[section]}</h1><p>{section === "scenarios" ? "Find a scenario and pick up where you left off." : "Reusable environments for realistic scenarios."}</p></div>{section === "scenarios" ? <button className="button-primary" disabled={busy} onClick={() => setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" })}><Plus size={17} /> New scenario</button> : <div className="library-pack-actions"><button className="button-quiet" onClick={() => setPackImportOpen(true)}><Download size={16} /> Import packs</button><DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}><Plus size={17} /> New pack</DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5}><DropdownMenu.Item onSelect={() => setNewPackKind("industry_pack")}>Industry pack</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setNewPackKind("organization_pack")}>Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>}</div>
         <div className="project-browser">
@@ -763,7 +773,9 @@ function App() {
 
       {showLibrary && !item && draftConversation && <div className="draft-page"><div className="draft-banner"><div><span className="eyebrow">AUTHORING DRAFT</span>{draftConversation.draft_kind === "scenario" ? <ArtifactTitle key={draftConversation.id} name={draftConversation.draft_name || "New scenario"} displayName={draftConversation.draft_display_name} api={api} source={{ context: { kind: "scenario", name: draftConversation.draft_name || "new-scenario" } }} onSave={saveDraftDisplayName} disabled={draftConversation.active} /> : <strong>{draftConversation.draft_kind === "industry_pack" ? "New industry pack" : "New organization pack"}</strong>}{draftConversation.draft_path ? <div className="path-with-copy draft-target"><span className="path-value" title={draftConversation.draft_path}>Target: {shortPath(draftConversation.draft_path)}</span><CopyPathButton path={draftConversation.draft_path} label="Copy draft path" onError={setNotice} /></div> : <span>The authored file will appear in this library.</span>}</div><button className="button-quiet" disabled={draftConversation.active} onClick={() => setDeletingConversation(draftConversation)}>Delete draft</button></div><ChatView item={{ name: draftConversation.draft_kind === "scenario" ? "New scenario" : "New pack", kind: draftConversation.draft_kind || "scenario" }} conversation={draftConversation} codexHealth={codexHealth} api={api} subscribeEvents={studio.subscribeEvents} onRenamed={studio.reload} onError={setNotice} /></div>}
 
-      {showLibrary && item && <ScenarioWorkspace onProperties={(section = "general") => setPropertiesTarget({ id: item.id, section })} key={item.id} item={item} snapshot={snapshot} conversations={conversations} selectedConversation={selectedConversation} target={workspaceTarget} jobs={itemJobs} api={api} codexHealth={codexHealth} busy={busy} validation={studio.validations[item.id] || snapshot.validations[item.id]?.result} focusJobId={focusJobId} initialDraft={fixDraft?.conversationId === selectedConversation ? fixDraft.text : undefined} subscribeEvents={studio.subscribeEvents}
+      {showLibrary && item && snapshot.missing_sources?.includes(item.id) && <MissingScenarioSource key={item.id} item={item} conversations={conversations} jobs={itemJobs} api={api} onRecovered={async (recovered) => { await studio.reload(); openItem(recovered); }} onRemoved={async () => { await studio.reload(); setSelectedId(null); }} onRuns={() => setSection("jobs")} />}
+
+      {showLibrary && item && !snapshot.missing_sources?.includes(item.id) && <ScenarioWorkspace onProperties={(section = "general") => setPropertiesTarget({ id: item.id, section })} key={item.id} item={item} snapshot={snapshot} conversations={conversations} selectedConversation={selectedConversation} target={workspaceTarget} jobs={itemJobs} api={api} codexHealth={codexHealth} busy={busy} validation={studio.validations[item.id] || snapshot.validations[item.id]?.result} focusJobId={focusJobId} initialDraft={fixDraft?.conversationId === selectedConversation ? fixDraft.text : undefined} subscribeEvents={studio.subscribeEvents}
         onNavigate={(target, jobId) => { setWorkspaceTarget(target); if (jobId !== undefined) setFocusJobId(jobId); }}
         onOpenConversation={(chat) => { setSelectedConversation(chat.id); setWorkspaceTarget("conversations"); }}
         onCreateConversation={() => void createConversation()} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
@@ -772,7 +784,7 @@ function App() {
       {section === "jobs" && <div className="page"><div className="page-intro"><div><span className="eyebrow">ALL OPERATIONS</span><h1>Job center</h1><p>Track generations, evaluations, and active authoring turns.</p></div>{hasPausedJobs && <button className="button-quiet" onClick={() => void api.request("/v1/jobs/resume", "POST", {}).catch((error) => setNotice(String(error)))}><Play size={16} /> Resume paused jobs</button>}</div><div className="jobs-summary"><div><strong>{snapshot.jobs.filter((job) => job.status === "running").length}</strong><span>Running jobs</span></div><div><strong>{snapshot.jobs.filter((job) => job.status === "queued").length}</strong><span>Queued jobs</span></div><div><strong>{snapshot.jobs.filter((job) => completedSuccessfully(job) && !snapshot.removed_job_ids?.includes(job.id)).length}</strong><span>Completed jobs</span></div><div aria-label={`${workingChats.length} active chats`}><strong>{workingChats.length}</strong><span>Active chats</span></div>{attentionChats.length > 0 && <div aria-label={`${attentionChats.length} chats need input`}><strong>{attentionChats.length}</strong><span>Need input</span></div>}{uncertainChats.length > 0 && <div aria-label={`${uncertainChats.length} chats need reconnection`}><strong>{uncertainChats.length}</strong><span>Connection uncertain</span></div>}</div>{(workingChats.length > 0 || attentionChats.length > 0 || uncertainChats.length > 0) && <section className="chat-activity surface"><div className="surface-heading"><h2>Authoring activity</h2><span className="eyebrow">LIVE</span></div>{[...workingChats, ...attentionChats, ...uncertainChats].map((chat) => <button className="chat-activity-row" key={chat.id} onClick={() => openActiveConversation(chat)}><span className={chat.needs_attention ? "attention-dot" : "active-pulse"} /><span><strong>{chat.title}</strong><small>{snapshot.items.find((entry) => entry.id === chat.item_id)?.name || "Draft"}</small></span><em>{chat.needs_attention ? "Needs input" : !codexHealthy ? "Connection uncertain" : "Working"}</em><ArrowUpRight size={16} /></button>)}</section>}{snapshot.jobs.length ? <JobSections jobs={snapshot.jobs} removedJobIds={snapshot.removed_job_ids || []} manageHistory nameFor={jobScenarioName} api={api} onError={setNotice} onChanged={studio.reload} /> : <div className="empty-panel"><Activity size={28} /><h3>No jobs yet</h3><p>Start a generation from a scenario workspace.</p></div>}</div>}
       {section === "bundles" && <BundleLibrary snapshot={snapshot} api={api} onError={setNotice} onChanged={studio.reload} onOpenScenario={(entry) => { setSection("scenarios"); openItem(entry); }} />}
       {propertiesTarget && snapshot.items.find((entry) => entry.id === propertiesTarget.id) && <ArtifactPropertiesDialog key={`properties-${propertiesTarget.id}`} item={snapshot.items.find((entry) => entry.id === propertiesTarget.id)!} initialSection={propertiesTarget.section} snapshot={snapshot} api={api} onClose={() => setPropertiesTarget(null)} onChanged={studio.reload} onProjectChange={(projectId) => { const entry = snapshot.items.find((entry) => entry.id === propertiesTarget.id); if (entry) void assignProject(entry, projectId); }} onOpen={async (path) => { const entries = await api.request<CatalogItem[]>("/v1/items"); const found = entries.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} />}
-      {section === "settings" && <div className="page settings-page"><div className="page-intro"><div><span className="eyebrow">PREFERENCES</span><h1>Settings</h1><p>Keep your workspace and tools ready for the next task.</p></div></div><SettingsView settings={snapshot.settings} paths={snapshot.paths} runtimeCleanup={snapshot.runtime_cleanup} api={api} onSaved={studio.reload} onError={setNotice} /></div>}
+      {section === "settings" && <div className="page settings-page"><div className="page-intro"><div><span className="eyebrow">PREFERENCES</span><h1>Settings</h1><p>Keep your workspace and tools ready for the next task.</p></div></div><SettingsView settings={snapshot.settings} paths={snapshot.paths} runtimeCleanup={snapshot.runtime_cleanup} publisherStatus={snapshot.publisher_status} api={api} onSaved={studio.reload} onError={setNotice} /></div>}
       {showReconnect && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Reconnect Codex"><h2>Reconnect Codex</h2><p>{codexHealth.detail}</p>{uncertainChats.length + attentionChats.length > 0 && <p>Reconnecting will interrupt {uncertainChats.length + attentionChats.length} active {uncertainChats.length + attentionChats.length === 1 ? "turn" : "turns"}. Their conversation history remains available for review.</p>}<div className="close-modal-actions"><button className="button-quiet" onClick={() => setShowReconnect(false)}>Cancel</button><button className="button-primary" disabled={reconnecting} onClick={() => void reconnectCodex()}><RefreshCw size={16} /> {reconnecting ? "Reconnecting…" : "Reconnect"}</button></div></div></div>}
       {sourceViewer && <BundleFileBrowser jobId={sourceViewer.itemId} files={sourceViewer.files} api={api} kind="items" onClose={() => setSourceViewer(null)} onError={setNotice} />}
       {newScenarioForm && <ImportDialog kind="scenario" initialProjectId={newScenarioForm.projectId} projects={snapshot.projects} api={api} creating={busy} onCreate={createDraft} onClose={() => setNewScenarioForm(null)} onImported={async (imported) => { await studio.reload(); setNewScenarioForm(null); if (imported) openItem(imported); showNotice("Scenario imported."); }} />}

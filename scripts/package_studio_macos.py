@@ -18,8 +18,16 @@ import tarfile
 import tomllib
 import urllib.request
 from pathlib import Path
+from typing import Literal
+from zipfile import ZipFile
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+from evidenceforge.generation.checkpoints.behavior import (
+    GenerationBehaviorManifest,
+    generation_behavior_surface_digest,
+)
 
 
 class RuntimeArchive(BaseModel):
@@ -35,7 +43,8 @@ class RuntimeLock(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     python_version: str
-    minimum_macos: str
+    minimum_macos: str = ""
+    minimum_linux: str = ""
     runtimes: dict[str, RuntimeArchive]
 
 
@@ -86,12 +95,41 @@ def pack_payload(root: Path, destination: Path) -> None:
                         archive.addfile(info)
 
 
-def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
+def validate_runtime_behavior(packages: Path) -> None:
+    """Require installed wheel content to match its own generation declaration."""
+    package = packages / "evidenceforge"
+    declaration = package / "config/generation_behavior.yaml"
+    manifest = GenerationBehaviorManifest.model_validate(
+        yaml.safe_load(declaration.read_text(encoding="utf-8"))
+    )
+    actual = generation_behavior_surface_digest(package)
+    if actual != manifest.behavior_surface_sha256:
+        raise RuntimeError(
+            "Packaged generation behavior does not match its manifest: "
+            f"declared={manifest.behavior_surface_sha256}, actual={actual}. "
+            "Inspect wheel contents and source changes before building an installer."
+        )
+    print(
+        f"Packaged generation behavior verified: revision={manifest.current_revision} "
+        f"digest={actual}",
+        flush=True,
+    )
+
+
+def assemble(
+    root: Path,
+    build: Path,
+    architectures: list[str],
+    *,
+    platform: Literal["macos", "linux"] = "macos",
+) -> Path:
     """Assemble selected runtime payloads from the lockfile and built project wheel."""
     run([sys.executable, str(root / "scripts/sync_studio_version.py")], root, dict(os.environ))
-    lock = RuntimeLock.model_validate_json(
-        (root / "desktop-ui/packaging/runtime-lock.json").read_bytes()
+    run(
+        [sys.executable, str(root / "scripts/check_generation_behavior.py")], root, dict(os.environ)
     )
+    lockfile = "runtime-lock.json" if platform == "macos" else "runtime-lock-linux.json"
+    lock = RuntimeLock.model_validate_json((root / "desktop-ui/packaging" / lockfile).read_bytes())
     version: str = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
     native_version: str = json.loads((root / "desktop-ui/src-tauri/tauri.conf.json").read_text())[
         "version"
@@ -99,8 +137,9 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
     environment = {
         **os.environ,
         "UV_CACHE_DIR": str(build / "uv-cache"),
-        "MACOSX_DEPLOYMENT_TARGET": lock.minimum_macos,
     }
+    if platform == "macos":
+        environment["MACOSX_DEPLOYMENT_TARGET"] = lock.minimum_macos
     build.mkdir(parents=True, exist_ok=True)
     requirements = build / "runtime-requirements.txt"
     run(
@@ -126,6 +165,14 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
     wheel = wheels / f"evidence_forge-{version}-py3-none-any.whl"
     if not wheel.is_file():
         raise FileNotFoundError(f"Expected project wheel at {wheel}")
+    with ZipFile(wheel) as archive:
+        metadata_entries = [
+            name
+            for name in archive.namelist()
+            if any(part.startswith("._") or part == ".DS_Store" for part in Path(name).parts)
+        ]
+    if metadata_entries:
+        raise RuntimeError(f"Project wheel contains macOS transfer metadata: {metadata_entries}")
     resources = build / "resources"
     resources.mkdir(exist_ok=True)
     archives: dict[str, dict[str, str]] = {}
@@ -151,7 +198,9 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
                 "--python-version",
                 lock.python_version,
                 "--python-platform",
-                f"{architecture}-apple-darwin",
+                f"{architecture}-apple-darwin"
+                if platform == "macos"
+                else f"{architecture}-unknown-linux-gnu",
                 "--only-binary",
                 ":all:",
                 "--require-hashes",
@@ -183,6 +232,7 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
             shutil.rmtree(scripts)
         for metadata in packages.glob("evidence_forge-*.dist-info/direct_url.json"):
             metadata.unlink()
+        validate_runtime_behavior(packages)
         command = payload / "bin/eforge"
         command.write_text(
             "#!/bin/sh\n"
@@ -209,7 +259,11 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
         "schema_version": 1,
         "evidenceforge_version": version,
         "python_version": lock.python_version,
-        "minimum_macos": lock.minimum_macos,
+        **(
+            {"minimum_macos": lock.minimum_macos}
+            if platform == "macos"
+            else {"minimum_linux": lock.minimum_linux}
+        ),
         "runtimes": archives,
     }
     (resources / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -220,7 +274,13 @@ def assemble(root: Path, build: Path, architectures: list[str]) -> Path:
                 "version": native_version,
                 "bundle": {
                     "resources": {str(resources): "runtime"},
-                    "macOS": {"minimumSystemVersion": lock.minimum_macos},
+                    **(
+                        {"macOS": {"minimumSystemVersion": lock.minimum_macos}}
+                        if platform == "macos"
+                        # WebKitGTK requires dynamically loaded GStreamer plugins at startup.
+                        # ELF dependency collection alone only includes their shared libraries.
+                        else {"linux": {"appimage": {"bundleMediaFramework": True}}}
+                    ),
                 },
             },
             indent=2,

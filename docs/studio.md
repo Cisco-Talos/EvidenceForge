@@ -4,8 +4,9 @@ EvidenceForge Studio is a desktop workspace for authoring scenarios and packs, v
 generating logs, and reviewing evaluations. Existing CLI and native chat-skill workflows are still
 supported. Studio is a supplement, not a replacement.
 
-**The Studio app currently supports macOS only.** The standalone installer targets Apple Silicon;
-Linux, Windows, and Intel macOS installers are not available. Engine and CLI platform support is
+**The published Studio installer currently supports macOS only.** It targets Apple Silicon;
+local Linux ARM64 AppImage builds are available for evaluation on Ubuntu 24.04. Linux x64,
+Windows, and Intel macOS installers have not been accepted. Engine and CLI platform support is
 unchanged. The alpha field-test target is macOS 26; native local checks also ran on macOS 27.0.1.
 Although the configured deployment floor is macOS 13, older systems have not been accepted.
 
@@ -37,13 +38,70 @@ First launch expands the private bundled runtime; later launches reuse it. The a
 terminal and downloads no additional runtime. Application updates are manual; see
 [updates and runtime retention](#updates-and-runtime-retention).
 
+### Linux AppImage (local previews)
+
+The `2.2.0a2` local preview is built natively on Ubuntu 24.04 ARM64. It includes a private Python
+runtime, the engine/CLI, resources and skills; the source checkout and its virtual environment
+are not needed to run the AppImage. It is not a published GitHub release.
+
+Use it on an ARM64 (`aarch64`) desktop. This image cannot run natively on an x64 (`x86_64`)
+machine; a separate x64 build is planned. Keep the AppImage and its adjacent checksum file in a
+folder you intend to retain, then open a terminal in that folder:
+
+```sh
+chmod +x EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage
+sha256sum -c EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage.sha256
+./EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage
+```
+
+The builder baseline is glibc 2.39. Compatibility with other distributions is pending native
+acceptance; building against newer libraries can exclude older hosts. Ordinary AppImage launch
+uses FUSE 2 (`libfuse2t64` on Ubuntu 24.04). If FUSE is unavailable, use
+`./EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage --appimage-extract-and-run`.
+See [Tauri's AppImage limitations](https://v2.tauri.app/distribute/appimage/#limitations) and
+[AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
+
+On Ubuntu 24.04, install the FUSE compatibility library if ordinary launch reports that
+`libfuse.so.2` is missing:
+
+```sh
+sudo apt-get install libfuse2t64
+```
+
+AppImage launch and runtime extraction do not require sudo. The image bundles its application
+dependencies, including WebKitGTK's GStreamer plugins, but still depends on compatible host
+system libraries and a working graphical desktop. Other distributions and desktop environments
+have not yet completed acceptance.
+
+First launch installs the checksum-verified bundled runtime under
+`$XDG_DATA_HOME/evidenceforge/runtimes`, defaulting to `~/.local/share/evidenceforge/runtimes`.
+The retained runtime permits Studio's service and jobs to outlive the temporary AppImage mount.
+Codex remains a separate installation; its Linux sandbox prerequisites apply below.
+
+An ordinary AppImage launch registers **EvidenceForge Studio** in your application menu with
+the EvidenceForge logo. Its launcher is stored under
+`$XDG_DATA_HOME/applications/evidenceforge-studio.desktop` (normally
+`~/.local/share/applications/`), and its icon is retained under
+`$XDG_DATA_HOME/evidenceforge/desktop/`. This lets GNOME identify the running window after the
+temporary AppImage mount disappears. If you move the AppImage, launch it from its new location
+once to refresh the managed launcher. A pre-existing custom launcher without the
+`X-EvidenceForge-Managed=true` marker is preserved. Source and isolated acceptance launches
+do not create this registration.
+
+The AppImage also bundles GStreamer plugins required by WebKitGTK. If startup reports
+`GStreamer element appsink not found` despite working system plugins, use a rebuilt preview:
+the initial local `2.2.0a2` AppImage omitted those plugins. VM graphics warnings such as
+`VMware: No 3D enabled` also occurred with the working source app; they alone do not establish
+that Studio failed to launch.
+
 ### Connect Codex for assisted authoring
 
 Install and sign in to Codex before authoring, or use Studio's
 **Settings → Authoring & tools → Sign in** after installing it. Studio uses Codex for its
 scenario and pack conversations. Your Codex credentials remain in Codex's own storage.
 
-Studio looks for `codex` on PATH, in common macOS CLI locations, and in Codex.app's bundled CLI.
+Studio looks for `codex` on PATH, in `~/.local/bin` on Linux, in common macOS CLI locations,
+and in Codex.app's bundled CLI.
 Finder starts apps with a minimal PATH, so a terminal and Studio can discover different Codex
 executables. Different Codex versions can expose different model catalogs for the same account.
 
@@ -51,9 +109,95 @@ To use the same executable in both, run `command -v codex` in your terminal and 
 path under **Settings → Authoring & tools → Codex executable**. Save, then click the Codex status
 dot in the header and reconnect when authoring is idle.
 
+Studio installs missing bundled EvidenceForge Codex skills when a conversation needs them.
+The installation location defaults to **Global** under **Settings → Authoring & tools**.
+Existing skill directories and disabled skills are preserved; use **Install or update** to
+explicitly update or repair an installation.
+
+### Linux Codex sandbox setup and troubleshooting
+
+Linux Studio delivery is still under development. These instructions apply to local AppImage
+previews and source checkouts. Codex-assisted authoring needs a working command sandbox,
+including `bubblewrap` (`bwrap`) and access to the Linux user namespaces it uses.
+Install your distribution's `bubblewrap` package. Codex may use a bundled helper when the
+system package is missing, but the namespace requirement still applies.
+
+Studio surfaces relevant warnings from Codex's existing startup check on Linux, with setup
+instructions. It starts no additional probe process and adds no startup wait. The notice
+identifies a likely setup problem and depends on warnings from the installed Codex version;
+it does not validate every sandbox operation. Studio does not install packages, load
+profiles, or change system security settings automatically.
+
+#### Symptoms, including on other distributions
+
+Codex may connect and answer a simple message successfully, then fail when it tries to read
+a skill or execute a command. Typical symptoms include:
+
+- An approval request saying **the sandbox could not start the read command**.
+- A bubblewrap warning about being unable to create user namespaces.
+- Errors such as `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` or
+  `bwrap: setting up uid map: Permission denied`.
+
+These symptoms can come from AppArmor, another security policy, or restrictions imposed by
+a container/host. They do not by themselves identify AppArmor as the cause. On systems with
+AppArmor, inspect the kernel log for a matching denial involving `bwrap` or `userns`:
+
+```sh
+sudo journalctl -k -b --no-pager --grep='apparmor|userns|bwrap'
+```
+
+The optional `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` setting reports whether
+AppArmor's general namespace restriction is enabled. A value of `1`, together with matching
+kernel denials, can indicate that bubblewrap needs an application-specific profile. The
+setting alone does not mean the sandbox is broken: a suitable profile may already be loaded.
+
+Use your distribution's supplied AppArmor policy for bubblewrap when available. If a profile
+already covers `/usr/bin/bwrap`, have the administrator or package maintainer repair that
+policy instead of installing an overlapping profile or overwriting local customizations.
+
+#### Ubuntu 24.04: install the additional bubblewrap profile
+
+Ubuntu 24.04 may require this additional profile even with `bubblewrap` installed. For a
+system without an existing profile covering `/usr/bin/bwrap`, install and load the official
+Ubuntu profile:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils
+sudo install -m 0644 \
+  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+  /etc/apparmor.d/bwrap-userns-restrict
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+The profile activates immediately and loads again at boot; no reboot is needed to apply it.
+Ubuntu's general namespace restriction remains enabled. Ubuntu 25.04 ships this profile
+with AppArmor, so installing `bubblewrap` should normally be sufficient. Other distributions
+can package policies differently; use the symptom-based diagnosis above rather than copying
+Ubuntu commands onto an unrelated distribution.
+
+#### Verify and reconnect
+
+Use `codex help sandbox` to check the syntax supported by your installed Codex version.
+With the CLI used for Linux bring-up (0.162.0), this harmless command checks sandbox startup:
+
+```sh
+codex sandbox -- /usr/bin/true
+```
+
+It should complete with exit status `0`. When authoring is idle, reconnect Codex using
+Studio's header status dot to refresh startup warnings. An already pending approval for an
+unsandboxed fallback is not replaced by loading the profile: decline that old request and
+ask Codex to retry the command inside the sandbox.
+
+See [Codex sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites)
+and [Ubuntu's namespace restriction notes](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions).
+
 ## Start with a workspace
 
 Studio creates a default workspace in your Documents directory named `EvidenceForge`.
+On Linux it uses the Documents directory configured through XDG; if no distinct Documents
+directory is configured, it uses `~/EvidenceForge`.
 Use **Settings → Workspace** to select another location. Workspace selection is independent of
 where Studio was launched. Projects organize library entries within a workspace.
 
@@ -106,6 +250,40 @@ Use conversations to create or revise scenario and pack content. **Packs → New
 industry or organization content. **Assets** offers structured editing for supported categories;
 Schema 3 draft edits retain the same draft identity. Use **Clone** for a separate identity.
 
+**New scenario** immediately creates a managed Schema 3 YAML scaffold and binds its conversation
+to that source. Authoring and resumed conversations edit this exact draft in place. Keep its
+`draft.json`, includes and companion files together; moving only the YAML can leave an orphaned
+managed receipt.
+
+An untouched scaffold shows **Ready to author** and **Continue authoring**. Generate and Publish
+remain disabled, and automatic resource forecasts wait until its authored content changes.
+This check uses the managed scaffold's content fingerprint, not its inline user/system counts:
+pack-based scenarios can obtain their entities from dependencies. Existing unmodified scaffolds
+from earlier Studio builds are recognized without rewriting their files. **Validate** remains
+available when you want to see the fields still needed.
+
+Publication failures stay inside the publication dialog. Schema failures identify the affected
+fields; cancelling closes that review and clears its action error. Source inspection failures and
+explicit validation findings remain available separately.
+
+### Missing or moved scenario sources
+
+Studio retains a missing source as **Source missing** instead of discarding its history.
+Opening it offers **Locate source** and **Remove library entry…**. Locating requires the original
+draft ID, or identical file bytes for a legacy scenario, and an authored YAML inside the current
+workspace. Finish active chats and jobs before reconnecting or removing the entry.
+
+Refresh automatically reconnects one missing Schema 3 draft to one live draft with the same UUID.
+It keeps the original library ID, project assignment, conversations, and historical run paths.
+Multiple candidates, conflicting project assignments, independent same-name drafts, and active
+work require manual resolution. Files and captured generation inputs are never rewritten by
+relinking. Draft editing remains distinct from cloning or creating an independent draft.
+
+**Remove library entry…** archives the missing registration without deleting YAML, receipts,
+generated bundles, saved conversations, or Codex threads. Runs remain in Job center. Conversations
+stop appearing under the removed entry; restoring the same original source path and identity then
+refreshing recovers its registration and conversation associations.
+
 **Environment** resolves the scenario's current files and shows exact pack versions, digests,
 source declarations, merge decisions, and the composed environment. **Choose packs** prepares a
 conversation request for you to review and send. Optional project-shared and scenario-private
@@ -117,6 +295,25 @@ through the CLI; see [configuration contexts](reference/configuration-contexts.m
 New authored content uses Schema 3 drafts. Earlier scenario schemas 1/2 and pack schema 2 remain
 readable. Use **Upgrade to latest schema** to prepare a separate upgraded draft, or **New draft**
 to revise an existing release. Published originals are immutable.
+
+Studio checks publisher setup when it connects to the local helper. If no identity is
+configured, a startup notice offers **Set up publisher** or **Later**. The same setup is
+available under **Settings → Workspace**. Enter a publisher ID (lowercase letters,
+numbers and hyphens) and a display name. **Global** is the default scope and is shared
+with the CLI across your workspaces; **This workspace** saves an override for the
+current workspace. Once configured, **Edit publisher** lets you revise the ID or
+display name at either scope. Switching scope loads the identity saved there; a
+workspace identity continues to override Global in that workspace. **Save changes**
+updates the chosen scope, while **Cancel** discards your edits. Changes set the
+default for new artifacts and drafts without a publisher. Drafts with an explicit
+publisher and published releases keep their recorded identity. The identity is a
+release namespace, not verified authorship. Creation, validation, generation and
+evaluation remain available before setup, but publication requires it. This check
+reads only the small local publisher configuration files on all platforms.
+
+The publication dialog pre-fills the next unused patch version for the publisher and
+artifact, starting at `1.0.0`. You can edit it before publishing; the label is not
+reserved until publication succeeds.
 
 **Publish locally…** validates a draft, lets you review its release version and warnings, and
 freezes its sources, supporting assets, dependencies, and effective configuration. Publication
@@ -162,6 +359,15 @@ Studio retains the latest valid completed evaluation report for each run. An int
 unreadable evaluation preserves the previous score; a completed report replaces it even if
 quality checks fail. Resource estimates and process completion are separate from quality scores.
 
+If generation stops, expand the run in **Runs** or **Job center**. A recorded CLI error
+appears in the run details; **View log** shows its captured output, and **Refresh log**
+updates the preview. Long logs show their last 32 KiB with a copyable path to the full
+file. A **Stopped** status means the process exited without a completed bundle; it
+can result from an error or interruption. Studio cannot infer a cause when the process
+left no error message. Validation checks the inputs; it cannot guarantee that the
+installed runtime will finish generation. Preserve partial output and use **Resume**
+when offered, or **Regenerate** for a new run after correcting the reported problem.
+
 Closing a window applies the configured job and authoring-turn policies. **Continue in
 background** lets app-owned work proceed; reopening Studio reconnects to it. **Checkpoint and
 pause** saves a recovery point for checkpoint-enabled generation, and evaluations follow their
@@ -184,6 +390,16 @@ Workspace content and private app data are both needed to preserve the full Stud
 | Captured generation inputs and helper state, macOS | `~/Library/Application Support/EvidenceForge/state/` |
 | Upgrade-recovery packages, macOS | `~/Library/Application Support/EvidenceForge/studio-upgrades/` |
 | Logs and disposable cache, macOS | `~/Library/Logs/EvidenceForge/` and `~/Library/Caches/EvidenceForge/` |
+| Settings, Linux | `~/.config/evidenceforge/settings.json` |
+| Library/job database and private runtimes, Linux | `~/.local/share/evidenceforge/studio.sqlite` and `~/.local/share/evidenceforge/runtimes/` |
+| Captured generation inputs, helper state and logs, Linux | `~/.local/state/evidenceforge/`; helper log is `service.log` |
+| Upgrade-recovery packages, Linux | `~/.local/share/evidenceforge/studio-upgrades/` |
+| Disposable cache, Linux | `~/.cache/evidenceforge/` |
+
+Linux paths above use the default XDG directories. `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+`XDG_STATE_HOME` and `XDG_CACHE_HOME` override their corresponding roots. For a complete Linux
+profile backup, include its configuration, data and state directories as well as the workspace;
+copying only the app-data folder omits separately stored settings and job inputs.
 
 Settings has actions to open the workspace, app-data folder, and logs. A developer override such
 as `EFORGE_STUDIO_HOME` changes the private locations; use the folders shown by the running app.
@@ -191,6 +407,27 @@ Each OS account has its own private data and helper. Multiple windows for one pr
 settings, selected workspace, queue, and generation limit. Keep private data restricted to its
 owning account. Codex owns conversation histories and authentication separately; Studio records
 their associations and thread IDs.
+
+### Closing Studio and helper lifetime
+
+Quitting Studio explicitly notifies the helper that this application has detached. When the
+last application exits, an idle helper exits promptly. Under **Continue in background**, it
+finishes running jobs and eligible queued work, then exits automatically. Existing pause/stop
+quit settings still control how jobs are handed off. Reopening Studio while work continues
+reattaches to the helper and cancels its pending exit; the next quit starts that process again.
+Native app process identity and renderer heartbeat leases provide fallback when an app crashes
+or its exit notification cannot be delivered. Native identity includes process creation time
+to prevent a reused PID from retaining ownership.
+
+All desktop platforms use Studio's branded About window with the product version and build.
+On Linux, choose **File → Quit EvidenceForge Studio** or press **Ctrl+Q** to quit; the window's
+close button uses the same job handoff. On macOS, use the application menu or **Cmd+Q**.
+
+The helper appears as a Python process, typically `python3.12` on Linux. Identify it by its
+command line, which contains `-m evidenceforge.studio.bootstrap --serve`; a Python process name
+alone does not distinguish it from unrelated tools. The native Studio executable is
+`evidenceforge-studio`. Normally use Studio's Quit action and allow jobs to finish instead of
+stopping the helper directly.
 
 ## Backup and restore
 
@@ -262,9 +499,16 @@ from an older package, retain its manifest/journal and follow the
 ## Updates and runtime retention
 
 Before replacing the app, finish or pause generations/evaluations, hold queued work, stop active
-authoring, and close all windows. Replace the app in Applications and open the new build.
-Workspaces and private data are stored outside the application bundle. Make a routine backup
-before an update, and review any requested state upgrade before continuing.
+authoring, and close all windows. Allow the helper to exit before changing builds.
+
+- On macOS, replace the app in Applications and open the new build.
+- On Linux, verify the new AppImage's checksum, make it executable, and replace the old image
+  or keep the new one in your chosen folder. Launch the new image directly once so its managed
+  application-menu launcher points to that file. Existing dock/menu entries otherwise continue
+  to open the old path.
+
+Workspaces and private data are stored outside the application bundle or AppImage. Make a routine
+backup before an update, and review any requested state upgrade before continuing.
 
 Runtime cleanup runs after successful startup, after background work finishes, and hourly while
 Studio is open. It keeps the current runtime and the previous successfully launched runtime for
@@ -274,11 +518,19 @@ unused runtimes have a 24-hour grace period. Runtimes still used by a launcher, 
 or active Codex authoring are retained regardless of age.
 
 If cleanup cannot prove that removing a runtime is safe, Studio keeps it and displays the folder
-and reason. Cleanup retries automatically and does not stop processes. Authored/imported content,
+and reason, grouping folders that share the same problem. Cleanup retries at startup, after
+background work finishes, hourly, and when retention settings are saved; it does not stop
+processes. A persistent inspection or filesystem restriction must be resolved before retries
+can succeed. Normal protected Linux session utilities do not require elevated access for cleanup;
+unknown process ownership or insufficient evidence about a possible runtime user still prevents
+removal. Authored/imported content,
 conversations, bundles, and state-upgrade backups are outside runtime cleanup. Keeping an old
 runtime does not undo a state migration or restore deleted content.
 
 For launching or building from a checkout, see
 [Studio development in CONTRIBUTING.md](../CONTRIBUTING.md#studio-development-on-macos).
+The current Linux builder setup, installed packages, toolchains and source-build commands are
+recorded in the [Linux setup worklog](worklog/2026-10-09-studio-linux-setup.md); AppImage packaging
+commands and acceptance limits are in the [local installer worklog](worklog/2026-10-09-studio-a2-local-installers.md).
 Product release preparation and installer publication are documented separately in
 [release instructions](releases.md).

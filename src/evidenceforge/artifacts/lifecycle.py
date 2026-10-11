@@ -18,6 +18,7 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from evidenceforge.artifacts.scaffolds import scaffold_fingerprint, scenario_scaffold
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.naming import storage_name, validate_display_name, validate_name
 from evidenceforge.schema import (
@@ -947,19 +948,7 @@ def create_new_draft(
         data["display_name"] = validate_display_name(display_name)
     files: dict[str, bytes] = {}
     if kind == "scenario":
-        data.update(
-            {
-                "schema_version": "3.0",
-                "composition": {},
-                "environment": {"description": description, "users": [], "systems": []},
-                "time_window": {"start": "2026-01-01T00:00:00Z", "duration": "1h"},
-                "baseline_activity": {"intensity": "medium", "variation": "low"},
-                "output": {
-                    "logs": [{"format": "windows"}, {"format": "zeek"}],
-                    "destination": "./output",
-                },
-            }
-        )
+        data.update(scenario_scaffold(description))
         entry = "scenario.yaml"
     else:
         from evidenceforge.composition.packs import CATALOG_FILES
@@ -986,6 +975,9 @@ def create_new_draft(
             files["model/environment.yaml"] = b"environment: {}\n"
             files["model/baseline_activity.yaml"] = b"baseline_activity: {}\n"
     files[entry] = yaml.safe_dump(data, sort_keys=False).encode()
+    receipt = {"draft_id": draft_id, "entrypoint": f"source/{entry}"}
+    if kind == "scenario":
+        receipt["scaffold_sha256"] = scaffold_fingerprint(data)
     target = artifact_root(project_root) / "drafts" / kind / storage_name(name) / draft_id
     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     staging = Path(tempfile.mkdtemp(prefix=".draft-", dir=target.parent))
@@ -993,11 +985,7 @@ def create_new_draft(
         _write_files(staging / "source", files)
         _write_files(
             staging,
-            {
-                "draft.json": canonical_bytes(
-                    {"draft_id": draft_id, "entrypoint": f"source/{entry}"}
-                )
-            },
+            {"draft.json": canonical_bytes(receipt)},
         )
         with _publication_lock(project_root):
             _publish_directory(staging, target)
@@ -1131,6 +1119,25 @@ def _validate_scenario(
     return findings
 
 
+def exception_findings(exc: BaseException) -> list[dict[str, Any]]:
+    """Present chained schema errors as fields without dumping input values or tracebacks."""
+    cause: BaseException | None = exc
+    seen: set[int] = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, ValidationError):
+            return [
+                {
+                    "severity": "error",
+                    "field_path": ".".join(str(part) for part in error["loc"]) or "$",
+                    "message": error["msg"],
+                }
+                for error in cause.errors(include_input=False, include_url=False)
+            ]
+        cause = cause.__cause__
+    return [{"severity": "error", "message": str(exc)}]
+
+
 def validation_findings(
     source: Path, *, project_root: Path, context: Path | None = None
 ) -> list[dict[str, Any]]:
@@ -1162,7 +1169,7 @@ def validation_findings(
                 ).validate()
             ]
     except (EvidenceForgeError, OSError, ValueError) as exc:
-        return [{"severity": "error", "message": str(exc)}]
+        return exception_findings(exc)
 
 
 def publish(

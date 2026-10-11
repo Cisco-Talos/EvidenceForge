@@ -4,6 +4,7 @@ import {
   ImportedBundle,
   Conversation,
   CodexHealth,
+  LinuxSandboxNotice,
   connectStudio,
   Project,
   SavedView,
@@ -75,6 +76,8 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
     next.imported_bundles = snapshot.imported_bundles.filter((entry) => entry.id !== event.entity_id);
   } else if (event.kind === "settings.updated") {
     next.settings = event.payload as unknown as StudioSettings;
+  } else if (event.kind === "publisher.updated" && event.entity_id === snapshot.settings.workspace) {
+    next.publisher_status = event.payload as unknown as StudioSnapshot["publisher_status"];
   } else if (event.kind === "runtime.cleanup") {
     next.runtime_cleanup = event.payload as unknown as StudioSnapshot["runtime_cleanup"];
   } else if (event.kind === "scenario.validated") {
@@ -86,8 +89,12 @@ function applyEvent(snapshot: StudioSnapshot, event: StudioEvent): StudioSnapsho
     next.dependencies = { ...snapshot.dependencies, [event.entity_id]: event.payload as unknown as NonNullable<StudioSnapshot["dependencies"]>[string] };
   } else if (event.kind === "scenario.forecast") {
     next.forecasts = { ...snapshot.forecasts, [event.entity_id]: event.payload as unknown as NonNullable<StudioSnapshot["forecasts"]>[string] };
+  } else if (event.kind === "scenario.authoring") {
+    next.starter_drafts = [...(snapshot.starter_drafts || []).filter((id) => id !== event.entity_id), ...(event.payload.starter ? [event.entity_id] : [])];
   } else if (event.kind === "codex.health") {
     next.codex_health = event.payload as unknown as CodexHealth;
+  } else if (event.kind === "codex.linux_sandbox") {
+    next.linux_sandbox_notice = event.payload.notice as LinuxSandboxNotice | null;
   }
   return next;
 }

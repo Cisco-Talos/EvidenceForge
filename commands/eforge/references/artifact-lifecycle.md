@@ -56,6 +56,9 @@ content releases. Existing schema markers are read by presence: `schema_version`
 
 Use `scenario new-draft <name> --json`, or `pack new-draft <name> --kind industry|organization
 --json`, for a new scaffold. Complete the authored fields using the dedicated authoring skill.
+When Studio supplies an existing draft path, use `... resume <path> --json` and edit that
+draft in place instead of creating another scaffold. Preserve its managed directory, `draft.json`,
+includes and companions. Never move just the YAML file to a second authoring target.
 Keep the `draft_id` supplied by the CLI through every editing session. Drafts use an explicitly
 selected publisher, otherwise retain their source's recorded publisher, otherwise use the
 configured project-over-user publisher. Without any of those they may remain anonymous.

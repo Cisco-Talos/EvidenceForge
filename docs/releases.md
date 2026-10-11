@@ -61,6 +61,31 @@ uv run python scripts/package_studio_macos.py --build-app --release
 Building locally does not publish. Automatic builds retain the current unsigned/unnotarized
 packaging policy. Signing/notarization and additional platform acceptance are separate work.
 
+## Local Linux AppImage builds
+
+Linux installer publication is not enabled in the release workflow. Local builds use the
+unpublished `-test` filename and native architecture; building does not tag or upload anything.
+On the Ubuntu 24.04 builder, after `uv sync --frozen --extra studio --extra dev` and
+`npm --prefix desktop-ui ci`, install the AppImage plugin build requirements and run:
+
+```sh
+sudo apt-get install patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+uv run --no-sync python scripts/package_studio_linux.py
+```
+
+The script reuses the macOS payload assembly path with a separate checksum-pinned Linux Python
+lock, installs locked runtime dependencies, and bundles a native AppImage. Outputs go to
+`dist/linux/` with a SHA256 file. GStreamer plugins and their scanner are bundled for WebKitGTK;
+`patchelf` is a build dependency, not a requirement on users' machines.
+Payload assembly verifies the source behavior manifest, rejects macOS transfer metadata in the
+wheel, and checks the installed package against its generation behavior declaration before
+creating runtime archives. The same integrity gates apply to local macOS assembly.
+Native `aarch64` and `x86_64` builds are supported by the script;
+the current local builder/acceptance target is ARM64. Cross-compiling ARM AppImages is not
+supported by the upstream bundler. The build baseline is Ubuntu 24.04/glibc 2.39; other distro
+acceptance, x64 build evidence and automatic Linux release assets remain separate gates.
+See [Tauri's native ARM requirement](https://v2.tauri.app/distribute/appimage/#appimages-for-arm-based-devices).
+
 ## Failed runs and retries
 
 Build or test failures prevent publication. Upload/publication failures can leave an annotated

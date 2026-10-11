@@ -1,3 +1,4 @@
+import { belongsToScenario } from "./scenarioSources";
 import { artifactTitle, draftTitle } from "./artifactNaming";
 import { artifactGroup, artifactGroupLabel } from "./artifactGrouping";
 import { Fragment, type DragEvent, useEffect, useState } from "react";
@@ -51,8 +52,9 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     ...drafts.map((draft) => ({ id: draft.id, name: draftTitle(draft), updated: draft.updated_at, project: projectName(draft.draft_project_id), groupId: snapshot.projects.some((project) => project.id === draft.draft_project_id) ? draft.draft_project_id! : "ungrouped", item: null, draft })),
   ].sort((a, b) => (sort === "updated" ? b.updated - a.updated : sort === "project" ? a.project.localeCompare(b.project) : 0) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const renderRow = ({ id, name, updated, project, item, draft }: typeof rows[number]) => {
-    const available = !!item && snapshot.jobs.some((job) => job.kind === "generation" && job.scenario === item.path && job.status === "completed");
-    const freshRun = item && snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path && job.status === "completed" && generationIsCurrent(job, item, snapshot)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
+    const missing = !!item && snapshot.missing_sources?.includes(item.id);
+    const available = !!item && snapshot.jobs.some((job) => belongsToScenario(job, item, snapshot) && job.status === "completed");
+    const freshRun = item && snapshot.jobs.filter((job) => belongsToScenario(job, item, snapshot) && job.status === "completed" && generationIsCurrent(job, item, snapshot)).sort((a, b) => (b.started_at || b.created_at || 0) - (a.started_at || a.created_at || 0))[0];
     const actualSize = freshRun ? sizes[freshRun.id] : null;
     const validation = item && snapshot.validations[item.id];
     const forecast = validation && item && !["none", "stale"].includes(scenarioStates(item, snapshot)[0].state) ? validation.result.report?.resource_forecast as { final_output?: { expected_bytes?: number } } | undefined : undefined;
@@ -65,18 +67,18 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
         <span className="scenario-symbol">{item ? <FileCode2 size={18} /> : <Sparkles size={18} />}</span>
         <span className="scenario-row-copy">
           <span className="scenario-row-title"><strong title={name}>{name}</strong><span className="scenario-project" title={`Project: ${project}`}><Folder size={12} /><span>{project}</span></span>{draft && <span className="draft-chip">Draft</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
-          <span className="scenario-description" title={item?.description}>{item ? item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
+          <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
           {item && <SearchExcerpts item={item} />}
-          <span className="scenario-mobile-meta">{item?.version || "Not authored yet"} · Updated {formatTime(updated)}</span>
+          <span className="scenario-mobile-meta">{missing ? "Source missing" : item?.version || "Draft"} · Updated {formatTime(updated)}</span>
         </span>
       </button>
-      <div className="scenario-row-status">{item ? <ScenarioStates item={item} snapshot={snapshot} compact /> : <span className="muted">Not authored yet</span>}</div>
+      <div className="scenario-row-status">{missing ? <span className="field-error">Source missing</span> : item ? <ScenarioStates item={item} snapshot={snapshot} compact /> : <span className="muted">Not authored yet</span>}</div>
       <span className="scenario-row-size" title={actualSize != null ? "Measured size of the latest completed bundle for this revision" : estimatedSize != null ? "Estimated generated data size; actual output may differ" : "No current size estimate yet"}>{actualSize != null ? formatBundleSize(actualSize) : estimatedSize != null ? <>{formatBundleSize(estimatedSize)}<small>Estimated</small></> : "—"}</span>
       <div className="scenario-row-meta"><span>{item?.version || "Draft"}</span><time dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time></div>
       <div className="scenario-row-actions">
         <ProjectPicker name={name} projectId={item ? item.project_id : draft!.draft_project_id} projects={snapshot.projects} onMove={(projectId) => item ? onMove(item, projectId) : onMoveDraft(draft!, projectId)} onNewProject={item ? () => onNewProject(item) : undefined} />
         {item && <button className={`icon-button ${available ? "" : "unavailable"}`} aria-label={`${isTauri() ? "Export" : "Download"} bundle for ${name}`} title={available ? "Export a completed run" : "Generate a run before exporting"} onClick={() => available ? onExport(item) : onUnavailableExport()}><Download size={16} /></button>}
-        <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label={`Options for ${name}`} title="More options"><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4} align="end">{item ? <><DropdownMenu.Item onSelect={() => onProperties?.(item)}>Properties…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onClone(item)}><Copy size={14} /> Clone scenario…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onHide(item)}>{item.hidden ? "Unhide" : "Hide"}</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onDelete(item)}>Delete scenario…</DropdownMenu.Item></> : <><DropdownMenu.Item onSelect={() => onRenameDraft(draft!)}>Rename scenario</DropdownMenu.Item><DropdownMenu.Item disabled={draft!.active} onSelect={() => onDeleteDraft(draft!)}>Delete draft</DropdownMenu.Item></>}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
+        <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label={`Options for ${name}`} title="More options"><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4} align="end">{missing ? <DropdownMenu.Item onSelect={() => onOpen(item!)}>Recover missing source…</DropdownMenu.Item> : item ? <><DropdownMenu.Item onSelect={() => onProperties?.(item)}>Properties…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onClone(item)}><Copy size={14} /> Clone scenario…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onHide(item)}>{item.hidden ? "Unhide" : "Hide"}</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onDelete(item)}>Delete scenario…</DropdownMenu.Item></> : <><DropdownMenu.Item onSelect={() => onRenameDraft(draft!)}>Rename scenario</DropdownMenu.Item><DropdownMenu.Item disabled={draft!.active} onSelect={() => onDeleteDraft(draft!)}>Delete draft</DropdownMenu.Item></>}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
       </div>
     </li>;
   };

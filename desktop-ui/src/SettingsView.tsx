@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Check, Folder, Sparkles } from "lucide-react";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
-import { RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
+import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
+import { PublisherSetup } from "./PublisherSetup";
 import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
 
@@ -10,10 +11,11 @@ type Tab = "workspace" | "jobs" | "tools";
 interface CodexAccount { type?: string; email?: string }
 interface CodexStatus { available: boolean; error?: string; account?: { account?: CodexAccount | null } }
 
-export function SettingsView({ settings, paths, runtimeCleanup, api, onSaved, onError }: {
+export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus, api, onSaved, onError }: {
   settings: StudioSettings;
   paths: { data: string; logs: string };
   runtimeCleanup?: RuntimeCleanupReport | null;
+  publisherStatus?: PackPublisherStatus | null;
   api: StudioApi;
   onSaved: () => Promise<void>;
   onError: (message: string) => void;
@@ -186,6 +188,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, api, onSaved, on
     <div className="settings-main">
       {tab === "workspace" && <>
         <div className="section-heading"><div><h2>Workspace</h2><p>Where authored scenarios, packs, and generated runs live.</p></div></div>
+        <PublisherSetup key={settings.workspace} workspace={settings.workspace} status={publisherStatus} api={api} onSaved={onSaved} />
         <div className="setting-row"><div className="setting-copy"><strong>Remember library views</strong><Help text="Restore the last project, search, filters, and sorting for scenarios and packs in this workspace. Turning this off opens each library with its default view." /></div><input className="visible-check" type="checkbox" aria-label="Remember library views" disabled={!libraryReady} checked={rememberView} onChange={(event) => setRememberView(event.target.checked)} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Search matches per item</strong><Help text="Show this many matching fields or source lines (five by default). Names and descriptions rank first, then YAML values, keys, and comments. Substring matching is unchanged; extra matches are counted." /></div><input className="setting-number" type="number" min={1} max={50} aria-label="Search matches per item" value={draft.search_match_limit ?? 5} onChange={(event) => setDraft({ ...draft, search_match_limit: Number(event.target.value) })} onBlur={() => setDraft((current) => ({ ...current, search_match_limit: Math.min(50, Math.max(1, current.search_match_limit || 5)) }))} /></div>
         <div className="setting-row"><div className="setting-copy"><strong>Current workspace</strong><Help text="The app opens this workspace on launch, independent of the terminal's current directory." /></div><div className="setting-control path-control"><input value={workspace} onChange={(event) => setWorkspace(event.target.value)} aria-label="Current workspace" /><CopyPathButton path={workspace} label="Copy workspace path" onError={onError} /><button className="icon-button" title="Open workspace folder" aria-label="Open workspace folder" onClick={() => void openLocalFolder(settings.workspace)}><ArrowUpRight size={16} /></button><button onClick={() => void selectWorkspace()}>Switch</button></div></div>
@@ -215,7 +218,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, api, onSaved, on
         <div className="setting-row"><div className="setting-copy"><strong>Codex account</strong><Help text="The identity is read from Codex. Credentials remain in Codex's own storage." /></div><div className="setting-control"><span className="path-label" role="status">{accountIdentity}</span><button className="button-quiet" disabled={!codexStatus?.available || loginPending} onClick={() => void accountAction()}>{account ? "Sign out" : "Sign in"}</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>Skill install location</strong><Help text="Global installs are available across workspaces; workspace installs stay with this project." /></div><select value={draft.skill_install_scope} onChange={(event) => setDraft({ ...draft, skill_install_scope: event.target.value as StudioSettings["skill_install_scope"] })}><option value="global">Global</option><option value="workspace">This workspace</option></select></div>
         <div className="setting-row"><div className="setting-copy"><strong>Install for</strong><Help text="Choose which agent's skill directory receives EvidenceForge instructions." /></div><select value={draft.skill_install_agent} onChange={(event) => setDraft({ ...draft, skill_install_agent: event.target.value as StudioSettings["skill_install_agent"] })}><option value="all">All agents</option><option value="chatgpt">Codex</option><option value="claude">Claude Code</option></select></div>
-        <div className="setting-row"><div className="setting-copy"><strong>EvidenceForge skills</strong><Help text="Copy the repository's current skill files to the selected agent directories. Existing versions are updated." /></div><div className="setting-control"><span className="path-label">{installMessage || `${draft.skill_install_scope} · ${draft.skill_install_agent}`}</span><button className="button-quiet" onClick={() => void installSkills()}>Install or update</button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>EvidenceForge skills</strong><Help text="Missing Codex skills are installed automatically when needed, using the selected location. Install or update copies current skills to the selected agents and updates existing versions." /></div><div className="setting-control"><span className="path-label">{installMessage || `${draft.skill_install_scope} · ${draft.skill_install_agent}`}</span><button className="button-quiet" onClick={() => void installSkills()}>Install or update</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>Codex executable</strong><Help text="Automatic uses Codex on PATH, then common CLI install locations on macOS, then Codex.app. Available models come from the selected Codex version. After changing this path, save and reconnect Codex using the status dot in the header." /></div><input value={draft.codex_path || ""} onChange={(event) => setDraft({ ...draft, codex_path: event.target.value || null })} placeholder="Automatic" /></div>
         <div className="setting-row"><div className="setting-copy"><strong>eforge executable</strong><Help text="Leave empty to use this Python environment's eforge CLI." /></div><input value={draft.eforge_path || ""} onChange={(event) => setDraft({ ...draft, eforge_path: event.target.value || null })} placeholder="Automatic" /></div>
       </>}

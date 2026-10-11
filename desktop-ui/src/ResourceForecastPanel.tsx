@@ -6,6 +6,7 @@ import { formatBundleSize, formatTime } from "./components";
 function normalized(path: string): string { return path.replace(/\\/g, "/").replace(/\/$/, ""); }
 
 export function currentPrediction(item: CatalogItem, snapshot: StudioSnapshot): PredictionRecord | undefined {
+  if (snapshot.starter_drafts?.includes(item.id)) return undefined;
   const record = snapshot.forecasts?.[item.id];
   const destination = snapshot.settings.output_parents[snapshot.settings.workspace] || `${snapshot.settings.workspace}/runs`;
   return record && record.source_sha256 === item.source_sha256
