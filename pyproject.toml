@@ -22,7 +22,7 @@
 
 [project]
 name = "evidence-forge"
-version = "2.2.0a1"
+version = "2.2.0a2"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
 license = "MIT"
@@ -81,6 +81,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/evidenceforge"]
+exclude = ["**/._*", "**/.DS_Store"]
 
 [tool.hatch.build.targets.wheel.force-include]
 # Recursively includes all skills, references, and future additions.
