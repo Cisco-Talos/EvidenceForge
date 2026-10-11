@@ -199,6 +199,10 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   useEffect(() => {
     if (!conversationId) return;
     return subscribeEvents((event) => {
+      if (event.kind === "skills.installed") {
+        void api.request<CodexStatus>("/v1/codex/status").then(setStatus).catch((error) => onError(String(error)));
+        return;
+      }
       if (event.kind === "codex.input_answered" || event.kind === "codex.input_cleared") {
         setPending((current) => current.filter((entry) => entry.request_id !== event.payload.request_id));
         return;
@@ -257,7 +261,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
         });
       }
     });
-  }, [conversationId, loadHistory, subscribeEvents]);
+  }, [api, conversationId, loadHistory, onError, subscribeEvents]);
 
   const { messages, activities } = useMemo(() => flattenHistory(history, localTurns), [history, localTurns]);
 

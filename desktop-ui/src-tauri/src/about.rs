@@ -23,9 +23,13 @@ pub fn show(app: &tauri::AppHandle) -> tauri::Result<()> {
         builder.build()?
     };
     if let Some(main) = main.as_ref() {
-        center_over_parent(&window, main)?;
+        if center_over_parent(&window, main).is_err() {
+            // Wayland compositors may deny global window coordinates. The
+            // parent relationship still lets them place the shared About view.
+            let _ = window.center();
+        }
     } else {
-        window.center()?;
+        let _ = window.center();
     }
     // Position before showing, including the first opening from the macOS menu.
     window.show()?;

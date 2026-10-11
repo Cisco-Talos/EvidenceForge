@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 160
+current_revision: 161
 history_start_revision: 1
-behavior_surface_sha256: 0114d1bad6b5748c549a4da2ae71298e4c51b1852c11bfaf0b81e1d0d33cab60
+behavior_surface_sha256: bd9e13343c8fb72dfdbbb03a284357a3a0664d362c1b0503222bc76b2b6584d4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1609,3 +1609,10 @@ changes:
       - artifact-display-metadata
     formats: []
     summary: Adds optional Schema 3 titles and shared identifier validation while excluding display metadata from generation models and semantic identity. Existing identifiers and deterministic rendering are unchanged.
+  - revision: 161
+    id: scoped-publisher-identity-reader
+    impact: none
+    domains:
+      - publisher-configuration
+    formats: []
+    summary: Exposes the existing single-scope publisher reader for explicit Studio identity edits while retaining project-over-user precedence. Equivalent resolved inputs and deterministic rendering are unchanged.

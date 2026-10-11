@@ -4,6 +4,45 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v2.2.0a2 (2026-10-11)
+
+Unpublished local build snapshot of the planned 2.2.0 release.
+Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
+
+**Studio usability and recovery**
+
+- Preserve managed scenario sources and conversation identities, reconnect moved drafts,
+  and provide explicit recovery for missing source registrations.
+- Recognize untouched starter drafts, defer forecasts and runnable actions until authoring,
+  and keep readable publication errors within their review dialog.
+- Show saved generation diagnostics for stopped runs; improve publisher setup/editing and
+  prefill publication with the next suggested version.
+- Explicitly notify the shared helper on app exit, let background jobs drain before shutdown,
+  and cancel pending exit when Studio reconnects. Retain crash/heartbeat fallback protection.
+- Use the branded About window across platforms and add Linux File → Quit / Ctrl+Q.
+- Keep the window responsive while connecting to the helper and installing its runtime;
+  show Retry only when connection fails.
+- Correct runtime cleanup process inspection on Linux and macOS, retain genuine runtime users,
+  and group persistent cleanup warnings with the retry schedule.
+
+**Linux preparation**
+
+- Improve native Linux selector readability, install missing bundled skills using the saved
+  scope, and document Ubuntu sandbox prerequisites with a lightweight Linux-only advisory.
+- Add repeatable source synchronization to the build VM with replacement backups.
+- Prepare native Linux and AppImage builds alongside the macOS DMG. Platform build evidence
+  and remaining acceptance are recorded in the installer worklog.
+- Bundle GStreamer plugins in the Linux AppImage so WebKitGTK can find `appsink` at startup.
+- Exclude macOS transfer metadata from Python wheels and verify packaged generation behavior
+  before bundling, fixing an AppImage generation failure caused by an extra `._publisher.py` file.
+- Register the Linux AppImage as EvidenceForge Studio with its logo in the application menu
+  and dock, retaining a per-user launcher outside the temporary mount.
+
+**Release automation history since the first alpha**
+
+- Recover tagged release publication after CI workflow failures (`99a0b5e1`).
+- Record successful first-alpha publication and installer acceptance (`3f31c0d1`, `0aa8a2ae`).
+
 ## v2.2.0a1 (2026-10-09)
 
 First alpha of the planned 2.2.0 release. Introduces EvidenceForge Studio,

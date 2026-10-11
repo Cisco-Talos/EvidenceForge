@@ -10,13 +10,30 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.desktop.library import LibraryItem
 from evidenceforge.desktop.state import EvaluationJob, GenerationJob
 from evidenceforge.studio.search import SearchMatch, index_sources, matching_excerpts, yaml_entries
+
+
+def indexed_draft_identity(path: Path, entries: list[dict[str, Any]]) -> str | None:
+    """Read a unique draft UUID from scalar values in the indexed root document."""
+    values: dict[str, list[str]] = {}
+    for entry in entries:
+        if entry["file"] == path.name and entry["kind"] == "value":
+            values.setdefault(entry["field"], []).append(entry["excerpt"])
+    if values.get("status") != ["draft"] or values.get("schema_version") != ["3.0"]:
+        return None
+    ids = values.get("draft_id", [])
+    if len(ids) != 1:
+        return None
+    try:
+        return str(UUID(ids[0]))
+    except ValueError:
+        return None
 
 
 class CatalogItem(BaseModel):
@@ -430,6 +447,27 @@ class StudioStore:
                     (workspace_key, kind, path_key),
                 ).fetchone()
                 old = CatalogItem.model_validate_json(row["payload"]) if row else None
+                if old is None and kind == "scenario":
+                    archives = self._db.execute(
+                        "SELECT payload FROM events WHERE kind='item.registration_removed' "
+                        "AND json_extract(payload, '$.item.workspace')=? "
+                        "AND json_extract(payload, '$.item.path')=? ORDER BY seq DESC",
+                        (workspace_key, path_key),
+                    ).fetchall()
+                    identity = indexed_draft_identity(source.path, json.loads(entries))
+                    for archive in archives:
+                        payload = json.loads(archive["payload"])
+                        saved = CatalogItem.model_validate(payload["item"])
+                        if self.item(saved.id) is not None:
+                            continue
+                        if (identity and identity == payload["draft_id"]) or (
+                            saved.source_sha256
+                            == hashlib.sha256(source.path.read_bytes()).hexdigest()
+                        ):
+                            old = saved
+                            if old.project_id and self.project(old.project_id) is None:
+                                old.project_id = None
+                            break
             item = CatalogItem(
                 id=old.id if old else uuid4().hex,
                 workspace=workspace,
@@ -566,6 +604,146 @@ class StudioStore:
     def remove_scenario(self, item_id: str) -> None:
         """Remove a retired scenario's associations, preserving captured runs and Codex."""
         self._remove_authored_item(item_id, {"scenario"})
+
+    def draft_identity(self, item: CatalogItem) -> str | None:
+        """Read a draft UUID from the indexed root document, even if it is missing."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT search_entries FROM items WHERE id=?", (item.id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return indexed_draft_identity(item.path, json.loads(row["search_entries"]))
+
+    def source_paths(self, item: CatalogItem) -> list[Path]:
+        """Retain historical run associations without rewriting captured job inputs."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM events WHERE entity_id=? AND kind='item.source_relocated'",
+                (item.id,),
+            ).fetchall()
+        paths = {item.path}
+        for row in rows:
+            paths.update(Path(path) for path in json.loads(row["payload"])["previous_paths"])
+        return sorted(paths)
+
+    def relink_scenario(self, old: CatalogItem, target: CatalogItem) -> CatalogItem:
+        """Atomically consolidate a missing registration and retain its chats and runs."""
+        if (
+            old.kind != "scenario"
+            or target.kind != "scenario"
+            or old.workspace.resolve() != target.workspace.resolve()
+            or old.id == target.id
+            or old.path.exists()
+            or not target.path.is_file()
+        ):
+            raise ValueError("Source availability changed; refresh the library and try again")
+        previous_paths = {str(path) for path in self.source_paths(old) + self.source_paths(target)}
+        updated = target.model_copy(
+            update={
+                "id": old.id,
+                "project_id": old.project_id or target.project_id,
+                "folder": old.folder or target.folder,
+                "hidden": old.hidden or target.hidden,
+                "imported": old.imported or target.imported,
+            }
+        )
+        with self._lock, self._db:
+            rows = self._db.execute(
+                "SELECT rowid, id, payload, content, search_entries FROM items WHERE id IN (?, ?)",
+                (old.id, target.id),
+            ).fetchall()
+            if len(rows) != 2:
+                raise ValueError("Library changed; refresh it and try again")
+            current = next(row for row in rows if row["id"] == target.id)
+            original = next(row for row in rows if row["id"] == old.id)
+            if (
+                CatalogItem.model_validate_json(original["payload"]) != old
+                or CatalogItem.model_validate_json(current["payload"]) != target
+            ):
+                raise ValueError("Library assignment changed; refresh and try again")
+            from evidenceforge.studio.source_recovery import source_busy
+
+            if source_busy(self, [old, target]):
+                raise ValueError("Finish or stop active work before relocating the source")
+            for row in rows:
+                self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))
+                for table in ("validations", "dependency_health", "resource_predictions"):
+                    self._db.execute(f"DELETE FROM {table} WHERE item_id=?", (row["id"],))
+            for row in self._db.execute(
+                "SELECT payload FROM conversations WHERE item_id IN (?, ?)", (old.id, target.id)
+            ).fetchall():
+                chat = Conversation.model_validate_json(row["payload"])
+                chat.item_id = old.id
+                if chat.draft_path == old.path:
+                    chat.draft_path = target.path
+                self._db.execute(
+                    "UPDATE conversations SET item_id=?, payload=? WHERE id=?",
+                    (old.id, chat.model_dump_json(), chat.id),
+                )
+            self._db.execute("DELETE FROM items WHERE id=?", (target.id,))
+            self._db.execute(
+                "UPDATE items SET path=?, payload=?, content=?, search_entries=? WHERE id=?",
+                (
+                    str(target.path.resolve()),
+                    updated.model_dump_json(),
+                    current["content"],
+                    current["search_entries"],
+                    old.id,
+                ),
+            )
+            original = next(row for row in rows if row["id"] == old.id)
+            self._db.execute(
+                "INSERT INTO items_fts(rowid, name, description, content) VALUES (?, ?, ?, ?)",
+                (
+                    original["rowid"],
+                    updated.name + " " + (updated.display_name or ""),
+                    updated.description,
+                    current["content"],
+                ),
+            )
+            self._db.execute(
+                "INSERT INTO events(entity_id, kind, payload) VALUES (?, ?, ?)",
+                (
+                    old.id,
+                    "item.source_relocated",
+                    json.dumps(
+                        {
+                            "path": str(target.path),
+                            "previous_paths": sorted(previous_paths),
+                            "merged_item_id": target.id,
+                        }
+                    ),
+                ),
+            )
+        return updated
+
+    def remove_missing_registration(self, item: CatalogItem) -> None:
+        """Forget a missing source without deleting files, chats, events or captured jobs."""
+        if item.kind != "scenario" or item.path.exists():
+            raise ValueError("Only a missing scenario registration can be removed")
+        identity = self.draft_identity(item)
+        with self._lock, self._db:
+            row = self._db.execute("SELECT rowid FROM items WHERE id=?", (item.id,)).fetchone()
+            if row is None:
+                raise ValueError("Library entry already removed")
+            self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))
+            for table in ("validations", "dependency_health", "resource_predictions"):
+                self._db.execute(f"DELETE FROM {table} WHERE item_id=?", (item.id,))
+            self._db.execute("DELETE FROM items WHERE id=?", (item.id,))
+            self._db.execute(
+                "INSERT INTO events(entity_id, kind, payload) VALUES (?, ?, ?)",
+                (
+                    item.id,
+                    "item.registration_removed",
+                    json.dumps(
+                        {
+                            "item": json.loads(item.model_dump_json()),
+                            "draft_id": identity,
+                        }
+                    ),
+                ),
+            )
 
     def _remove_authored_item(self, item_id: str, kinds: set[str]) -> None:
         with self._lock, self._db:

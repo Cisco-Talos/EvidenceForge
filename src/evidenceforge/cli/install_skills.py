@@ -489,7 +489,9 @@ def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
     return eforge_dir
 
 
-def _ensure_safe_chatgpt_skill_directory(target_dir: Path, skill_name: str) -> Path:
+def _ensure_safe_chatgpt_skill_directory(
+    target_dir: Path, skill_name: str, *, exist_ok: bool = True
+) -> Path:
     """Create or validate a safe ChatGPT skill directory."""
     from evidenceforge.utils.paths import reject_symlink
 
@@ -497,7 +499,7 @@ def _ensure_safe_chatgpt_skill_directory(target_dir: Path, skill_name: str) -> P
     reject_symlink(skill_dir)
 
     ensure_directory(target_dir)
-    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_dir.mkdir(parents=True, exist_ok=exist_ok)
 
     reject_symlink(skill_dir)
 
@@ -549,7 +551,9 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     return installed, removed
 
 
-def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
+def install_chatgpt_skills(
+    target_dir: Path, *, missing_only: bool = False
+) -> tuple[list[str], list[str]]:
     """Install EvidenceForge skills to a ChatGPT skills directory.
 
     Creates one ChatGPT skill directory per EvidenceForge command, each with a
@@ -559,6 +563,8 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
     Args:
         target_dir: ChatGPT skills directory, e.g. .agents/skills/.
+        missing_only: Install only absent skill directories, preserving existing
+            skills, including customized files and symbolic links.
 
     Returns:
         Tuple of (installed_files, removed_files) as relative path lists.
@@ -575,7 +581,16 @@ def install_chatgpt_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     removed: list[str] = []
     for name, source in sorted(command_files.items()):
         skill_name = f"eforge-{name}"
-        skill_dir = _ensure_safe_chatgpt_skill_directory(target_dir, skill_name)
+        if missing_only and os.path.lexists(target_dir / skill_name):
+            continue
+        try:
+            skill_dir = _ensure_safe_chatgpt_skill_directory(
+                target_dir, skill_name, exist_ok=not missing_only
+            )
+        except FileExistsError:
+            if missing_only:
+                continue
+            raise
         skill_reference_files = _references_for_chatgpt_skill(name, reference_files)
 
         skill_manifest: dict[str, Path] = {"SKILL.md": source}

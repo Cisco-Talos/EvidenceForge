@@ -38,6 +38,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/session/app-exit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Application Exit
+         * @description Acknowledge native exit and drain protected work before shutting down.
+         */
+        post: operations["application_exit_v1_session_app_exit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/state/status": {
         parameters: {
             query?: never;
@@ -721,6 +741,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/scenarios/{item_id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Recover Source */
+        post: operations["recover_source_v1_scenarios__item_id__source_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/scenarios/{item_id}/registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Missing Source */
+        delete: operations["remove_missing_source_v1_scenarios__item_id__registration_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/items/{item_id}/files/{filename}": {
         parameters: {
             query?: never;
@@ -782,7 +836,8 @@ export interface paths {
         /** Pack Publisher */
         get: operations["pack_publisher_v1_packs_publisher_get"];
         put?: never;
-        post?: never;
+        /** Setup Publisher */
+        post: operations["setup_publisher_v1_packs_publisher_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1573,6 +1628,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Diagnostics */
+        get: operations["job_diagnostics_v1_jobs__job_id__diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/files": {
         parameters: {
             query?: never;
@@ -1927,6 +1999,11 @@ export interface components {
             }[];
             /** Suggested Version */
             suggested_version?: string | null;
+            /**
+             * Starter Draft
+             * @default false
+             */
+            starter_draft: boolean;
             /** Name Consumers */
             name_consumers?: components["schemas"]["AffectedItem"][];
             /** Name Review Problems */
@@ -2912,6 +2989,37 @@ export interface components {
             confirm_configuration_change: boolean;
         };
         /**
+         * JobDiagnostics
+         * @description A bounded log preview and the last explicit CLI error, when recorded.
+         */
+        JobDiagnostics: {
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Log Path
+             * Format: path
+             */
+            log_path: string;
+            /**
+             * Tail
+             * @default
+             */
+            tail: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
          * JobHistoryChange
          * @description Job center entries removed while preserving authoritative run records.
          */
@@ -3079,6 +3187,18 @@ export interface components {
             parents?: components["schemas"]["ParentReference"][];
             /** Release Notes */
             release_notes?: string | null;
+        };
+        /**
+         * LinuxSandboxNotice
+         * @description A likely Linux sandbox prerequisite reported by Codex.
+         */
+        LinuxSandboxNotice: {
+            /**
+             * Code
+             * @description Sandbox prerequisite identified by an existing Codex warning
+             * @enum {string}
+             */
+            code: "bubblewrap_missing" | "user_namespace_restricted";
         };
         /**
          * NoteHistoryEntry
@@ -3256,6 +3376,8 @@ export interface components {
             publisher_display_name?: string | null;
             /** Scope */
             scope?: ("user" | "project") | null;
+            /** Error */
+            error?: string | null;
         };
         /**
          * PackReview
@@ -3427,6 +3549,52 @@ export interface components {
             release_notes: string;
             /** Expected Digest */
             expected_digest: string;
+        };
+        /**
+         * PublisherIdentity
+         * @description One configured, non-cryptographic publisher namespace.
+         */
+        PublisherIdentity: {
+            /**
+             * Publisher Schema Version
+             * @default 1.0
+             * @constant
+             */
+            publisher_schema_version: "1.0";
+            /** Publisher */
+            publisher: string;
+            /** Publisher Display Name */
+            publisher_display_name: string;
+        };
+        /**
+         * PublisherSetupRequest
+         * @description Publisher setup or an explicitly reviewed edit of one configuration scope.
+         */
+        PublisherSetupRequest: {
+            /**
+             * Publisher Schema Version
+             * @default 1.0
+             * @constant
+             */
+            publisher_schema_version: "1.0";
+            /** Publisher */
+            publisher: string;
+            /** Publisher Display Name */
+            publisher_display_name: string;
+            /**
+             * Scope
+             * @default user
+             * @enum {string}
+             */
+            scope: "user" | "project";
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            expected_identity?: components["schemas"]["PublisherIdentity"] | null;
+            /** Workspace */
+            workspace?: string | null;
         };
         /**
          * QuitSettings
@@ -4219,6 +4387,17 @@ export interface components {
             truncated: boolean;
         };
         /**
+         * SourceRecoveryRequest
+         * @description Explicit source selection for a missing scenario registration.
+         */
+        SourceRecoveryRequest: {
+            /**
+             * Path
+             * Format: path
+             */
+            path: string;
+        };
+        /**
          * StudioEvent
          * @description One monotonically numbered change for reconnecting clients.
          */
@@ -4329,6 +4508,14 @@ export interface components {
             artifact_groups?: {
                 [key: string]: components["schemas"]["ArtifactGroup"];
             };
+            /** Missing Sources */
+            missing_sources?: string[];
+            /** Starter Drafts */
+            starter_drafts?: string[];
+            /** Source Paths */
+            source_paths?: {
+                [key: string]: string[];
+            };
             /** Projects */
             projects: components["schemas"]["Project"][];
             /** Folders */
@@ -4357,6 +4544,8 @@ export interface components {
             /** Imported Bundles */
             imported_bundles: components["schemas"]["ImportedBundle"][];
             runtime_cleanup?: components["schemas"]["RuntimeCleanupReport"] | null;
+            linux_sandbox_notice?: components["schemas"]["LinuxSandboxNotice"] | null;
+            publisher_status?: components["schemas"]["PackPublisherStatus"] | null;
         };
         /**
          * TurnRequest
@@ -4585,6 +4774,8 @@ export interface operations {
             query?: never;
             header?: {
                 "x-eforge-session"?: string;
+                "x-eforge-app-pid"?: number | null;
+                "x-eforge-app-created-at"?: number | null;
                 "x-eforge-token"?: string | null;
             };
             path?: never;
@@ -4615,6 +4806,40 @@ export interface operations {
         };
     };
     detach_window_v1_session_detach_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-session"?: string;
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    application_exit_v1_session_app_exit_post: {
         parameters: {
             query?: never;
             header?: {
@@ -6140,6 +6365,78 @@ export interface operations {
             };
         };
     };
+    recover_source_v1_scenarios__item_id__source_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_missing_source_v1_scenarios__item_id__registration_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     source_file_v1_items__item_id__files__filename__get: {
         parameters: {
             query?: never;
@@ -6250,7 +6547,9 @@ export interface operations {
     };
     pack_publisher_v1_packs_publisher_get: {
         parameters: {
-            query?: never;
+            query?: {
+                scope?: ("user" | "project") | null;
+            };
             header?: {
                 "x-eforge-token"?: string | null;
             };
@@ -6258,6 +6557,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackPublisherStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    setup_publisher_v1_packs_publisher_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublisherSetupRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -8179,6 +8513,39 @@ export interface operations {
             };
         };
     };
+    job_diagnostics_v1_jobs__job_id__diagnostics_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobDiagnostics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     bundle_files_v1_jobs__job_id__files_get: {
         parameters: {
             query?: never;
@@ -8608,6 +8975,8 @@ export interface operations {
             query?: never;
             header?: {
                 "x-eforge-session"?: string;
+                "x-eforge-app-pid"?: number | null;
+                "x-eforge-app-created-at"?: number | null;
                 "x-eforge-token"?: string | null;
             };
             path?: never;

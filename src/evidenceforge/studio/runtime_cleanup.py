@@ -1,4 +1,4 @@
-"""Versioned runtime retention, launch leases, and conservative macOS cleanup.
+"""Versioned runtime retention, launch leases, and conservative POSIX cleanup.
 
 This disposable installation cache has its own contracts. It never interprets
 or changes the Studio database, workspace, or versioned UI settings envelope.
@@ -148,28 +148,68 @@ def runtime_worker_fds() -> tuple[int, ...]:
 
 
 def _process_use(root: Path) -> tuple[bool, str | None]:
-    """Also protect unleased commands; refuse a census with unknown account ownership."""
+    """Protect unleased commands without requiring access to unrelated executables.
+
+    POSIX processes running as this account belong in the census, including those
+    whose real/saved identities differ. Attachment's stricter identity rules do
+    not apply to cleanup; processes executing as other accounts are outside it.
+    A readable command line can identify an unrelated protected system process;
+    an inaccessible Python executable still needs inspection because an interpreter
+    can run from this runtime without naming its installation in its arguments.
+    """
     account = current_account()
-    uncertain: str | None = None
+    inaccessible: list[int] = []
     try:
         for process in psutil.process_iter():
             try:
-                if process_account(process) != account:
+                belongs = (
+                    int(account.value) == process.uids().effective
+                    if account.kind == "uid"
+                    else process_account(process) == account
+                )
+                if not belongs:
                     continue
                 if process.status() == psutil.STATUS_ZOMBIE:
                     continue
-                values = [process.exe(), *process.cmdline()]
+                executable: str | None = None
+                arguments: list[str] | None = None
+                executable_denied = False
+                try:
+                    executable = process.exe()
+                except psutil.AccessDenied:
+                    executable_denied = True
+                except OSError:
+                    pass
+                try:
+                    arguments = process.cmdline()
+                except (psutil.AccessDenied, OSError):
+                    pass
+                values = [executable or "", *(arguments or [])]
                 if any(str(root) in value for value in values):
                     return True, None
+                if executable and arguments is not None:
+                    continue
+                if executable_denied and arguments:
+                    # Do not infer an interpreter's installation from argv[0]: it
+                    # can be relative, a symlink, or just `python -m ...`.
+                    names = (Path(arguments[0]).name, process.name())
+                    if not any(re.match(r"^(?:python|pypy)(?:\d|$)", name) for name in names):
+                        continue
+                inaccessible.append(process.pid)
             except psutil.NoSuchProcess:
                 continue
             except (psutil.AccessDenied, OSError, StudioStateError):
-                uncertain = (
-                    f"Cannot inspect process {process.pid} to verify this runtime is unused."
-                )
+                inaccessible.append(process.pid)
     except (OSError, psutil.AccessDenied):
-        uncertain = "Cannot inspect the process list to verify this runtime is unused."
-    return False, uncertain
+        return False, "Cannot inspect the process list to verify this runtime is unused."
+    if inaccessible:
+        identifiers = ", ".join(str(pid) for pid in sorted(set(inaccessible)))
+        return False, (
+            f"Cannot rule out runtime use by processes {identifiers}: ownership, executable, "
+            "or command-line information is unavailable. Quit older Studio builds and their "
+            "background work before checking again."
+        )
+    return False, None
 
 
 class RuntimeCleanup:

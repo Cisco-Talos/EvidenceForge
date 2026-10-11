@@ -1,0 +1,14 @@
+{
+  "python_version": "3.12.12",
+  "minimum_linux": "Ubuntu 24.04 (glibc 2.39), native build architecture",
+  "runtimes": {
+    "aarch64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251028/cpython-3.12.12%2B20251028-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "7cbce1094f99f99fe0283e868f95dbda03d785d8191d1f1f7edc8e2048a1b187"
+    },
+    "x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20251028/cpython-3.12.12%2B20251028-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+      "sha256": "d136b7168603620bf82fd2ec0fcaed2a5853551aae66f8023b3ae32b435683f2"
+    }
+  }
+}

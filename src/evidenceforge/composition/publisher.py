@@ -55,15 +55,20 @@ def _read_identity(path: Path) -> PublisherIdentity | None:
         raise PackError(f"invalid publisher configuration {path}: {exc}") from exc
 
 
+def scoped_publisher(project_root: Path, scope: PublisherScope) -> PublisherIdentity | None:
+    """Read one publisher scope without consulting its fallback."""
+    return _read_identity(publisher_path(project_root, scope))
+
+
 def effective_publisher(
     project_root: Path, *, required: bool = False
 ) -> tuple[PublisherIdentity | None, PublisherScope | None]:
     """Load project-over-user publisher identity without deriving a fallback."""
 
-    project = _read_identity(publisher_path(project_root, "project"))
+    project = scoped_publisher(project_root, "project")
     if project is not None:
         return project, "project"
-    user = _read_identity(publisher_path(project_root, "user"))
+    user = scoped_publisher(project_root, "user")
     if user is not None:
         return user, "user"
     if required:

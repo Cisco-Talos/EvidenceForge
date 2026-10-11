@@ -18,6 +18,7 @@ export type CodexHealth = Required<Schema["CodexHealth"]>;
 export type QuitSettings = Required<Schema["QuitSettings"]>;
 export type StudioSettings = Omit<Required<Schema["StudioSettings"]>, "quit"> & { quit: QuitSettings };
 export type RuntimeCleanupReport = Schema["RuntimeCleanupReport"];
+export type LinuxSandboxNotice = Schema["LinuxSandboxNotice"];
 export type GenerationProgress = Required<Schema["GenerationProgress"]>;
 export type StudioJob = Schema["JobSummary"];
 export type ScorecardDetail = Schema["ScorecardDetail"];
@@ -72,6 +73,9 @@ export type ValidationRecord = Schema["ValidationRecord"];
 interface Connection {
   url: string;
   token: string;
+  app_pid?: number;
+  app_created_at?: number;
+  app_session?: string;
 }
 
 // A renderer keeps its identity across reconnects; separate windows get separate IDs.
@@ -82,7 +86,7 @@ export class StudioApiError extends Error {
   readonly detail: unknown;
 
   constructor(status: number, detail: unknown) {
-    super(typeof detail === "string" ? detail : `${status} request failed`);
+    super(typeof detail === "string" ? detail : detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string" ? detail.message : `${status} request failed`);
     this.status = status;
     this.detail = detail;
   }
@@ -91,10 +95,16 @@ export class StudioApiError extends Error {
 export class StudioApi {
   readonly url: string;
   readonly token: string;
+  private readonly appHeaders: Record<string, string>;
+  private readonly session: string;
 
   constructor(connection: Connection) {
     this.url = connection.url;
     this.token = connection.token;
+    this.session = connection.app_session ?? windowSession;
+    this.appHeaders = connection.app_pid !== undefined && connection.app_created_at !== undefined
+      ? { "X-EForge-App-Pid": String(connection.app_pid), "X-EForge-App-Created-At": String(connection.app_created_at) }
+      : {};
   }
 
   async libraryPreferences(workspace: string): Promise<LibraryPreferences> {
@@ -119,7 +129,8 @@ export class StudioApi {
       signal: controller.signal,
       headers: {
         "X-EForge-Token": this.token,
-        "X-EForge-Session": windowSession,
+        "X-EForge-Session": this.session,
+        ...this.appHeaders,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

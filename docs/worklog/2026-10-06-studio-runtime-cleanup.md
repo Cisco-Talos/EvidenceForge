@@ -67,3 +67,77 @@ are normalized; user-controlled cache links remain rejected.
 The running user app/helper and real runtime folders are untouched by these checks. Reopen
 the rebuilt standalone app when current work permits. Clean-machine and cross-account GUI
 acceptance remain the separately tracked release gates.
+
+## Linux warning investigation — October 11
+
+The user reported that the cleanup warning appears on every VM launch, with changing
+contents. Read-only inspection of the running Ubuntu AppImage confirmed three eligible
+runtime folders retained with the same `Cannot inspect process 3664` warning. All five
+installed runtimes have valid-looking receipt files and the `1` launch-lease marker;
+the current runtime is `3ea8af8b…`, and `3a31d5eb…` is protected as the previous runtime.
+No cleanup, cache deletion, process termination, or settings change was performed.
+
+Using the running payload's Python/psutil as the normal VM account reproduced these
+process census failures:
+
+- PID 1978, `(sd-pam)`: same account, but `Process.exe()` raises `AccessDenied`.
+- PID 2125, `fusermount3`: real UID 1000, effective/saved UID 0; `process_account()`
+  rejects mixed identities before the cleanup code can classify its relevance.
+- PID 3664, `sshd`: same account, but `Process.exe()` raises `AccessDenied`.
+
+Command lines were readable for all three and did not reference the runtime cache.
+The census stores only the last inspection failure, explaining the displayed PID and
+why it can change between passes. It currently treats any such failure anywhere in
+the account's process list as uncertainty for every eligible runtime, so routine Linux
+session/FUSE processes prevent removal indefinitely. Repeating that census does not
+resolve the persistent OS access restriction.
+
+Retries are scheduled at helper startup, hourly, at reconciled job terminal/pause
+changes, and when retention settings are saved. The wording does not explain that
+this is a persistent inspection failure. A future fix should separate helper-attachment
+identity rules from cleanup process classification and distinguish unavailable optional
+process evidence from inability to establish runtime use, retaining the installer lock,
+lease contract, exclusive lease, receipt/path checks and genuine-use protections.
+Do not change global `process_account()` attachment rules or blanket-ignore unknown
+inspection errors to silence the warning. This turn diagnosed the issue only.
+
+### Approved fix and local builds
+
+The user approved the proposed fix in the next turn. Cleanup now classifies POSIX
+processes by their effective UID, independently of helper attachment's requirement
+that real/effective/saved identities agree. Other accounts remain outside the census;
+`process_account()` and attachment validation are unchanged. Executable and command
+line reads are independent. A nonempty readable command line with no runtime reference
+can clear an executable-access denial for a non-Python process. An inaccessible
+Python/PyPy interpreter remains uncertain because its arguments may not identify its
+installation. Unknown ownership, unavailable command lines, and other executable
+inspection failures continue to retain eligible runtimes. Positive runtime references
+remain protected. Lease, age, receipt, installer-lock and retirement logic is unchanged.
+
+Warnings list all uncertain PIDs instead of the last one. The UI groups identical
+reasons across folders and explains the retry schedule and need to resolve persistent
+conditions. The Studio guide documents this behavior. Updated the existing census
+assertion for the new diagnostic; no tests were added or run.
+
+Manual inspection on Ubuntu reproduced the old PID 3664 warning and showed the fixed
+census returning `(False, None)` for an unused runtime and `(True, None)` for the live
+helper runtime. The real Mac census also returned `(False, None)` for an unused target;
+workspace sandbox enumeration is unavailable, so that read ran with authorized host
+process access. Ruff check/format and the TypeScript/Vite build passed.
+
+Rebuilt the Mac standalone app at
+`build/studio-macos/target/aarch64-apple-darwin/release/bundle/macos/EvidenceForge Studio.app`
+without a new DMG. Its packaged cleanup module matches the source bytes. Rebuilt the
+Ubuntu ARM64 AppImage at the existing `dist/linux/EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage`
+path, retaining the previous preview in `~/eforge-build-setup/a2-before-cleanup-20261011/`.
+The new AppImage is 135342600 bytes, SHA256
+`2d0ca53da4c5627965b34f25bda468f156f43b68b82df6fd139fca2cafd993b3`.
+It and its checksum were copied back to the Mac's `dist/linux/` directory.
+
+The user had closed Studio on the VM during the build. Opened the rebuilt AppImage
+through the guest terminal and inspected the actual GUI: the scenario library loaded
+with no cleanup banner. The authenticated helper report had no warnings and recorded
+four expired removals (`3a31d5eb…`, `92dd4041…`, `c9224952…`, `ec208c1c…`). Only the new
+current runtime `68b1e288…` and previous runtime `3ea8af8b…` remain. The VM app is left
+open for the user. No jobs were cancelled, no state/workspace content was removed,
+and no version bump, commit, tag, or publication occurred.

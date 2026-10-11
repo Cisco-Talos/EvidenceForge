@@ -15,6 +15,7 @@ from starlette.background import BackgroundTask
 from evidenceforge.artifacts.lifecycle import (
     ArtifactError,
     create_draft,
+    exception_findings,
     inspect_artifact,
     list_versions,
     publish,
@@ -34,6 +35,7 @@ from evidenceforge.artifacts.properties import (
     inspect_properties,
 )
 from evidenceforge.artifacts.removal import AffectedItem
+from evidenceforge.artifacts.scaffolds import is_starter_draft
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.naming import DisplayName
 from evidenceforge.schema import LifecycleMetadata
@@ -68,6 +70,7 @@ class ArtifactInfo(BaseModel):
     digest: str
     versions: list[dict[str, Any]] = Field(default_factory=list)
     suggested_version: str | None = None
+    starter_draft: bool = False
     name_consumers: list[AffectedItem] = Field(default_factory=list)
     name_review_problems: list[str] = Field(default_factory=list)
     model_config = ConfigDict(extra="forbid")
@@ -350,6 +353,7 @@ def register_artifact_routes(
                 digest=raw["digest"],
                 versions=versions,
                 suggested_version=suggested_version,
+                starter_draft=item.kind == "scenario" and is_starter_draft(item.path),
                 name_consumers=name_consumers,
                 name_review_problems=name_review_problems,
             )
@@ -436,6 +440,10 @@ def register_artifact_routes(
                 else:
                     from evidenceforge.studio.contexts import context_path
 
+                    if item.kind == "scenario" and is_starter_draft(item.path):
+                        raise ArtifactError(
+                            "Ready to author — continue the conversation to build this scenario."
+                        )
                     result = await asyncio.to_thread(
                         publish,
                         item.path,
@@ -460,7 +468,14 @@ def register_artifact_routes(
                 await studio.emit(item.id, "artifact.updated", {"path": str(result)})
                 return ArtifactImported(path=result, findings=findings)
             except (EvidenceForgeError, OSError, ValueError) as exc:
-                raise HTTPException(status_code=409, detail=str(exc)) from exc
+                issues = exception_findings(exc)
+                detail: str | dict[str, Any] = str(exc)
+                if any(issue.get("field_path") for issue in issues):
+                    detail = {
+                        "message": "Scenario needs changes before publication.",
+                        "issues": issues,
+                    }
+                raise HTTPException(status_code=409, detail=detail) from exc
 
     @app.get("/v1/items/{item_id}/release")
     async def export(item_id: str, studio: Any = Depends(authorized)) -> FileResponse:

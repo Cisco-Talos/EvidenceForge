@@ -12,6 +12,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -20,6 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+import psutil
 import yaml
 from fastapi import (
     Depends,
@@ -49,11 +51,17 @@ from evidenceforge.artifacts.removal import (
     retired_scenario_sources,
     review_scenario_deletion,
 )
-from evidenceforge.cli.install_skills import install_chatgpt_skills, install_skills
+from evidenceforge.artifacts.scaffolds import is_starter_draft
+from evidenceforge.cli.install_skills import (
+    CHATGPT_SKILL_NAMES,
+    install_chatgpt_skills,
+    install_skills,
+)
 from evidenceforge.composition.packs import PackRepository, parse_pack_cli_reference
 from evidenceforge.composition.publisher import (
     PublisherIdentity,
     effective_publisher,
+    scoped_publisher,
     set_publisher,
 )
 from evidenceforge.config.context import OverlayReference, SelectedContext
@@ -115,6 +123,7 @@ from evidenceforge.studio.imports import (
     prepare_archive,
     prepare_scenario,
 )
+from evidenceforge.studio.job_diagnostics import JobDiagnostics, read_job_diagnostics
 from evidenceforge.studio.jobs import (
     StudioJobStore,
     can_resume,
@@ -129,6 +138,7 @@ from evidenceforge.studio.jobs import (
     suspend_generation,
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
+from evidenceforge.studio.linux_sandbox import LinuxSandboxNotice, linux_sandbox_notice
 from evidenceforge.studio.pack_lifecycle import (
     PackDeleted,
     PackDeleteRequest,
@@ -242,6 +252,39 @@ class PackPublisherStatus(BaseModel):
     publisher: str | None = None
     publisher_display_name: str | None = None
     scope: Literal["user", "project"] | None = None
+    error: str | None = None
+
+
+class PublisherSetupRequest(PublisherIdentity):
+    """Publisher setup or an explicitly reviewed edit of one configuration scope."""
+
+    scope: Literal["user", "project"] = "user"
+    replace: bool = False
+    expected_identity: PublisherIdentity | None = None
+    workspace: Path | None = None
+
+
+def publisher_status(
+    workspace: Path, scope: Literal["user", "project"] | None = None
+) -> PackPublisherStatus:
+    """Read local identity files without failing Studio bootstrap on invalid setup."""
+    try:
+        if scope is None:
+            identity, scope = effective_publisher(workspace)
+        else:
+            identity = scoped_publisher(workspace, scope)
+    except (PackError, OSError):
+        return PackPublisherStatus(
+            configured=False,
+            error="Publisher configuration could not be read. Repair the user or workspace "
+            ".eforge/publisher.yaml file before setting up publication.",
+        )
+    return PackPublisherStatus(
+        configured=identity is not None,
+        publisher=identity.publisher if identity else None,
+        publisher_display_name=identity.publisher_display_name if identity else None,
+        scope=scope,
+    )
 
 
 class PackCloneRequest(BaseModel):
@@ -317,6 +360,14 @@ class ConversationRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, pattern=SCENARIO_NAME_PATTERN)
 
     display_name: DisplayName | None = None
+
+
+class SourceRecoveryRequest(BaseModel):
+    """Explicit source selection for a missing scenario registration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: Path
 
 
 class ConversationUpdate(BaseModel):
@@ -699,6 +750,9 @@ class StudioSnapshot(BaseModel):
     paths: StudioPaths
     items: list[CatalogItem]
     artifact_groups: dict[str, ArtifactGroup] = Field(default_factory=dict)
+    missing_sources: list[str] = Field(default_factory=list)
+    starter_drafts: list[str] = Field(default_factory=list)
+    source_paths: dict[str, list[Path]] = Field(default_factory=dict)
     projects: list[Project]
     folders: list[str]
     views: list[SavedView]
@@ -711,6 +765,8 @@ class StudioSnapshot(BaseModel):
     removed_job_ids: list[str] = Field(default_factory=list)
     imported_bundles: list[ImportedBundle]
     runtime_cleanup: RuntimeCleanupReport | None = None
+    linux_sandbox_notice: LinuxSandboxNotice | None = None
+    publisher_status: PackPublisherStatus | None = None
 
 
 class CodexReconnectRequest(BaseModel):
@@ -794,6 +850,7 @@ class StudioService:
         self.job_cycle_lock = asyncio.Lock()
         self.codex = CodexClient(self.settings.codex_path, self._codex_event, self._codex_request)
         self.codex_health = CodexHealth()
+        self.linux_sandbox_notice: LinuxSandboxNotice | None = None
         self.codex_failures = 0
         self.codex_lock = asyncio.Lock()
         self._last_scan = time.monotonic()
@@ -808,6 +865,7 @@ class StudioService:
         self.prediction_task: asyncio.Task[None] | None = None
         self.prediction_lock = asyncio.Lock()
         self.prediction_pending: dict[str, tuple[CatalogItem, str, StudioSettings]] = {}
+        self.authoring_states: dict[str, bool] = {}
         self.prediction_wakeup = asyncio.Event()
         self.runtime_cleanup = RuntimeCleanup(paths.data)
         self._last_runtime_cleanup = 0.0
@@ -859,6 +917,21 @@ class StudioService:
 
     async def _codex_event(self, method: str, params: dict[str, Any]) -> None:
         """Persist agent activity and keep conversation state current."""
+        if sys.platform == "linux":
+            if method == "codex/linuxSandboxReset":
+                await self.set_linux_sandbox_notice(None)
+                return
+            if method == "codex/linuxSandboxWarning":
+                await self.set_linux_sandbox_notice(LinuxSandboxNotice.model_validate(params))
+                return
+            if method in {"warning", "configWarning"}:
+                message = " ".join(
+                    value
+                    for key in ("message", "summary", "details")
+                    if isinstance(value := params.get(key), str)
+                )
+                if notice := linux_sandbox_notice(message):
+                    await self.set_linux_sandbox_notice(notice)
         if method == "codex/connected":
             self.codex_failures = 0
             await self.set_codex_health("connected", "Codex is responding")
@@ -918,6 +991,71 @@ class StudioService:
             return
         self.codex_health = health
         await self.emit("codex", "codex.health", health.model_dump())
+
+    async def set_linux_sandbox_notice(self, notice: LinuxSandboxNotice | None) -> None:
+        """Publish a deduplicated advisory from Codex's existing Linux startup check."""
+        if notice == self.linux_sandbox_notice:
+            return
+        self.linux_sandbox_notice = notice
+        await self.emit(
+            "codex",
+            "codex.linux_sandbox",
+            {"notice": notice.model_dump() if notice is not None else None},
+        )
+
+    async def resolve_turn_skill(self, name: str, workspace: Path) -> dict[str, Any]:
+        """Find an enabled skill, installing missing bundled Codex skills when needed."""
+
+        async def discover(force_reload: bool) -> list[dict[str, Any]]:
+            listing = await self.codex.call(
+                "skills/list", {"cwds": [str(workspace)], "forceReload": force_reload}
+            )
+            return [
+                skill
+                for group in listing.get("data", [])
+                for skill in group.get("skills", [])
+                if skill.get("name") == name
+            ]
+
+        matches = await discover(False)
+        skill = next(
+            (entry for entry in matches if entry.get("enabled", True) and entry.get("path")),
+            None,
+        )
+        if skill is not None:
+            return skill
+        if any(not entry.get("enabled", True) for entry in matches):
+            raise HTTPException(status_code=409, detail=f"{name} is disabled. Enable it in Codex.")
+        if name not in {f"eforge-{command}" for command in CHATGPT_SKILL_NAMES}:
+            raise HTTPException(
+                status_code=409, detail=f"{name} is unavailable. Install this skill before sending."
+            )
+
+        _agent, target = skill_targets(self.settings.skill_install_scope, "chatgpt", workspace)[0]
+        try:
+            files, _removed = await asyncio.to_thread(
+                install_chatgpt_skills, target, missing_only=True
+            )
+        except (OSError, ValueError, PathSafetyError) as error:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not install {name}: {error}. Use Settings to install or repair skills.",
+            ) from error
+        matches = await discover(True)
+        if files:
+            await self.emit(
+                "codex", "skills.installed", {"installed": {"chatgpt": len(files)}, "failures": {}}
+            )
+        skill = next(
+            (entry for entry in matches if entry.get("enabled", True) and entry.get("path")),
+            None,
+        )
+        if skill is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{name} is unavailable after skill discovery. Use Settings to install or repair skills.",
+            )
+        return skill
 
     async def _monitor_codex(self) -> None:
         """Check the transport and reconcile turns even when no window is open."""
@@ -1136,6 +1274,51 @@ class StudioService:
         async with self.library_lock:
             return await self._scan(resolve_drafts=resolve_drafts)
 
+    async def ensure_scenario_draft(self, conversation: Conversation) -> CatalogItem:
+        """Bind new and preview-era authoring chats to one real source before a turn."""
+        from evidenceforge.artifacts.lifecycle import create_new_draft
+
+        if conversation.workspace != self.settings.workspace:
+            raise HTTPException(status_code=409, detail="Workspace changed; create the draft again")
+        try:
+            draft = conversation.draft_path
+            if draft is None or not draft.is_file():
+                draft = await asyncio.to_thread(
+                    create_new_draft,
+                    "scenario",
+                    conversation.draft_name or "new-scenario",
+                    description="",
+                    display_name=conversation.draft_display_name,
+                    project_root=conversation.workspace,
+                )
+            project = (
+                self.store.project(conversation.draft_project_id)
+                if conversation.draft_project_id
+                else None
+            )
+            if conversation.draft_project_id and (
+                project is None or project.workspace != conversation.workspace
+            ):
+                raise ValueError("Project changed; choose a project in this workspace")
+            configure_scenario(draft, conversation.workspace, project)
+            source = next(
+                found
+                for found in discover_scenarios(conversation.workspace, [draft])
+                if found.path == draft
+            )
+            item = self.store.upsert_item(conversation.workspace, "scenario", source)
+            item.project_id = conversation.draft_project_id
+            self.store.save_item(item)
+            conversation.item_id = item.id
+            conversation.draft_path = draft
+            conversation.draft_kind = None
+            conversation.draft_project_id = None
+            self.store.save_conversation(conversation)
+            await self.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
+            return item
+        except (EvidenceForgeError, OSError, ValueError, StopIteration) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     async def _scan(self, *, resolve_drafts: bool = True) -> list[CatalogItem]:
         workspace = self.settings.workspace
         before = self.store.items(workspace)
@@ -1150,7 +1333,9 @@ class StudioService:
         def discover() -> list[CatalogItem]:
             items = [
                 self.store.upsert_item(workspace, "scenario", source)
-                for source in discover_scenarios(workspace, [])
+                for source in discover_scenarios(
+                    workspace, [item.path for item in before if item.kind == "scenario"]
+                )
             ]
             for kind, source_kind in (
                 ("industry_pack", "industry"),
@@ -1163,6 +1348,13 @@ class StudioService:
             return items
 
         items = await asyncio.to_thread(discover)
+        from evidenceforge.studio.source_recovery import reconcile_sources
+
+        moved = await asyncio.to_thread(reconcile_sources, self.store, workspace)
+        if moved:
+            items = [item for item in self.store.items(workspace) if item.path.is_file()]
+            for item in moved:
+                await self.emit(item.id, "item.updated", json.loads(item.model_dump_json()))
         by_source = {(item.kind, item.path.resolve()): item for item in items}
         for conversation in self.store.conversations(workspace):
             if (
@@ -1232,6 +1424,13 @@ class StudioService:
                 )
         cached = self.store.resource_predictions([item.id for item in selected])
         for item in selected:
+            starter = is_starter_draft(item.path)
+            if self.authoring_states.get(item.id) != starter:
+                self.authoring_states[item.id] = starter
+                await self.emit(item.id, "scenario.authoring", {"starter": starter})
+            if starter:
+                self.prediction_pending.pop(item.id, None)
+                continue
             key = prediction_key(item, results[item.id].fingerprint, self.settings)
             if cached.get(item.id, {}).get("input_fingerprint") != key:
                 self.prediction_pending[item.id] = (
@@ -1276,7 +1475,9 @@ class StudioService:
     ) -> PredictionRecord | None:
         """Publish only while the inspected workspace, files, and preferences remain current."""
         async with self.prediction_lock:
-            if item.workspace.resolve() != self.settings.workspace.resolve():
+            if item.workspace.resolve() != self.settings.workspace.resolve() or is_starter_draft(
+                item.path
+            ):
                 return None
             key = prediction_key(item, dependencies, settings)
             cached = self.store.resource_predictions([item.id]).get(item.id)
@@ -1305,12 +1506,25 @@ class StudioService:
         """Return a coherent view for first load and reconnection."""
         workspace = self.settings.workspace
         items = self.store.items(workspace)
+        starters = [
+            item.id for item in items if item.kind == "scenario" and is_starter_draft(item.path)
+        ]
         return {
             "seq": self.store.latest_seq(),
             "settings": json.loads(self.settings.model_dump_json()),
+            "publisher_status": publisher_status(workspace).model_dump(mode="json"),
             "paths": json.loads(self.paths.model_dump_json()),
             "runtime_cleanup": self.runtime_cleanup.report.model_dump(mode="json"),
             "items": [json.loads(item.model_dump_json()) for item in items],
+            "starter_drafts": starters,
+            "missing_sources": [
+                item.id for item in items if item.kind == "scenario" and not item.path.is_file()
+            ],
+            "source_paths": {
+                item.id: [str(path) for path in self.store.source_paths(item)]
+                for item in items
+                if item.kind == "scenario"
+            },
             "artifact_groups": {
                 item.id: self.artifact_groups[item.id].model_dump(mode="json")
                 for item in items
@@ -1323,11 +1537,18 @@ class StudioService:
             "views": [json.loads(view.model_dump_json()) for view in self.store.views(workspace)],
             "validations": self.store.validations([item.id for item in items]),
             "dependencies": self.store.dependency_health([item.id for item in items]),
-            "forecasts": self.store.resource_predictions([item.id for item in items]),
+            "forecasts": self.store.resource_predictions(
+                [item.id for item in items if item.id not in starters]
+            ),
             "conversations": [
                 json.loads(chat.model_dump_json()) for chat in self.store.conversations(workspace)
             ],
             "codex_health": self.codex_health.model_dump(),
+            "linux_sandbox_notice": (
+                self.linux_sandbox_notice.model_dump()
+                if self.linux_sandbox_notice is not None
+                else None
+            ),
             "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
             "removed_job_ids": self.store.removed_job_ids(workspace),
             "imported_bundles": [
@@ -1343,6 +1564,7 @@ def _maintenance_path(path: str) -> bool:
         "/v1/runtime/prepare-replacement",
         "/v1/session/heartbeat",
         "/v1/session/detach",
+        "/v1/session/app-exit",
     } or path.startswith("/v1/state/")
 
 
@@ -1434,12 +1656,16 @@ def create_app(
         if windows.has_other_windows(""):
             windows.should_exit(False)
             return False
+        # Routine reconciliation runs every 750 ms. Sampling that lock must not
+        # repeatedly restart the idle grace period after the last real job ends.
+        # Defer the check; the final locked pass still rechecks jobs and workers.
+        if service and service.job_cycle_lock.locked():
+            return False
         busy = initializing or bool(operation_task and not operation_task.done())
         if service:
             busy = busy or bool(
                 service.active_requests
                 or service.preparing_workspace
-                or service.job_cycle_lock.locked()
                 or service.prediction_lock.locked()
                 or service.authoring_stop_task
                 and not service.authoring_stop_task.done()
@@ -1526,7 +1752,13 @@ def create_app(
             "http://127.0.0.1:1420",
         ],
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["X-EForge-Token", "X-EForge-Session", "Content-Type"],
+        allow_headers=[
+            "X-EForge-Token",
+            "X-EForge-Session",
+            "X-EForge-App-Pid",
+            "X-EForge-App-Created-At",
+            "Content-Type",
+        ],
     )
     app.state.studio = service
     app.state.sessions = windows
@@ -1578,7 +1810,15 @@ def create_app(
     @app.post("/v1/session/heartbeat", dependencies=[Depends(maintenance_auth)])
     async def heartbeat(
         x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+        x_eforge_app_pid: int | None = Header(default=None, gt=0),
+        x_eforge_app_created_at: float | None = Header(default=None, gt=0, allow_inf_nan=False),
     ) -> dict[str, str]:
+        try:
+            windows.bind_application(x_eforge_session, x_eforge_app_pid, x_eforge_app_created_at)
+        except (OSError, psutil.Error, StudioStateError, ValueError) as error:
+            raise HTTPException(
+                status_code=409, detail="Studio application identity changed"
+            ) from error
         windows.heartbeat(x_eforge_session)
         return {"status": "window alive"}
 
@@ -1588,6 +1828,14 @@ def create_app(
     ) -> dict[str, str]:
         windows.close(x_eforge_session)
         return {"status": "window detached"}
+
+    @app.post("/v1/session/app-exit", dependencies=[Depends(maintenance_auth)])
+    async def application_exit(
+        x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+    ) -> dict[str, str]:
+        """Acknowledge native exit and drain protected work before shutting down."""
+        windows.close(x_eforge_session, proactive=True)
+        return {"status": "application detached; exit when idle"}
 
     def active_coordinator() -> StateCoordinator:
         if coordinator is None:
@@ -2203,6 +2451,11 @@ def create_app(
             raise HTTPException(status_code=404, detail="Scenario not found")
         await studio.scan()
         item = catalog_source(item_id, studio)
+        if is_starter_draft(item.path):
+            raise HTTPException(
+                status_code=409,
+                detail="Ready to author — continue the conversation to build this scenario.",
+            )
         dependencies = studio.store.dependency_health([item.id])[item.id]["fingerprint"]
         result = await studio.predict_item(
             item, dependencies, studio.settings.model_copy(deep=True), force=True
@@ -2665,6 +2918,100 @@ def create_app(
 
     register_artifact_routes(app, authorized, catalog_source)
 
+    def missing_scenario(item_id: str, studio: StudioService) -> CatalogItem:
+        item = studio.store.item(item_id)
+        if (
+            item is None
+            or item.kind != "scenario"
+            or item.workspace.resolve() != studio.settings.workspace.resolve()
+        ):
+            raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+        if item.path.exists():
+            raise HTTPException(status_code=409, detail="Source is available; refresh the library")
+        return item
+
+    @app.post("/v1/scenarios/{item_id}/source")
+    async def recover_source(
+        item_id: str, request: SourceRecoveryRequest, studio: StudioService = Depends(authorized)
+    ) -> CatalogItem:
+        from evidenceforge.desktop.library import _scenario_item
+        from evidenceforge.studio.search import yaml_entries
+        from evidenceforge.studio.source_recovery import compatible_registration, source_busy
+        from evidenceforge.studio.store import indexed_draft_identity
+
+        async with studio.workspace_selection_lock, studio.asset_lock, studio.library_lock:
+            item = missing_scenario(item_id, studio)
+            try:
+                candidate = _safe_path(request.path.expanduser())
+                if (
+                    not candidate.is_relative_to(item.workspace.resolve())
+                    or not candidate.is_file()
+                ):
+                    raise ValueError("Choose an authored scenario YAML inside this workspace")
+                source = _scenario_item(candidate)
+                if source is None:
+                    raise ValueError("Selected file is not an authored scenario YAML")
+                identity = studio.store.draft_identity(item)
+                candidate_identity = indexed_draft_identity(
+                    candidate,
+                    [
+                        entry.model_dump()
+                        for entry in yaml_entries({candidate.name: source.search_text})
+                    ],
+                )
+                same_draft = identity and identity == candidate_identity
+                if (
+                    not same_draft
+                    and hashlib.sha256(candidate.read_bytes()).hexdigest() != item.source_sha256
+                ):
+                    raise ValueError(
+                        "Selected source has a different identity or content; choose this scenario's original file"
+                    )
+                existing = next(
+                    (
+                        entry
+                        for entry in studio.store.items(item.workspace, "scenario")
+                        if entry.path == candidate
+                    ),
+                    None,
+                )
+                if source_busy(studio.store, [item] + ([existing] if existing else [])):
+                    raise ValueError(
+                        "Finish or stop active chats and jobs before locating the source"
+                    )
+                if existing and not compatible_registration(item, existing):
+                    raise ValueError(
+                        "The selected entry has a different project or folder; align its assignment first"
+                    )
+                target = studio.store.upsert_item(item.workspace, "scenario", source)
+                if identity and studio.store.draft_identity(target) != identity:
+                    raise ValueError("Source identity changed; refresh and select it again")
+                updated = studio.store.relink_scenario(item, target)
+            except (EvidenceForgeError, OSError, ValueError, yaml.YAMLError) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            await studio.emit(updated.id, "item.updated", json.loads(updated.model_dump_json()))
+            await studio.emit(str(item.workspace), "library.refreshed", {})
+            return updated
+
+    @app.delete("/v1/scenarios/{item_id}/registration")
+    async def remove_missing_source(
+        item_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, bool]:
+        from evidenceforge.studio.source_recovery import source_busy
+
+        async with studio.workspace_selection_lock, studio.asset_lock, studio.library_lock:
+            item = missing_scenario(item_id, studio)
+            if source_busy(studio.store, [item]):
+                raise HTTPException(
+                    status_code=409, detail="Finish or stop active work before removing this entry"
+                )
+            try:
+                studio.store.remove_missing_registration(item)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            await studio.emit(str(item.workspace), "library.refreshed", {})
+            return {"removed": True}
+
     @app.get("/v1/items/{item_id}/files/{filename:path}")
     def source_file(
         item_id: str, filename: str, studio: StudioService = Depends(authorized)
@@ -2740,17 +3087,56 @@ def create_app(
         return cloned
 
     @app.get("/v1/packs/publisher")
-    def pack_publisher(studio: StudioService = Depends(authorized)) -> PackPublisherStatus:
-        try:
-            identity, scope = effective_publisher(studio.settings.workspace)
-        except PackError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return PackPublisherStatus(
-            configured=identity is not None,
-            publisher=identity.publisher if identity else None,
-            publisher_display_name=identity.publisher_display_name if identity else None,
-            scope=scope,
-        )
+    def pack_publisher(
+        scope: Literal["user", "project"] | None = None,
+        studio: StudioService = Depends(authorized),
+    ) -> PackPublisherStatus:
+        status = publisher_status(studio.settings.workspace, scope)
+        if status.error:
+            raise HTTPException(status_code=400, detail=status.error)
+        return status
+
+    @app.post("/v1/packs/publisher")
+    async def setup_publisher(
+        request: PublisherSetupRequest, studio: StudioService = Depends(authorized)
+    ) -> PackPublisherStatus:
+        workspace = studio.settings.workspace
+        async with studio.asset_lock:
+            if request.workspace is not None and request.workspace.resolve() != workspace.resolve():
+                raise HTTPException(
+                    status_code=409, detail="Workspace changed. Reopen publisher setup."
+                )
+            try:
+                identity = PublisherIdentity(
+                    publisher=request.publisher,
+                    publisher_display_name=request.publisher_display_name.strip(),
+                )
+                if request.replace:
+                    existing = scoped_publisher(workspace, request.scope)
+                    if existing != request.expected_identity:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Publisher settings changed after review. Reopen Edit to "
+                            "review the current identity.",
+                        )
+                else:
+                    existing, _scope = effective_publisher(workspace)
+                if not request.replace and existing is not None:
+                    if existing != identity:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="A publisher identity is already configured. Refresh setup "
+                            "to use the existing identity.",
+                        )
+                    return publisher_status(workspace)
+                await asyncio.to_thread(
+                    set_publisher, workspace, identity, scope=request.scope, force=request.replace
+                )
+            except (PackError, OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            status = publisher_status(workspace)
+            await studio.emit(str(workspace), "publisher.updated", status.model_dump(mode="json"))
+            return status
 
     @app.post("/v1/packs")
     async def create_pack(
@@ -3265,12 +3651,8 @@ def create_app(
             draft_display_name=request.display_name,
         )
         if request.draft_kind == "scenario":
-            conversation.draft_path = (
-                studio.settings.workspace
-                / "scenarios"
-                / f"studio-{conversation.id}"
-                / "scenario.yaml"
-            )
+            async with studio.workspace_selection_lock, studio.asset_lock, studio.library_lock:
+                await studio.ensure_scenario_draft(conversation)
         elif request.draft_kind:
             conversation.draft_path = (
                 studio.settings.workspace
@@ -3504,7 +3886,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="Conversation not found")
         if conversation.active:
             raise HTTPException(status_code=409, detail="This conversation has an active turn")
+        if conversation.item_id is None and conversation.draft_kind == "scenario":
+            async with studio.library_lock:
+                await studio.ensure_scenario_draft(conversation)
         item = studio.store.item(conversation.item_id) if conversation.item_id else None
+        if item is not None and not item.path.is_file():
+            raise HTTPException(
+                status_code=409,
+                detail="Source is missing; locate its YAML in the library before authoring",
+            )
         if conversation.item_id and (item is None or item.workspace != conversation.workspace):
             raise HTTPException(status_code=404, detail="Conversation source is unavailable")
         first_turn = conversation.thread_id is None
@@ -3539,22 +3929,7 @@ def create_app(
                     conversation.reasoning_effort = selected.get("defaultReasoningEffort")
             inputs: list[dict[str, str]] = [{"type": "text", "text": request.text}]
             if skill_name:
-                listing = await studio.codex.call(
-                    "skills/list",
-                    {"cwds": [str(conversation.workspace)], "forceReload": False},
-                )
-                matches = (
-                    skill
-                    for group in listing.get("data", [])
-                    for skill in group.get("skills", [])
-                    if skill.get("name") == skill_name and skill.get("enabled", True)
-                )
-                skill = next(matches, None)
-                if skill is None or not skill.get("path"):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"{skill_name} is unavailable. Install EvidenceForge skills in Settings.",
-                    )
+                skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
                 inputs.append({"type": "skill", "name": skill_name, "path": str(skill["path"])})
             configuration_instructions = ""
             if runtime_root() is not None:
@@ -3594,7 +3969,7 @@ def create_app(
                 draft_name_context = (
                     f"The user named this draft {conversation.draft_name!r}; use that "
                     "as the authored scenario name unless the user asks to change it. "
-                    if conversation.draft_kind == "scenario" and conversation.draft_name
+                    if context_kind == "scenario" and conversation.draft_name
                     else ""
                 )
                 if conversation.draft_display_name:
@@ -3609,6 +3984,9 @@ def create_app(
                         f"This conversation concerns the EvidenceForge {context_kind} at {target}. "
                         "For a new draft, create its authored file at that exact path when the user "
                         "asks you to write it; keep companion files beside it. "
+                        "If that draft file already exists, resume and edit it in place. "
+                        "Do not run new-draft again, allocate another draft_id, or move only its YAML "
+                        "out of the managed directory; retain draft.json and all companion files. "
                         f"{draft_name_context}"
                         "Treat that path as context for the user's requests. Wait for a user "
                         "request before editing files. Keep deterministic generation in eforge."
@@ -3626,7 +4004,12 @@ def create_app(
                     {
                         "threadId": conversation.thread_id,
                         "model": conversation.model_id,
-                        "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. Keep deterministic generation in eforge. Follow user requests and the EvidenceForge skills."
+                        "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. "
+                        "Resume and edit the existing draft at this exact path. Do not run new-draft "
+                        "again, allocate another draft_id, or move only its YAML out of the managed "
+                        "directory; retain draft.json and all companion files. Wait for the user's "
+                        "request before editing. Keep deterministic generation in eforge. "
+                        "Follow user requests and the EvidenceForge skills."
                         + configuration_instructions,
                     },
                 )
@@ -4210,6 +4593,20 @@ def create_app(
             background=BackgroundTask(archive.unlink, missing_ok=True),
         )
 
+    @app.get("/v1/jobs/{job_id}/diagnostics", response_model=JobDiagnostics)
+    def job_diagnostics(job_id: str, studio: StudioService = Depends(authorized)) -> JobDiagnostics:
+        payload = next(
+            (
+                entry
+                for entry in studio.store.job_payloads(studio.settings.workspace)
+                if entry["id"] == job_id
+            ),
+            None,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return read_job_diagnostics(Path(payload["log_file"]), studio.paths.state / "jobs", job_id)
+
     @app.get("/v1/jobs/{job_id}/files")
     def bundle_files(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, Any]:
         payload = next(
@@ -4273,6 +4670,11 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Scenario not found")
             if item.workspace.resolve() != studio.settings.workspace.resolve():
                 raise HTTPException(status_code=404, detail="Scenario not found in this workspace")
+            if is_starter_draft(item.path):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Ready to author — continue the conversation to build this scenario.",
+                )
             health = (await studio.refresh_dependencies([item]))[item.id]
             if not health.ready:
                 raise HTTPException(
@@ -4629,7 +5031,15 @@ def create_app(
     async def open_window(
         studio: StudioService = Depends(authorized),
         x_eforge_session: str = Header(default="legacy", min_length=1, max_length=128),
+        x_eforge_app_pid: int | None = Header(default=None, gt=0),
+        x_eforge_app_created_at: float | None = Header(default=None, gt=0, allow_inf_nan=False),
     ) -> dict[str, str]:
+        try:
+            windows.bind_application(x_eforge_session, x_eforge_app_pid, x_eforge_app_created_at)
+        except (OSError, psutil.Error, StudioStateError, ValueError) as error:
+            raise HTTPException(
+                status_code=409, detail="Studio application identity changed"
+            ) from error
         windows.open(x_eforge_session)
         if studio.intent.action != "pause":
             studio.set_intent(

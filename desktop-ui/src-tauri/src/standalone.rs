@@ -20,7 +20,8 @@ struct Manifest {
     schema_version: u32,
     evidenceforge_version: String,
     python_version: String,
-    minimum_macos: String,
+    minimum_macos: Option<String>,
+    minimum_linux: Option<String>,
     runtimes: HashMap<String, Archive>,
 }
 
@@ -88,6 +89,7 @@ fn safe_ancestry(path: &Path) -> Result<(), String> {
 
 fn canonical_system_alias(path: &Path) -> PathBuf {
     // macOS itself publishes these aliases; user-controlled links remain rejected.
+    #[cfg(target_os = "macos")]
     for alias in ["/var", "/tmp", "/etc"] {
         if path.starts_with(alias) {
             return Path::new("/private").join(path.strip_prefix("/").unwrap());
@@ -115,7 +117,12 @@ pub fn install(resources: &Path, data: &Path, architecture: &str) -> Result<Runt
         &fs::read(resources.join("manifest.json")).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("Invalid standalone runtime manifest: {e}"))?;
-    if manifest.schema_version != 1 || manifest.minimum_macos.is_empty() {
+    let minimum = if cfg!(target_os = "macos") {
+        manifest.minimum_macos.as_deref()
+    } else {
+        manifest.minimum_linux.as_deref()
+    };
+    if manifest.schema_version != 1 || minimum.is_none_or(str::is_empty) {
         return Err("Unsupported standalone runtime manifest".into());
     }
     let archive = manifest
@@ -218,10 +225,25 @@ pub fn selected(app: &tauri::AppHandle) -> Result<Option<Runtime>, String> {
     let data = if let Some(home) = std::env::var_os("EFORGE_STUDIO_HOME") {
         PathBuf::from(home).join("data")
     } else {
-        app.path()
-            .home_dir()
-            .map_err(|e| e.to_string())?
-            .join("Library/Application Support/EvidenceForge")
+        #[cfg(target_os = "macos")]
+        {
+            app.path()
+                .home_dir()
+                .map_err(|e| e.to_string())?
+                .join("Library/Application Support/EvidenceForge")
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let base = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or(
+                    app.path()
+                        .home_dir()
+                        .map_err(|e| e.to_string())?
+                        .join(".local/share"),
+                );
+            base.join("evidenceforge")
+        }
     };
     install(&resources, &data, std::env::consts::ARCH).map(Some)
 }
@@ -268,7 +290,8 @@ mod tests {
             directory.join("manifest.json"),
             br#"{
             "schema_version":1,"evidenceforge_version":"2.1.2","python_version":"3.12.12",
-            "minimum_macos":"13.0","runtimes":{"aarch64":{"archive":"../bad","sha256":"bad"}}
+            "minimum_macos":"13.0","minimum_linux":"Ubuntu 24.04",
+            "runtimes":{"aarch64":{"archive":"../bad","sha256":"bad"}}
         }"#,
         )
         .unwrap();

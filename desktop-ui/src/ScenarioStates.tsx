@@ -1,3 +1,4 @@
+import { belongsToScenario } from "./scenarioSources";
 import { CheckCircle2, CircleMinus, Clock3, LoaderCircle, TriangleAlert, XCircle } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import { CatalogItem, DependencyHealth, StudioJob, StudioSnapshot, ValidationRecord } from "./api";
@@ -73,7 +74,7 @@ export function generationIsCurrent(job: StudioJob, item: CatalogItem, snapshot:
 }
 
 export function scenarioStates(item: CatalogItem, snapshot: StudioSnapshot): OperationState[] {
-  const generations = snapshot.jobs.filter((job) => job.kind === "generation" && job.scenario === item.path);
+  const generations = snapshot.jobs.filter((job) => belongsToScenario(job, item, snapshot));
   const changedAt = snapshot.dependencies?.[item.id]?.changed_at || 0;
   const validation = validationState(item, snapshot.validations[item.id], snapshot.dependencies?.[item.id]?.fingerprint, changedAt);
   const latestGeneration = latest(generations);

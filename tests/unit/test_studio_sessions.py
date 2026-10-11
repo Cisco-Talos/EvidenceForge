@@ -240,7 +240,9 @@ def test_inflight_activity_prevents_shutdown(
     client.portal.call(hold)
     assert not _check(client)
     client.portal.call(release)
-    assert not _check(client)
+    # Routine polling defers the check without restarting the grace period.
+    # Actual requests, predictions and authoring still restart it.
+    assert _check(client) == (activity == "cycle")
     now[0] += 8
     assert _check(client)
 

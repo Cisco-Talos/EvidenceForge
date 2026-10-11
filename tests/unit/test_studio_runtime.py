@@ -62,13 +62,15 @@ def test_private_runtime_is_relocation_safe_and_isolates_python_environment(
 def test_finder_codex_discovery_and_explicit_setting_precedence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
+    lookup = Mock(return_value=None)
+    monkeypatch.setattr(runtime.shutil, "which", lookup)
     monkeypatch.setattr(runtime.sys, "platform", "darwin")
     monkeypatch.delenv("EFORGE_DESKTOP_CODEX_BIN", raising=False)
     candidate = Path("/Applications/Codex.app/Contents/Resources/codex")
     monkeypatch.setattr(Path, "is_file", lambda path: path == candidate)
     monkeypatch.setattr(runtime.os, "access", lambda path, mode: path == candidate)
     assert runtime.discover_codex() == str(candidate)
+    lookup.assert_called_once_with("codex", path=runtime.command_environment().get("PATH"))
     explicit = tmp_path / "codex"
     assert runtime.discover_codex(explicit) == str(explicit)
     monkeypatch.setenv("EFORGE_DESKTOP_CODEX_BIN", "/chosen/codex")

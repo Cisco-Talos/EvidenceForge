@@ -1,6 +1,6 @@
 [package]
 name = "evidenceforge-studio"
-version = "2.2.0-alpha.1"
+version = "2.2.0-alpha.2"
 description = "Local EvidenceForge scenario and run studio"
 authors = ["Cisco Talos"]
 edition = "2021"
@@ -27,8 +27,10 @@ tauri-plugin-dialog = "2"
 reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "sync"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSImage"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData"] }

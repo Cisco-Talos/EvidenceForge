@@ -66,6 +66,12 @@ def runtime_id() -> str:
 def command_environment() -> dict[str, str]:
     """Expose the private CLI only to Studio's subprocesses."""
     environment = dict(os.environ)
+    if sys.platform == "linux":
+        # Desktop launchers may omit this conventional location for npm-installed Codex/node.
+        user_bin = str(Path.home() / ".local/bin")
+        path = environment.get("PATH", "")
+        if user_bin not in path.split(os.pathsep) and Path(user_bin).is_dir():
+            environment["PATH"] = user_bin + os.pathsep + path
     root = runtime_root()
     if root is not None:
         environment["PATH"] = str(root / "bin") + os.pathsep + environment.get("PATH", "")
@@ -83,7 +89,7 @@ def discover_codex(explicit: Path | None = None) -> str | None:
         return configured
     if explicit is not None:
         return str(explicit.expanduser().resolve())
-    found = shutil.which("codex")
+    found = shutil.which("codex", path=command_environment().get("PATH"))
     if found or sys.platform != "darwin":
         return found
     # Finder has a minimal PATH. Prefer the standalone CLI there too so a

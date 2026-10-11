@@ -570,6 +570,23 @@ test("scenario workspace combines run setup and exact-run scoring", async () => 
 });
 
 
+test("starter guidance disables generation and forecasts but preserves validation and the conversation", async () => {
+  const previous = snapshot.starter_drafts;
+  snapshot.starter_drafts = ["alpha"];
+  try {
+    const user = userEvent.setup();
+    await renderExpandedApp();
+    await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    expect(screen.getByText("Ready to author — continue the conversation to build this scenario.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Generate", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Forecast · Awaiting authoring" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Validate", exact: true })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Continue authoring" }));
+    expect(screen.getByRole("textbox", { name: "Message to Codex" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Rename conversation Initial design" })).toBeVisible();
+  } finally { snapshot.starter_drafts = previous; }
+});
+
 test("the workspace forecast opens beside Generate without appearing before run rows", async () => {
   const user = userEvent.setup();
   const { container } = await renderExpandedApp();
@@ -1278,22 +1295,22 @@ test("Delete menu keeps history removal and bundle deletion together with distin
   expect(screen.getByRole("menuitem", { name: /Delete bundle/ })).toBeTruthy();
   await user.keyboard("{Escape}");
   expect(document.activeElement).toBe(trigger);
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
   await user.click(trigger);
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
   expect(screen.getByRole("dialog", { name: "Delete bundle" })).toBeTruthy();
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
   expect(onDeleteHistory).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await user.click(trigger);
   await user.click(screen.getByRole("menuitem", { name: /Delete job/ }));
   expect(onDeleteHistory).toHaveBeenCalledOnce();
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
 });
 
 test("evaluations only offer history deletion and active generations offer neither delete action", async () => {
   const user = userEvent.setup();
-  const api = {} as StudioApi;
+  const api = { request: vi.fn(async () => ({ available: false })) } as unknown as StudioApi;
   const callbacks = { onError: vi.fn(), onChanged: vi.fn(async () => undefined), onDeleteHistory: vi.fn(async () => undefined) };
   const { container, unmount } = render(<JobCard job={{ id: "eval", kind: "evaluation", status: "completed", output_root: "/tmp/run" }} api={api} {...callbacks} />);
   await user.click(container.querySelector("summary")!);
@@ -2073,3 +2090,16 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
     } finally { snapshot.items = originalItems; request.mockImplementation(implementation); }
   });
 }
+
+test("missing scenario opens recovery instead of artifact operations", async () => {
+  const previous = snapshot.missing_sources;
+  snapshot.missing_sources = ["alpha"];
+  try {
+    await renderExpandedApp();
+    expect(screen.getAllByText("Source missing").length).toBeGreaterThan(0);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+    expect(screen.getByRole("region", { name: "Missing scenario source" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Scenario YAML path" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Validate scenario" })).toBeNull();
+  } finally { snapshot.missing_sources = previous; }
+});

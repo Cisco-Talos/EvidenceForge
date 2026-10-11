@@ -73,13 +73,13 @@ test.each(["queued", "running", "paused"])("an existing %s evaluation prevents a
 
 test("queuing one evaluation leaves other run actions available and recovers from a failed request", async () => {
   let reject!: (error: Error) => void;
-  const request = vi.fn(() => new Promise<typeof detail>((_resolve, fail) => { reject = fail; }));
+  const request = vi.fn((_path?: string) => new Promise<typeof detail>((_resolve, fail) => { reject = fail; }));
   const { onError } = setup([run, second], request);
   const user = userEvent.setup();
   await open("first"); await open("second");
   await user.click(within(row("first")).getByRole("button", { name: "Evaluate" }));
   await user.click(within(row("first")).getByRole("button", { name: "Queuing…" }));
-  expect(request).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(1);
   expect(within(row("second")).getByRole("button", { name: "Evaluate" })).toBeEnabled();
   await act(async () => reject(new Error("Could not queue evaluation")));
   expect(onError).toHaveBeenCalledWith("Error: Could not queue evaluation");
