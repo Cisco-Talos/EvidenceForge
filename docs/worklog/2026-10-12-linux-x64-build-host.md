@@ -5,7 +5,8 @@
 The user provided `192.168.1.233` as the native x86_64 build/test VM and requested login
 verification and a package/configuration readiness report before installation. The user then
 explicitly authorized creating the shared `eforge-build` SSH key for both build VMs.
-No build-tool installation, system trust change or sandbox-policy change has been performed.
+The user subsequently authorized building the latest x86_64 AppImage, including the documented
+build prerequisites. No system trust or sandbox-policy change has been performed.
 Passwords and private/public key contents are not recorded here.
 
 ## Verified host state
@@ -55,3 +56,58 @@ Added two narrowly scoped local SSH config entries:
 The prior config is backed up at `~/.ssh/config.before-eforge-build`; existing host-key
 records are retained, and the authenticated x86_64 host key is recorded. Strict-host-key,
 batch-mode, public-key-only login succeeds to both aliases without a password.
+
+## Authorized native build setup
+
+Installed the prerequisites from
+[CONTRIBUTING.md](../../CONTRIBUTING.md#ubuntu-2404-prerequisites), including the native
+compiler, Tauri development libraries, patchelf and FUSE 2. Installed per-user toolchains
+and added Rust's environment to the login profile. Verified the official Node archive's
+SHA-256 before extraction. HTTPS verification remained enabled throughout.
+
+Verified versions: Node 22.23.3, npm 10.9.9, uv 0.13.0, Rust/Cargo 1.99.0,
+native target `x86_64-unknown-linux-gnu`, system Python 3.12.3 and uv-managed Python 3.12.15.
+WebKitGTK is 2.52.6, GTK 3.24.41, OpenSSL 3.0.13, librsvg 2.58.0 and GStreamer 1.24.2.
+FUSE 2 is `libfuse2t64` 2.9.9-8.1build1; patchelf is 0.18.0-1.1build1.
+Native library discovery and GStreamer `appsink` inspection pass.
+
+The first helper/state test run found the VM's default umask `0002` creates group-writable
+fixture ancestry. Studio correctly refused those paths. Repeating with a process-local
+umask `022` passed: 227 tests, one skipped and 145 slow tests deselected. The contributor
+test guide now documents this requirement. The initial failure log is retained on the VM.
+The user's login umask and Studio's ownership checks were not changed.
+
+No Codex installation, account sign-in, CA trust change or AppArmor policy change was needed
+for compilation or packaged-runtime verification. Interactive authoring and manual desktop
+acceptance remain separate checks.
+
+## Verified latest x86_64 preview
+
+Built from exact `origin/dev` snapshot `57025df17ca61ccdc932044c8cc196fc7223784e` in a clean
+native checkout at `/home/eforge/EvidenceForge`. Product version is `2.2.0a2`, with Studio
+version `2.2.0-alpha.2`; this snapshot includes the approved issue #444 scheduling fix.
+
+Validation completed successfully:
+
+- Synchronized version metadata and generated frontend types.
+- All 296 frontend tests, 227 Linux helper/state tests and 12 native Rust shell tests.
+- Actual AppImage extraction and native x86_64 ELF identity.
+- Private runtime checksum and generation behavior revision 162.
+- Isolated CLI, bundled skills/references, pack inspection, artifact naming/properties,
+  bundle data properties, scenario validation and checkpoint-enabled generation.
+- GStreamer `appsink` loading from bundled plugins with the host plugin search disabled.
+- Exact preview installer/checksum set and matching SHA-256 after copying to the Mac.
+
+Artifact: `EvidenceForge-Studio-2.2.0a2-x86_64-test.AppImage`, executable mode 0755,
+141,765,112 bytes (135.20 MiB).
+SHA-256: `22faf4f62fbac9f18f26dfe7cdb963ec43f7a64f635e82409f82010f4e9a5da4`.
+
+The VM retains the image and adjacent checksum under `/home/eforge/EvidenceForge/dist/linux/`.
+The Mac copy is under `dist/linux/57025df1-vm/`, preserving previous same-version previews.
+The VM's build log, source commit, exit status and initial umask failure log are retained
+under `/home/eforge/eforge-build-setup/57025df1/`; final exit status is zero.
+The toolchain installation log is under `/home/eforge/eforge-build-setup/`.
+
+Manual desktop acceptance is pending the user's test. No GUI launch, release version bump,
+tag creation or publication was performed. This worklog and the contributor umask note are
+documentation recorded after the built snapshot; they do not change the packaged engine.

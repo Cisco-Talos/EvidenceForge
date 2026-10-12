@@ -448,6 +448,11 @@ see the [Studio guide](docs/studio.md).
 
 ### Test Markers
 
+On POSIX hosts, run tests with `umask 022` (or a stricter mask). Some state-recovery fixtures
+create intermediate directories using the shell's mask; a group-writable mask such as `0002`
+makes those paths fail Studio's ownership checks. Set the mask in the test terminal before
+running the commands below; the application still enforces its private-state permissions.
+
 - `@pytest.mark.slow`: extended release-gate tests, excluded by default and run with
   `uv run pytest -m slow --no-cov`. This lane holds distinct expensive fault matrices,
   fresh-process determinism checks, and representative end-to-end generation.
