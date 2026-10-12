@@ -61,3 +61,9 @@ version remains 2.2.0a2. No release tagging or publication is authorized or perf
 
 The previously accepted x86_64 VM preview predates this change. Updated native preview artifacts
 and their source snapshots will be recorded after verification.
+
+Cross-platform CI exposed four existing launchd fixture failures on Linux: patching the global
+`sys.platform` also activated macOS `/tmp` alias normalization in unrelated private-state I/O.
+The helper tests now simulate the platform only in the background-launch module, leaving real
+filesystem semantics and ownership checks intact. All five launch contracts pass on both native
+macOS and the x86_64 Linux VM. This changes tests only; packaged application code is unchanged.
