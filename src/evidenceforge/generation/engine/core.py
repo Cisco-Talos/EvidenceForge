@@ -828,6 +828,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._generation_complete = True
         logger.info("Generation complete")
 
+    def _authored_event_hour_key(self, event_time: datetime) -> int:
+        """Index an authored event under its scenario-relative generation pass."""
+
+        # Baseline passes retain the start's minute, second and microsecond.
+        # Clock-hour truncation would leave non-aligned entries for the tail,
+        # after their owning sessions and processes may already have closed.
+        pass_offset = (event_time - self.start_time) // timedelta(hours=1)
+        pass_start = self.start_time + pass_offset * timedelta(hours=1)
+        return int(pass_start.timestamp())
+
     def _initialize(self) -> None:
         """Initialize state manager, emitters, and validate scenario.
 
@@ -1102,11 +1112,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if "ecar" in self.emitters:
             self.emitters["ecar"]._state_manager = self.state_manager
         # Phase 6.3: Pre-parse storyline event times for interleaved generation
-        self._storyline_by_hour: dict[int, list] = {}  # hour_epoch -> list of (time, event_idx)
+        self._storyline_by_hour: dict[int, list] = {}  # pass_start_epoch -> (time, event_idx)
         if self.scenario.storyline:
             for idx, event in enumerate(self.scenario.storyline):
                 event_time = self._parse_storyline_time(event.time)
-                hour_key = int(event_time.replace(minute=0, second=0, microsecond=0).timestamp())
+                hour_key = self._authored_event_hour_key(event_time)
                 self._storyline_by_hour.setdefault(hour_key, []).append((event_time, idx))
             for key in self._storyline_by_hour:
                 self._storyline_by_hour[key].sort()
@@ -1121,7 +1131,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         if self.scenario.red_herrings:
             for idx, event in enumerate(self.scenario.red_herrings):
                 event_time = self._parse_storyline_time(event.time)
-                hour_key = int(event_time.replace(minute=0, second=0, microsecond=0).timestamp())
+                hour_key = self._authored_event_hour_key(event_time)
                 self._red_herring_by_hour.setdefault(hour_key, []).append((event_time, idx))
             for key in self._red_herring_by_hour:
                 self._red_herring_by_hour[key].sort()

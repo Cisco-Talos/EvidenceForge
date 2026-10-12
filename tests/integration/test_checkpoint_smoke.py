@@ -30,8 +30,17 @@ def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
     return result.stdout
 
 
-@pytest.mark.parametrize("target", ["default", "sof-elk"])
-def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path, target: str) -> None:
+@pytest.mark.parametrize(
+    "target,start",
+    [
+        ("default", None),
+        ("sof-elk", None),
+        pytest.param("default", "2026-10-09T09:59:17.125Z", marks=pytest.mark.slow),
+    ],
+)
+def test_short_generation_checkpoint_suspension_and_resume(
+    tmp_path: Path, target: str, start: str | None
+) -> None:
     scenario_data = yaml.safe_load(
         Path(
             "tests/fixtures/scenarios"
@@ -40,6 +49,25 @@ def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path, targe
     )
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
+    if start is not None:
+        scenario_data["time_window"]["start"] = start
+        scenario_data["storyline"] = [
+            {
+                "id": f"authored-{index}",
+                "time": time,
+                "actor": "test_user",
+                "system": "TEST-01",
+                "activity": "Authored process across checkpoint recovery",
+                "events": [
+                    {
+                        "type": "process",
+                        "process_name": r"C:\Windows\System32\cmd.exe",
+                        "command_line": f"cmd.exe /c echo checkpoint-hour-{index}",
+                    }
+                ],
+            }
+            for index, time in enumerate(["+30m", "+1h30m"])
+        ]
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
     output = tmp_path / "suspended"
@@ -128,6 +156,13 @@ def test_short_generation_checkpoint_suspension_and_resume(tmp_path: Path, targe
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
+    if start is not None:
+        for index in range(2):
+            assert any(
+                f"checkpoint-hour-{index}".encode() in content
+                for name, content in resumed_files.items()
+                if name.startswith("data/")
+            )
     assert any(
         (b"MSWinEventLog" if target == "sof-elk" else b"<Event ") in content
         for name, content in resumed_files.items()

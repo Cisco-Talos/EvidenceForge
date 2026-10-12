@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 161
+current_revision: 162
 history_start_revision: 1
-behavior_surface_sha256: bd9e13343c8fb72dfdbbb03a284357a3a0664d362c1b0503222bc76b2b6584d4
+behavior_surface_sha256: 8ac2ee1f38c0fcefa9ad9ab0ce64f5f190b23b00f6658b4b18a16d33f0f2baaa
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1616,3 +1616,12 @@ changes:
       - publisher-configuration
     formats: []
     summary: Exposes the existing single-scope publisher reader for explicit Studio identity edits while retaining project-over-user precedence. Equivalent resolved inputs and deterministic rendering are unchanged.
+  - revision: 162
+    id: scenario-relative-authored-hour-index
+    impact: localized
+    domains:
+      - storyline-ordering
+      - red-herring-ordering
+      - session-lifecycle
+    formats: []
+    summary: Anchors storyline and red-herring hour indexes to the scenario start so non-aligned runs execute authored events before baseline lifecycle cleanup. Hour-aligned scheduling is unchanged.

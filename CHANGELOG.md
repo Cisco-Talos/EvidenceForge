@@ -9,6 +9,13 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 Unpublished local build snapshot of the planned 2.2.0 release.
 Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
+**Generation scheduling**
+
+- Fix issue #444: index storyline and red-herring events relative to the scenario's
+  start, including minutes and seconds. Non-hour-aligned runs now execute authored
+  activity during its generation pass before lifecycle cleanup; hour-aligned output
+  remains unchanged. Cover both reported start dates and checkpoint/resume equivalence.
+
 **Studio usability and recovery**
 
 - Preserve managed scenario sources and conversation identities, reconnect moved drafts,
