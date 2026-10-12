@@ -482,7 +482,8 @@ def test_frozen_scenario_remains_usable_after_installed_dependency_deletion(tmp_
     release = publish(scenario_draft, project_root=tmp_path, accept_warnings=True)
     before = compile_scenario(release, project_root=tmp_path).digests
     review = review_pack_deletion(pack, tmp_path)
-    assert any(entry.path == scenario_draft for entry in review.affected)
+    assert not any(entry.path == scenario_draft for entry in review.affected)
+    assert any(entry.path == scenario for entry in review.affected)
     # Its portable source references the captured closure, not the installed pack.
     assert release not in {entry.path for entry in review.affected}
     remove_workspace_pack(pack, tmp_path, review.revision, accept_dependents=True)

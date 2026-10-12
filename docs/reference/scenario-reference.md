@@ -56,8 +56,10 @@ Draft editing never increments a release version. See
 for CLI/skills, local publication, notes, lineage, upgrades and `.efscenario` archives.
 Draft creation retains an explicitly selected or recorded publisher, otherwise uses the configured
 project-over-user identity when available. Without configuration drafts may remain anonymous.
-Publication records the exact finalized draft snapshot without rewriting that editable draft or
-its legacy original. Studio can group these linked entries without assigning historical ownership.
+Publication records the exact finalized draft snapshot and completes that draft. The library
+keeps the published release; revising it creates a new draft with its own identity. Original
+draft files remain as read-only history, and legacy originals are unchanged. Studio shows the
+latest published version by default; **Show previous versions** reveals earlier releases.
 
 Scenario 1.0 remains fully supported and is the compatibility format shown throughout this field
 reference. Scenario 2.0 uses `scenario_version: "2.0"` and may remain monolithic or explicitly

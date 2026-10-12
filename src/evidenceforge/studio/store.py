@@ -638,6 +638,25 @@ class StudioStore:
             or not target.path.is_file()
         ):
             raise ValueError("Source availability changed; refresh the library and try again")
+        return self._relink_authored_item(old, target)
+
+    def complete_publication(self, old: CatalogItem, target: CatalogItem) -> CatalogItem:
+        """Transfer a verified finalized draft's registration to its immutable release."""
+        from evidenceforge.artifacts.completion import completed_draft_release
+
+        if (
+            old.kind != target.kind
+            or old.workspace.resolve() != target.workspace.resolve()
+            or old.id == target.id
+            or completed_draft_release(old.path, old.workspace) != target.path.resolve()
+        ):
+            raise ValueError("Publication changed; refresh the library and try again")
+        return self._relink_authored_item(old, target, publication=True)
+
+    def _relink_authored_item(
+        self, old: CatalogItem, target: CatalogItem, *, publication: bool = False
+    ) -> CatalogItem:
+        """Consolidate exact registrations without rewriting immutable job inputs."""
         previous_paths = {str(path) for path in self.source_paths(old) + self.source_paths(target)}
         updated = target.model_copy(
             update={
@@ -664,7 +683,7 @@ class StudioStore:
                 raise ValueError("Library assignment changed; refresh and try again")
             from evidenceforge.studio.source_recovery import source_busy
 
-            if source_busy(self, [old, target]):
+            if not publication and source_busy(self, [old, target]):
                 raise ValueError("Finish or stop active work before relocating the source")
             for row in rows:
                 self._db.execute("DELETE FROM items_fts WHERE rowid=?", (row["rowid"],))

@@ -1348,6 +1348,23 @@ class StudioService:
             return items
 
         items = await asyncio.to_thread(discover)
+        from evidenceforge.artifacts.completion import published_draft_sources
+
+        completed = await asyncio.to_thread(
+            published_draft_sources, workspace, [item.path for item in before]
+        )
+        for old in before:
+            release = completed.get(old.path.resolve())
+            if release is None:
+                continue
+            target = next(
+                (item for item in self.store.items(workspace) if item.path == release), None
+            )
+            if target is not None and target.id != old.id:
+                updated = await asyncio.to_thread(self.store.complete_publication, old, target)
+                await self.emit(updated.id, "item.updated", json.loads(updated.model_dump_json()))
+        if completed:
+            items = [item for item in self.store.items(workspace) if item.path.is_file()]
         from evidenceforge.studio.source_recovery import reconcile_sources
 
         moved = await asyncio.to_thread(reconcile_sources, self.store, workspace)

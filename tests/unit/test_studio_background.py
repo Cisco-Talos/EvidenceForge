@@ -7,6 +7,7 @@ import plistlib
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -33,7 +34,9 @@ def test_macos_helper_launch_is_independent_and_scoped_to_data_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registered: bool
 ) -> None:
     paths = _paths(tmp_path)
-    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        background, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)
+    )
     monkeypatch.setattr(
         background.os,
         "getuid",
@@ -86,7 +89,9 @@ def test_macos_does_not_replace_running_registration_without_descriptor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = _paths(tmp_path)
-    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        background, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)
+    )
     run = Mock(return_value=subprocess.CompletedProcess([], 0, stdout="\tpid = 1234\n"))
     monkeypatch.setattr(background.subprocess, "run", run)
     monkeypatch.setattr(background.psutil, "pid_exists", lambda pid: pid == 1234)
@@ -99,7 +104,9 @@ def test_macos_launch_failure_does_not_fall_back_to_app_owned_helper(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = _paths(tmp_path)
-    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        background, "sys", SimpleNamespace(platform="darwin", executable=sys.executable)
+    )
     monkeypatch.setattr(
         background.os,
         "getuid",
@@ -122,7 +129,9 @@ def test_linux_helper_keeps_detached_process_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = _paths(tmp_path)
-    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        background, "sys", SimpleNamespace(platform="linux", executable=sys.executable)
+    )
     popen = Mock()
     monkeypatch.setattr(background.subprocess, "Popen", popen)
     run = Mock()

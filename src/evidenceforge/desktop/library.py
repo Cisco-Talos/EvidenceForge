@@ -241,7 +241,15 @@ def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[Libr
             for filename in filenames:
                 if filename.endswith((".yaml", ".yml")):
                     paths.add(Path(directory, filename).resolve())
-    items = [item for path in sorted(paths) if path.is_file() if (item := _scenario_item(path))]
+    from evidenceforge.artifacts.completion import published_draft_sources
+
+    completed = published_draft_sources(workspace, list(paths))
+    items = [
+        item
+        for path in sorted(paths)
+        if path.resolve() not in completed and path.is_file()
+        if (item := _scenario_item(path))
+    ]
     return sorted(items, key=lambda item: item.name.casefold())
 
 
@@ -294,7 +302,12 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
                     modified_at=modified_at,
                 )
             )
+    from evidenceforge.artifacts.completion import published_draft_sources
+
+    completed = published_draft_sources(workspace, artifact_sources)
     for path in artifact_sources:
+        if path.resolve() in completed:
+            continue
         try:
             data = load_scenario_source_graph(path).data
             if data.get("type") != kind:

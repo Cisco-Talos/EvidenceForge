@@ -95,7 +95,7 @@ def test_managed_removal_retires_only_selected_draft_or_release(
             == "1.0.1"
         )
         with pytest.raises(ArtifactError, match="already published or reserved"):
-            publish(draft, project_root=tmp_path, version="1.0.0", accept_warnings=True)
+            publish(branch, project_root=tmp_path, version="1.0.0", accept_warnings=True)
 
 
 def test_stale_review_new_inclusion_and_symlinks_refuse_removal(tmp_path: Path) -> None:

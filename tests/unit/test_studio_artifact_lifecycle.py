@@ -91,7 +91,12 @@ def test_existing_legacy_anonymous_draft_and_release_share_derived_library_group
         assert result.status_code == 200, result.text
         snapshot = client.get("/v1/bootstrap", headers=HEADERS).json()
         scenarios = [item for item in snapshot["items"] if item["kind"] == "scenario"]
-        assert len(scenarios) == 3
+        assert len(scenarios) == 2
+        assert (
+            next(item for item in scenarios if item["path"] == result.json()["path"])["id"]
+            == draft_item["id"]
+        )
+        assert all(item["path"] != str(old_draft) for item in scenarios)
         groups = [snapshot["artifact_groups"][item["id"]] for item in scenarios]
         assert len({group["key"] for group in groups}) == 1
         assert all(group["publisher"] == "testing" for group in groups)

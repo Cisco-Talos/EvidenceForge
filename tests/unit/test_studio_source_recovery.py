@@ -340,3 +340,123 @@ def test_conflicting_projects_require_resolution_before_merge(client: RecoveryCl
     )
     assert studio.store.item(item.id).project_id == first["id"]
     assert studio.store.item(target.id).project_id == second["id"]
+
+
+@pytest.mark.parametrize("kind", ["scenario", "industry_pack", "organization_pack"])
+def test_publication_rebinds_registration_preserving_chats_projects_and_runs(
+    client: RecoveryClient, kind: str
+) -> None:
+    from evidenceforge.artifacts.lifecycle import create_draft, publish
+
+    api, studio, workspace = client
+    set_publisher(
+        workspace,
+        PublisherIdentity(publisher="testing", publisher_display_name="Tests"),
+        scope="project",
+        force=False,
+    )
+    if kind == "scenario":
+        original = workspace / "original.yaml"
+        original.write_bytes(Path("tests/fixtures/scenarios/minimal.yaml").read_bytes())
+        source = create_draft(original, project_root=workspace)
+        api.post("/v1/library/refresh", headers=HEADERS)
+        item = next(entry for entry in _scenarios(api) if entry["path"] == str(source))
+    else:
+        created = api.post(
+            "/v1/packs",
+            headers=HEADERS,
+            json={"kind": kind, "name": "retained", "description": "Test"},
+        )
+        assert created.status_code == 200, created.text
+        item = created.json()["item"]
+        source = Path(item["path"])
+    selected = studio.store.item(item["id"])
+    project = api.post("/v1/projects", headers=HEADERS, json={"name": "Preserved"}).json()
+    selected.project_id = project["id"]
+    studio.store.save_item(selected)
+    chat = Conversation(
+        workspace=workspace,
+        item_id=selected.id,
+        draft_path=source,
+        thread_id="retained-codex-thread",
+        title="Publication history",
+    )
+    studio.store.save_conversation(chat)
+    job = GenerationJob(
+        id="publication-history",
+        workspace=workspace,
+        scenario=source,
+        output_root=workspace / "runs/history",
+        progress_file=studio.paths.state / "jobs/history.jsonl",
+        log_file=studio.paths.state / "jobs/history.log",
+        status="stopped",
+        started_at=1,
+    )
+    studio.store.save_job(job.id, workspace, "generation", job)
+    original_jobs = studio.store.job_payloads(workspace)
+    # Publish through the shared CLI service, then reconcile as after a helper restart.
+    released = publish(source, project_root=workspace, accept_warnings=True)
+    refreshed = api.post("/v1/library/refresh", headers=HEADERS)
+    assert refreshed.status_code == 200, refreshed.text
+    rows = api.get("/v1/items", headers=HEADERS).json()
+    current = next(entry for entry in rows if entry["path"] == str(released))
+    assert current["id"] == selected.id
+    assert current["project_id"] == project["id"]
+    assert not any(entry["path"] == str(source) for entry in rows)
+    retained = studio.store.conversation(chat.id)
+    assert retained.item_id == selected.id and retained.thread_id == chat.thread_id
+    assert retained.draft_path == released
+    assert studio.store.job_payloads(workspace) == original_jobs
+    snapshot = api.get("/v1/bootstrap", headers=HEADERS).json()
+    if kind == "scenario":
+        assert set(snapshot["source_paths"][selected.id]) == {str(source), str(released)}
+    assert snapshot["artifact_groups"][selected.id]["published_version"] == "1.0.0"
+    api.post("/v1/library/refresh", headers=HEADERS)
+    assert studio.store.item(selected.id).path == released
+    # The old ID now owns an immutable release. Revising creates a separate draft.
+    revised = api.post(
+        f"/v1/items/{selected.id}/lifecycle",
+        headers=HEADERS,
+        json={"action": "draft"},
+    )
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["path"] != str(source)
+
+
+def test_committed_publication_recovers_after_catalog_transfer_failure(
+    client: RecoveryClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.artifacts.lifecycle import create_draft
+
+    api, studio, workspace = client
+    set_publisher(
+        workspace,
+        PublisherIdentity(publisher="testing", publisher_display_name="Tests"),
+        scope="project",
+        force=False,
+    )
+    original = workspace / "original.yaml"
+    original.write_bytes(Path("tests/fixtures/scenarios/minimal.yaml").read_bytes())
+    source = create_draft(original, project_root=workspace)
+    api.post("/v1/library/refresh", headers=HEADERS)
+    selected = next(entry for entry in _scenarios(api) if entry["path"] == str(source))
+    real = studio.store.complete_publication
+
+    def fail(old: Any, target: Any) -> None:
+        raise OSError("Interrupted catalog transfer")
+
+    monkeypatch.setattr(studio.store, "complete_publication", fail)
+    result = api.post(
+        f"/v1/items/{selected['id']}/lifecycle",
+        headers=HEADERS,
+        json={"action": "publish", "accept_warnings": True},
+    )
+    assert result.status_code == 409 and "Interrupted catalog" in result.text
+    releases = list((workspace / ".eforge/artifacts/releases").glob("*/scenario/*/*/release.json"))
+    assert len(releases) == 1
+    monkeypatch.setattr(studio.store, "complete_publication", real)
+    result = api.post("/v1/library/refresh", headers=HEADERS)
+    assert result.status_code == 200, result.text
+    assert len(_scenarios(api)) == 1
+    assert _scenarios(api)[0]["id"] == selected["id"]
+    assert _scenarios(api)[0]["version"] == "1.0.0"
