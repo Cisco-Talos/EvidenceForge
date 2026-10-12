@@ -389,6 +389,22 @@ codex
 The standalone Linux CLI is available at `~/.local/bin/codex` and does not require Node on
 the desktop session's PATH. Node/npm are still needed for Studio source builds.
 
+Studio chat isolation is verified with Codex 0.162.1 on macOS and Linux, and 0.162.0 on Linux
+ARM64. It requires app-server support for unloading/resuming threads, inspecting configuration
+layers and acknowledging per-thread sandbox policies. Unsupported or broadened policies fail
+before a message is sent. CI installs 0.162.1 for its native protection gate.
+
+After configuring the sandbox, run the model-free protection check on macOS or Linux:
+
+```bash
+EFORGE_NATIVE_CODEX_BIN="$(command -v codex)" \
+  uv run pytest --no-cov tests/unit/test_studio_chat_sandbox.py
+```
+
+This check uses an isolated temporary Codex home and synthetic files. It verifies read-only
+resumption and draft-scoped writes, including blocked chmod, overwrite, deletion, replacement,
+symlink and hard-link attempts. It does not sign in, call a model or change your library.
+
 Complete the sign-in offered by Codex, then use Studio's **Settings → Authoring & tools**
 to select the executable and reconnect when authoring is idle. See the
 [official Codex CLI setup](https://learn.chatgpt.com/docs/codex/cli).

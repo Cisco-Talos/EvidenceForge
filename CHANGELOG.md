@@ -19,6 +19,10 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
 **Studio usability and recovery**
 
+- Keep existing and new chats on published scenarios and packs as read-only discussions.
+  Require New draft and a new conversation for revisions; enforce and verify Codex sandbox
+  restrictions on every turn, refuse escalation and external mutation tools, and exercise
+  native permission checks on macOS and both Linux architectures.
 - Complete scenario and pack drafts after successful publication, preserving their
   conversations, project assignment and run history. Revise releases through a new
   draft; show the latest published version by default with older versions available

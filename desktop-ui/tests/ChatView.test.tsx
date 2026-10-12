@@ -6,6 +6,46 @@ import type { Conversation, StudioApi, StudioEvent } from "../src/api";
 
 afterEach(() => { cleanup(); });
 
+test("published chat permits questions and explains that edits need a new draft", async () => {
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true, account_ready: true };
+  });
+  render(<ChatView item={{ name: "Published pack", kind: "industry_pack" }}
+    conversation={{ id: "published-chat", active: false } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={() => () => undefined} onError={vi.fn()} />);
+  expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
+  expect(screen.getByText(/select New draft and start a new conversation/)).toBeTruthy();
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).disabled).toBe(false);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+});
+
+test("publication refreshes the same conversation's access without reopening chat", async () => {
+  let published = false;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/access")) return published ? { mode: "discussion", version: "1.0.0" } : { mode: "draft" };
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true, account_ready: true };
+  });
+  const props = {
+    conversation: { id: "retained-chat", active: false } as Conversation,
+    codexHealth: { state: "connected" as const, detail: "Connected" },
+    api: { request } as unknown as StudioApi,
+    subscribeEvents: () => () => undefined,
+    onError: vi.fn(),
+  };
+  const view = render(<ChatView {...props} item={{ name: "Scenario", kind: "scenario", path: "/draft/source/scenario.yaml" }} />);
+  await waitFor(() => expect(request.mock.calls.some(([path]) => path.endsWith("/access"))).toBe(true));
+  published = true;
+  view.rerender(<ChatView {...props} item={{ name: "Scenario", kind: "scenario", path: "/release/source/scenario.yaml" }} />);
+  expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
+  expect(screen.getByText(/Ask questions about this scenario/)).toBeTruthy();
+});
+
 test("failed history shows the provider error beside the accepted user message", async () => {
   const message = "The 'selected-model' model is not supported for this account.";
   const request = vi.fn(async (path: string) => {
@@ -179,6 +219,7 @@ test("a fast follow-up keeps its own user and agent messages when the start even
   ] } };
   const request = vi.fn(async (path: string, method?: string) => {
     if (path.endsWith("/history")) return history;
+    if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
     if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
     if (path === "/v1/codex/pending") return [];
     if (path.endsWith("/turns") && method === "POST") {

@@ -226,6 +226,19 @@ New authored content uses Schema 3 drafts. Earlier scenario schemas 1/2 and pack
 readable. Use **Upgrade to latest schema** to prepare a separate upgraded draft, or **New draft**
 to revise an existing release. Published originals are immutable.
 
+After publication, existing conversations keep their history and become **read-only discussions**
+of the published version. New conversations on that version also allow questions without creating
+a draft. To make changes, select **New draft**, then start a **new conversation** on that draft.
+The same workflow applies to scenarios, industry packs and organization packs. Unmanaged legacy
+sources can be discussed; adopt them with **New draft** before assisted editing.
+
+Studio applies and verifies Codex's sandbox on every message. Discussion commands cannot write
+files or change permissions, including on the completed draft referenced in earlier messages.
+Editable conversations can write only inside their active managed draft container. Permission
+escalation, network-enabled shell commands, hooks, plugins and external MCP tools are disabled in
+Studio chats. If Codex cannot confirm the required protection, Studio refuses to send the message.
+Validation, generation and evaluation remain available through the workspace controls.
+
 Studio checks publisher setup when it connects to the local helper. If no identity is
 configured, a startup notice offers **Set up publisher** or **Later**. The same setup is
 available under **Settings → Workspace**. Enter a publisher ID (lowercase letters,

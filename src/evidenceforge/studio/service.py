@@ -92,6 +92,13 @@ from evidenceforge.studio.assets import (
     inventory_revision,
     save_asset,
 )
+from evidenceforge.studio.chat_permissions import (
+    CHAT_CONFIG,
+    ChatAccess,
+    chat_access,
+    isolated_chat_config,
+    verify_chat_permissions,
+)
 from evidenceforge.studio.codex import (
     CodexClient,
     CodexThreadNotReadyError,
@@ -848,7 +855,12 @@ class StudioService:
         self.replacement_ready = False
         self.active_requests = 0
         self.job_cycle_lock = asyncio.Lock()
-        self.codex = CodexClient(self.settings.codex_path, self._codex_event, self._codex_request)
+        self.codex = CodexClient(
+            self.settings.codex_path,
+            self._codex_event,
+            self._codex_request,
+            config_overrides=CHAT_CONFIG,
+        )
         self.codex_health = CodexHealth()
         self.linux_sandbox_notice: LinuxSandboxNotice | None = None
         self.codex_failures = 0
@@ -1181,12 +1193,25 @@ class StudioService:
     async def _codex_request(
         self, request_id: int | str, method: str, params: dict[str, Any]
     ) -> None:
-        """Park approvals and questions until the user answers in the window."""
-        self.pending_codex_requests[request_id] = {"method": method, "params": params}
+        """Park questions for the user and refuse requests for broader capabilities."""
         thread_id = params.get("threadId")
         conversation = (
             self.store.conversation_for_thread(thread_id) if isinstance(thread_id, str) else None
         )
+        # Scoped authoring never grants wider permissions. Questions remain available;
+        # bypasses, external mutation approvals and client-side tool calls are refused.
+        if method != "item/tool/requestUserInput":
+            if method == "item/permissions/requestApproval":
+                result = {"permissions": {}, "scope": "turn"}
+            elif method == "mcpServer/elicitation/request":
+                result = {"action": "decline", "content": None}
+            elif method == "item/tool/call":
+                result = {"success": False, "contentItems": []}
+            else:
+                result = {"decision": "decline"}
+            await self.codex.respond(request_id, result)
+            return
+        self.pending_codex_requests[request_id] = {"method": method, "params": params}
         if conversation is not None:
             conversation.needs_attention = True
             self.store.save_conversation(conversation)
@@ -3626,27 +3651,6 @@ def create_app(
             item = studio.store.item(request.item_id)
             if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
                 raise HTTPException(status_code=404, detail="Scenario or pack not found")
-            from evidenceforge.artifacts.lifecycle import _receipt_root, create_draft
-
-            if _receipt_root(item.path) is not None:
-                try:
-                    draft = await asyncio.to_thread(
-                        create_draft, item.path, project_root=item.workspace
-                    )
-                    await studio.scan()
-                    created = next(
-                        (
-                            entry
-                            for entry in studio.store.items(item.workspace)
-                            if entry.path == draft
-                        ),
-                        None,
-                    )
-                    if created is None:
-                        raise ValueError("new draft could not be indexed")
-                    request = request.model_copy(update={"item_id": created.id})
-                except (EvidenceForgeError, OSError, ValueError) as exc:
-                    raise HTTPException(status_code=409, detail=str(exc)) from exc
         if request.project_id:
             if not request.draft_kind:
                 raise HTTPException(
@@ -3671,12 +3675,14 @@ def create_app(
             async with studio.workspace_selection_lock, studio.asset_lock, studio.library_lock:
                 await studio.ensure_scenario_draft(conversation)
         elif request.draft_kind:
-            conversation.draft_path = (
-                studio.settings.workspace
-                / ".eforge"
-                / "packs"
-                / f"studio-{conversation.id}"
-                / "pack.yaml"
+            from evidenceforge.artifacts.lifecycle import create_new_draft
+
+            conversation.draft_path = await asyncio.to_thread(
+                create_new_draft,
+                request.draft_kind.removesuffix("_pack"),
+                request.name or "new-" + request.draft_kind.replace("_", "-"),
+                description="",
+                project_root=conversation.workspace,
             )
         studio.store.save_conversation(conversation)
         await studio.emit(
@@ -3776,6 +3782,22 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(error)) from error
         except CodexUnavailableError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/v1/conversations/{conversation_id}/access")
+    async def conversation_access(
+        conversation_id: str, studio: StudioService = Depends(authorized)
+    ) -> ChatAccess:
+        conversation = studio.store.conversation(conversation_id)
+        if conversation is None or conversation.workspace != studio.settings.workspace:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        item = studio.store.item(conversation.item_id) if conversation.item_id else None
+        source = item.path if item else conversation.draft_path
+        if source is None:
+            raise HTTPException(status_code=409, detail="Select a scenario or pack before chatting")
+        try:
+            return await asyncio.to_thread(chat_access, source)
+        except (CodexUnavailableError, EvidenceForgeError, OSError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/v1/codex/status")
     async def codex_status(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
@@ -3944,6 +3966,22 @@ def create_app(
                 conversation.model_id = selected["id"]
                 if conversation.reasoning_effort is None:
                     conversation.reasoning_effort = selected.get("defaultReasoningEffort")
+            source = item.path if item is not None else conversation.draft_path
+            if source is None:
+                raise CodexUnavailableError("Select a scenario or pack before chatting")
+            try:
+                access = await asyncio.to_thread(chat_access, source)
+            except (EvidenceForgeError, OSError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            effective = await studio.codex.call(
+                "config/read", {"cwd": str(access.directory), "includeLayers": True}
+            )
+            protection = {
+                "cwd": str(access.directory),
+                "sandbox": "read-only" if access.mode == "discussion" else "workspace-write",
+                "approvalPolicy": "never",
+                "config": isolated_chat_config(effective, access),
+            }
             inputs: list[dict[str, str]] = [{"type": "text", "text": request.text}]
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
@@ -3962,7 +4000,7 @@ def create_app(
                 if conversation.draft_kind == "scenario"
                 else None
             )
-            if context_source is not None:
+            if context_source is not None and access.version is None:
                 project_id = item.project_id if item is not None else conversation.draft_project_id
                 project = studio.store.project(project_id) if project_id else None
                 if item is None:
@@ -3995,42 +4033,44 @@ def create_app(
                         "write it in the Schema 3 YAML, separately from name. "
                     )
                 parameters: dict[str, Any] = {
-                    "cwd": str(conversation.workspace),
-                    "sandbox": "workspace-write",
+                    **protection,
                     "developerInstructions": (
                         f"This conversation concerns the EvidenceForge {context_kind} at {target}. "
-                        "For a new draft, create its authored file at that exact path when the user "
-                        "asks you to write it; keep companion files beside it. "
-                        "If that draft file already exists, resume and edit it in place. "
-                        "Do not run new-draft again, allocate another draft_id, or move only its YAML "
-                        "out of the managed directory; retain draft.json and all companion files. "
                         f"{draft_name_context}"
-                        "Treat that path as context for the user's requests. Wait for a user "
-                        "request before editing files. Keep deterministic generation in eforge."
-                        + configuration_instructions
+                        "Follow user requests and EvidenceForge skills. Keep deterministic "
+                        "generation in eforge." + configuration_instructions + access.instructions
                     ),
                 }
                 if conversation.model_id:
                     parameters["model"] = conversation.model_id
                 started = await studio.codex.call("thread/start", parameters)
+                verify_chat_permissions(started, access)
                 conversation.thread_id = str(started["thread"]["id"])
                 conversation.title = " ".join(request.text.strip().split()[:7])[:80]
             else:
-                await studio.codex.call(
+                # Codex 0.162 retains a loaded thread's old configuration on resume.
+                # Unload the idle session so the requested policy is actually applied.
+                await studio.codex.call("thread/unsubscribe", {"threadId": conversation.thread_id})
+                resumed = await studio.codex.call(
                     "thread/resume",
                     {
                         "threadId": conversation.thread_id,
+                        **protection,
                         "model": conversation.model_id,
                         "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. "
-                        "Resume and edit the existing draft at this exact path. Do not run new-draft "
-                        "again, allocate another draft_id, or move only its YAML out of the managed "
-                        "directory; retain draft.json and all companion files. Wait for the user's "
-                        "request before editing. Keep deterministic generation in eforge. "
-                        "Follow user requests and the EvidenceForge skills."
-                        + configuration_instructions,
+                        "Follow user requests and EvidenceForge skills. Keep deterministic "
+                        "generation in eforge." + configuration_instructions + access.instructions,
                     },
                 )
-            parameters = {"threadId": conversation.thread_id, "input": inputs, "summary": "auto"}
+                verify_chat_permissions(resumed, access)
+            parameters = {
+                "threadId": conversation.thread_id,
+                "input": inputs,
+                "summary": "auto",
+                "cwd": str(access.directory),
+                "approvalPolicy": "never",
+                "sandboxPolicy": access.sandbox,
+            }
             if conversation.model_id:
                 parameters["model"] = conversation.model_id
             if conversation.reasoning_effort:
@@ -4109,6 +4149,11 @@ def create_app(
         pending = studio.pending_codex_requests.get(reply.request_id)
         if pending is None:
             raise HTTPException(status_code=404, detail="Codex request is no longer pending")
+        if pending.get("method") != "item/tool/requestUserInput":
+            raise HTTPException(
+                status_code=409,
+                detail="Chat permissions cannot be widened; use New draft to revise a published item",
+            )
         await studio.codex.respond(reply.request_id, reply.result)
         studio.pending_codex_requests.pop(reply.request_id)
         params = pending.get("params", {})

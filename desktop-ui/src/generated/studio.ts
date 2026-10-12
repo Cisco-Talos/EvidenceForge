@@ -1160,6 +1160,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{conversation_id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Conversation Access */
+        get: operations["conversation_access_v1_conversations__conversation_id__access_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/codex/status": {
         parameters: {
             query?: never;
@@ -2425,6 +2442,31 @@ export interface components {
              * @default
              */
             search_revision: string;
+        };
+        /**
+         * ChatAccess
+         * @description File-backed discussion/authoring state; never persisted as artifact authority.
+         */
+        ChatAccess: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discussion" | "draft";
+            /**
+             * Source
+             * Format: path
+             */
+            source: string;
+            /**
+             * Directory
+             * Format: path
+             */
+            directory: string;
+            /** Version */
+            version?: string | null;
+            /** Based On Version */
+            based_on_version?: string | null;
         };
         /**
          * ClearJobHistoryRequest
@@ -7578,6 +7620,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conversation_access_v1_conversations__conversation_id__access_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatAccess"];
                 };
             };
             /** @description Validation Error */

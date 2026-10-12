@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowUp, Check, CirclePause, Pencil, Sparkles, X } from "lucide-react";
-import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type TurnSubmission } from "./api";
+import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type TurnSubmission, type ChatAccess } from "./api";
 import { ChatActivity, upsertActivity, type ActivityItem } from "./ChatActivity";
 import { ChatMarkdown } from "./ChatMarkdown";
 
@@ -65,7 +65,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, onDraftSubmitted, onRenamed, onError }: {
-  item: Pick<CatalogItem, "name" | "kind">;
+  item: Pick<CatalogItem, "name" | "kind"> & Partial<Pick<CatalogItem, "path">>;
   conversation: Conversation | null;
   codexHealth: CodexHealth;
   api: StudioApi;
@@ -78,6 +78,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const [history, setHistory] = useState<CodexHistory>({});
   const [status, setStatus] = useState<CodexStatus | null>(null);
   const [pending, setPending] = useState<PendingRequest[]>([]);
+  const [access, setAccess] = useState<ChatAccess | null>(null);
   const [draft, setDraft] = useState("");
   const [skill, setSkill] = useState("");
   const [sending, setSending] = useState(false);
@@ -104,6 +105,16 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const previousActivity = useRef({ id: conversationId, active: conversation?.active });
   const previousHealth = useRef(codexHealth.state);
   activeRef.current = conversation?.active;
+
+  useEffect(() => {
+    setAccess(null);
+    if (!conversationId) return;
+    let cancelled = false;
+    void api.request<ChatAccess>(`/v1/conversations/${conversationId}/access`)
+      .then((value) => { if (!cancelled && value?.mode) setAccess(value); })
+      .catch((error) => { if (!cancelled) onError(String(error)); });
+    return () => { cancelled = true; };
+  }, [api, conversationId, conversation?.draft_path, conversation?.active, item.path]);
 
   const loadHistory = useCallback(async (completedTurnId?: string, retry = false) => {
     if (!conversationId) return;
@@ -365,9 +376,11 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
 
   return <section className="chat-panel">
     <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" maxLength={80} value={titleDraft} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTitle(false); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={savingTitle || !titleDraft.trim()}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" disabled={savingTitle} onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{conversation.model_id && !models.some((model) => model.id === conversation.model_id) && <option value={conversation.model_id} disabled>{conversation.model_id} (unavailable)</option>}{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
+    {access?.mode === "discussion" && <p className="chat-connection-note" role="status">{access.version ? `Discussing published version ${access.version} — read-only.` : "Read-only discussion."} To make changes, select New draft and start a new conversation.</p>}
+    {access?.mode === "draft" && access.based_on_version && <p className="chat-connection-note" role="status">Editing a draft based on published version {access.based_on_version}.</p>}
     {conversation.connection_note && <p className="chat-connection-note" role="status">{conversation.connection_note}</p>}
     <div className="chat-body" ref={chatBody} onScroll={trackChatScroll}><div className="message-list">
-      {!messages.length && !localTurns.length && !conversation.active && <div className="chat-welcome"><div className="chat-symbol"><Sparkles size={25} /></div><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{isNewDraft ? "Describe what you want to build. Codex will use the appropriate EvidenceForge skill and save the authored file in this workspace." : `Ask Codex to build, revise, or explain this ${item.kind === "scenario" ? "scenario" : "pack"}. Its source path is already in conversation context.`}</p></div>}
+      {!messages.length && !localTurns.length && !conversation.active && <div className="chat-welcome"><div className="chat-symbol"><Sparkles size={25} /></div><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{access?.mode === "discussion" ? `Ask questions about this ${item.kind === "scenario" ? "scenario" : "pack"}. This conversation can read and explain its contents.` : isNewDraft ? "Describe what you want to build. Codex will use the appropriate EvidenceForge skill and save the authored file in this workspace." : `Ask Codex to build, revise, or explain this ${item.kind === "scenario" ? "scenario" : "pack"}. Its source path is already in conversation context.`}</p></div>}
       {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble" role={message.role === "error" ? "alert" : undefined}><span className="message-author">{message.role === "user" ? "You" : message.role === "error" ? "Codex error" : "Codex"}</span>{message.role === "agent" ? <ChatMarkdown text={message.text} /> : <p>{message.text}</p>}</div></div>)}
       <ChatActivity items={activities} />
       {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><ChatMarkdown text={turn.agentText} /></div></div>}{turn.errorText && <div className="message-row error"><div className="message-bubble" role="alert"><span className="message-author">Codex error</span><p>{turn.errorText}</p></div></div>}</Fragment>)}

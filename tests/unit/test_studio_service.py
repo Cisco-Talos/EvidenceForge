@@ -1048,12 +1048,11 @@ def test_draft_conversation_links_authored_file_and_project(
             json={"draft_kind": "industry_pack", "project_id": project["id"]},
         ).json()
         pack_path = Path(pack_draft["draft_path"])
-        assert pack_path.parent.parent == workspace / ".eforge" / "packs"
+        assert pack_path.is_relative_to(workspace / ".eforge" / "artifacts" / "drafts" / "industry")
+        assert (pack_path.parent.parent / "draft.json").is_file()
         assert pack_draft["draft_project_id"] == project["id"]
-        pack_path.parent.mkdir(parents=True)
         pack_path.write_text(
-            "name: training-industry\ntype: industry\nversion: '1.0'\n",
-            encoding="utf-8",
+            pack_path.read_text().replace("description: ''", "description: Training")
         )
         client.post("/v1/library/refresh", headers=headers)
         pack_item = next(
@@ -1602,7 +1601,13 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         "    if method == 'skills/list':\n"
         f"        result = {{'data': [{{'skills': [{{'name': {skill!r}, "
         f"'path': '/tmp/skills/{skill}/SKILL.md', 'enabled': True}}]}}]}}\n"
-        "    elif method == 'thread/start': result = {'thread': {'id': 'thread-alpha'}}\n"
+        "    elif method == 'config/read': result = {'layers': []}\n"
+        "    elif method in ('thread/start', 'thread/resume'):\n"
+        "        p = request['params']; ro = p['sandbox'] == 'read-only'\n"
+        "        result = {'thread': {'id': 'thread-alpha'}, 'cwd': p['cwd'], "
+        "'approvalPolicy': 'never', 'sandbox': {'type': 'readOnly' if ro else 'workspaceWrite', "
+        "'writableRoots': [], 'networkAccess': False, 'excludeTmpdirEnvVar': True, "
+        "'excludeSlashTmp': True}}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'account/read': result = {'account': {'type': 'chatgpt'}}\n"
@@ -1687,6 +1692,15 @@ def test_uncertain_codex_turn_preserves_attempt_without_overwriting_fast_complet
     async def fake_call(method: str, params: dict[str, object], *, timeout: float = 30) -> dict:
         if method == "model/list":
             return {"data": [{"id": "test-model", "isDefault": True}]}
+        if method == "config/read":
+            return {"layers": []}
+        if method in {"thread/start", "thread/resume"}:
+            return {
+                "thread": {"id": params.get("threadId", "new")},
+                "cwd": params["cwd"],
+                "approvalPolicy": "never",
+                "sandbox": {"type": "readOnly", "networkAccess": False},
+            }
         if method == "turn/start":
             if params["threadId"] == "fast-completion":
                 await studio._codex_event(
@@ -1767,7 +1781,13 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         "    if method == 'skills/list':\n"
         "        result = {'data': [{'skills': [{'name': 'eforge-scenario', "
         "'path': '/tmp/skills/eforge-scenario/SKILL.md', 'enabled': True}]}]}\n"
-        "    elif method == 'thread/start': result = {'thread': {'id': 'thread-draft'}}\n"
+        "    elif method == 'config/read': result = {'layers': []}\n"
+        "    elif method in ('thread/start', 'thread/resume'):\n"
+        "        p = request['params']; ro = p['sandbox'] == 'read-only'\n"
+        "        result = {'thread': {'id': 'thread-draft'}, 'cwd': p['cwd'], "
+        "'approvalPolicy': 'never', 'sandbox': {'type': 'readOnly' if ro else 'workspaceWrite', "
+        "'writableRoots': [], 'networkAccess': False, 'excludeTmpdirEnvVar': True, "
+        "'excludeSlashTmp': True}}\n"
         "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    if method == 'turn/start':\n"

@@ -13,6 +13,7 @@ export type Project = Omit<Required<Schema["Project"]>, "overlay_enabled"> & Pic
 type PackViewFilters = "publisher" | "version" | "pack_source" | "sort";
 export type SavedView = Omit<Required<Schema["SavedView"]>, PackViewFilters> & Pick<Schema["SavedView"], PackViewFilters>;
 export type Conversation = Required<Schema["Conversation"]>;
+export type ChatAccess = Schema["ChatAccess"];
 export type TurnSubmission = Required<Schema["TurnSubmission"]>;
 export type CodexHealth = Required<Schema["CodexHealth"]>;
 export type QuitSettings = Required<Schema["QuitSettings"]>;
