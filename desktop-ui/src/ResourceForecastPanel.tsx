@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { AlertTriangle, HardDrive, MemoryStick, RefreshCw } from "lucide-react";
+import { AlertTriangle, HardDrive, MemoryStick } from "lucide-react";
 import type { CatalogItem, PredictionRecord, StudioApi, StudioSnapshot } from "./api";
+import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
 import { formatBundleSize, formatTime } from "./components";
 
 function normalized(path: string): string { return path.replace(/\\/g, "/").replace(/\/$/, ""); }
@@ -30,8 +31,9 @@ export function ResourceForecastPanel({ item, snapshot, api, onError, onChanged,
     } catch (error) { onError(String(error)); }
     finally { setRefreshing(false); }
   }
+  const refreshAction: ObjectAction = { id: "refresh", label: "Refresh resource forecast", group: "work", disabled: refreshing, reason: "Forecast refresh is in progress", description: "Recheck current files and available resources", run: refresh };
   return <section className={`surface resource-forecast ${compact ? "compact" : ""}`} aria-label="Generation resource forecast">
-    <div className="surface-heading"><h2>{compact ? "Resource forecast" : "Before you generate"}</h2><button className="icon-button" aria-label="Refresh resource forecast" title="Recheck current files and available resources" disabled={refreshing} onClick={() => void refresh()}><RefreshCw size={16} className={refreshing ? "spinning" : ""} /></button></div>
+    <div className="surface-heading"><h2>{compact ? "Resource forecast" : "Before you generate"}</h2><div className="job-actions"><ActionShortcut action={refreshAction} /><ObjectMenu label="Resource forecast actions" actions={[refreshAction]} /></div></div>
     {forecast && record?.result.available ? <><p className="muted forecast-note">Estimates for this revision · {snapshot.settings.checkpoint_hours ? `checkpoints every ${snapshot.settings.checkpoint_hours} simulated hours` : "checkpoints disabled"}</p><div className="forecast-metrics">{([
       ["Generated data", forecast.final_output, HardDrive], ["Peak memory", forecast.memory, MemoryStick], ["Peak disk", forecast.disk, HardDrive],
     ] as const).map(([label, range, Icon]) => <div key={label}><span><Icon size={14} /> {label}</span><strong>{formatBundleSize(range.expected_bytes)}</strong>{!compact && <small>{formatBundleSize(range.lower_bytes)} – {formatBundleSize(range.upper_bytes)}</small>}</div>)}</div>

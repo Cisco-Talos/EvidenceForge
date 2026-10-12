@@ -1,11 +1,15 @@
-import { useEffect, useState } from "react";
-import { Download, RefreshCw, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { useContext, useEffect, useState } from "react";
+import { ShieldCheck, TriangleAlert } from "lucide-react";
+import { CatalogActionContext, CatalogObjectMenu } from "./CatalogObjectMenu";
+import { ActionShortcut, type ObjectAction } from "./ObjectActions";
 import type { CatalogItem, PackReview, StudioApi } from "./api";
 
 export function PackWorkflow({ item, api, onPrepare, onExport }: {
   item: CatalogItem; api: StudioApi; onPrepare: (prompt: string) => Promise<void>; onExport: () => void;
 }) {
-  const [review, setReview] = useState<PackReview | null>(null);
+  const catalog = useContext(CatalogActionContext);
+  const [localReview, setReview] = useState<PackReview | null>(null);
+  const review = catalog?.packReview?.(item) || localReview;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -18,14 +22,20 @@ export function PackWorkflow({ item, api, onPrepare, onExport }: {
   useEffect(() => {
     let cancelled = false;
     setBusy(true); setReview(null); setError("");
-    api.request<PackReview>(`/v1/packs/${item.id}/review`).then((value) => { if (!cancelled) setReview(value); })
+    api.request<PackReview>(`/v1/packs/${item.id}/review`).then((value) => { if (!cancelled) { setReview(value); catalog?.onPackReview?.(item, value); } })
       .catch((failure) => { if (!cancelled) setError(String(failure)); })
       .finally(() => { if (!cancelled) setBusy(false); });
     return () => { cancelled = true; };
   }, [api, item.id, item.source_sha256, refresh]);
+  const fallbackActions: ObjectAction[] = [
+    { id: "validate", label: "Validate", group: "work", disabled: busy, reason: "Validation is in progress", run: () => setRefresh((value) => value + 1) },
+    { id: "fix", label: "Fix in chat", group: "work", disabled: busy || !review || review.valid, reason: "Validate to find issues requiring changes", run: prepareRepair },
+    { id: "export-release", label: "Export release…", group: "reuse", disabled: busy || !review?.valid || !item.version, reason: "Validate and publish this pack before exporting", run: onExport },
+  ];
+  const actions = catalog?.actions(item) || fallbackActions;
   return <div className="pack-workflow">
     <p>Create and revise reusable content in Conversations or Assets. Draft edits keep the same draft. Publish locally to choose a version and freeze its contents.</p>
-    <div className="job-actions"><button className="button-quiet" disabled={busy} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={15} />{busy ? "Checking…" : "Validate pack"}</button><button className="button-primary" disabled={busy || !review?.valid || !item.version} onClick={onExport}><Download size={15} />Export release…</button></div>
+    <div className="job-actions"><ActionShortcut action={actions.find((entry) => entry.id === "validate")!} /><CatalogObjectMenu item={item} fallbackActions={fallbackActions} /></div>
     {error && <p className="error-text" role="alert">{error}</p>}
     {review && (review.valid ? <>
       <p className="state-success"><ShieldCheck size={16} /> Pack and locked dependencies passed validation.</p>
@@ -35,6 +45,6 @@ export function PackWorkflow({ item, api, onPrepare, onExport }: {
       <h4>Catalog exports</h4><ul>{Object.entries(review.exports || {}).filter(([, entries]) => entries.length).map(([category, entries]) => <li key={category}>{category.replace(/_catalog$/, "").replace(/_/g, " ")}: {entries.length}</li>)}</ul>
       {item.kind === "organization_pack" && <><h4>Organization model</h4><ul>{Object.entries(review.model_contributions || {}).filter(([, fields]) => fields.length).map(([section, fields]) => <li key={section}>{section.replace(/_/g, " ")}: {fields.join(", ")}</li>)}</ul></>}
       <p className="muted">Export creates a portable .efpack release with its exact dependencies. Import it in another workspace to share it. Validate a scenario using this pack to check the complete environment.</p>
-    </> : <><p className="error-text" role="alert"><TriangleAlert size={16} />{review.error || "Pack needs changes before release."}</p><button className="button-quiet" disabled={busy} onClick={() => void prepareRepair()}><Sparkles size={15} aria-hidden="true" />Fix in chat</button></>)}
+    </> : <><p className="error-text" role="alert"><TriangleAlert size={16} />{review.error || "Pack needs changes before release."}</p><ActionShortcut action={actions.find((entry) => entry.id === "fix")!} /></>)}
   </div>;
 }

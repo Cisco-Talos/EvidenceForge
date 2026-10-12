@@ -2,12 +2,11 @@ import { belongsToScenario } from "./scenarioSources";
 import { artifactTitle, draftTitle } from "./artifactNaming";
 import { artifactGroup, artifactGroupLabel } from "./artifactGrouping";
 import { Fragment, type DragEvent, useEffect, useState } from "react";
-import { ChevronRight, Copy, Download, FileCode2, Folder, GripVertical, MoreHorizontal, Sparkles } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
-import { isTauri } from "@tauri-apps/api/core";
+import { ChevronRight, FileCode2, Folder, GripVertical } from "lucide-react";
 import type { CatalogItem, Conversation, Project, StudioApi, StudioSnapshot } from "./api";
 import { formatBundleSize, formatTime } from "./components";
-import { ProjectPicker } from "./PackLibrary";
+import { CatalogObjectMenu, projectAssignmentAction } from "./CatalogObjectMenu";
+import { DraftObjectMenu } from "./DraftObjectMenu";
 import { ScenarioStates, scenarioStates } from "./ScenarioStates";
 
 import { SearchExcerpts } from "./SearchExcerpts";
@@ -19,7 +18,7 @@ import { HeaderSummary } from "./WorkspaceSection";
 export type ScenarioSort = "name" | "updated" | "project";
 
 export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, onProperties, onOpenDraft, onClone,
-  onExport, onUnavailableExport, onHide, onDelete, onMove, onMoveDraft, onNewProject, onRenameDraft,
+  onExport, onHide, onDelete, onMove, onMoveDraft, onNewProject, onRenameDraft,
   onDeleteDraft, onDragStart, onDraftDragStart, onDragEnd, expandedGroups, onToggleGroup, dropTargetId, onProjectDragOver, onProjectDragLeave, onProjectDrop }: {
   expandedGroups: string[]; onToggleGroup: (id: string, open: boolean) => void;
   dropTargetId: string | null;
@@ -64,7 +63,7 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
     return <li className={`scenario-row ${draft ? "scenario-draft" : ""} ${item?.hidden ? "scenario-hidden" : ""}`} key={id} draggable onDragStart={drag} onDragEnd={onDragEnd}>
       <span className="scenario-drag-handle" aria-hidden="true" title={`Drag ${name} to a project`} draggable onDragStart={(event) => { event.stopPropagation(); drag(event); }}><GripVertical size={14} /></span>
       <button className="scenario-open" aria-label={`Open scenario ${name}`} onClick={() => item ? onOpen(item) : onOpenDraft(draft!)}>
-        <span className="scenario-symbol">{item ? <FileCode2 size={18} /> : <Sparkles size={18} />}</span>
+        <span className="scenario-symbol"><FileCode2 size={18} /></span>
         <span className="scenario-row-copy">
           <span className="scenario-row-title"><strong title={name}>{name}</strong><span className="scenario-project" title={`Project: ${project}`}><Folder size={12} /><span>{project}</span></span>{draft && <span className="draft-chip">Draft</span>}{item?.hidden && <span className="draft-chip">Hidden</span>}</span>
           <span className="scenario-description" title={item?.description}>{item ? snapshot.starter_drafts?.includes(item.id) ? "Ready to author" : item.description || "No description yet" : draft?.active ? "Authoring in progress" : "Ready to author"}</span>
@@ -75,11 +74,16 @@ export function ScenarioLibrary({ items, drafts, snapshot, api, sort, onOpen, on
       <div className="scenario-row-status">{missing ? <span className="field-error">Source missing</span> : item ? <ScenarioStates item={item} snapshot={snapshot} compact /> : <span className="muted">Not authored yet</span>}</div>
       <span className="scenario-row-size" title={actualSize != null ? "Measured size of the latest completed bundle for this revision" : estimatedSize != null ? "Estimated generated data size; actual output may differ" : "No current size estimate yet"}>{actualSize != null ? formatBundleSize(actualSize) : estimatedSize != null ? <>{formatBundleSize(estimatedSize)}<small>Estimated</small></> : "—"}</span>
       <div className="scenario-row-meta"><span>{item?.version || "Draft"}</span><time dateTime={new Date(updated * 1000).toISOString()} title={new Date(updated * 1000).toLocaleString()}>{formatTime(updated)}</time></div>
-      <div className="scenario-row-actions">
-        <ProjectPicker name={name} projectId={item ? item.project_id : draft!.draft_project_id} projects={snapshot.projects} onMove={(projectId) => item ? onMove(item, projectId) : onMoveDraft(draft!, projectId)} onNewProject={item ? () => onNewProject(item) : undefined} />
-        {item && <button className={`icon-button ${available ? "" : "unavailable"}`} aria-label={`${isTauri() ? "Export" : "Download"} bundle for ${name}`} title={available ? "Export a completed run" : "Generate a run before exporting"} onClick={() => available ? onExport(item) : onUnavailableExport()}><Download size={16} /></button>}
-        <DropdownMenu.Root><DropdownMenu.Trigger className="icon-button" aria-label={`Options for ${name}`} title="More options"><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4} align="end">{missing ? <DropdownMenu.Item onSelect={() => onOpen(item!)}>Recover missing source…</DropdownMenu.Item> : item ? <><DropdownMenu.Item onSelect={() => onProperties?.(item)}>Properties…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onClone(item)}><Copy size={14} /> Clone scenario…</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onHide(item)}>{item.hidden ? "Unhide" : "Hide"}</DropdownMenu.Item><DropdownMenu.Item onSelect={() => onDelete(item)}>Delete scenario…</DropdownMenu.Item></> : <><DropdownMenu.Item onSelect={() => onRenameDraft(draft!)}>Rename scenario</DropdownMenu.Item><DropdownMenu.Item disabled={draft!.active} onSelect={() => onDeleteDraft(draft!)}>Delete draft</DropdownMenu.Item></>}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
-      </div>
+      <div className="scenario-row-actions">{item ? <CatalogObjectMenu item={item} fallbackActions={[
+        { id: "open", label: "Open", group: "inspect", run: () => onOpen(item) },
+        { id: "properties", label: "Properties…", group: "inspect", disabled: missing, reason: "Recover the missing source first", run: () => onProperties?.(item) },
+        ...(missing ? [{ id: "recover", label: "Recover missing source…", group: "work" as const, run: () => onOpen(item) }] : []),
+        { id: "clone", label: "Clone…", group: "reuse", disabled: missing, reason: "Recover the missing source first", run: () => onClone(item) },
+        { id: "export", label: "Export bundle…", group: "reuse", disabled: !available, reason: "Complete a generation before exporting", run: () => onExport(item) },
+        projectAssignmentAction(snapshot.projects, (projectId) => onMove(item, projectId), () => onNewProject(item)),
+        { id: "hide", label: item.hidden ? "Show in library" : "Hide from library", group: "organize", run: () => onHide(item) },
+        { id: "delete", label: "Delete scenario", group: "remove", run: () => onDelete(item) },
+      ]} /> : <DraftObjectMenu draft={draft!} projects={snapshot.projects} onOpen={() => onOpenDraft(draft!)} onRename={() => onRenameDraft(draft!)} onMove={(projectId) => onMoveDraft(draft!, projectId)} onDelete={() => onDeleteDraft(draft!)} />}</div>
     </li>;
   };
   const grouped = new Map<string, { id: string; name: string; updated: number; rows: typeof rows }>();

@@ -72,6 +72,10 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P2** Streamline Studio object actions with complete, consistent three dots menus,
+  selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
+  behavior. The agreed requirements, implementation and validation are recorded in the
+  [object action worklog](docs/worklog/2026-10-12-studio-object-actions.md).
 - [x] **P1** Reproduce and fix the `apt-healthcare-breach` preview generation failure at
   collection hour 9 (`Deferred session process projection has no unique transport endpoint`).
   Diagnose the owning network/session planner contract and add a focused regression; the run

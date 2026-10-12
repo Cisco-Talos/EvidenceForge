@@ -1,3 +1,4 @@
+import { RemovalButton } from "./ObjectActions";
 import { artifactTitle } from "./artifactNaming";
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
@@ -46,7 +47,7 @@ export function DeletePackDialog({ item, api, onClose, onDeleted }: {
         {!!review.problems?.length && <ul className="error-text">{review.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>}
       </>}
       {error && <p className="error-text" role="alert">{error}</p>}
-      <div className="close-modal-actions"><button className="button-quiet" disabled={deleting} onClick={onClose}>Cancel</button><button className="button-quiet" disabled={loading || deleting} onClick={() => setRefresh((value) => value + 1)}>Refresh review</button><button className="button-danger" disabled={loading || deleting || !review?.removable} onClick={() => void remove()}>{deleting ? "Deleting…" : "Delete version"}</button></div>
+      <div className="close-modal-actions"><button className="button-quiet" disabled={deleting} onClick={onClose}>Cancel</button><button className="button-quiet" disabled={loading || deleting} onClick={() => setRefresh((value) => value + 1)}>Refresh review</button><RemovalButton disabled={loading || deleting || !review?.removable} onClick={() => void remove()}>{deleting ? "Deleting…" : "Delete version"}</RemovalButton></div>
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>;
 }

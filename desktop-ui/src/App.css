@@ -1315,3 +1315,63 @@ html[data-platform="linux"] select optgroup { color: var(--text); background-col
 .missing-source-page .path-with-copy { margin: 18px 0; }
 .missing-source-page form { margin: 22px 0; }
 .missing-source-removal { margin-top: 24px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; }
+
+/* Shared object actions keep summaries useful while consolidating controls. */
+.object-action-menu { min-width: 210px; max-width: min(340px, calc(100vw - 24px)); max-height: min(640px, var(--radix-dropdown-menu-content-available-height, calc(100dvh - 24px))); overflow-y: auto; z-index: 100; }
+.object-action-menu [role="separator"] { height: 1px; margin: 5px 3px; background: #47617e; }
+.object-action-menu .object-action-item { display: flex; align-items: center; gap: 8px; }
+.object-action-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.object-action-copy small { color: var(--muted); font-size: 11px; line-height: 1.4; white-space: normal; }
+.object-action-menu .object-action-removal { color: #ff8592; }
+.object-action-menu .object-action-removal[data-disabled] { color: #9eb3c9; }
+.object-action-menu .object-action-item[data-disabled] { opacity: .6; }
+.button-danger:disabled { color: #9eb3c9; border-color: #46556a; background: #263448; }
+.job-row-shortcuts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.bundle-file-entry { display: flex; align-items: center; gap: 4px; }
+.bundle-file-entry .bundle-file-row { flex: 1; min-width: 0; }
+.asset-action-cell { width: 38px; text-align: right; }
+.asset-action-cell .icon-button { vertical-align: middle; }
+.removal-shortcut { color: #ff8592; }
+.removal-shortcut:disabled { color: #9eb3c9; }
+.chat-activity-entry { display: flex; align-items: center; gap: 8px; }
+.chat-activity-entry .chat-activity-row { flex: 1; min-width: 0; }
+.scorecard-dialog { width: min(900px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
+.job-row-result { min-width: 0; }
+.job-row-controls { flex-wrap: wrap; }
+@media (max-width: 1200px) {
+  .job-row-summary, .workspace-run .job-row-summary { grid-template-columns: minmax(120px, 1fr) 110px 95px minmax(110px, 1fr); }
+  .job-row-controls, .workspace-run .job-row-controls { grid-column: 1 / -1; grid-row: auto; justify-self: stretch; justify-content: flex-end; }
+  .workspace-run .run-score-summary { grid-column: 1 / -1; grid-row: auto; }
+}
+@media (max-width: 720px) {
+  .job-row-summary, .workspace-run .job-row-summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .job-row-time, .workspace-run .job-row-time { grid-column: 1 / -1; grid-row: auto; }
+  .job-row-result, .workspace-run .job-row-result { grid-column: 1 / -1; grid-row: auto; }
+  .job-row-shortcuts { flex: 1; }
+  .job-row-controls, .workspace-run .job-row-controls { grid-column: 1 / -1; }
+}
+
+.asset-dialog { width: min(1100px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
+.workspace-live-runs .job-row { margin: 0; }
+.overlay-file-list li { display: flex; align-items: center; gap: 8px; }
+.overlay-file-list li > button:first-child { flex: 1; min-width: 0; }
+
+@media (max-width: 720px) {
+  .workspace-section-actions { flex-wrap: wrap; justify-content: flex-start; min-width: 0; }
+  .workspace-section-actions .object-menu-trigger { flex-shrink: 0; }
+  .topbar-title { min-width: 0; flex: 1; }
+  .topbar-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+@media (max-width: 480px) {
+  .topbar { flex-wrap: wrap; height: auto; min-height: 58px; padding-top: 8px; padding-bottom: 8px; gap: 8px; }
+  .topbar-actions { width: 100%; justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
+  .topbar-actions .button-quiet { font-size: 11px; padding: 7px 9px; }
+  .workspace-section-actions { width: 100%; }
+}
+
+.removal-dialog, .asset-dialog, .scorecard-dialog { position: fixed; z-index: 101; top: 50%; left: 50%; transform: translate(-50%, -50%); max-height: calc(100dvh - 24px); overflow: auto; }
+.removal-dialog { width: min(560px, calc(100vw - 24px)); }
+.removal-dialog .close-modal-actions { flex-wrap: wrap; }
+
+.resource-forecast .surface-heading { flex-wrap: wrap; }
+.resource-forecast .surface-heading .job-actions { margin: 0; flex-wrap: wrap; }

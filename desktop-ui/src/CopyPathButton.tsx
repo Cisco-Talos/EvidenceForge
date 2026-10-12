@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
-async function writePathToClipboard(path: string): Promise<void> {
+export async function writePathToClipboard(path: string): Promise<void> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(path);

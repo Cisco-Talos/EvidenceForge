@@ -58,7 +58,7 @@ export function NewPackDialog({ kind, initialProjectId, projects, api, onCreated
         <label className="modal-field"><span>Details <span className="muted">· optional</span></span><textarea aria-label="Pack details" rows={3} maxLength={16000} disabled={busy} placeholder="Describe what you'd like this pack to contain…" value={details} onChange={(event) => setDetails(event.target.value)} /></label>
         <p className="muted small">Details are sent as the first chat message when you create the pack. Leave them empty to start the conversation yourself.</p>
         {error && <p className="field-error" role="alert">{error}</p>}
-        <div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button className="button-primary" type="submit" disabled={busy || !ready}><Sparkles size={16} aria-hidden="true" />{busy ? "Creating…" : "Create pack"}</button></div>
+        <div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={onClose}>Cancel</button><button className="button-primary" type="submit" disabled={busy || !ready}>{details.trim() && <Sparkles size={16} aria-hidden="true" />}{busy ? "Creating…" : "Create pack"}</button></div>
       </form>
     </Dialog.Content>
   </Dialog.Portal></Dialog.Root>;

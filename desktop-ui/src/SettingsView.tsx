@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, ArrowUpRight, Check, Folder, Sparkles } from "lucide-react";
+import { Activity, ArrowUpRight, Check, Folder, MessageSquareText } from "lucide-react";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
@@ -183,7 +183,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
     <div className="settings-nav">
       <button className={tab === "workspace" ? "active" : ""} onClick={() => setTab("workspace")}><Folder size={16} /> Workspace</button>
       <button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}><Activity size={16} /> Jobs</button>
-      <button className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><Sparkles size={16} /> Authoring & tools</button>
+      <button className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}><MessageSquareText size={16} /> Authoring & tools</button>
     </div>
     <div className="settings-main">
       {tab === "workspace" && <>

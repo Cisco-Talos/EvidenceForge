@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useState } from "react";
-import { ChevronRight, FileText, Package, Pencil, Plus, RotateCcw, Search, Settings2 } from "lucide-react";
+import { ActionShortcut, ObjectMenu, type ObjectAction } from "./ObjectActions";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronRight, FileText, Package, Pencil, Search, Settings2 } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import type { AssetDetail, AssetOrigin, AssetPage, AssetSaved, CatalogItem, StudioApi } from "./api";
 import { Pagination } from "./Pagination";
@@ -130,16 +131,20 @@ function AddAssetChooser({ categories, selected, isPack, onChoose, onCancel }: {
   </section>;
 }
 
-export function AssetBrowser({ item, api, refreshVersion, onChanged }: {
-  item: CatalogItem; api: StudioApi; refreshVersion?: number | string; onChanged?: () => Promise<void>;
+export function AssetBrowser({ item, api, refreshVersion, onChanged, initialAdding = false }: {
+  item: CatalogItem; api: StudioApi; refreshVersion?: number | string; onChanged?: () => Promise<void>; initialAdding?: boolean;
 }) {
   const storageKey = `studio-assets:${item.id}`;
   const [view, setView] = useState<View>(() => { try { const saved = JSON.parse(sessionStorage.getItem(storageKey) || "{}"); return { ...initialView, ...saved, ...(saved.category === "stale_accounts" ? { category: "users", status: "stale" } : {}) }; } catch { return initialView; } });
   const [page, setPage] = useState<AssetPage | null>(null);
   const [detail, setDetail] = useState<AssetDetail | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, AssetDetail>>({});
+  const activePage = useRef("");
+  activePage.current = `${item.id}:${page?.category}:${page?.revision}`;
+  useEffect(() => setDetailCache({}), [page?.revision, page?.category]);
   const [editing, setEditing] = useState(false);
   const [restoringAll, setRestoringAll] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(initialAdding);
   const [newCategory, setNewCategory] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -161,6 +166,8 @@ export function AssetBrowser({ item, api, refreshVersion, onChanged }: {
   }, [api, item.id, item.source_sha256, refreshVersion, reload, view.category, view.query, view.origin, view.source, view.page, view.size, view.status]);
   useEffect(() => {
     if (!view.expanded || !page || loading) return;
+    const cached = detailCache[view.expanded];
+    if (cached?.revision === page.revision) { setDetail(cached); return; }
     let cancelled = false;
     setDetail(null); setError("");
     const params = new URLSearchParams({ category: view.expanded === "new" ? newCategory || page.category : page.category, revision: page.revision });
@@ -173,19 +180,44 @@ export function AssetBrowser({ item, api, refreshVersion, onChanged }: {
     setNotice(result.version ? `Created version ${result.version}. The original version remains selected here; open the new version from Packs to continue editing.` : "Scenario saved. Validation and run status now reflect the changed inputs.");
     close(); setReload((current) => current + 1); await onChanged?.();
   }
-  async function convertAccount() {
-    if (!detail?.summary) return;
-    setError("");
+  async function inspectAsset(entry: AssetPage["entries"][number]): Promise<AssetDetail> {
+    if (!page) throw new Error("Refresh the asset list first");
+    const revision = page.revision;
+    const pageKey = activePage.current;
+    const cached = detailCache[entry.id];
+    if (cached?.revision === revision) return cached;
+    const params = new URLSearchParams({ category: page.category, asset_id: entry.id, revision });
+    const value = await api.request<AssetDetail>(`/v1/items/${item.id}/assets/detail?${params}`, "GET", undefined, 180000);
+    if (activePage.current !== pageKey) throw new Error("The asset list changed; open its current entry again");
+    setDetailCache((current) => ({ ...current, [entry.id]: value }));
+    return value;
+  }
+  async function openAsset(entry: AssetPage["entries"][number], mode: "view" | "edit" | "restore" | "convert") {
     try {
-      const params = new URLSearchParams({ category: detail.category, asset_id: detail.summary.id, revision: detail.revision, conversion: "true" });
-      const draft = await api.request<AssetDetail>(`/v1/items/${item.id}/assets/detail?${params}`, "GET", undefined, 180000);
-      setDetail(draft); setRestoringAll(false); setEditing(true);
+      const pageKey = activePage.current;
+      let value = await inspectAsset(entry);
+      if (mode === "convert") {
+        const params = new URLSearchParams({ category: value.category, asset_id: entry.id, revision: value.revision, conversion: "true" });
+        value = await api.request<AssetDetail>(`/v1/items/${item.id}/assets/detail?${params}`, "GET", undefined, 180000);
+        if (activePage.current !== pageKey) throw new Error("The asset list changed; open its current entry again");
+      }
+      setDetail(value); setRestoringAll(mode === "restore"); setEditing(mode !== "view"); setAdding(false); setView((current) => ({ ...current, expanded: entry.id }));
     } catch (reason) { setError(String(reason)); }
   }
-  const canEdit = page?.categories.some((category) => category.editable !== false) !== false;
-  const body = detail ? editing || view.expanded === "new" ? <AssetEditor key={`${detail.revision}:${detail.summary?.id || "new"}:${restoringAll}:${detail.conversion_from || ""}`} detail={detail} isPack={isPack} api={api} itemId={item.id} onCancel={close} onSaved={saved} restoreAll={restoringAll} /> : <>{canEdit && <div className="asset-detail-actions"><button className="button-quiet" onClick={() => { setRestoringAll(false); setEditing(true); }}><Pencil size={14} />{isPack || detail.summary?.origin.kind === "scenario" ? "Edit" : "Customize in scenario"}</button>{!isPack && detail.inherited_value && !!detail.override_fields?.length && <button className="button-quiet" onClick={() => { setRestoringAll(true); setEditing(true); }}><RotateCcw size={14} />Restore inherited values</button>}{!isPack && detail.summary && ["users", "stale_accounts"].includes(detail.category) && <button className="button-quiet" onClick={() => void convertAccount()}><RotateCcw size={14} />{detail.category === "users" ? "Mark as stale…" : "Restore as user…"}</button>}</div>}<AssetFields detail={detail} /></> : <p role="status" className="muted">Loading asset details…</p>;
+  function assetActions(entry: AssetPage["entries"][number]): ObjectAction[] {
+    const known = detailCache[entry.id] || (detail?.summary?.id === entry.id ? detail : null);
+    const editable = page?.categories.find((category) => category.key === page.category)?.editable !== false;
+    return [
+      { id: "view", label: "View details", group: "inspect", run: () => openAsset(entry, "view") },
+      { id: "edit", label: isPack || entry.origin.kind === "scenario" ? "Edit…" : "Customize in scenario…", group: "work", disabled: !editable || loading, reason: "This asset category is read-only", run: () => openAsset(entry, "edit") },
+      ...(!isPack ? [{ id: "restore", label: "Restore inherited values…", group: "work" as const, disabled: !editable || !known?.inherited_value || !known.override_fields?.length, reason: !known ? "Reading inherited values" : "This asset has no inherited overrides to restore", run: () => openAsset(entry, "restore") }] : []),
+      ...(!isPack && ["users", "stale_accounts"].includes(page?.category || "") ? [{ id: "convert", label: (entry.account_status === "stale" || known?.category === "stale_accounts") ? "Restore as user…" : "Mark as stale…", group: "work" as const, disabled: !editable || loading, reason: "This asset category is read-only", run: () => openAsset(entry, "convert") }] : []),
+    ];
+  }
+  const addAssetAction: ObjectAction = { id: "add", label: "Add asset…", group: "work", disabled: !page || loading || page.categories.every((category) => category.editable === false), reason: "Wait for an editable asset inventory", run: () => { setRestoringAll(false); setAdding(true); setEditing(false); setDetail(null); setView((current) => ({ ...current, expanded: null })); } };
+  const body = detail ? editing || view.expanded === "new" ? <AssetEditor key={`${detail.revision}:${detail.summary?.id || "new"}:${restoringAll}:${detail.conversion_from || ""}`} detail={detail} isPack={isPack} api={api} itemId={item.id} onCancel={close} onSaved={saved} restoreAll={restoringAll} /> : <>{detail.summary && <div className="asset-detail-actions"><ActionShortcut action={assetActions(detail.summary).find((action) => action.id === "edit")!} /><ObjectMenu label={`Actions for asset ${detail.summary.name}`} actions={assetActions(detail.summary)} onOpenChange={(open) => { if (open) void inspectAsset(detail.summary!).catch((reason) => setError(String(reason))); }} /></div>}<AssetFields detail={detail} /></> : <p role="status" className="muted">Loading asset details…</p>;
   return <section className="asset-browser surface" aria-label={isPack ? "Pack assets" : "Environment assets"} aria-busy={loading}>
-    <header className="asset-browser-heading"><h2>{isPack ? "Pack assets" : "Assets"}</h2><button className="button-quiet" disabled={!page || loading || !canEdit} onClick={() => { setRestoringAll(false); setAdding(true); setEditing(false); setDetail(null); setView((current) => ({ ...current, expanded: null })); }}><Plus size={15} /> Add asset</button></header>
+    <header className="asset-browser-heading"><h2>{isPack ? "Pack assets" : "Assets"}</h2><ActionShortcut action={addAssetAction} /><ObjectMenu label="Asset list actions" actions={[addAssetAction]} /></header>
     <div className="asset-categories" aria-label="Asset categories">{page?.categories.map((category) => <button className={`button-quiet ${page.category === category.key ? "active" : ""}`} key={category.key} aria-pressed={page.category === category.key} onClick={() => filter({ category: category.key })}>{category.label} <small>{category.total.toLocaleString()}</small></button>)}</div>
     <div className="asset-filters"><div className="search-box"><Search size={15} /><input aria-label="Search assets" maxLength={200} placeholder="Search names, addresses, groups, or values…" value={view.query} onChange={(event) => filter({ query: event.target.value })} /></div><select aria-label="Filter asset origins" value={view.origin} onChange={(event) => filter({ origin: event.target.value })}><option value="">All origins</option>{Object.entries(originNames).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><input aria-label="Filter asset source" maxLength={200} placeholder="Pack or source file…" value={view.source} onChange={(event) => filter({ source: event.target.value })} /></div>
     {error && <p role="alert" className="field-error">{error} <button className="button-quiet" onClick={() => setReload((current) => current + 1)}>Refresh assets</button></p>}
@@ -195,7 +227,7 @@ export function AssetBrowser({ item, api, refreshVersion, onChanged }: {
     {view.expanded === "new" && !loading && <div className="asset-expanded">{body}</div>}
     {loading ? <p role="status" className="muted">Loading assets…</p> : page && <>
       <p className="muted asset-result-count">{page.matching.toLocaleString()} matching · {page.total.toLocaleString()} total</p>
-      <table className="asset-table"><thead><tr><th aria-label="Origin" className="asset-origin-column" /><th>Asset</th><th>Details</th><th>Source</th></tr></thead><tbody>{page.entries.map((entry) => <Fragment key={entry.id}><tr className={view.expanded === entry.id ? "expanded" : ""}><td className="asset-origin-column"><OriginBadge origin={entry.origin} /></td><td><button className="asset-row-toggle" aria-expanded={view.expanded === entry.id} onClick={() => { setRestoringAll(false); setEditing(false); setDetail(null); setView((current) => ({ ...current, expanded: current.expanded === entry.id ? null : entry.id })); }}><ChevronRight size={15} className={`disclosure-chevron ${view.expanded === entry.id ? "expanded" : ""}`} />{entry.name}</button>{entry.account_status && <span className={`asset-account-status asset-account-${entry.account_status}`}>{entry.account_status}</span>}</td><td>{entry.description}</td><td className="asset-source" title={entry.origin.source}>{sourceLabel(entry.origin.source)}</td></tr>{view.expanded === entry.id && <tr className="asset-detail-row"><td colSpan={4}><div className="asset-expanded">{body}</div></td></tr>}</Fragment>)}</tbody></table>
+      <table className="asset-table"><thead><tr><th aria-label="Origin" className="asset-origin-column" /><th>Asset</th><th>Details</th><th>Source</th><th aria-label="Actions" /></tr></thead><tbody>{page.entries.map((entry) => <Fragment key={entry.id}><tr className={view.expanded === entry.id ? "expanded" : ""}><td className="asset-origin-column"><OriginBadge origin={entry.origin} /></td><td><button className="asset-row-toggle" aria-expanded={view.expanded === entry.id} onClick={() => { setRestoringAll(false); setEditing(false); setDetail(null); setView((current) => ({ ...current, expanded: current.expanded === entry.id ? null : entry.id })); }}><ChevronRight size={15} className={`disclosure-chevron ${view.expanded === entry.id ? "expanded" : ""}`} />{entry.name}</button>{entry.account_status && <span className={`asset-account-status asset-account-${entry.account_status}`}>{entry.account_status}</span>}</td><td>{entry.description}</td><td className="asset-source" title={entry.origin.source}>{sourceLabel(entry.origin.source)}</td><td className="asset-action-cell"><ObjectMenu label={`Actions for asset ${entry.name}`} actions={assetActions(entry)} onOpenChange={(open) => { if (open) void inspectAsset(entry).catch((reason) => setError(String(reason))); }} /></td></tr>{view.expanded === entry.id && <tr className="asset-detail-row"><td colSpan={5}><div className="asset-expanded">{body}</div></td></tr>}</Fragment>)}</tbody></table>
       {!page.entries.length && <p className="muted">{page.total ? "No assets match these filters." : "No assets in this category yet."}</p>}
       <div className="asset-page-controls"><label>Rows per page<select aria-label="Assets per page" value={view.size} onChange={(event) => filter({ size: Number(event.target.value) })}>{[25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}</select></label><Pagination page={page.page} pageSize={page.page_size} matching={page.matching} unit="assets" label="Asset pages" names={{ first: "First assets page", previous: "Previous assets", next: "Next assets", last: "Last assets page", page: (number) => `Assets page ${number}` }} onPage={(next) => { setEditing(false); setView((current) => ({ ...current, page: next, expanded: null })); }} /></div>
     </>}

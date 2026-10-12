@@ -1781,6 +1781,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Job */
+        post: operations["stop_job_v1_jobs__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/suspend": {
         parameters: {
             query?: never;
@@ -3122,6 +3139,11 @@ export interface components {
             submitted_at?: number | null;
             /** Created At */
             created_at?: number | null;
+            /**
+             * Owned Output
+             * @description Whether Studio owns this generation output directory
+             */
+            owned_output?: boolean | null;
             /** Checkpoint Hours */
             checkpoint_hours?: number | null;
             /**
@@ -8856,6 +8878,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_job_v1_jobs__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };

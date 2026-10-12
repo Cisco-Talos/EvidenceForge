@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BundlePropertiesDialog } from "./ArtifactProperties";
 import { isTauri, invoke } from "@tauri-apps/api/core";
-import { ArrowUpRight, ChevronRight, ChevronDown, Download, FolderOpen, FolderPlus, Search, Trash2 } from "lucide-react";
+import { ChevronRight, ChevronDown, FolderOpen, FolderPlus, Search } from "lucide-react";
 import type { CatalogItem, ImportedBundle, StudioApi, StudioJob, StudioSnapshot } from "./api";
 import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
-import { CopyPathButton } from "./CopyPathButton";
+import { ActionShortcut, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
+import { CatalogObjectMenu } from "./CatalogObjectMenu";
+import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { BundleOptionsMenu, formatBundleSize, formatTime, JobCard, StatusBadge } from "./components";
 import { recentJobs } from "./jobOrder";
@@ -14,6 +16,7 @@ import { HeaderSummary } from "./WorkspaceSection";
 export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
   bundle: ImportedBundle; api: StudioApi; onError: (message: string) => void; onChanged: () => Promise<void>;
 }) {
+  const row = useRef<HTMLDetailsElement>(null);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [files, setFiles] = useState<BundleFiles | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -26,6 +29,8 @@ export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
     catch (error) { onError(String(error)); }
   }
   async function exportZip() {
+    if (working) return;
+    if (row.current) row.current.open = true;
     setWorking(true);
     setSavedPath(null);
     try {
@@ -43,12 +48,20 @@ export function ImportedBundleRow({ bundle, api, onError, onChanged }: {
     } catch (error) { onError(String(error)); }
     finally { setWorking(false); }
   }
-  return <details className="job-row imported-bundle-row" id={`bundle-${bundle.id}`}>
-    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><StatusBadge status="Completed" /><span className="job-row-result">Read-only in Studio</span><span className="job-row-controls"><ChevronDown size={16} className="job-row-chevron" /><BundleOptionsMenu id={bundle.id} onProperties={() => setPropertiesOpen(true)} /></span></summary>
-    <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={bundle.root}>{bundle.root}</span><CopyPathButton path={bundle.root} label="Copy bundle path" onError={onError} /></div><p className="muted small">Studio did not create this bundle. Removing it from the library leaves its files on disk.</p><div className="job-actions"><button className="button-quiet" onClick={() => void openFiles()}><FolderOpen size={16} /> View files</button><button className="button-quiet" disabled={working} onClick={() => void exportZip()}><Download size={16} /> {working ? "Exporting…" : isTauri() ? "Export ZIP" : "Download ZIP"}</button><button className="button-quiet" disabled={working} onClick={() => setConfirmRemove(true)}><Trash2 size={16} /> Remove from Studio</button></div>{working && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}{savedPath && <div className="path-with-copy muted small"><span className="path-value">Saved to {savedPath}</span><CopyPathButton path={savedPath} label="Copy saved ZIP path" onError={onError} /></div>}</div>
+  const actions: ObjectAction[] = [
+    { id: "open", label: "Open details", group: "inspect", run: () => { if (row.current) row.current.open = true; } },
+    { id: "properties", label: "Properties…", group: "inspect", run: () => setPropertiesOpen(true) },
+    { id: "files", label: "View files", group: "inspect", run: openFiles },
+    { id: "export", label: "Export ZIP…", group: "reuse", disabled: working, reason: "An operation is in progress", run: exportZip },
+    { id: "copy", label: "Copy path", group: "reuse", run: () => writePathToClipboard(bundle.root).catch((error) => onError(String(error))) },
+    { id: "remove", label: "Remove from Studio", group: "remove", disabled: working, reason: "An operation is in progress", description: "Keep external files in their original location", run: () => setConfirmRemove(true) },
+  ];
+  return <details ref={row} className="job-row imported-bundle-row" id={`bundle-${bundle.id}`}>
+    <summary className="job-row-summary"><span className="job-row-name"><span className="job-row-title"><strong title={bundle.root}>{folderName}</strong><span className="bundle-size">{formatBundleSize(bundle.size_bytes)}</span></span><small>Imported CLI or earlier desktop bundle</small></span><time className="job-row-time">{formatTime(bundle.created_at)}</time><StatusBadge status="Completed" /><span className="job-row-result">Read-only in Studio</span><span className="job-row-controls"><span className="job-row-shortcuts"><ActionShortcut action={actions[2]} /><ActionShortcut action={actions[3]} /></span><ChevronDown size={16} className="job-row-chevron" /><BundleOptionsMenu id={bundle.id} onProperties={() => setPropertiesOpen(true)} actions={actions} /></span></summary>
+    <div className="job-row-details"><div className="path-with-copy job-output-path"><span className="path-value muted" title={bundle.root}>{bundle.root}</span><CopyPathButton path={bundle.root} label="Copy bundle path" onError={onError} /></div><p className="muted small">Studio did not create this bundle. Removing it from the library leaves its files on disk.</p>{working && isTauri() && <ExportStatus progress={exportProgress} api={api} onError={onError} />}{savedPath && <div className="path-with-copy muted small"><span className="path-value">Saved to {savedPath}</span><CopyPathButton path={savedPath} label="Copy saved ZIP path" onError={onError} /></div>}</div>
     {propertiesOpen && <BundlePropertiesDialog id={bundle.id} imported api={api} onClose={() => setPropertiesOpen(false)} />}
     {files && <BundleFileBrowser jobId={bundle.id} kind="bundles" files={files} api={api} onClose={() => setFiles(null)} onError={onError} />}
-    {confirmRemove && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Remove imported bundle"><h2>Remove from Studio?</h2><p>This bundle will disappear from the library. Its files remain at their current path and can be imported again.</p><div className="close-modal-actions"><button className="button-quiet" onClick={() => setConfirmRemove(false)}>Cancel</button><button className="button-danger" disabled={working} onClick={() => void remove()}>Remove from Studio</button></div></div></div>}
+    {confirmRemove && <RemovalConfirmation title="Remove from Studio?" label="Remove from Studio" busy={working} onCancel={() => setConfirmRemove(false)} onConfirm={remove}><p>This bundle disappears from the library. Its files remain at their current path and can be imported again.</p></RemovalConfirmation>}
   </details>;
 }
 
@@ -136,7 +149,7 @@ export function BundleLibrary({ snapshot, api, onError, onChanged, onOpenScenari
 
   return <div className="page bundle-page"><div className="page-intro"><div><span className="eyebrow">GENERATED OUTPUT</span><h1>Bundles</h1><p>Inspect, export, and manage Studio runs and imported CLI bundles.</p></div><div className="bundle-page-actions"><button className="button-quiet" disabled={working} onClick={() => void discover()}><Search size={16} /> Find in workspace</button><button className="button-primary" onClick={() => setImportPath("")}><FolderPlus size={17} /> Import bundle</button></div></div>
     <div className="bundle-toolbar"><div className="search-box"><Search size={17} /><input aria-label="Search bundles" placeholder="Search scenarios or run IDs…" value={search} onChange={(event) => setSearch(event.target.value)} /></div><label>Status<select aria-label="Filter bundles by status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label><label>Project<select aria-label="Filter bundles by project" value={project} onChange={(event) => setProject(event.target.value)}><option value="all">All projects</option><option value="ungrouped">Ungrouped</option>{snapshot.projects.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><span className="result-count">{visibleCount} {visibleCount === 1 ? "bundle" : "bundles"}</span></div>
-    {groups.length ? <div className="bundle-groups">{groups.map((group) => <details className="bundle-group job-group" key={group.path} open={openGroups[group.path] ?? false} onToggle={(event) => { const open = event.currentTarget.open; setOpenGroups((current) => ({ ...current, [group.path]: open })); }}><summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{group.name}</strong><span>{group.jobs.length + group.imports.length}</span><small className="group-summary"><HeaderSummary summary={bundleSummary(group.jobs, group.imports, sizes)} /></small></summary>{group.item && <div className="bundle-group-action"><button className="button-quiet" onClick={() => onOpenScenario(group.item!)}>Open scenario <ArrowUpRight size={15} /></button></div>}<div className="job-list">{orderedBundles(group.jobs, group.imports).map((entry) => entry.kind === "job" ? <JobCard key={entry.id} job={entry.job} name={group.name} grouped sizeBytes={sizes[entry.id]} api={api} onError={onError} onChanged={onChanged} /> : <ImportedBundleRow key={entry.id} bundle={entry.bundle} api={api} onError={onError} onChanged={onChanged} />)}</div></details>)}</div> : <div className="empty-panel"><FolderOpen size={28} /><h3>{generations.length + imports.length ? "No matching bundles" : "No bundles yet"}</h3><p>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</p></div>}
+    {groups.length ? <div className="bundle-groups">{groups.map((group) => <details className="bundle-group job-group" key={group.path} open={openGroups[group.path] ?? false} onToggle={(event) => { const open = event.currentTarget.open; setOpenGroups((current) => ({ ...current, [group.path]: open })); }}><summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{group.name}</strong><span>{group.jobs.length + group.imports.length}</span><small className="group-summary"><HeaderSummary summary={bundleSummary(group.jobs, group.imports, sizes)} /></small>{group.item && <CatalogObjectMenu item={group.item} fallbackActions={[{ id: "open", label: "Open", group: "inspect", run: () => onOpenScenario(group.item!) }]} />}</summary><div className="job-list">{orderedBundles(group.jobs, group.imports).map((entry) => entry.kind === "job" ? <JobCard key={entry.id} job={entry.job} name={group.name} grouped sizeBytes={sizes[entry.id]} api={api} onError={onError} onChanged={onChanged} /> : <ImportedBundleRow key={entry.id} bundle={entry.bundle} api={api} onError={onError} onChanged={onChanged} />)}</div></details>)}</div> : <div className="empty-panel"><FolderOpen size={28} /><h3>{generations.length + imports.length ? "No matching bundles" : "No bundles yet"}</h3><p>{generations.length + imports.length ? "Try another search or filter." : "Generate a scenario or import an existing bundle."}</p></div>}
     {importPath !== null && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Import bundle" onSubmit={(event) => { event.preventDefault(); void importBundle(); }}><h2>Import an existing bundle</h2><p>Choose a complete EvidenceForge generation folder. Studio indexes it for viewing and export; its files remain where they are.</p><label className="modal-field">Bundle folder<input autoFocus aria-label="Bundle folder" name="bundle-folder" autoComplete="off" value={importPath} onChange={(event) => setImportPath(event.target.value)} /></label>{isTauri() && <button type="button" className="button-quiet" onClick={() => void chooseFolder()}><FolderOpen size={16} /> Browse…</button>}<div className="close-modal-actions"><button type="button" className="button-quiet" disabled={working} onClick={() => setImportPath(null)}>Cancel</button><button type="submit" className="button-primary" disabled={working || !importPath.trim()}>{working ? "Importing…" : "Import bundle"}</button></div></form></div>}
   </div>;
 }

@@ -29,13 +29,13 @@ test("missing entry opens a recovery page and locates a selected source", async 
 
 test("removing a registration requires the explicit removal action", async () => {
   const { user, request, onRemoved } = fixture();
-  await user.click(screen.getByRole("button", { name: "Remove library entry…" }));
+  await user.click(screen.getByRole("button", { name: "Remove from library" }));
   expect(request).not.toHaveBeenCalled();
   expect(screen.getByText(/Saved conversations will no longer appear/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   expect(request).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Remove library entry…" }));
-  await user.click(screen.getByRole("button", { name: "Remove entry" }));
+  await user.click(screen.getByRole("button", { name: "Remove from library" }));
+  await user.click(screen.getAllByRole("button", { name: "Remove from library" }).at(-1)!);
   expect(request).toHaveBeenCalledWith("/v1/scenarios/missing/registration", "DELETE");
   expect(onRemoved).toHaveBeenCalled();
 });
@@ -49,7 +49,7 @@ test("recovery error is shown and an active chat prevents changes", async () => 
   cleanup();
   fixture(undefined, true);
   expect(screen.getByRole("button", { name: "Locate source" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Remove library entry…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Remove from library" })).toBeDisabled();
 });
 
 test("retained runs remain associated with previous source paths", () => {

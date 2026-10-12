@@ -8,7 +8,7 @@ import { ScenarioRuns } from "../src/ScenarioRuns";
 
 const item = { id: "scenario", source_sha256: "current", name: "Example" } as CatalogItem;
 const snapshot = { dependencies: {} } as StudioSnapshot;
-const run: StudioJob = { id: "first", kind: "generation", status: "completed", status_message: "", output_root: "/first", source_sha256: "current", submitted_at: 100, can_resume: false };
+const run: StudioJob = { id: "first", kind: "generation", owned_output: true, status: "completed", status_message: "", output_root: "/first", source_sha256: "current", submitted_at: 100, can_resume: false };
 const second: StudioJob = { ...run, id: "second", submitted_at: 200 };
 const evaluation: StudioJob = { ...run, id: "latest-score", kind: "evaluation", generation_id: "second", submitted_at: undefined, created_at: 300, scorecard: { overall_score: 92, acceptance_passed: false, total_records: 1000 } };
 const detail = { scenario_name: "Example", evaluated_at: "2026-10-02T16:00:00Z", overall_score: 92, acceptance_passed: false, total_records: 1000, source_counts: { windows: 1000 }, pillars: [{ name: "Parseability", score: 90, sub_scores: [{ name: "Schema", score: 90, skipped: false, rating: "passed", details: "Valid records" }] }], acceptance_criteria: [], flags: [] };
@@ -22,6 +22,7 @@ function setup(jobs = [run, second, evaluation], request = vi.fn(async (_path: s
 }
 function row(id: string): HTMLDetailsElement { return document.getElementById(`workspace-run-${id}`) as HTMLDetailsElement; }
 async function open(id: string) { await userEvent.setup().click(row(id).querySelector("summary")!); }
+async function menu(id: string) { await userEvent.setup().click(within(row(id)).getByRole("button", { name: `Bundle options for ${id}` })); }
 afterEach(() => cleanup());
 
 test("runs directly list bundles and their scores in stable original submission order", async () => {
@@ -33,7 +34,9 @@ test("runs directly list bundles and their scores in stable original submission 
   expect(within(row("second")).getByLabelText(/Evaluation: Failed acceptance/)).toHaveClass("state-error");
   expect(request).not.toHaveBeenCalled();
   await open("unfinished");
-  expect(within(row("unfinished")).getByRole("button", { name: "Evaluate" })).toBeDisabled();
+  await menu("unfinished");
+  expect(screen.getByRole("menuitem", { name: "Evaluate" })).toHaveAttribute("data-disabled");
+  await userEvent.setup().keyboard("{Escape}");
   await open("first");
   await userEvent.setup().click(within(row("first")).getByRole("button", { name: "Evaluate" }));
   expect(request).toHaveBeenCalledWith("/v1/jobs/evaluations", "POST", { generation_id: "first" });
@@ -46,7 +49,10 @@ test("expanding a run opens its scorecard beside bundle actions without an inter
   await open("second");
   expect(await screen.findByRole("region", { name: "Saved scorecard" })).toBeVisible();
   expect(request).toHaveBeenCalledWith("/v1/jobs/latest-score/scorecard");
-  for (const name of ["View files", "Download ZIP", "Re-evaluate", "Delete"]) expect(within(row("second")).getByRole("button", { name })).toBeVisible();
+  for (const name of ["View files", "Re-evaluate"]) expect(within(row("second")).getByRole("button", { name })).toBeVisible();
+  await menu("second");
+  for (const name of ["Export ZIP…", "Delete bundle", "Remove from history", "View scorecard"]) expect(screen.getByRole("menuitem", { name })).toBeVisible();
+  await userEvent.setup().keyboard("{Escape}");
   expect(screen.queryByRole("button", { name: "View scorecard", exact: true })).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.getByText("Parseability")).toBeVisible();
@@ -66,7 +72,8 @@ test("only the latest saved evaluation is shown and older links resolve to the s
 test.each(["queued", "running", "paused"])("an existing %s evaluation prevents a duplicate while keeping the previous saved score visible", async (status) => {
   setup([second, evaluation, { ...evaluation, id: "new-attempt", created_at: 400, status, scorecard: undefined }]);
   await open("second");
-  expect(within(row("second")).getByRole("button", { name: status === "paused" ? "Evaluation paused" : "Evaluation in progress" })).toBeDisabled();
+  expect(within(row("second")).getByRole("button", { name: "Re-evaluate" })).toBeDisabled();
+  expect(row("second").querySelector("summary")).toHaveTextContent(status === "paused" ? "Evaluation paused" : status === "queued" ? "Evaluation queued" : "Evaluation in progress");
   expect(await screen.findByRole("region", { name: "Saved scorecard" })).toBeVisible();
   expect(screen.getByText(/Previous saved score remains available/)).toBeVisible();
 });
@@ -78,7 +85,8 @@ test("queuing one evaluation leaves other run actions available and recovers fro
   const user = userEvent.setup();
   await open("first"); await open("second");
   await user.click(within(row("first")).getByRole("button", { name: "Evaluate" }));
-  await user.click(within(row("first")).getByRole("button", { name: "Queuing…" }));
+  expect(within(row("first")).getByText("Queuing evaluation…")).toBeVisible();
+  await user.click(within(row("first")).getByRole("button", { name: "Evaluate" }));
   expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(1);
   expect(within(row("second")).getByRole("button", { name: "Evaluate" })).toBeEnabled();
   await act(async () => reject(new Error("Could not queue evaluation")));
@@ -124,13 +132,14 @@ test("a failed score remains red while unverified inputs have a separate warning
 });
 
 test.each([
-  { status: "running", can_resume: false, action: "Suspend", endpoint: "/v1/jobs/first/suspend", body: undefined },
+  { status: "running", can_resume: false, action: "Pause", endpoint: "/v1/jobs/first/suspend", body: undefined },
   { status: "paused", can_resume: true, action: "Resume", endpoint: "/v1/jobs/resume", body: { generation_id: "first" } },
   { status: "stopped", can_resume: false, action: "Regenerate", endpoint: "/v1/jobs/first/regenerate", body: undefined },
 ])("$status runs retain their lifecycle actions", async ({ status, can_resume, action, endpoint, body }) => {
   const { request } = setup([{ ...run, status, can_resume }]);
   await open("first");
-  await userEvent.setup().click(within(row("first")).getByRole("button", { name: action }));
+  if (action === "Regenerate") { await menu("first"); await userEvent.setup().click(screen.getByRole("menuitem", { name: action })); }
+  else await userEvent.setup().click(within(row("first")).getByRole("button", { name: action }));
   expect(request).toHaveBeenCalledWith(endpoint, "POST", ...(body ? [body] : []));
 });
 
@@ -139,14 +148,30 @@ test("partial export, built-in viewing and confirmed bundle deletion operate on 
   const { api } = setup([{ ...run, status: "stopped" }], request as ReturnType<typeof vi.fn<(_path: string) => Promise<typeof detail>>>);
   await open("first");
   const user = userEvent.setup();
-  await user.click(within(row("first")).getByRole("button", { name: "Download partial ZIP" }));
+  await menu("first");
+  await user.click(screen.getByRole("menuitem", { name: "Export partial ZIP…" }));
   expect(api.downloadBundle).toHaveBeenCalledWith("first", "Example-partial-first.zip", expect.any(Function));
   await user.click(within(row("first")).getByRole("button", { name: "View files" }));
   expect(request).toHaveBeenCalledWith("/v1/jobs/first/files");
   await user.click(screen.getByRole("button", { name: "Close bundle files" }));
-  await user.click(within(row("first")).getByRole("button", { name: "Delete" }));
+  await menu("first");
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
   expect(request).not.toHaveBeenCalledWith("/v1/jobs/first/incomplete-bundle", "DELETE");
   await user.click(screen.getByRole("button", { name: "Delete bundle", exact: true }));
   expect(request).toHaveBeenCalledWith("/v1/jobs/first/incomplete-bundle", "DELETE");
+});
+
+test("unowned runs have history removal without bundle deletion", async () => {
+  setup([{ ...run, owned_output: false }]);
+  await menu("first");
+  expect(screen.getByRole("menuitem", { name: "Remove from history" })).not.toHaveAttribute("data-disabled");
+  expect(screen.queryByRole("menuitem", { name: "Delete bundle" })).toBeNull();
+  expect(row("first")).not.toHaveAttribute("open");
+});
+
+test("a linked active evaluation disables deletion of its completed source bundle", async () => {
+  setup([second, { ...evaluation, status: "running", scorecard: undefined }]);
+  await menu("second");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveTextContent("Stop the linked evaluation first");
 });

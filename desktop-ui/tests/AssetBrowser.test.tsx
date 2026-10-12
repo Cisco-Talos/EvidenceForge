@@ -29,6 +29,11 @@ function setup(selected = item) {
   return { ...view, request, onChanged, api };
 }
 beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} }); });
+async function assetMenu(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getAllByRole("button", { name: "Actions for asset alice" })[0]);
+  return screen.findByRole("menuitem", { name });
+}
+
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
 test("large lists are bounded and reuse numbered pagination; details load only on expansion", async () => {
@@ -88,7 +93,7 @@ test("constrained fields use searchable reference choices and enum selectors", a
   await user.click(await screen.findByRole("button", { name: "alice" }));
   expect(await screen.findByText("sales")).toHaveClass("asset-value-tag");
   expect(screen.queryByText('[\n  "sales"\n]')).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Customize in scenario" }));
+  await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
   expect(screen.getByRole("combobox", { name: "Browsing Intensity" })).toHaveValue("normal");
   await user.selectOptions(screen.getByRole("combobox", { name: "Browsing Intensity" }), "heavy");
   await user.click(screen.getByRole("button", { name: "Choose Primary System" }));
@@ -112,7 +117,7 @@ test("application platform dictionaries show nested fields and save exact nested
   expect(await screen.findByText("C:\\Browser\\browser.exe")).toBeVisible();
   expect(screen.getByText("Windows")).toBeVisible();
   expect(screen.getAllByRole("textbox")).toHaveLength(2);
-  await user.click(screen.getByRole("button", { name: "Customize in scenario" }));
+  await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
   const image = screen.getByRole("textbox", { name: "Platforms / Windows / Image Path *" });
   await user.clear(image); await user.type(image, "C:\\Browser\\browser-v2.exe");
   expect(screen.queryByRole("textbox", { name: "Platforms" })).not.toBeInTheDocument();
@@ -128,7 +133,7 @@ test("Add Asset explains the selected type and blocks missing required fields", 
   const request = guidedSetup({ ...detail, schema_document: schemas.user });
   const user = userEvent.setup();
   await screen.findByRole("button", { name: "alice" });
-  await user.click(await screen.findByRole("button", { name: "Add asset" }));
+  await user.click(await screen.findByRole("button", { name: "Add asset…" }));
   expect(await screen.findByRole("region", { name: "Choose asset type" })).toBeVisible();
   expect(screen.getByRole("combobox", { name: "Account kind" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Continue with user account" }));
@@ -151,7 +156,7 @@ test("Add Asset explains the selected type and blocks missing required fields", 
 test("scenario editing reviews a concrete change and submits a revision guard", async () => {
   const { request, onChanged } = setup(); const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Customize in scenario" }));
+  await user.click(await screen.findByRole("button", { name: "Customize in scenario…" }));
   expect(screen.getByLabelText("Username *")).toBeDisabled();
   const field = screen.getByLabelText("Full name *");
   await user.clear(field); await user.type(field, "Alice Local");
@@ -168,7 +173,7 @@ test("pack editing requires a new version and remembers page state on reopen", a
   const selected = { ...item, kind: "organization_pack" } as CatalogItem;
   const { unmount, api } = setup(selected); const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Edit" }));
+  await user.click(await screen.findByRole("button", { name: "Edit…" }));
   expect(screen.getByLabelText("New version")).toHaveValue("1.0.1");
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await user.click(screen.getByRole("button", { name: "Last assets page" }));
@@ -184,9 +189,10 @@ test("customized fields are marked and restoring a field previews inherited valu
   const request = guidedSetup(customizedUser, { groups: ["sales", "engineering"] });
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  expect(await screen.findByRole("button", { name: "Restore inherited values" })).toBeVisible();
+  expect(await assetMenu(user, "Restore inherited values…")).not.toHaveAttribute("data-disabled");
+  await user.keyboard("{Escape}");
   expect(screen.getAllByText("Customized")).toHaveLength(2);
-  await user.click(screen.getByRole("button", { name: "Customize in scenario" }));
+  await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
   expect(screen.getByRole("combobox", { name: "Account status" })).toHaveValue("true");
   expect(within(screen.getByRole("combobox", { name: "Account status" })).getByRole("option", { name: "Active", exact: true })).toBeVisible();
   const restore = screen.getByRole("button", { name: "Restore inherited Groups" });
@@ -208,7 +214,7 @@ test("restoring the whole asset is reviewed and subsequent edits preserve other 
   const request = guidedSetup(customizedUser);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Restore inherited values" }));
+  await user.click(await assetMenu(user, "Restore inherited values…"));
   expect(screen.getByText(/All scenario customizations on this asset will be removed/)).toBeVisible();
   expect(screen.getByText("Alice Pack")).toBeVisible();
   expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
@@ -247,7 +253,7 @@ test("retirement checks references without saving, then reviews status and direc
   const { request, onChanged } = conversionSetup("users");
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Mark as stale…" }));
+  await user.click(await assetMenu(user, "Mark as stale…"));
   expect(await screen.findByRole("heading", { name: "Mark as stale: alice" })).toBeVisible();
   expect(screen.getByRole("textbox", { name: "Username *" })).toBeDisabled();
   await user.clear(screen.getByRole("textbox", { name: "Reason *" }));
@@ -269,7 +275,7 @@ test("restoration fills saved user details and permits choosing active or disabl
   const { request } = conversionSetup("stale_accounts");
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Restore as user…" }));
+  await user.click(await assetMenu(user, "Restore as user…"));
   expect(await screen.findByRole("textbox", { name: "Full Name *" })).toHaveValue("Alice Saved");
   expect(screen.getByRole("combobox", { name: "Account status" })).toHaveValue("false");
   await user.selectOptions(screen.getByRole("combobox", { name: "Account status" }), "true");
@@ -283,7 +289,7 @@ test("conversion review shows canonical blockers and disables saving", async () 
   const { request, onChanged } = conversionSetup("users", ["storyline.0.actor: Unknown actor alice"]);
   const user = userEvent.setup();
   await user.click(await screen.findByRole("button", { name: "alice" }));
-  await user.click(await screen.findByRole("button", { name: "Mark as stale…" }));
+  await user.click(await assetMenu(user, "Mark as stale…"));
   await screen.findByRole("heading", { name: "Mark as stale: alice" });
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   expect(await screen.findByText("storyline.0.actor: Unknown actor alice")).toBeVisible();

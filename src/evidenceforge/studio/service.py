@@ -142,6 +142,7 @@ from evidenceforge.studio.jobs import (
     queue_studio_generation,
     reconcile_jobs,
     retain_latest_evaluations,
+    stop_studio_job,
     suspend_generation,
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
@@ -737,6 +738,9 @@ class JobSummary(BaseModel):
     started_at: float | None = None
     submitted_at: float | None = None
     created_at: float | None = None
+    owned_output: bool | None = Field(
+        default=None, description="Whether Studio owns this generation output directory"
+    )
     checkpoint_hours: int | None = None
     can_resume: bool = False
     source_sha256: str | None = None
@@ -4975,6 +4979,22 @@ def create_app(
             summary = job_summary(json.loads(job.model_dump_json()))
             await studio.emit(job.id, "job.created", summary)
             return summary
+
+    @app.post("/v1/jobs/{job_id}/stop")
+    async def stop_job(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, str]:
+        async with studio.job_cycle_lock:
+            try:
+                await asyncio.to_thread(
+                    stop_studio_job, studio.jobs, studio.settings.workspace, job_id
+                )
+            except KeyError as error:
+                raise HTTPException(
+                    status_code=404, detail="Job not found in this workspace"
+                ) from error
+            except (OSError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            await studio.emit(job_id, "job.stop_requested", {"id": job_id})
+        return {"status": "job stopped; files preserved"}
 
     @app.post("/v1/jobs/{job_id}/suspend")
     async def suspend(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, str]:

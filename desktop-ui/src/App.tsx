@@ -1,14 +1,14 @@
 import { latestPublishedItems } from "./artifactGrouping";
 import { StateMaintenance } from "./StateMaintenance";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2, Trash2, X } from "lucide-react";
+import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, RefreshCw, Search, Settings2, X } from "lucide-react";
 import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type PackCreation } from "./api";
-import { formatTime, shortPath } from "./components";
+import { CatalogItem, CodexHealth, Conversation, ItemKind, PackPublisherStatus, PackReview, Project, SavedView, StudioApiError, StudioJob, type ExportProgress, type PackCreation } from "./api";
+import { formatBundleSize, formatTime, shortPath } from "./components";
 import { BundleLibrary } from "./BundleLibrary";
-import { CopyPathButton } from "./CopyPathButton";
+import { CopyPathButton, writePathToClipboard } from "./CopyPathButton";
 import { ExportStatus } from "./ExportStatus";
 import { JobSections } from "./JobSections";
 import { completedSuccessfully } from "./jobOutcomes";
@@ -20,7 +20,7 @@ import { ChatView } from "./ChatView";
 import { artifactFilename, artifactTitle, draftTitle } from "./artifactNaming";
 import { packNameError } from "./packName";
 import { scenarioNameError } from "./scenarioName";
-import { scenarioStates } from "./ScenarioStates";
+import { generationIsCurrent, scenarioStates } from "./ScenarioStates";
 import { PackLibrary } from "./PackLibrary";
 import { ScenarioLibrary, type ScenarioSort } from "./ScenarioLibrary";
 import { useLibraryRecall } from "./useLibraryRecall";
@@ -39,6 +39,13 @@ import { BundleFileBrowser, type BundleFiles } from "./BundleFileBrowser";
 import { useStudio } from "./useStudio";
 import { useNotice } from "./useNotice";
 import { StudioBrand } from "./StudioBrand";
+import { CatalogActionContext, projectAssignmentAction } from "./CatalogObjectMenu";
+import { ActionShortcut, ObjectMenu, RemovalButton, RemovalConfirmation, type ObjectAction } from "./ObjectActions";
+import { DraftObjectMenu } from "./DraftObjectMenu";
+import { conversationActions } from "./ConversationList";
+import { AssetBrowser } from "./AssetBrowser";
+import { JobActionContext } from "./JobActionContext";
+import { currentPrediction, ResourceForecastPanel } from "./ResourceForecastPanel";
 import "./App.css";
 
 type Section = "scenarios" | "packs" | "bundles" | "jobs" | "settings";
@@ -98,6 +105,16 @@ function App() {
     showNotice(studio.upgradeNotice);
     studio.clearUpgradeNotice();
   }, [snapshot, studio.upgradeNotice, studio.clearUpgradeNotice, showNotice]);
+  const [environmentRefreshingId, setEnvironmentRefreshingId] = useState<string | null>(null);
+  const [environmentVersions, setEnvironmentVersions] = useState<Record<string, number>>({});
+  const [packReviews, setPackReviews] = useState<Record<string, { source: string; review: PackReview }>>({});
+  const updatePackReview = useCallback((target: CatalogItem, review: PackReview) => setPackReviews((current) => ({ ...current, [target.id]: { source: target.source_sha256, review } })), []);
+  const [assetTarget, setAssetTarget] = useState<{ item: CatalogItem; add: boolean } | null>(null);
+  const forecastOrigin = useRef<HTMLElement | null>(null);
+  const [forecastTarget, setForecastTarget] = useState<CatalogItem | null>(null);
+  const [catalogSizes, setCatalogSizes] = useState<Record<string, number | null>>({});
+  const [removingRegistration, setRemovingRegistration] = useState<CatalogItem | null>(null);
+  const [deletingView, setDeletingView] = useState<SavedView | null>(null);
   const [busy, setBusy] = useState(false);
   const [closeFailed, setCloseFailed] = useState(false);
   const [closeProblem, setCloseProblem] = useState<CloseProblem | null>(null);
@@ -257,7 +274,8 @@ function App() {
   }
 
   async function deleteConversation() {
-    if (!api || !deletingConversation) return;
+    if (!api || !deletingConversation || busy) return;
+    setBusy(true);
     try {
       await api.request(`/v1/conversations/${deletingConversation.id}`, "DELETE");
       if (selectedConversation === deletingConversation.id) setSelectedConversation(conversations.find((chat) => chat.id !== deletingConversation.id)?.id || null);
@@ -265,6 +283,7 @@ function App() {
       setDeletingConversation(null);
       await studio.reload();
     } catch (error) { setNotice(String(error)); }
+    finally { setBusy(false); }
   }
 
   async function saveProject() {
@@ -345,11 +364,14 @@ function App() {
   }
 
   async function deleteSavedView(view: SavedView) {
-    if (!api) return;
+    if (!api || busy) return false;
+    setBusy(true);
     try {
       await api.request(`/v1/views/${encodeURIComponent(view.name)}`, "DELETE");
       await studio.reload();
-    } catch (error) { setNotice(String(error)); }
+      return true;
+    } catch (error) { setNotice(String(error)); return false; }
+    finally { setBusy(false); }
   }
 
   function beginScenarioDrag(event: DragEvent<HTMLElement>, entry: CatalogItem) {
@@ -479,11 +501,21 @@ function App() {
     setWorkspaceTarget("conversations");
   }
 
-  async function validateItem() {
-    if (!api || !item) return;
+  async function validateItem(target: CatalogItem | null = item) {
+    if (!api || !target) return;
+    openItem(target);
     setBusy(true);
     setWorkspaceTarget("validation");
-    try { await api.request("/v1/validate", "POST", { scenario_id: item.id }); }
+    try {
+      if (target.kind === "scenario") await api.request("/v1/validate", "POST", { scenario_id: target.id });
+      else {
+        const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
+        await api.request(`/v1/items/${target.id}/lifecycle`, "POST", { action: "validate", expected_digest: info.digest }, 180000);
+        updatePackReview(target, await api.request<PackReview>(`/v1/packs/${target.id}/review`));
+        setPropertiesTarget({ id: target.id, section: "technical" });
+      }
+      await studio.reload();
+    }
     catch (error) { setNotice(String(error)); }
     finally { setBusy(false); }
   }
@@ -496,9 +528,9 @@ function App() {
     finally { setExportProgress(null); }
   }
 
-  async function viewYaml() {
-    if (!item || !api) return;
-    try { setSourceViewer({ itemId: item.id, files: await api.request<BundleFiles>(`/v1/items/${item.id}/files`) }); }
+  async function viewYaml(target: CatalogItem | null = item) {
+    if (!target || !api) return;
+    try { setSourceViewer({ itemId: target.id, files: await api.request<BundleFiles>(`/v1/items/${target.id}/files`) }); }
     catch (error) { setNotice(String(error)); }
   }
 
@@ -509,11 +541,12 @@ function App() {
     showNotice(name ? "Names saved." : "Display name saved.");
   }
 
-  async function startGeneration() {
-    if (!api || !item || snapshot?.dependencies?.[item.id]?.ready === false) return;
+  async function startGeneration(target: CatalogItem | null = item) {
+    if (!api || !target || snapshot?.dependencies?.[target.id]?.ready === false) return;
+    openItem(target);
     setBusy(true);
     try {
-      await api.request("/v1/jobs/generations", "POST", { scenario_id: item.id });
+      await api.request("/v1/jobs/generations", "POST", { scenario_id: target.id });
       await studio.reload();
       setWorkspaceTarget("generation");
       showNotice("Generation queued. Its progress is visible here and in Job center.");
@@ -521,12 +554,13 @@ function App() {
     finally { setBusy(false); }
   }
 
-  async function createConversation() {
-    if (!api || !item) return;
+  async function createConversation(target: CatalogItem | null = item) {
+    if (!api || !target) return;
+    openItem(target);
     try {
-      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: item.id });
+      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: target.id });
       await studio.reload();
-      if (created.item_id && created.item_id !== item.id) setSelectedId(created.item_id);
+      if (created.item_id && created.item_id !== target.id) setSelectedId(created.item_id);
       setSelectedConversation(created.id);
       setWorkspaceTarget("conversations");
     } catch (error) { setNotice(String(error)); }
@@ -593,9 +627,9 @@ function App() {
     } catch (error) { setNotice(String(error)); }
   }
 
-  async function fixValidationInChat() {
-    if (!api || !item) return;
-    const report = (studio.validations[item.id] || snapshot?.validations[item.id]?.result)?.report;
+  async function fixValidationInChat(target: CatalogItem | null = item) {
+    if (!api || !target) return;
+    const report = (studio.validations[target.id] || snapshot?.validations[target.id]?.result)?.report;
     const findings = Array.isArray(report?.issues) ? report.issues as Record<string, unknown>[] : [];
     const summaries = findings.slice(0, 40).map((finding) => {
       const suggestion = finding.suggestion ? ` Suggested fix: ${String(finding.suggestion)}` : "";
@@ -608,11 +642,12 @@ function App() {
       ...summaries,
       ...(findings.length > summaries.length ? [`- ${findings.length - summaries.length} more findings; rerun validation for the full list.`] : []),
     ].join("\n");
+    openItem(target);
     setBusy(true);
     try {
-      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: item.id });
+      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: target.id });
       setFixDraft({ conversationId: created.id, text: prompt });
-      if (created.item_id && created.item_id !== item.id) setSelectedId(created.item_id);
+      if (created.item_id && created.item_id !== target.id) setSelectedId(created.item_id);
       setSelectedConversation(created.id);
       setWorkspaceTarget("conversations");
     } catch (error) { setNotice(String(error)); }
@@ -727,11 +762,93 @@ function App() {
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
 
+  const sizeJobsKey = snapshot?.jobs.filter((job) => job.kind === "generation").map((job) => `${job.id}:${job.status}`).join("|") || "";
+  useEffect(() => {
+    let live = true;
+    setCatalogSizes({});
+    if (!api || !sizeJobsKey) return;
+    const refresh = () => void api.bundleSizes().then((sizes) => { if (live) setCatalogSizes(sizes); }).catch(() => undefined);
+    refresh();
+    const timer = snapshot?.jobs.some((job) => job.status === "running") ? setInterval(refresh, 15000) : null;
+    return () => { live = false; if (timer) clearInterval(timer); };
+  }, [api, snapshot?.settings.workspace, sizeJobsKey]);
+
+  async function openArtifactPath(path: string) {
+    if (!api) return;
+    const items = await api.request<CatalogItem[]>("/v1/items");
+    const found = items.find((entry) => entry.path === path);
+    if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); }
+  }
+
   if (studio.maintenance) return <StateMaintenance status={studio.maintenance} requestError={studio.error} onRetry={() => void studio.recoverState()} onRestore={() => void studio.recoverState(true)} onWorkspace={(path) => void studio.selectRecoveryWorkspace(path)} />;
   if (!snapshot || !api) return <div className="boot-screen"><img className="boot-logo" src="/brand/evidenceforge-dark.png" alt="EvidenceForge" /><h1>Studio</h1><p>{studio.error || "Connecting to the local service…"}</p>{studio.error && <button onClick={() => window.location.reload()}>Retry</button>}</div>;
 
+  function catalogActions(target: CatalogItem): ObjectAction[] {
+    const sourceMissing = snapshot!.missing_sources?.includes(target.id);
+    const chats = workspaceConversations(snapshot!.conversations, target.id);
+    const starter = snapshot!.starter_drafts?.includes(target.id);
+    const currentRuns = snapshot!.jobs.filter((job) => belongsToScenario(job, target, snapshot!) && job.status === "completed" && generationIsCurrent(job, target, snapshot!)).sort((a, b) => (b.submitted_at || b.created_at || 0) - (a.submitted_at || a.created_at || 0));
+    const measured = currentRuns[0] ? catalogSizes[currentRuns[0].id] : null;
+    const prediction = currentPrediction(target, snapshot!);
+    const size = starter ? "Forecast · Awaiting authoring" : measured != null ? `Latest · ${formatBundleSize(measured)}` : prediction?.result.available && prediction.result.forecast ? `Forecast · ~${formatBundleSize(prediction.result.forecast.final_output.expected_bytes)}` : prediction?.result.error ? "Forecast · Unavailable" : "Forecast · Calculating…";
+    const packReview = packReviews[target.id]?.source === target.source_sha256 ? packReviews[target.id].review : null;
+    const report = snapshot!.validations[target.id]?.result.report;
+    const findings = Array.isArray(report?.issues) ? report.issues : [];
+    const active = snapshot!.conversations.some((chat) => chat.item_id === target.id && chat.active) || (target.kind === "scenario" && snapshot!.jobs.some((job) => belongsToScenario(job, target, snapshot!) && ["running", "queued", "paused"].includes(job.status)));
+    const blocked = busy || sourceMissing;
+    const reason = sourceMissing ? "Recover the missing source first" : "An operation is in progress";
+    const actions: ObjectAction[] = [
+      { id: "open", label: "Open", group: "inspect", run: () => openItem(target) },
+      { id: "properties", label: "Properties…", group: "inspect", disabled: sourceMissing, reason, run: () => setPropertiesTarget({ id: target.id, section: "general" }) },
+      { id: "source", label: "View source", group: "inspect", disabled: sourceMissing, reason, run: () => viewYaml(target) },
+      { id: "continue", label: "Continue", group: "work", disabled: !chats.length, reason: "Create a conversation first", description: chats[0]?.title, run: () => openActiveConversation(chats[0]) },
+      { id: "conversation", label: "New conversation", group: "work", disabled: blocked, reason, run: () => createConversation(target) },
+      { id: "validate", label: "Validate", group: "work", disabled: blocked, reason, run: () => validateItem(target) },
+      { id: "fix", label: "Fix in chat", group: "work", disabled: blocked || (target.kind === "scenario" ? !findings.length : !packReview || packReview.valid), reason: blocked ? reason : target.kind !== "scenario" && !packReview ? "Inspect pack validation first" : "No validation findings requiring changes", run: () => target.kind === "scenario" ? fixValidationInChat(target) : preparePackRepair(target) },
+      { id: "clone", label: "Clone…", group: "reuse", disabled: blocked, reason, run: () => target.kind === "scenario" ? beginScenarioClone(target) : beginPackClone(target) },
+      { id: "copy-path", label: "Copy path", group: "reuse", run: () => writePathToClipboard(target.path).catch((error) => setNotice(String(error))) },
+      projectAssignmentAction(snapshot!.projects, (id) => void assignProject(target, id), () => setProjectForm({ id: null, name: "", description: "", assignItemId: target.id })),
+      { id: "hide", label: target.hidden ? "Show in library" : "Hide from library", group: "organize", run: () => setItemHidden(target, !target.hidden) },
+      ...(!sourceMissing && (target.kind === "scenario" || target.pack_source === "workspace") ? [{ id: "delete", label: target.kind === "scenario" ? "Delete scenario" : "Delete version", group: "remove" as const, disabled: busy || active, reason: "Finish or stop active work first", run: () => target.kind === "scenario" ? setDeletingScenario(target) : setDeletingPack(target) }] : []),
+    ];
+    if (target.kind !== "scenario") actions.push(
+      { id: "assets", label: "View assets", group: "inspect", disabled: sourceMissing, reason, run: () => setAssetTarget({ item: target, add: false }) },
+      { id: "add-asset", label: "Add asset…", group: "work", disabled: blocked, reason, run: () => setAssetTarget({ item: target, add: true }) },
+      { id: "export-release", label: "Export release…", group: "reuse", disabled: blocked || !target.version || !packReview?.valid, reason: blocked ? reason : !target.version ? "Publish a release before exporting" : !packReview ? "Inspect pack validation first" : "Repair validation findings before exporting", run: () => exportPack(target) });
+    if (target.kind === "scenario") actions.push(
+      { id: "refresh-environment", label: "Refresh environment", group: "work", disabled: blocked || environmentRefreshingId === target.id, reason: environmentRefreshingId === target.id ? "Environment refresh is in progress" : reason, run: async () => {
+        if (environmentRefreshingId === target.id) return;
+        setEnvironmentRefreshingId(target.id);
+        try { await api!.request(`/v1/scenarios/${target.id}/dependencies/refresh`, "POST", undefined, 180000); await studio.reload(); setEnvironmentVersions((current) => ({ ...current, [target.id]: (current[target.id] || 0) + 1 })); }
+        catch (error) { setNotice(String(error)); }
+        finally { setEnvironmentRefreshingId(null); }
+      } },
+      { id: "forecast", label: size, group: "work", disabled: !!starter || sourceMissing, reason: starter ? "Continue authoring before forecasting" : reason, run: () => { forecastOrigin.current = document.activeElement as HTMLElement; setForecastTarget(target); } },
+      { id: "generate", label: "Generate", group: "work", disabled: blocked || !!starter || snapshot!.dependencies?.[target.id]?.ready === false, reason: starter ? "Continue authoring before generation" : snapshot!.dependencies?.[target.id]?.ready === false ? "Resolve dependency errors first" : reason, run: () => startGeneration(target) },
+      { id: "export-bundle", label: "Export bundle…", group: "reuse", disabled: sourceMissing || !snapshot!.jobs.some((job) => belongsToScenario(job, target, snapshot!) && job.status === "completed"), reason: "Complete a generation before exporting its bundle", run: () => openExport(target) },
+    );
+    if (sourceMissing) actions.push(
+      { id: "recover-source", label: "Recover missing source…", group: "work", run: () => openItem(target) },
+      { id: "remove-registration", label: "Remove from library", group: "remove", disabled: busy || active, reason: "Finish or stop active work first", description: "Keep files, conversations and generated data", run: () => setRemovingRegistration(target) },
+    );
+    return actions;
+  }
+  async function preparePackRepair(target: CatalogItem) {
+    if (!api) return;
+    try {
+      const review = await api.request<PackReview>(`/v1/packs/${target.id}/review`);
+      if (review.valid) { showNotice("This pack has no validation findings to repair."); return; }
+      openItem(target);
+      const created = await api.request<Conversation>("/v1/conversations", "POST", { item_id: target.id });
+      setFixDraft({ conversationId: created.id, text: `Review and repair this pack. First rerun eforge pack validate against the current files. Explain proposed changes, preserve referenced versions, and revalidate. Current finding: ${review.error}` });
+      if (created.item_id && created.item_id !== target.id) setSelectedId(created.item_id);
+      setSelectedConversation(created.id); setWorkspaceTarget("conversations"); await studio.reload();
+    } catch (error) { setNotice(String(error)); }
+  }
+
+  const resumeHeldAction: ObjectAction = { id: "resume-held", label: "Resume paused jobs", group: "work", disabled: !hasPausedJobs, reason: "No paused jobs to resume", run: async () => { try { await api!.request("/v1/jobs/resume", "POST", {}); await studio.reload(); } catch (error) { setNotice(String(error)); } } };
   const showLibrary = ["scenarios", "packs"].includes(section);
-  return <Tooltip.Provider><div className="app-shell">
+  return <Tooltip.Provider><CatalogActionContext.Provider value={{ api, busy, onError: setNotice, environmentRefreshing: environmentRefreshingId, environmentRefreshVersion: (target) => environmentVersions[target.id] || 0, onPackReview: updatePackReview, packReview: (target) => packReviews[target.id]?.source === target.source_sha256 ? packReviews[target.id].review : null, actions: catalogActions, onChanged: studio.reload, onOpenArtifact: openArtifactPath, onVersions: (target) => setPropertiesTarget({ id: target.id, section: "versions" }) }}><JobActionContext.Provider value={{ jobs: snapshot.jobs, removedIds: snapshot.removed_job_ids || [], showGeneration: (id) => { setSection("jobs"); setSelectedId(null); setFocusJobId(id); } }}><div className="app-shell">
     <aside className="sidebar">
       <StudioBrand compact />
       <nav className="primary-nav" aria-label="Main navigation">
@@ -744,17 +861,21 @@ function App() {
       <div className="sidebar-bottom"><button className={section === "settings" ? "selected" : ""} onClick={() => { setSection("settings"); setSelectedId(null); setDraftConversationId(null); }}><Settings2 size={18} /> Settings</button></div>
     </aside>
     <main className={`main-area ${showLibrary && ((item && workspaceTarget === "conversations") || draftConversationId) ? "chat-main" : ""}`}>
-      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="icon-button" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}><RefreshCw size={17} /></button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
+      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="button-quiet" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}>Refresh library</button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
 
       <RuntimeCleanupNotice report={snapshot.runtime_cleanup} />
       <LinuxSandboxNotice notice={snapshot.linux_sandbox_notice} onError={setNotice} />
       <PublisherSetup key={snapshot.settings.workspace} workspace={snapshot.settings.workspace} status={snapshot.publisher_status} api={api} onSaved={studio.reload} notice hidden={section === "settings"} />
       {showLibrary && !item && !draftConversationId && <div className="page library-page">
-        <div className="page-intro"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>{sectionTitles[section]}</h1><p>{section === "scenarios" ? "Find a scenario and pick up where you left off." : "Reusable environments for realistic scenarios."}</p></div>{section === "scenarios" ? <button className="button-primary" disabled={busy} onClick={() => setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" })}><Plus size={17} /> New scenario</button> : <div className="library-pack-actions"><button className="button-quiet" onClick={() => setPackImportOpen(true)}><Download size={16} /> Import packs</button><DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}><Plus size={17} /> New pack</DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5}><DropdownMenu.Item onSelect={() => setNewPackKind("industry_pack")}>Industry pack</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setNewPackKind("organization_pack")}>Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>}</div>
+        <div className="page-intro"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>{sectionTitles[section]}</h1><p>{section === "scenarios" ? "Find a scenario and pick up where you left off." : "Reusable environments for realistic scenarios."}</p></div>{section === "scenarios" ? <button className="button-primary" disabled={busy} onClick={() => setNewScenarioForm({ name: "", projectId: selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : "" })}>New scenario</button> : <div className="library-pack-actions"><button className="button-quiet" onClick={() => setPackImportOpen(true)}>Import packs…</button><DropdownMenu.Root><DropdownMenu.Trigger className="button-primary" disabled={busy}>New pack</DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={5}><DropdownMenu.Item onSelect={() => setNewPackKind("industry_pack")}>Industry pack</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setNewPackKind("organization_pack")}>Organization pack</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>}</div>
         <div className="project-browser">
-          {<aside className="project-rail" aria-label="Projects"><div className="project-rail-heading"><span>PROJECTS</span><button className="icon-button" aria-label="New project" title="New project" onClick={() => setProjectForm({ id: null, name: "", description: "", assignItemId: null })}><Plus size={16} /></button></div>
+          {<aside className="project-rail" aria-label="Projects"><div className="project-rail-heading"><span>PROJECTS</span><button className="button-quiet" aria-label="New project" title="New project" onClick={() => setProjectForm({ id: null, name: "", description: "", assignItemId: null })}>New project</button></div>
             <button className={`project-nav-row ${selectedProjectId === null ? "active" : ""}`} aria-label={section === "packs" ? "All packs" : "All scenarios"} onClick={() => setSelectedProjectId(null)}><Layers3 size={16} /><span>{section === "packs" ? "All packs" : "All scenarios"}</span><small>{scenarioCount}</small></button>
-            {snapshot.projects.map((project) => <div className={`project-nav-entry ${selectedProjectId === project.id ? "active" : ""} ${dropTargetId === project.id ? "drop-target" : ""}`} key={project.id} onDragOver={(event) => allowProjectDrop(event, project.id)} onDragLeave={leaveProjectDrop} onDrop={(event) => dropIntoProject(event, project.id)}><button className="project-nav-row" aria-label={`Open project ${project.name}`} onClick={() => setSelectedProjectId(project.id)}><Folder size={16} /><span>{project.name}</span><small>{snapshot.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden && entry.project_id === project.id).length + allDrafts.filter((draft) => draft.draft_project_id === project.id).length}</small></button><DropdownMenu.Root><DropdownMenu.Trigger className="icon-button project-menu-trigger" aria-label={`Options for project ${project.name}`}><MoreHorizontal size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu" sideOffset={4}><DropdownMenu.Item onSelect={() => setProjectForm({ id: project.id, name: project.name, description: project.description, overlay_enabled: project.overlay_enabled, assignItemId: null })}>Edit project</DropdownMenu.Item><DropdownMenu.Item onSelect={() => setDeletingProject(project)}>Delete project</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div>)}
+            {snapshot.projects.map((project) => <div className={`project-nav-entry ${selectedProjectId === project.id ? "active" : ""} ${dropTargetId === project.id ? "drop-target" : ""}`} key={project.id} onDragOver={(event) => allowProjectDrop(event, project.id)} onDragLeave={leaveProjectDrop} onDrop={(event) => dropIntoProject(event, project.id)}><button className="project-nav-row" aria-label={`Open project ${project.name}`} onClick={() => setSelectedProjectId(project.id)}><Folder size={16} /><span>{project.name}</span><small>{snapshot.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden && entry.project_id === project.id).length + allDrafts.filter((draft) => draft.draft_project_id === project.id).length}</small></button><ObjectMenu label={`Options for project ${project.name}`} className="project-menu-trigger" actions={[
+  { id: "open", label: "Open", group: "inspect", run: () => setSelectedProjectId(project.id) },
+  { id: "edit", label: "Edit project…", group: "organize", run: () => setProjectForm({ id: project.id, name: project.name, description: project.description, overlay_enabled: project.overlay_enabled, assignItemId: null }) },
+  { id: "delete", label: "Delete project", group: "remove", disabled: busy, reason: "An operation is in progress", description: "Move its objects to Ungrouped; keep files", run: () => setDeletingProject(project) },
+]} /></div>)}
             <button className={`project-nav-row ${selectedProjectId === "ungrouped" ? "active" : ""} ${dropTargetId === "ungrouped" ? "drop-target" : ""}`} aria-label="Ungrouped" onClick={() => setSelectedProjectId("ungrouped")} onDragOver={(event) => allowProjectDrop(event, null)} onDragLeave={leaveProjectDrop} onDrop={(event) => dropIntoProject(event, null)}><FolderOpen size={16} /><span>Ungrouped</span><small>{ungroupedCount}</small></button>
           </aside>}
           <div className="project-library">
@@ -767,7 +888,7 @@ function App() {
               {section === "scenarios" && <select className="library-sort" aria-label="Sort scenarios" value={scenarioSort} onChange={(event) => setScenarioSort(event.target.value as ScenarioSort)}><option value="name">Name A–Z</option><option value="updated">Recently updated</option><option value="project">Project A–Z</option></select>}
               {section === "scenarios" && hiddenCount > 0 && <button className={`hidden-filter ${showHidden ? "active" : ""}`} aria-label={showHidden ? "Hide hidden items" : "Show hidden items"} title={showHidden ? "Hide hidden items again" : "Include hidden items in this library"} onClick={() => setShowHidden(!showHidden)}><Filter size={15} /> {showHidden ? "Showing hidden" : `Hidden (${hiddenCount})`}</button>}
               {previousVersionCount > 0 && <button className={`hidden-filter ${showPreviousVersions ? "active" : ""}`} aria-pressed={showPreviousVersions} onClick={() => setShowPreviousVersions(!showPreviousVersions)}>{showPreviousVersions ? "Hide previous versions" : `Show previous versions (${previousVersionCount})`}</button>}
-              <button className={`icon-button saved-views-toggle ${savedViews.length ? "has-views" : ""}`} aria-label="Saved views" title="Saved views" onClick={() => setShowViews(true)}><Bookmark size={17} /></button>
+              <button className={`button-quiet saved-views-toggle ${savedViews.length ? "has-views" : ""}`} aria-label="Saved views" title="Saved views" onClick={() => setShowViews(true)}>Saved views</button>
               <span className="result-count">{library.length + drafts.length} {library.length + drafts.length === 1 ? "item" : "items"}</span>
             </div>
             {section === "packs" ? <PackLibrary onProperties={(entry) => setPropertiesTarget({ id: entry.id, section: "general" })} artifactGroups={snapshot.artifact_groups} expandedGroups={expandedGroups} onToggleGroup={toggleLibraryGroup} items={library} drafts={drafts} projects={snapshot.projects} busy={busy} onOpen={openItem} onOpenDraft={(draft) => setDraftConversationId(draft.id)} onNew={setNewPackKind} onClone={(entry) => void beginPackClone(entry)} onExport={(entry) => void exportPack(entry)} onHide={(entry) => void setItemHidden(entry, !entry.hidden)} onMove={(entry, projectId) => void assignProject(entry, projectId)} onMoveDraft={(draft, projectId) => void assignDraftProject(draft, projectId)} onNewProject={(entry) => setProjectForm({ id: null, name: "", description: "", assignItemId: entry.id })} onDelete={setDeletingPack} onDeleteDraft={setDeletingConversation} onDragStart={beginScenarioDrag} onDraftDragStart={(event, draft) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-evidenceforge-draft", draft.id); event.dataTransfer.setData("text/plain", draftTitle(draft)); draggedScenario.current = draft.id; }} onDragEnd={endScenarioDrag} /> : <>
@@ -777,7 +898,7 @@ function App() {
         </div>
       </div>}
 
-      {showLibrary && !item && draftConversation && <div className="draft-page"><div className="draft-banner"><div><span className="eyebrow">AUTHORING DRAFT</span>{draftConversation.draft_kind === "scenario" ? <ArtifactTitle key={draftConversation.id} name={draftConversation.draft_name || "New scenario"} displayName={draftConversation.draft_display_name} api={api} source={{ context: { kind: "scenario", name: draftConversation.draft_name || "new-scenario" } }} onSave={saveDraftDisplayName} disabled={draftConversation.active} /> : <strong>{draftConversation.draft_kind === "industry_pack" ? "New industry pack" : "New organization pack"}</strong>}{draftConversation.draft_path ? <div className="path-with-copy draft-target"><span className="path-value" title={draftConversation.draft_path}>Target: {shortPath(draftConversation.draft_path)}</span><CopyPathButton path={draftConversation.draft_path} label="Copy draft path" onError={setNotice} /></div> : <span>The authored file will appear in this library.</span>}</div><button className="button-quiet" disabled={draftConversation.active} onClick={() => setDeletingConversation(draftConversation)}>Delete draft</button></div><ChatView item={{ name: draftConversation.draft_kind === "scenario" ? "New scenario" : "New pack", kind: draftConversation.draft_kind || "scenario" }} conversation={draftConversation} codexHealth={codexHealth} api={api} subscribeEvents={studio.subscribeEvents} onRenamed={studio.reload} onError={setNotice} /></div>}
+      {showLibrary && !item && draftConversation && <div className="draft-page"><div className="draft-banner"><div><span className="eyebrow">AUTHORING DRAFT</span>{draftConversation.draft_kind === "scenario" ? <ArtifactTitle key={draftConversation.id} name={draftConversation.draft_name || "New scenario"} displayName={draftConversation.draft_display_name} api={api} source={{ context: { kind: "scenario", name: draftConversation.draft_name || "new-scenario" } }} onSave={saveDraftDisplayName} disabled={draftConversation.active} /> : <strong>{draftConversation.draft_kind === "industry_pack" ? "New industry pack" : "New organization pack"}</strong>}{draftConversation.draft_path ? <div className="path-with-copy draft-target"><span className="path-value" title={draftConversation.draft_path}>Target: {shortPath(draftConversation.draft_path)}</span><CopyPathButton path={draftConversation.draft_path} label="Copy draft path" onError={setNotice} /></div> : <span>The authored file will appear in this library.</span>}</div><DraftObjectMenu draft={draftConversation} projects={snapshot.projects} onOpen={() => setDraftConversationId(draftConversation.id)} onRename={draftConversation.draft_kind === "scenario" ? () => { setRenamingDraft(draftConversation); setDraftName(draftTitle(draftConversation)); } : undefined} onMove={(id) => void assignDraftProject(draftConversation, id)} onDelete={() => setDeletingConversation(draftConversation)} /></div><ChatView item={{ name: draftConversation.draft_kind === "scenario" ? "New scenario" : "New pack", kind: draftConversation.draft_kind || "scenario" }} conversation={draftConversation} codexHealth={codexHealth} api={api} subscribeEvents={studio.subscribeEvents} onRenamed={studio.reload} onError={setNotice} /></div>}
 
       {showLibrary && item && snapshot.missing_sources?.includes(item.id) && <MissingScenarioSource key={item.id} item={item} conversations={conversations} jobs={itemJobs} api={api} onRecovered={async (recovered) => { await studio.reload(); openItem(recovered); }} onRemoved={async () => { await studio.reload(); setSelectedId(null); }} onRuns={() => setSection("jobs")} />}
 
@@ -787,7 +908,7 @@ function App() {
         onCreateConversation={() => void createConversation()} onRenameConversation={(chat) => { setEditingConversation(chat); setEditingTitle(chat.title); }} onDeleteConversation={setDeletingConversation}
         onProjectChange={(id) => void assignProject(item, id)} onClone={() => item.kind === "scenario" ? beginScenarioClone(item) : void beginPackClone(item)} onExportPack={() => void exportPack(item)} onDeleteScenario={() => setDeletingScenario(item)} onDeletePack={() => setDeletingPack(item)} onHidden={() => void setItemHidden(item, !item.hidden)} onViewYaml={() => void viewYaml()} onImportPacks={() => setPackImportOpen(true)} onOpenPack={(entry) => { setSection("packs"); openItem(entry); }} onGenerate={startGeneration} onValidate={() => void validateItem()} onFix={() => void fixValidationInChat()} onPrepare={prepareEnvironmentChange} onDraftSubmitted={(conversationId) => setFixDraft((current) => current?.conversationId === conversationId ? null : current)} onChanged={studio.reload} onOpenArtifact={async (path) => { const items = await api.request<CatalogItem[]>("/v1/items"); const found = items.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} onError={setNotice} />}
 
-      {section === "jobs" && <div className="page"><div className="page-intro"><div><span className="eyebrow">ALL OPERATIONS</span><h1>Job center</h1><p>Track generations, evaluations, and active authoring turns.</p></div>{hasPausedJobs && <button className="button-quiet" onClick={() => void api.request("/v1/jobs/resume", "POST", {}).catch((error) => setNotice(String(error)))}><Play size={16} /> Resume paused jobs</button>}</div><div className="jobs-summary"><div><strong>{snapshot.jobs.filter((job) => job.status === "running").length}</strong><span>Running jobs</span></div><div><strong>{snapshot.jobs.filter((job) => job.status === "queued").length}</strong><span>Queued jobs</span></div><div><strong>{snapshot.jobs.filter((job) => completedSuccessfully(job) && !snapshot.removed_job_ids?.includes(job.id)).length}</strong><span>Completed jobs</span></div><div aria-label={`${workingChats.length} active chats`}><strong>{workingChats.length}</strong><span>Active chats</span></div>{attentionChats.length > 0 && <div aria-label={`${attentionChats.length} chats need input`}><strong>{attentionChats.length}</strong><span>Need input</span></div>}{uncertainChats.length > 0 && <div aria-label={`${uncertainChats.length} chats need reconnection`}><strong>{uncertainChats.length}</strong><span>Connection uncertain</span></div>}</div>{(workingChats.length > 0 || attentionChats.length > 0 || uncertainChats.length > 0) && <section className="chat-activity surface"><div className="surface-heading"><h2>Authoring activity</h2><span className="eyebrow">LIVE</span></div>{[...workingChats, ...attentionChats, ...uncertainChats].map((chat) => <button className="chat-activity-row" key={chat.id} onClick={() => openActiveConversation(chat)}><span className={chat.needs_attention ? "attention-dot" : "active-pulse"} /><span><strong>{chat.title}</strong><small>{snapshot.items.find((entry) => entry.id === chat.item_id)?.name || "Draft"}</small></span><em>{chat.needs_attention ? "Needs input" : !codexHealthy ? "Connection uncertain" : "Working"}</em><ArrowUpRight size={16} /></button>)}</section>}{snapshot.jobs.length ? <JobSections jobs={snapshot.jobs} removedJobIds={snapshot.removed_job_ids || []} manageHistory nameFor={jobScenarioName} api={api} onError={setNotice} onChanged={studio.reload} /> : <div className="empty-panel"><Activity size={28} /><h3>No jobs yet</h3><p>Start a generation from a scenario workspace.</p></div>}</div>}
+      {section === "jobs" && <div className="page"><div className="page-intro"><div><span className="eyebrow">ALL OPERATIONS</span><h1>Job center</h1><p>Track generations, evaluations, and active authoring turns.</p></div><div className="job-center-actions">{hasPausedJobs && <ActionShortcut action={resumeHeldAction} />}<ObjectMenu label="Job center actions" actions={[resumeHeldAction]} /></div></div><div className="jobs-summary"><div><strong>{snapshot.jobs.filter((job) => job.status === "running").length}</strong><span>Running jobs</span></div><div><strong>{snapshot.jobs.filter((job) => job.status === "queued").length}</strong><span>Queued jobs</span></div><div><strong>{snapshot.jobs.filter((job) => completedSuccessfully(job) && !snapshot.removed_job_ids?.includes(job.id)).length}</strong><span>Completed jobs</span></div><div aria-label={`${workingChats.length} active chats`}><strong>{workingChats.length}</strong><span>Active chats</span></div>{attentionChats.length > 0 && <div aria-label={`${attentionChats.length} chats need input`}><strong>{attentionChats.length}</strong><span>Need input</span></div>}{uncertainChats.length > 0 && <div aria-label={`${uncertainChats.length} chats need reconnection`}><strong>{uncertainChats.length}</strong><span>Connection uncertain</span></div>}</div>{(workingChats.length > 0 || attentionChats.length > 0 || uncertainChats.length > 0) && <section className="chat-activity surface"><div className="surface-heading"><h2>Authoring activity</h2><span className="eyebrow">LIVE</span></div>{[...workingChats, ...attentionChats, ...uncertainChats].map((chat) => <div className="chat-activity-entry" key={chat.id}><button className="chat-activity-row" onClick={() => openActiveConversation(chat)}><span className={chat.needs_attention ? "attention-dot" : "active-pulse"} /><span><strong>{chat.title}</strong><small>{snapshot.items.find((entry) => entry.id === chat.item_id)?.name || "Draft"}</small></span><em>{chat.needs_attention ? "Needs input" : !codexHealthy ? "Connection uncertain" : "Working"}</em><ArrowUpRight size={16} /></button><ObjectMenu label={`Options for ${chat.title}`} actions={conversationActions(chat, openActiveConversation, (entry) => { setEditingConversation(entry); setEditingTitle(entry.title); }, setDeletingConversation)} /></div>)}</section>}{snapshot.jobs.length ? <JobSections jobs={snapshot.jobs} removedJobIds={snapshot.removed_job_ids || []} manageHistory nameFor={jobScenarioName} api={api} onError={setNotice} onChanged={studio.reload} /> : <div className="empty-panel"><Activity size={28} /><h3>No jobs yet</h3><p>Start a generation from a scenario workspace.</p></div>}</div>}
       {section === "bundles" && <BundleLibrary snapshot={snapshot} api={api} onError={setNotice} onChanged={studio.reload} onOpenScenario={(entry) => { setSection("scenarios"); openItem(entry); }} />}
       {propertiesTarget && snapshot.items.find((entry) => entry.id === propertiesTarget.id) && <ArtifactPropertiesDialog key={`properties-${propertiesTarget.id}`} item={snapshot.items.find((entry) => entry.id === propertiesTarget.id)!} initialSection={propertiesTarget.section} snapshot={snapshot} api={api} onClose={() => setPropertiesTarget(null)} onChanged={studio.reload} onProjectChange={(projectId) => { const entry = snapshot.items.find((entry) => entry.id === propertiesTarget.id); if (entry) void assignProject(entry, projectId); }} onOpen={async (path) => { const entries = await api.request<CatalogItem[]>("/v1/items"); const found = entries.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} />}
       {section === "settings" && <div className="page settings-page"><div className="page-intro"><div><span className="eyebrow">PREFERENCES</span><h1>Settings</h1><p>Keep your workspace and tools ready for the next task.</p></div></div><SettingsView settings={snapshot.settings} paths={snapshot.paths} runtimeCleanup={snapshot.runtime_cleanup} publisherStatus={snapshot.publisher_status} api={api} onSaved={studio.reload} onError={setNotice} /></div>}
@@ -798,21 +919,28 @@ function App() {
       {packImportOpen && <ImportDialog kind="pack" api={api} projects={snapshot.projects} initialProjectId={selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : ""} onClose={() => setPackImportOpen(false)} onImported={async () => { await studio.reload(); setPackImportOpen(false); showNotice("Pack import complete. Dependency checks refreshed."); }} />}
       {renamingDraft && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Rename scenario" onSubmit={(event) => { event.preventDefault(); void renameDraft(); }}><h2>Rename scenario</h2><label className="modal-field">Scenario Name<input autoFocus aria-label="Scenario Name" name="scenario-name" autoComplete="off" aria-invalid={!!draftName && !!scenarioNameError(draftName)} aria-describedby={draftName && scenarioNameError(draftName) ? "draft-name-error" : undefined} value={draftName} onChange={(event) => setDraftName(event.target.value)} /></label>{draftName && scenarioNameError(draftName) && <p id="draft-name-error" className="field-error" role="status">{scenarioNameError(draftName)}</p>}<div className="close-modal-actions"><button type="button" className="button-quiet" onClick={() => setRenamingDraft(null)}>Cancel</button><button type="submit" className="button-primary" disabled={!!scenarioNameError(draftName)}>Save name</button></div></form></div>}
       {commandOpen && <div className="modal-backdrop"><div className="command-modal" role="dialog" aria-modal="true" aria-label="Command menu"><div className="command-search"><Search size={19} /><input autoFocus aria-label="Search commands" placeholder="Go to a scenario, project, or page…" value={commandQuery} onChange={(event) => { setCommandQuery(event.target.value); setCommandIndex(0); }} onKeyDown={(event) => { if (event.key === "Escape") setCommandOpen(false); else if (event.key === "ArrowDown") { event.preventDefault(); setCommandIndex((current) => Math.min(commands.length - 1, current + 1)); } else if (event.key === "ArrowUp") { event.preventDefault(); setCommandIndex((current) => Math.max(0, current - 1)); } else if (event.key === "Enter") { event.preventDefault(); runCommand(commandIndex); } }} /><kbd>ESC</kbd></div><div className="command-results" role="listbox" aria-label="Commands">{commands.length ? commands.map((command, index) => <button key={command.id} role="option" aria-selected={commandIndex === index} className={commandIndex === index ? "active" : ""} onMouseEnter={() => setCommandIndex(index)} onClick={() => runCommand(index)}><span>{command.label}</span><small>{command.detail}</small></button>) : <p>No matching commands.</p>}</div><div className="command-footer">↑ ↓ to select · Enter to open · Esc to close</div></div></div>}
-      {showViews && showLibrary && !item && !draftConversationId && <div className="modal-backdrop"><div className="close-modal saved-views-modal" role="dialog" aria-modal="true" aria-label="Saved views"><div className="saved-views-heading"><div><h2>Saved views</h2><p>Return to a library search, its filters, and expanded groups.</p></div><button className="icon-button" aria-label="Close saved views" onClick={() => setShowViews(false)}><X size={17} /></button></div><div className="saved-views-list">{savedViews.length ? savedViews.map((view) => <div className="saved-view-row" key={view.name}><button className="saved-view-open" aria-label={`Apply saved view ${view.name}`} onClick={() => applySavedView(view)}><Bookmark size={16} /><span><strong>{view.name}</strong><small>{[view.search ? `Search: ${view.search}` : "All items", view.ungrouped ? "Ungrouped" : snapshot.projects.find((project) => project.id === view.project_id)?.name, view.publisher ? `Author: ${view.publisher}` : null, view.version, view.pack_source, view.show_hidden ? "Includes hidden" : null].filter(Boolean).join(" · ")}</small></span></button><button className="icon-button" aria-label={`Delete saved view ${view.name}`} title={`Delete ${view.name}`} onClick={() => void deleteSavedView(view)}><Trash2 size={16} /></button></div>) : <p className="muted">No saved views for this library yet.</p>}</div><form className="saved-view-create" onSubmit={(event) => { event.preventDefault(); void saveCurrentView(); }}><label className="modal-field">Name for current view<input aria-label="Saved view name" maxLength={80} value={viewName} onChange={(event) => setViewName(event.target.value)} placeholder="For example, active investigations" /></label><button className="button-primary" type="submit" disabled={busy || !viewName.trim()}><Plus size={16} /> Save view</button></form></div></div>}
+      {showViews && showLibrary && !item && !draftConversationId && <div className="modal-backdrop"><div className="close-modal saved-views-modal" role="dialog" aria-modal="true" aria-label="Saved views"><div className="saved-views-heading"><div><h2>Saved views</h2><p>Return to a library search, its filters, and expanded groups.</p></div><button className="icon-button" aria-label="Close saved views" onClick={() => setShowViews(false)}><X size={17} /></button></div><div className="saved-views-list">{savedViews.length ? savedViews.map((view) => <div className="saved-view-row" key={view.name}><button className="saved-view-open" aria-label={`Apply saved view ${view.name}`} onClick={() => applySavedView(view)}><Bookmark size={16} /><span><strong>{view.name}</strong><small>{[view.search ? `Search: ${view.search}` : "All items", view.ungrouped ? "Ungrouped" : snapshot.projects.find((project) => project.id === view.project_id)?.name, view.publisher ? `Author: ${view.publisher}` : null, view.version, view.pack_source, view.show_hidden ? "Includes hidden" : null].filter(Boolean).join(" · ")}</small></span></button><ObjectMenu label={`Options for saved view ${view.name}`} actions={[
+  { id: "apply", label: "Apply view", group: "inspect", run: () => applySavedView(view) },
+  { id: "delete", label: "Delete saved view", group: "remove", disabled: busy, reason: "An operation is in progress", run: () => setDeletingView(view) },
+]} /></div>) : <p className="muted">No saved views for this library yet.</p>}</div><form className="saved-view-create" onSubmit={(event) => { event.preventDefault(); void saveCurrentView(); }}><label className="modal-field">Name for current view<input aria-label="Saved view name" maxLength={80} value={viewName} onChange={(event) => setViewName(event.target.value)} placeholder="For example, active investigations" /></label><button className="button-primary" type="submit" disabled={busy || !viewName.trim()}>Save view</button></form></div></div>}
       {notice && <div className={`toast toast-${notice.kind}`} role={notice.kind === "error" ? "alert" : "status"}><span>{notice.message}</span>{closeFailed && <button className="button-quiet" onClick={() => void invoke("studio_exit")}>Force close</button>}<button className="icon-button" aria-label="Dismiss message" onClick={() => { dismissNotice(); setCloseFailed(false); }}><X size={16} /></button></div>}
       {exportItem && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label={isTauri() ? "Export scenario bundle" : "Download scenario bundle"}><h2>{isTauri() ? "Export" : "Download"} {artifactTitle(exportItem)}</h2><p>Choose a completed run. The ZIP includes its logs, artifacts, ground truth, and resolved scenario, plus the current authored YAML and notes.</p><label className="modal-field">Run<select aria-label={isTauri() ? "Run to export" : "Run to download"} value={exportRunId} onChange={(event) => setExportRunId(event.target.value)}>{completedRuns(exportItem).map((run) => <option key={run.id} value={run.id}>{formatTime(run.started_at || 0)} · {run.id.slice(0, 8)}</option>)}</select></label>{busy && isTauri() && <ExportStatus progress={exportProgress} api={api!} onError={(error) => setNotice(error)} />}<div className="close-modal-actions"><button className="button-quiet" onClick={() => setExportItem(null)} disabled={busy}>Cancel</button><button className="button-primary" onClick={() => void downloadBundle()} disabled={busy}><Download size={16} /> {busy ? "Preparing ZIP…" : isTauri() ? "Export ZIP" : "Download ZIP"}</button></div></div></div>}
       {cloningItem?.kind === "scenario" && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Clone scenario" onSubmit={(event) => { event.preventDefault(); void cloneScenario(); }}><h2>Clone {artifactTitle(cloningItem)}</h2><p>Copy this scenario’s authored files into a new folder. Conversations, generated runs, and evaluations stay with the original. The copy joins the same project.</p><label className="modal-field">New scenario name<input autoFocus aria-label="New scenario name" name="scenario-clone-name" autoComplete="off" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label><p className="muted small">Use letters, digits, hyphens, or underscores.</p><div className="close-modal-actions"><button type="button" className="button-quiet" onClick={() => setCloningItem(null)} disabled={busy}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !!scenarioNameError(cloneName.trim())}>{busy ? "Cloning…" : "Clone scenario"}</button></div></form></div>}
       {cloningItem && cloningItem.kind !== "scenario" && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Clone pack" onSubmit={(event) => { event.preventDefault(); void clonePack(); }}><h2>Clone {artifactTitle(cloningItem)}</h2><p>Create a validated, editable pack in this workspace. Choose its name and version; the copy uses your publisher namespace.</p><label className="modal-field">Pack name<input autoFocus aria-label="Pack name" name="pack-clone-name" autoComplete="off" value={cloneName} onChange={(event) => setCloneName(event.target.value)} /></label><label className="modal-field">Pack version<input aria-label="Pack version" name="pack-clone-version" autoComplete="off" value={cloneVersion} onChange={(event) => setCloneVersion(event.target.value)} /></label>{clonePublisherStatus === null ? <p className="muted">Checking publisher identity…</p> : clonePublisherStatus.configured ? <p className="muted">Publisher: {clonePublisherStatus.publisher_display_name} ({clonePublisherStatus.publisher}, {clonePublisherStatus.scope} scope)</p> : <><p className="muted">Pack copies need a publisher identity. This will be saved for this workspace.</p><label className="modal-field">Publisher ID<input aria-label="Publisher ID" name="pack-publisher-id" autoComplete="off" value={clonePublisher} onChange={(event) => setClonePublisher(event.target.value)} /></label><label className="modal-field">Publisher display name<input aria-label="Publisher display name" name="pack-publisher-display-name" autoComplete="off" value={clonePublisherDisplay} onChange={(event) => setClonePublisherDisplay(event.target.value)} /></label></>}<div className="close-modal-actions"><button type="button" className="button-quiet" onClick={() => setCloningItem(null)} disabled={busy}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !clonePublisherStatus || !!packNameError(cloneName.trim()) || !/^\d+\.\d+\.\d+$/.test(cloneVersion.trim()) || (!clonePublisherStatus.configured && (!/^[a-z0-9][a-z0-9-]*$/.test(clonePublisher.trim()) || !clonePublisherDisplay.trim()))}>{busy ? "Cloning…" : "Clone pack"}</button></div></form></div>}
       {projectForm && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label={projectForm.id ? "Edit project" : "New project"} onSubmit={(event) => { event.preventDefault(); void saveProject(); }}><h2>{projectForm.id ? "Edit project" : "New project"}</h2><p>Projects group scenarios and packs in this workspace. Their files stay where they are.</p><label className="modal-field">Project Name<input autoFocus aria-label="Project Name" name="project-name" autoComplete="off" maxLength={80} value={projectForm.name} onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })} /></label><label className="modal-field">Description<textarea aria-label="Project description" maxLength={240} rows={3} value={projectForm.description} onChange={(event) => setProjectForm({ ...projectForm, description: event.target.value })} /></label><label className="modal-field configuration-toggle" title="Applies this project’s configuration directory after workspace defaults to every assigned scenario. Existing runs keep their captured inputs."><span><input type="checkbox" checked={projectForm.overlay_enabled || false} onChange={(event) => setProjectForm({ ...projectForm, overlay_enabled: event.target.checked })} /> Use project configuration</span><small>Shared by this project’s scenarios. Existing runs keep their captured inputs.</small></label>{projectForm.assignItemId && <p className="muted">The selected item will be added to this project.</p>}<div className="close-modal-actions"><button type="button" className="button-quiet" onClick={() => setProjectForm(null)}>Cancel</button><button type="submit" className="button-primary" disabled={busy || !projectForm.name.trim()}>{busy ? "Saving…" : projectForm.id ? "Save project" : "Create project"}</button></div></form></div>}
       {configurationMove && <Dialog.Root open onOpenChange={(open) => !open && setConfigurationMove(null)}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="close-modal configuration-move-modal" aria-describedby="configuration-move-help"><Dialog.Title>Move {configurationMove.entry.name}?</Dialog.Title><Dialog.Description id="configuration-move-help">This changes the project configuration used for validation, forecasts, and future generations. Existing runs keep their captured inputs.</Dialog.Description><p>{snapshot?.projects.find((project) => project.id === configurationMove.entry.project_id)?.name || "Ungrouped"} → {snapshot?.projects.find((project) => project.id === configurationMove.projectId)?.name || "Ungrouped"}</p><div className="close-modal-actions"><Dialog.Close className="button-quiet">Cancel</Dialog.Close><button className="button-primary" onClick={() => void assignProject(configurationMove.entry, configurationMove.projectId, true)}>Move scenario</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>}
+      {assetTarget && <Dialog.Root open onOpenChange={(open) => { if (!open) setAssetTarget(null); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="close-modal asset-dialog"><Dialog.Title>Assets · {artifactTitle(assetTarget.item)}</Dialog.Title><Dialog.Description>Inspect and edit this exact pack using its existing version and revision safeguards.</Dialog.Description><AssetBrowser item={assetTarget.item} api={api} initialAdding={assetTarget.add} onChanged={async () => { setPackReviews((current) => { const next = { ...current }; delete next[assetTarget.item.id]; return next; }); await studio.reload(); }} /><Dialog.Close className="button-quiet">Close assets</Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>}
+      {forecastTarget && <Dialog.Root open onOpenChange={(open) => { if (!open) setForecastTarget(null); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker run-forecast-dialog" onCloseAutoFocus={(event) => { event.preventDefault(); forecastOrigin.current?.focus(); }}><Dialog.Title>Generation forecast</Dialog.Title><Dialog.Description>Estimates for the current scenario and generation settings.</Dialog.Description><ResourceForecastPanel item={forecastTarget} snapshot={snapshot} api={api} onError={setNotice} onChanged={studio.reload} /><footer><Dialog.Close className="button-quiet">Close</Dialog.Close><button className="button-primary" disabled={busy || snapshot.starter_drafts?.includes(forecastTarget.id) || snapshot.dependencies?.[forecastTarget.id]?.ready === false} onClick={() => { const target = forecastTarget; setForecastTarget(null); void startGeneration(target); }}>Generate</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>}
+      {removingRegistration && <RemovalConfirmation title="Remove from library?" label="Remove from library" busy={busy} onCancel={() => setRemovingRegistration(null)} onConfirm={async () => { setBusy(true); try { await api.request(`/v1/scenarios/${removingRegistration.id}/registration`, "DELETE"); if (selectedId === removingRegistration.id) { setSelectedId(null); setSelectedConversation(null); } await studio.reload(); setRemovingRegistration(null); } catch (error) { setNotice(String(error)); } finally { setBusy(false); } }}><p>This removes the stale registration. Authored files, generated bundles and Codex threads are kept. Saved conversations will no longer appear under this entry.</p></RemovalConfirmation>}
+      {deletingView && <RemovalConfirmation title="Delete saved view?" label="Delete saved view" onCancel={() => setDeletingView(null)} busy={busy} onConfirm={async () => { if (await deleteSavedView(deletingView)) setDeletingView(null); }}><p>Delete <strong>{deletingView.name}</strong>? Its saved search and filters will be removed. Scenarios, packs and files are kept.</p></RemovalConfirmation>}
       {deletingScenario && api && <DeleteScenarioDialog item={deletingScenario} api={api} onClose={() => setDeletingScenario(null)} onDeleted={async () => { if (selectedId === deletingScenario.id) { setSelectedId(null); setSelectedConversation(null); setWorkspaceTarget("overview"); } setDeletingScenario(null); await studio.reload(); showNotice("Scenario permanently deleted."); }} /> }
       {deletingPack && api && <DeletePackDialog item={deletingPack} api={api} onClose={() => setDeletingPack(null)} onDeleted={async () => { if (selectedId === deletingPack.id) { setSelectedId(null); setSelectedConversation(null); setWorkspaceTarget("overview"); } setDeletingPack(null); await studio.reload(); showNotice("Pack permanently deleted."); }} />}
-      {deletingProject && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete project"><h2>Delete {deletingProject.name}?</h2><p>Its scenarios and packs will move to Ungrouped. Their source files, conversations, and runs will remain available.</p>{deletingProject.overlay_enabled && <p>Its shared configuration will stop applying to future work. Configuration files will be preserved.</p>}<div className="close-modal-actions"><button className="button-quiet" onClick={() => setDeletingProject(null)}>Cancel</button><button className="button-danger" disabled={busy} onClick={() => void deleteProject()}>Delete project</button></div></div></div>}
+      {deletingProject && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete project"><h2>Delete {deletingProject.name}?</h2><p>Its scenarios and packs will move to Ungrouped. Their source files, conversations, and runs will remain available.</p>{deletingProject.overlay_enabled && <p>Its shared configuration will stop applying to future work. Configuration files will be preserved.</p>}<div className="close-modal-actions"><button className="button-quiet" onClick={() => setDeletingProject(null)}>Cancel</button><RemovalButton disabled={busy} onClick={() => void deleteProject()}>Delete project</RemovalButton></div></div></div>}
       {editingConversation && <div className="modal-backdrop"><form className="close-modal" role="dialog" aria-modal="true" aria-label="Rename conversation" onSubmit={(event) => { event.preventDefault(); void renameConversation(); }}><h2>Rename conversation</h2><label className="modal-field">Name<input autoFocus aria-label="Conversation name" maxLength={80} value={editingTitle} onChange={(event) => setEditingTitle(event.target.value)} /></label><div className="close-modal-actions"><button type="button" className="button-quiet" onClick={() => setEditingConversation(null)}>Cancel</button><button type="submit" className="button-primary" disabled={!editingTitle.trim()}>Save name</button></div></form></div>}
-      {deletingConversation && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete conversation"><h2>{deletingConversation.draft_kind ? "Delete draft?" : "Delete conversation?"}</h2><p><strong>{deletingConversation.title}</strong> will be removed from Studio. Its Codex thread and any authored files remain available.</p><div className="close-modal-actions"><button className="button-quiet" onClick={() => setDeletingConversation(null)}>Cancel</button><button className="button-danger" onClick={() => void deleteConversation()}>{deletingConversation.draft_kind ? "Delete draft" : "Delete conversation"}</button></div></div></div>}
+      {deletingConversation && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Delete conversation"><h2>{deletingConversation.draft_kind ? "Delete draft?" : "Delete conversation?"}</h2><p><strong>{deletingConversation.title}</strong> will be removed from Studio. Its Codex thread and any authored files remain available.</p><div className="close-modal-actions"><button className="button-quiet" onClick={() => setDeletingConversation(null)}>Cancel</button><RemovalButton disabled={busy || deletingConversation.active} onClick={() => void deleteConversation()}>{deletingConversation.draft_kind ? "Delete draft" : "Delete conversation"}</RemovalButton></div></div></div>}
       {closeProblem && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Close EvidenceForge Studio"><h2>{closeProblem.type === "waiting" ? "Waiting for checkpoints" : closeProblem.type === "confirm_delete" ? "Delete incomplete bundles?" : "These jobs cannot checkpoint"}</h2>{closeProblem.type === "checkpoint_disabled" && <><p>Choose what happens to each checkpoint-disabled generation before closing.</p>{closeProblem.jobIds.map((id) => <label className="close-choice" key={id}><span>{snapshot.jobs.find((job) => job.id === id)?.scenario || id}</span><select aria-label={`Close action for ${id}`} value={closeChoices[id] || ""} onChange={(event) => setCloseChoices({ ...closeChoices, [id]: event.target.value as "continue" | "stop" })}><option value="">Choose an action</option><option value="continue">Continue this job</option><option value="stop">Stop and preserve files</option></select></label>)}</>}{closeProblem.type === "confirm_delete" && <p>Incomplete app-created bundles will be removed after their jobs stop. Completed and imported bundles are kept.</p>}{closeProblem.type === "waiting" && <><p>{closeProblem.jobIds.length} active generations are reaching a safe checkpoint.</p>{closeProblem.failures?.map((failure) => <p className="error-text" key={failure.id}>{failure.detail}</p>)}</>}<div className="close-modal-actions"><button className="button-quiet" onClick={() => { if (closeProblem.type === "waiting") void api.request("/v1/session/cancel-close", "POST").catch((error) => setNotice(String(error))); setCloseProblem(null); }}>Cancel close</button>{closeProblem.type === "confirm_delete" && <button className="button-primary" onClick={() => void submitClose({ confirm_delete: true })}>Delete and close</button>}{closeProblem.type === "checkpoint_disabled" && <button className="button-primary" disabled={closeProblem.jobIds.some((id) => !closeChoices[id])} onClick={() => void submitClose({ generation_exceptions: closeChoices })}>Apply and close</button>}</div></div></div>}
     </main>
-  </div></Tooltip.Provider>;
+  </div></JobActionContext.Provider></CatalogActionContext.Provider></Tooltip.Provider>;
 }
 
 declare global { interface Window { __TAURI_INTERNALS__?: object } }
