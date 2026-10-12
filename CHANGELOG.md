@@ -14,7 +14,8 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 - Fix issue #444: index storyline and red-herring events relative to the scenario's
   start, including minutes and seconds. Non-hour-aligned runs now execute authored
   activity during its generation pass before lifecycle cleanup; hour-aligned output
-  remains unchanged. Cover both reported start dates and checkpoint/resume equivalence.
+  remains unchanged. Cover both reported start dates and checkpoint/resume equivalence
+  (`f452a4be`).
 
 **Studio usability and recovery**
 
@@ -47,6 +48,10 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
 **Release automation history since the first alpha**
 
+- Build and verify native macOS Apple Silicon and Ubuntu ARM64/x86_64 installers,
+  require all three installer/checksum pairs before publication, and provide build-only
+  previews (`a21b7272`). Recognize Tauri's native `amd64` bundle name while retaining
+  `x86_64` in public AppImage filenames (`52918e62`).
 - Recover tagged release publication after CI workflow failures (`99a0b5e1`).
 - Record successful first-alpha publication and installer acceptance (`3f31c0d1`, `0aa8a2ae`).
 

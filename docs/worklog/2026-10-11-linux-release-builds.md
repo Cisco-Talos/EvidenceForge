@@ -103,3 +103,34 @@ architectures and macOS have packaged-runtime acceptance and exact installer/che
 from the same source commit. Preview artifacts remain in that run for 14 days. Source changes,
 local regression tests and native build results are complete; the remaining release hold is
 user x86_64 desktop testing and the later full release/acceptance gates.
+
+## October 12: approved issue #444 fix and refreshed previews
+
+The user approved including the root-cause authored-hour scheduling correction in 2.2.0a2.
+Source `f452a4bef146bd5bb523057a0ecb753ce2ab4275` is on dev, with its changelog and regression
+tests. Full local routine validation passes: 12,555 passed, 49 skipped. The reported 09:59
+start dates, checkpoint/resume equivalence and unchanged hour-aligned output are recorded in
+[the scheduling worklog](2026-10-12-authored-hour-scheduling.md).
+
+All three native build-only jobs passed in
+[run 38261128080](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/38261128080).
+Each Linux helper/state suite passed 227 tests (one skipped, 145 slow tests deselected), and
+all three Rust shell suites passed 12 tests. Actual installers passed shared packaged runtime,
+resources, behavior identity and checkpoint-enabled generation checks; both AppImages also
+passed bundled GStreamer appsink/scanner checks. Exact installer/checksum checks and uploads pass.
+
+The refreshed x86_64 AppImage is stored separately from the previous preview:
+
+- `dist/linux/f452a4be/EvidenceForge-Studio-2.2.0a2-x86_64-test.AppImage`.
+- Size: **138930680 bytes**.
+- SHA256: `5b6fe2d9e7e12b5a4860f5de0956223639adc7caf56ba897bfb0fe3d18673139`.
+- Downloaded bytes match the adjacent checksum; executable mode and native ELF64 x86_64
+  header are verified. Local preview-installer validation passes.
+
+Use this refreshed image for manual acceptance of the scheduling correction. The prior
+`dist/linux/` preview remains untouched. User desktop acceptance and full release readiness
+gates still precede publication; no tag or publication workflow ran.
+
+The user provided a native x86_64 Ubuntu VM and authorized a shared SSH key for both build
+VMs. Login and a read-only readiness audit are complete; package installation is not yet
+authorized. See [the host readiness worklog](2026-10-12-linux-x64-build-host.md).

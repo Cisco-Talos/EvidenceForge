@@ -65,8 +65,8 @@ are needed.
   regressions pass again after adding absolute-time and RDP-fence coverage.
 - Before/after noon controls have all 41 generated data and ground-truth files byte-identical.
 - Repository Ruff lint/format, whitespace checks and the behavior manifest check against
-  `HEAD` pass. The full release coverage/slow/portability and native installer gates have not
-  been run for this local correction.
+  `HEAD` pass. Full release coverage/slow/portability gates remain for release readiness;
+  subsequent native preview verification is recorded below.
 
 Scratch inputs, original failures and diagnostic runs are retained under
 `/private/tmp/eforge-444-k8rdc519/`. No user scenario or existing generated bundle was modified.
@@ -84,3 +84,21 @@ The PR's routine Linux/Windows, lint, checkpoint durability, slow shards and por
 passed. Its sole failure is the release-version guard on its `main` target. No additional
 dependency change or main merge is needed; the update will reach main through the normal
 stable release integration. Closing the redundant PR preserves that release boundary.
+
+## Approved integration
+
+Committed the approved correction, regression tests and 2.2.0a2 changelog as `f452a4be`
+and pushed to `dev`. PR #443 is closed as superseded, without merging into main.
+The complete routine suite passes locally: 12,555 passed, 49 skipped, 2,179 deselected
+in 731.47 seconds, without coverage. Ruff, whitespace, lockfile, behavior-manifest and
+Python/Studio version synchronization checks pass.
+
+Build-only native previews for this exact commit passed on all three platforms in
+[run 38261128080](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/38261128080).
+Each Linux helper/state suite passed 227 tests with one skip, and each native shell suite
+passed 12 tests. The actual DMG and both AppImages passed packaged runtime/resource/behavior
+verification, checkpoint-enabled generation, Linux bundled GStreamer checks and exact
+installer/checksum validation. The updated x86_64 image is downloaded and checksum-verified
+under `dist/linux/f452a4be/`; its evidence is in the Linux release build worklog.
+No publication workflow or release tag ran. The new local x86_64 VM audit and shared-key
+setup are recorded in [the host worklog](2026-10-12-linux-x64-build-host.md).
