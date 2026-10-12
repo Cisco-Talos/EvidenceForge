@@ -6,7 +6,8 @@ The user provided `192.168.1.233` as the native x86_64 build/test VM and request
 verification and a package/configuration readiness report before installation. The user then
 explicitly authorized creating the shared `eforge-build` SSH key for both build VMs.
 The user subsequently authorized building the latest x86_64 AppImage, including the documented
-build prerequisites. No system trust or sandbox-policy change has been performed.
+build prerequisites. The later Codex installation authorization and its scoped sandbox setup
+are recorded below. No system trust change has been performed.
 Passwords and private/public key contents are not recorded here.
 
 ## Verified host state
@@ -111,3 +112,30 @@ The toolchain installation log is under `/home/eforge/eforge-build-setup/`.
 Manual desktop acceptance is pending the user's test. No GUI launch, release version bump,
 tag creation or publication was performed. This worklog and the contributor umask note are
 documentation recorded after the built snapshot; they do not change the packaged engine.
+
+## Codex installation for native authoring acceptance
+
+The user explicitly requested Codex installation on the x86_64 VM. Installed Codex 0.162.1
+for `eforge` using the [official standalone installer](https://learn.chatgpt.com/docs/codex/cli).
+The executable is `/home/eforge/.local/bin/codex`; its retained standalone package is under
+`/home/eforge/.codex/packages/standalone/releases/0.162.1-x86_64-unknown-linux-musl/`.
+
+The initial npm installation was replaced by the standalone package. Its Node launcher failed
+when invoked directly with the active desktop's inherited PATH, which predates the new Node
+installation. The standalone command works in both a fresh login shell and the active desktop
+environment without needing Node. Studio's command environment also discovers `~/.local/bin`.
+The maintained contributor guide now uses this standalone installation method.
+
+The sandbox probe initially failed with a loopback `RTM_NEWADDR` permission error. Matching
+kernel audit records showed `unprivileged_userns` AppArmor capability denials for `/usr/bin/bwrap`.
+There was no existing matching bubblewrap profile. Following the
+[official Linux prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites), installed
+Ubuntu's `apparmor-profiles` and `apparmor-utils` packages and loaded its unmodified
+`bwrap-userns-restrict` profile at `/etc/apparmor.d/bwrap-userns-restrict` (root-owned, mode 0644).
+Both `bwrap` and `unpriv_bwrap` profiles are loaded. The general
+`kernel.apparmor_restrict_unprivileged_userns` setting remains `1`.
+
+Final checks pass for CLI version/discovery, sandbox startup and reading a project file inside
+the sandbox. Codex reports `Not logged in`; the user must complete their own sign-in before
+Studio authoring acceptance. No credentials were copied from either the Mac or ARM VM, and
+no authenticated model call or Studio GUI launch was performed.

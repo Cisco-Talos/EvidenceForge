@@ -377,14 +377,17 @@ and compatible host libraries. See [AppImage's FUSE guidance](https://docs.appim
 ### Codex authoring and Linux sandbox tests
 
 Codex is optional for engine/CLI tests and deterministic generation. Assisted-authoring
-acceptance requires a separately installed Codex CLI and your own sign-in. One per-user
-installation method, after Node/npm setup, is:
+acceptance requires a separately installed Codex CLI and your own sign-in. Use OpenAI's
+standalone installer on macOS or Linux:
 
 ```bash
-npm install --global --prefix "$HOME/.local" @openai/codex
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
 codex --version
 codex
 ```
+
+The standalone Linux CLI is available at `~/.local/bin/codex` and does not require Node on
+the desktop session's PATH. Node/npm are still needed for Studio source builds.
 
 Complete the sign-in offered by Codex, then use Studio's **Settings → Authoring & tools**
 to select the executable and reconnect when authoring is idle. See the
