@@ -139,3 +139,12 @@ Final checks pass for CLI version/discovery, sandbox startup and reading a proje
 the sandbox. Codex reports `Not logged in`; the user must complete their own sign-in before
 Studio authoring acceptance. No credentials were copied from either the Mac or ARM VM, and
 no authenticated model call or Studio GUI launch was performed.
+
+## User smoke-test feedback
+
+On October 12, after receiving the VM-built x86_64 AppImage and the Codex installation result,
+the user reported: "That x64 works." Record the supplied VM's general x86_64 smoke test as
+successful. Specific GUI/authoring workflows and sign-in completion were not enumerated;
+the preceding agent checks and authentication status remain their recorded observations.
+Other-distro, clean-machine and detailed native acceptance are not inferred from this report.
+Release tagging and publication still require explicit user authorization.

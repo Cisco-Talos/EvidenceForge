@@ -131,6 +131,16 @@ Use this refreshed image for manual acceptance of the scheduling correction. The
 `dist/linux/` preview remains untouched. User desktop acceptance and full release readiness
 gates still precede publication; no tag or publication workflow ran.
 
-The user provided a native x86_64 Ubuntu VM and authorized a shared SSH key for both build
-VMs. Login and a read-only readiness audit are complete; package installation is not yet
-authorized. See [the host readiness worklog](2026-10-12-linux-x64-build-host.md).
+The user provided a native x86_64 Ubuntu VM, authorized a shared SSH key for both build VMs,
+and subsequently requested the latest native build and Codex installation. The VM-built
+`57025df1` preview passes native and packaged checks; Codex 0.162.1 and its sandbox are verified.
+See [the host readiness worklog](2026-10-12-linux-x64-build-host.md) for source/artifact identity
+and setup evidence.
+
+## October 12: user x86_64 smoke-test confirmation
+
+After the latest VM-built AppImage and Codex setup, the user reported: "That x64 works."
+Record this as successful x86_64 smoke-test feedback on the supplied Ubuntu VM. Specific
+workflows were not enumerated, so it does not establish every detailed native acceptance
+contract, other-distro compatibility or clean-machine acceptance. The user has not authorized
+tagging or publication. Full release gates still apply to the eventual release snapshot.
