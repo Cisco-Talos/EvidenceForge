@@ -51,7 +51,7 @@ Initial lifecycle group: 84 passed, one slow test deselected. All 298 frontend t
 generated API freshness and production build pass. The existing frontend chunk-size warning
 remains. Broader native Studio/desktop/artifact/skill regressions pass: 634 tests, 54 expensive
 tests deselected. The final completion/publication/deletion group passes all 46 tests, including
-companion-file guards. Cross-platform CI and updated native previews are pending.
+companion-file guards. The final cross-platform CI and native preview evidence is recorded below.
 An additional fault probe reproduced a completed staging receipt being observed before its
 exclusive publication rename. Completion now requires the exact canonical publisher/kind/name/
 version directory, ignoring staging trees and misplaced receipts. All 26 completion and Studio
@@ -67,3 +67,45 @@ Cross-platform CI exposed four existing launchd fixture failures on Linux: patch
 The helper tests now simulate the platform only in the background-launch module, leaving real
 filesystem semantics and ownership checks intact. All five launch contracts pass on both native
 macOS and the x86_64 Linux VM. This changes tests only; packaged application code is unchanged.
+
+## Updated native previews
+
+Both previews were built from exact application snapshot
+`96642857a82fd11472da649c7364f8e950cc7b90`; later commit `0e5bcdf4` changes only test fixtures.
+Each VM passed 34 publication/Studio tests, all 298 frontend tests, 12 native shell contracts,
+version freshness, packaged CLI/resource checks, checkpoint-enabled generation and bundled
+GStreamer appsink verification. Installer-pair and checksum checks also passed after download.
+
+- x86_64: `dist/linux/96642857-vm/x86_64/EvidenceForge-Studio-2.2.0a2-x86_64-test.AppImage`,
+  141769208 bytes; SHA-256
+  `3dc18c6f3ec011cd9163a66fe3b24f36624a503c9456e13c5b8ebc996ac4141a`.
+- ARM64: `dist/linux/96642857-vm/aarch64/EvidenceForge-Studio-2.2.0a2-aarch64-test.AppImage`,
+  135346696 bytes; SHA-256
+  `9cc15d30f66e0e234e44029f83d688d7f8bd959551b9810bb3a82109c9e8ccd0`.
+
+VM checkout/logs are retained under `~/eforge-previews/96642857/`; existing host checkouts
+and earlier preview installers were preserved. ARM packaging resumed after the Mac backing
+volume ran short of free space and the user restored the VM. Only disposable local Rust
+compilation caches were cleared. The original interrupted log is retained beside the resumed
+log. Both final build statuses are zero.
+
+The user has not yet accepted these updated previews. No release tag or publication was made.
+
+## Integration and cross-platform gates
+
+[PR #446](https://github.com/Cisco-Talos/EvidenceForge/pull/446) merged into `dev` as
+`8562df28bb4fa378e040e6c3c7e58c23381731f6`. All required gates passed in
+[CI run 38283012340](https://github.com/Cisco-Talos/EvidenceForge/actions/runs/38283012340):
+Linux engine 11923 passed, 70 skipped; Windows engine 11960 passed, 33 skipped;
+Studio backend/frontend/native shell/build gates on macOS, Linux x86_64 and ARM64;
+native recovery gates on all three hosts; Windows checkpoint durability; lint and Required CI.
+All nine completion regressions passed on both Linux and Windows. Each native Studio backend
+suite passed 473 tests, with all 298 frontend tests and 12 shell contracts passing.
+
+CI checked out synthetic PR merge `bc5f4effca8143d41c52fc7f4940f40ab8d58ceb` (head `0e5bcdf4`
+into base `f7cb9cea`); its tree matches the integrated dev merge. The Apple Silicon standalone
+app passed isolated packaged CLI/resources, behavior/runtime checks and checkpoint generation.
+The CI archive is saved at `dist/macos/0e5bcdf4-ci/EvidenceForge-Studio-aarch64-test.zip`;
+SHA-256 `9a52210c61a0f4d6102749be999004e8a819f87978d64df7785fc9f093a484df`.
+The downloaded ZIP passes compressed-data integrity verification. This is a test app archive,
+not a release DMG. Updated native GUI acceptance remains open before publication.

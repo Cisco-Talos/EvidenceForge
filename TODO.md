@@ -101,7 +101,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P1 — 2.2.0a2 Linux installer acceptance:** Native Ubuntu 24.04 ARM64 and x86_64
   AppImage builders, packaged verification and Studio recovery CI are implemented; all three
   native installer jobs passed. The user reported the x86_64 setup works on the supplied VM
-  on October 12. Other distro/clean-machine and detailed native acceptance remain open;
+  on October 12. Updated x86_64/ARM64 previews include the publication workflow fix and pass
+  native packaged verification; their acceptance and other distro/clean-machine testing remain
+  open. See the [publication worklog](docs/worklog/2026-10-12-publication-draft-completion.md);
   publication still requires explicit authorization. See the
   [Linux release build worklog](docs/worklog/2026-10-11-linux-release-builds.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
