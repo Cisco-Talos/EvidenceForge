@@ -189,8 +189,16 @@ automatic merging. Add other exact parents with `... draft <source> --parent <ot
 Missing ancestors do not block a self-contained release.
 Legacy source parents record their schema and exact digest without a guessed release label.
 Publication also records the exact draft ID, publisher (when assigned) and digest it finalized,
-while preserving the draft's existing ancestry. The editable draft remains unchanged. If it is
-edited afterward its new contents no longer match that publication snapshot.
+while preserving the draft's existing ancestry. Successful publication completes that exact
+draft: it is no longer listed as a separate editable version, and supported editing/resume
+operations refuse it. Create a new draft from the published release to revise and re-publish.
+The original draft files remain as a read-only historical snapshot, preserving comparisons,
+conversations and captured run associations. Failed validation or publication interrupted before
+installing the release leaves the draft editable. If the release commits before Studio's index
+transfer completes, refresh/restart reconciles the existing release without publishing again.
+Existing drafts with unpublished edits made after an older publication remain visible; those
+edits are never silently discarded. Only the finalized parent is completed, not independent
+sibling drafts or ancestors used to create a fork.
 Studio groups an unassigned source or draft with a same-name release only when exact recorded
 ancestry links them to one unambiguous publisher. Different artifact kinds, renamed forks and
 explicit publisher namespaces remain separate. Missing ancestors can be linked through shared
@@ -215,7 +223,11 @@ label, starting at `1.0.0`. Users may select `--version X.Y.Z` or `--bump patch|
 Review reported warnings, then explicitly acknowledge them with `--accept-warnings` if appropriate.
 Generation and evaluation are optional checks, not publication gates. Partial organization packs
 retain their existing validation semantics. Publication freezes sources, dependencies, selected
-overlays and effective configuration; the draft remains independently editable.
+overlays and effective configuration. Studio replaces the completed draft's library registration
+with the published release, preserving its project and history. Scenario and pack libraries show
+the latest published version by default; **Show previous versions** reveals the earlier releases.
+Explicit pack-version filters can also select an earlier release. This display choice does not
+change release files or exact dependency references.
 
 ## Test and promote dependencies
 

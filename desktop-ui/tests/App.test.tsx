@@ -2103,3 +2103,30 @@ test("missing scenario opens recovery instead of artifact operations", async () 
     expect(screen.queryByRole("button", { name: "Validate scenario" })).toBeNull();
   } finally { snapshot.missing_sources = previous; }
 });
+
+test("scenario library shows the latest release and exposes previous versions on request", async () => {
+  const originalItems = snapshot.items;
+  const originalGroups = snapshot.artifact_groups;
+  snapshot.items = [
+    { ...originalItems[0], id: "old-release", path: `${workspace}/old.yaml`, display_name: "Previous release", version: "1.0.9" },
+    { ...originalItems[0], id: "current-release", path: `${workspace}/current.yaml`, display_name: "Current release", version: "1.0.10" },
+    { ...originalItems[0], id: "active-draft", path: `${workspace}/draft.yaml`, display_name: "Active draft", version: "" },
+  ];
+  snapshot.artifact_groups = Object.fromEntries(snapshot.items.map((entry) => [entry.id, {
+    key: "release-family", name: entry.name, publisher: "testing", published_version: entry.version || null,
+  }]));
+  try {
+    await renderExpandedApp();
+    expect(screen.getByRole("button", { name: "Open scenario Current release" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open scenario Active draft" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Show previous versions (1)" }));
+    expect(screen.getByRole("button", { name: "Open scenario Previous release" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Hide previous versions" }));
+    expect(screen.queryByRole("button", { name: "Open scenario Previous release" })).toBeNull();
+  } finally {
+    snapshot.items = originalItems;
+    snapshot.artifact_groups = originalGroups;
+  }
+});

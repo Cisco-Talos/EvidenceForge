@@ -273,6 +273,9 @@ def delete_artifact_files(source: Path, target: Path, workspace: Path, kind: str
             "publisher": receipt.lifecycle.publisher,
             "version": receipt.lifecycle.version,
             "digest": receipt.digest,
+            "published_draft": receipt.lifecycle.parents[-1].model_dump(mode="json")
+            if receipt.lifecycle.parents and receipt.lifecycle.parents[-1].draft_id
+            else None,
         }
     elif kind in {"industry", "organization"}:
         from evidenceforge.composition.packs import parse_pack_cli_reference
@@ -402,6 +405,32 @@ def _deletion_records(workspace: Path) -> Iterator[dict]:
 def retired_scenario_sources(workspace: Path) -> set[Path]:
     """Find permanently deleted scenarios whose local index still needs cleanup."""
     return retired_artifact_sources(workspace, "scenario")
+
+
+def retired_draft_publications(workspace: Path) -> dict[tuple[str, str, str, str], Path]:
+    """Preserve completed-draft identity when its release is permanently deleted."""
+    from pydantic import ValidationError
+
+    from evidenceforge.schema import ParentReference
+
+    completed: dict[tuple[str, str, str, str], Path] = {}
+    for data in _deletion_records(workspace):
+        release = data.get("release")
+        if not isinstance(release, dict) or not release.get("published_draft"):
+            continue
+        source = workspace.resolve() / safe_relative(data["source"])
+        if source.exists():
+            continue
+        try:
+            parent = ParentReference.model_validate(release["published_draft"])
+        except ValidationError:
+            continue
+        if parent.draft_id and (parent.kind, parent.name) == (
+            release.get("kind"),
+            release.get("name"),
+        ):
+            completed[(parent.kind, parent.name, str(parent.draft_id), parent.digest)] = source
+    return completed
 
 
 def retired_versions(workspace: Path, *, kind: str, name: str, publisher: str) -> set[str]:

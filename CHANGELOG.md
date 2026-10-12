@@ -19,6 +19,10 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
 **Studio usability and recovery**
 
+- Complete scenario and pack drafts after successful publication, preserving their
+  conversations, project assignment and run history. Revise releases through a new
+  draft; show the latest published version by default with older versions available
+  through Show previous versions.
 - Preserve managed scenario sources and conversation identities, reconnect moved drafts,
   and provide explicit recovery for missing source registrations.
 - Recognize untouched starter drafts, defer forecasts and runnable actions until authoring,

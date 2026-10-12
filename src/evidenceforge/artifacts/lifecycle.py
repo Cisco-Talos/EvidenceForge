@@ -136,6 +136,10 @@ def assert_mutable(source: Path) -> None:
     if root is not None:
         verify_release(root)
         raise ArtifactError("this release is immutable; create a separate draft to edit it")
+    from .completion import completed_draft_release
+
+    if completed_draft_release(source) is not None:
+        raise ArtifactError("this draft has been published; create a new draft from its release")
     data = load_scenario_source_graph(source).data
     contract = identify_document(data)
     if contract.lifecycle and contract.lifecycle.status == "published":
@@ -1026,10 +1030,15 @@ def list_versions(
 def list_drafts(project_root: Path, *, kind: ArtifactKind | None = None) -> list[dict[str, Any]]:
     """Discover portable drafts, including sources that still need semantic repair."""
     drafts: list[dict[str, Any]] = []
+    from .completion import published_draft_sources
+
+    completed = published_draft_sources(project_root)
     root = artifact_root(project_root) / "drafts"
     for marker in sorted(root.glob(f"{kind or '*'}/*/*/draft.json")):
         entry = json.loads(marker.read_bytes())["entrypoint"]
         source = marker.parent / safe_relative(entry)
+        if source.resolve() in completed:
+            continue
         try:
             info = inspect_artifact(source)
         except (EvidenceForgeError, OSError, ValueError) as exc:
@@ -1239,6 +1248,12 @@ def publish(
             f"{publisher}/{graph.data['name']}",
         )
     with _publication_lock(project_root):
+        from .completion import completed_draft_release
+
+        if completed_draft_release(source, project_root) is not None:
+            raise ArtifactError(
+                "this draft has been published; create a new draft from its release"
+            )
         if label in _used_versions(
             project_root, kind=kind, name=graph.data["name"], publisher=publisher
         ):

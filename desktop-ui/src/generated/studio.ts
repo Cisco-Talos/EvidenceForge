@@ -1954,6 +1954,8 @@ export interface components {
             name: string;
             /** Publisher */
             publisher?: string | null;
+            /** Published Version */
+            published_version?: string | null;
         };
         /** ArtifactImported */
         ArtifactImported: {

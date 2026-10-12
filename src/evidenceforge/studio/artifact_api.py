@@ -440,6 +440,11 @@ def register_artifact_routes(
                 else:
                     from evidenceforge.studio.contexts import context_path
 
+                    if any(
+                        chat.active and chat.item_id == item.id
+                        for chat in studio.store.conversations(item.workspace)
+                    ):
+                        raise ArtifactError("Finish the active authoring turn before publishing")
                     if item.kind == "scenario" and is_starter_draft(item.path):
                         raise ArtifactError(
                             "Ready to author — continue the conversation to build this scenario."

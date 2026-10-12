@@ -20,6 +20,7 @@ class ArtifactGroup(BaseModel):
     key: str
     name: str
     publisher: str | None = None
+    published_version: str | None = None
 
 
 class ArtifactLineage(BaseModel):
@@ -112,5 +113,8 @@ def group_lineage(records: dict[str, ArtifactLineage]) -> dict[str, ArtifactGrou
             key=canonical_bytes([record.kind, record.name, identity]).decode(),
             name=record.name,
             publisher=publisher,
+            published_version=record.reference.version
+            if record.reference.source_schema_version is None and not record.reference.draft_id
+            else None,
         )
     return groups

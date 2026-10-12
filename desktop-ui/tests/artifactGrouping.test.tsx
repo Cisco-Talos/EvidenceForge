@@ -3,7 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Tooltip } from "radix-ui";
 import type { CatalogItem, StudioApi, StudioSnapshot } from "../src/api";
-import { artifactGroup, type ArtifactGroups } from "../src/artifactGrouping";
+import { artifactGroup, latestPublishedItems, type ArtifactGroups } from "../src/artifactGrouping";
 import { ScenarioLibrary } from "../src/ScenarioLibrary";
 import { PackLibrary } from "../src/PackLibrary";
 
@@ -71,4 +71,22 @@ test("pack lists use the same ancestry grouping and keep each exact version avai
   expect([...document.querySelectorAll("[data-artifact-identity]")].map((row) => row.getAttribute("data-artifact-identity"))).toEqual(["davidjbianco/Test_scenario_1", "davidjbianco/Test_scenario_1"]);
   expect(screen.getByRole("button", { name: "Open A Published Title 1.0.0" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Open Maple Office - PowerShell Discovery" })).toBeInTheDocument();
+});
+
+test("latest releases use numeric versions while keeping active drafts, legacy files and publisher forks", () => {
+  const old = { ...item("old", "team"), version: "1.0.9" };
+  const current = { ...item("current", "team"), version: "1.0.10" };
+  const fork = { ...item("fork", "other"), version: "1.0.1" };
+  const draft = item("active", "team");
+  const legacy = { ...item("legacy", "team"), version: "9.0.0" };
+  const metadata: ArtifactGroups = {
+    old: { key: "team", name: old.name, publisher: "team", published_version: "1.0.9" },
+    current: { key: "team", name: current.name, publisher: "team", published_version: "1.0.10" },
+    fork: { key: "other", name: fork.name, publisher: "other", published_version: "1.0.1" },
+    active: { key: "team", name: draft.name, publisher: "team", published_version: null },
+    legacy: { key: "team", name: legacy.name, publisher: "team", published_version: null },
+  };
+  expect(latestPublishedItems([old, current, fork, draft, legacy], metadata).map((entry) => entry.id))
+    .toEqual(["current", "fork", "active", "legacy"]);
+  expect(latestPublishedItems([old, current], {}).map((entry) => entry.id)).toEqual(["old", "current"]);
 });

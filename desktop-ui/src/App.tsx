@@ -1,3 +1,4 @@
+import { latestPublishedItems } from "./artifactGrouping";
 import { StateMaintenance } from "./StateMaintenance";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2, Trash2, X } from "lucide-react";
@@ -59,6 +60,7 @@ function App() {
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showHidden, setShowHidden] = useState(false);
+  const [showPreviousVersions, setShowPreviousVersions] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [scenarioSort, setScenarioSort] = useState<ScenarioSort>("name");
   const [packFilter, setPackFilter] = useState<"packs" | "industry_pack" | "organization_pack">("packs");
@@ -129,7 +131,7 @@ function App() {
   const scenarioCount = (snapshot?.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden).length || 0) + allDrafts.length;
   const ungroupedCount = (snapshot?.items.filter((entry) => inLibrary(entry.kind) && !entry.hidden && !entry.project_id).length || 0) + allDrafts.filter((draft) => !draft.draft_project_id).length;
   const searchKey = `${kind}:${search.trim()}:${snapshot?.settings.search_match_limit || 5}:${snapshot?.items.filter((entry) => entry.kind === kind || kind === "packs" && entry.kind !== "scenario").map((entry) => `${entry.id}:${entry.search_revision || entry.source_sha256}`).join(";")}`;
-  const library = useMemo(() => snapshot?.items.filter((entry) =>
+  const matchingLibrary = useMemo(() => snapshot?.items.filter((entry) =>
     (entry.kind === kind || (kind === "packs" && entry.kind !== "scenario")) && (!entry.hidden || showHidden) &&
     (selectedProjectId === null || (selectedProjectId === "ungrouped" ? !entry.project_id : entry.project_id === selectedProjectId)) &&
     (kind === "scenario" || ((!packCriteria.publisher || entry.publisher === packCriteria.publisher) && (!packCriteria.version || entry.version === packCriteria.version) && (!packCriteria.source || entry.pack_source === packCriteria.source))) &&
@@ -137,6 +139,9 @@ function App() {
       ? searchResult.ids.has(entry.id)
       : `${artifactTitle(entry)} ${entry.name} ${entry.description} ${entry.publisher || ""} ${entry.publisher_display_name || ""} ${entry.version} ${entry.requires_evidenceforge || ""} ${entry.pack_source || ""}`.toLowerCase().includes(search.toLowerCase())))).map((entry) => search.trim() && searchResult?.key === searchKey ? searchResult.hits.get(entry.id) || entry : entry) || [],
     [snapshot, kind, search, searchKey, searchResult, selectedProjectId, packCriteria, showHidden]);
+  const latestLibrary = latestPublishedItems(matchingLibrary, snapshot?.artifact_groups);
+  const previousVersionCount = matchingLibrary.length - latestLibrary.length;
+  const library = showPreviousVersions || (kind !== "scenario" && !!packCriteria.version) ? matchingLibrary : latestLibrary;
   const item = snapshot?.items.find((entry) => entry.id === selectedId) || null;
   const projectScenarios = snapshot?.items.filter((entry) => entry.kind === "scenario" && !entry.hidden && (selectedProjectId === "ungrouped" ? !entry.project_id : entry.project_id === selectedProjectId)) || [];
   const projectAttention = snapshot ? projectScenarios.filter((entry) => scenarioStates(entry, snapshot).some((state) => ["error", "warning"].includes(state.state))).length : 0;
@@ -761,6 +766,7 @@ function App() {
 
               {section === "scenarios" && <select className="library-sort" aria-label="Sort scenarios" value={scenarioSort} onChange={(event) => setScenarioSort(event.target.value as ScenarioSort)}><option value="name">Name A–Z</option><option value="updated">Recently updated</option><option value="project">Project A–Z</option></select>}
               {section === "scenarios" && hiddenCount > 0 && <button className={`hidden-filter ${showHidden ? "active" : ""}`} aria-label={showHidden ? "Hide hidden items" : "Show hidden items"} title={showHidden ? "Hide hidden items again" : "Include hidden items in this library"} onClick={() => setShowHidden(!showHidden)}><Filter size={15} /> {showHidden ? "Showing hidden" : `Hidden (${hiddenCount})`}</button>}
+              {previousVersionCount > 0 && <button className={`hidden-filter ${showPreviousVersions ? "active" : ""}`} aria-pressed={showPreviousVersions} onClick={() => setShowPreviousVersions(!showPreviousVersions)}>{showPreviousVersions ? "Hide previous versions" : `Show previous versions (${previousVersionCount})`}</button>}
               <button className={`icon-button saved-views-toggle ${savedViews.length ? "has-views" : ""}`} aria-label="Saved views" title="Saved views" onClick={() => setShowViews(true)}><Bookmark size={17} /></button>
               <span className="result-count">{library.length + drafts.length} {library.length + drafts.length === 1 ? "item" : "items"}</span>
             </div>

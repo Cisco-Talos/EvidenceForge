@@ -276,7 +276,14 @@ def register_lifecycle_commands(app: typer.Typer, *, pack: bool = False) -> None
         """Find the same draft for another editing session without allocating a release."""
 
         def operation() -> dict[str, Any]:
-            info = inspect_artifact(resolve_reference(source, _root(project_root)))
+            path = resolve_reference(source, _root(project_root))
+            from evidenceforge.artifacts.completion import completed_draft_release
+
+            if completed_draft_release(path, _root(project_root)) is not None:
+                raise ValueError(
+                    "this draft has been published; create a new draft from its release"
+                )
+            info = inspect_artifact(path)
             if not info.get("lifecycle") or info["lifecycle"]["status"] != "draft":
                 raise ValueError("resume requires a draft; use draft to edit a published release")
             return info

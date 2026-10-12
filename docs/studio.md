@@ -248,6 +248,11 @@ reserved until publication succeeds.
 **Publish locally…** validates a draft, lets you review its release version and warnings, and
 freezes its sources, supporting assets, dependencies, and effective configuration. Publication
 creates a release in the local workspace; it does not upload to GitHub or a remote registry.
+The release replaces its completed draft in the library, keeping the same project assignment,
+conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
+that revision creates another immutable version. Independent drafts remain available. Libraries
+show the latest published version by default; **Show previous versions** reveals older versions
+without changing their files or dependency references.
 Publish required pack dependencies before publishing a scenario that depends on them. If files
 change after review, refresh the review before confirming.
 
