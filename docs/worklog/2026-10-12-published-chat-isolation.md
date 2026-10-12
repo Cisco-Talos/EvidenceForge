@@ -51,3 +51,17 @@ sandbox; otherwise nested `sandbox-exec` fails even for the positive read check.
 Product version remains 2.2.0a2 and generation behavior is unchanged. No tag or release is
 published. Native interactive acceptance of the updated conversations remains necessary before
 the user authorizes publication; earlier installer previews predate this change.
+
+## Local acceptance follow-up
+
+The user declined pushing this branch, opening a PR or merging into dev. Keep subsequent changes
+local until explicitly authorized. macOS source-launch testing confirmed that the read-only chat
+warning appears. The user requested shorter text without a New draft instruction inside chat,
+where that action is unavailable. The read-only warning remains visible; editable drafts no
+longer show their publication-origin notice. These are presentation changes only.
+
+Previous-version access already exists through **Show previous versions (N)** in the Scenarios
+and Packs library toolbar, outside the selected item's conversation. The Studio guide now
+specifies that location and the current-filter condition for showing the toggle.
+The affected ChatView/App test groups pass all 114 tests, including the existing previous-version
+toggle contract. Production frontend build, Ruff and diff hygiene checks pass.

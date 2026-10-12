@@ -229,6 +229,8 @@ to revise an existing release. Published originals are immutable.
 After publication, existing conversations keep their history and become **read-only discussions**
 of the published version. New conversations on that version also allow questions without creating
 a draft. To make changes, select **New draft**, then start a **new conversation** on that draft.
+Chat keeps a short read-only warning visible for published discussions; editable drafts have no
+publication-origin notice. **New draft** is available in the item's workspace, outside chat.
 The same workflow applies to scenarios, industry packs and organization packs. Unmanaged legacy
 sources can be discussed; adopt them with **New draft** before assisted editing.
 
@@ -264,8 +266,11 @@ creates a release in the local workspace; it does not upload to GitHub or a remo
 The release replaces its completed draft in the library, keeping the same project assignment,
 conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
 that revision creates another immutable version. Independent drafts remain available. Libraries
-show the latest published version by default; **Show previous versions** reveals older versions
-without changing their files or dependency references.
+show the latest published version by default. Return to the **Scenarios** or **Packs** library and
+select **Show previous versions (N)** beside the search/filter controls to reveal older versions.
+Open an older version's row to inspect it, discuss it read-only, run it or create a new draft.
+The toggle appears when the current library filters include multiple published versions in the
+same family; it does not change their files or dependency references.
 Publish required pack dependencies before publishing a scenario that depends on them. If files
 change after review, refresh the review before confirming.
 

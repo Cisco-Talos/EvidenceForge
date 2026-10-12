@@ -6,7 +6,7 @@ import type { Conversation, StudioApi, StudioEvent } from "../src/api";
 
 afterEach(() => { cleanup(); });
 
-test("published chat permits questions and explains that edits need a new draft", async () => {
+test("published chat permits questions and displays its read-only status", async () => {
   const request = vi.fn(async (path: string) => {
     if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
     if (path.endsWith("/history")) return { thread: { turns: [] } };
@@ -18,7 +18,6 @@ test("published chat permits questions and explains that edits need a new draft"
     codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
     subscribeEvents={() => () => undefined} onError={vi.fn()} />);
   expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
-  expect(screen.getByText(/select New draft and start a new conversation/)).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).disabled).toBe(false);
   expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
 });
@@ -26,7 +25,7 @@ test("published chat permits questions and explains that edits need a new draft"
 test("publication refreshes the same conversation's access without reopening chat", async () => {
   let published = false;
   const request = vi.fn(async (path: string) => {
-    if (path.endsWith("/access")) return published ? { mode: "discussion", version: "1.0.0" } : { mode: "draft" };
+    if (path.endsWith("/access")) return published ? { mode: "discussion", version: "1.0.0" } : { mode: "draft", based_on_version: "0.9.0" };
     if (path.endsWith("/history")) return { thread: { turns: [] } };
     if (path === "/v1/codex/pending") return [];
     return { available: true, account_ready: true };
