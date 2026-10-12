@@ -5,7 +5,14 @@ from pathlib import Path
 
 from evidenceforge.models.exceptions import EvidenceForgeError
 
-from .lifecycle import _safe_path, artifact_root, inspect_artifact, safe_relative, verify_release
+from .lifecycle import (
+    _safe_path,
+    artifact_root,
+    inspect_artifact,
+    safe_relative,
+    storage_name,
+    verify_release,
+)
 
 
 def published_draft_sources(
@@ -30,6 +37,16 @@ def published_draft_sources(
     for marker in artifacts.glob("releases/*/*/*/*/release.json"):
         try:
             receipt = verify_release(marker.parent)
+            expected = (
+                artifacts
+                / "releases"
+                / str(receipt.lifecycle.publisher)
+                / receipt.kind
+                / storage_name(receipt.name)
+                / str(receipt.lifecycle.version)
+            )
+            if marker.parent != expected:
+                continue
             if not receipt.lifecycle.parents:
                 continue
             parent = receipt.lifecycle.parents[-1]

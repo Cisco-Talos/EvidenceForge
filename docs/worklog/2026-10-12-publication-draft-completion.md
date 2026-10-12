@@ -52,6 +52,10 @@ generated API freshness and production build pass. The existing frontend chunk-s
 remains. Broader native Studio/desktop/artifact/skill regressions pass: 634 tests, 54 expensive
 tests deselected. The final completion/publication/deletion group passes all 46 tests, including
 companion-file guards. Cross-platform CI and updated native previews are pending.
+An additional fault probe reproduced a completed staging receipt being observed before its
+exclusive publication rename. Completion now requires the exact canonical publisher/kind/name/
+version directory, ignoring staging trees and misplaced receipts. All 26 completion and Studio
+source-history tests pass with that correction, including a read during the pre-rename fault.
 Generation behavior remains revision 162 with the unchanged surface digest. Product
 version remains 2.2.0a2. No release tagging or publication is authorized or performed.
 

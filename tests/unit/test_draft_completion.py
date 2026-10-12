@@ -88,6 +88,8 @@ def test_failed_publication_leaves_draft_available_for_edits_and_retry(
     real = lifecycle._publish_directory
 
     def fail(staging: Path, destination: Path) -> None:
+        assert published_draft_sources(workspace) == {}
+        assert_mutable(source)
         raise OSError("Interrupted before atomic publication")
 
     monkeypatch.setattr(lifecycle, "_publish_directory", fail)
