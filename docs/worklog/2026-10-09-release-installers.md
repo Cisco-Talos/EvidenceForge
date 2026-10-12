@@ -94,7 +94,8 @@ cross-account and public Studio acceptance items in TODO.md remain independent r
 ## Local alpha DMG build
 
 - User requested the DMG on October 9. Built the current working tree with
-  `uv run --no-sync python scripts/package_studio_macos.py --build-app --release`.
+  the macOS release-named build procedure now maintained in
+  [CONTRIBUTING.md](../../CONTRIBUTING.md#studio-development-on-macos).
   No source commit, tag push or GitHub publication was performed.
 - Apple Silicon installer: `dist/macos/EvidenceForge-Studio-2.2.0a1-aarch64.dmg`
   (36,084,438 bytes), with its `.dmg.sha256` companion. SHA256:

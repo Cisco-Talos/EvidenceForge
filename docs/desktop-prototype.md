@@ -1,8 +1,8 @@
 # Desktop prototype retired
 
 The Qt prototype was replaced by EvidenceForge Studio after core-parity acceptance on
-October 2, 2026. Use `uv run eforge-desktop` with the
-[Studio development setup](../CONTRIBUTING.md#studio-development-on-macos).
+October 2, 2026. Use the source launch and build/test instructions in
+[CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).
 `eforge-studio` remains an equivalent alias. For app installation and workflows, see the
 [Studio guide](studio.md).
 

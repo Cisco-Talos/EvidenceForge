@@ -39,17 +39,9 @@ Source synchronization retained replacement backups under
 Git metadata and private workspace/state were not synchronized. No VM GUI/helper was active
 before the source build; the user's scenario files and SQLite state were not edited for building.
 
-```sh
-# Linux source executable, retaining the existing small debug build profile
-uv sync --frozen --extra studio --extra dev
-CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 npm --prefix desktop-ui run build:native -- --debug --no-bundle -- --locked
-
-# Linux standalone installer
-CARGO_BUILD_JOBS=2 uv run --no-sync python scripts/package_studio_linux.py
-
-# macOS standalone app and DMG; local test filename, unsigned/unnotarized
-uv run --no-sync python scripts/package_studio_macos.py --build-app
-```
+Maintained source and standalone installer build commands are in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup). This record retains the
+native build environment, outputs and acceptance results rather than a second build recipe.
 
 ## Evidence and remaining work
 

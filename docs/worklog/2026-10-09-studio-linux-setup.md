@@ -1,5 +1,8 @@
 # Studio Linux build environment
 
+This is a dated execution record. Maintained setup, build and test procedures are in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup).
+
 ## Decisions and authorization
 
 October 9, 2026: prepare Linux Studio support with ARM64 first, then x64.
@@ -24,15 +27,8 @@ requested a durable record of every setup change for future Linux build document
 
 ## Installed Ubuntu packages
 
-Executed over SSH:
-
-```bash
-sudo apt-get update
-sudo apt-get -o Dpkg::Use-Pty=0 install -y \
-  build-essential curl git pkg-config ca-certificates file wget xz-utils \
-  libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-  libayatana-appindicator3-dev librsvg2-dev libfuse2t64
-```
+Installed the Ubuntu native build prerequisites over SSH. The maintained package recipe is in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#ubuntu-2404-prerequisites).
 
 APT installed 157 new packages, including transitive development dependencies;
 it upgraded and removed none. Existing explicitly requested packages were marked
@@ -54,8 +50,8 @@ that still require FUSE 2. No distribution upgrade was performed.
 
 ## AppImage build dependency follow-up
 
-AppImage packaging follow-up on October 10 added `patchelf` **0.18.0-1.1build1** with
-`sudo apt-get -o Dpkg::Use-Pty=0 install -y patchelf`. APT installed this one package and
+AppImage packaging follow-up on October 10 added `patchelf` **0.18.0-1.1build1** through APT.
+APT installed this one package and
 upgraded/removed none. The GStreamer AppImage bundling plugin needs it to rewrite plugin/helper
 library paths. `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good` and `gstreamer1.0-tools`
 were already installed; the host's `gst-inspect-1.0 appsink` worked before the fix. No system
@@ -74,29 +70,17 @@ Installed without sudo into the development account:
   Installed under `~/.local/share/node/node-v22.23.3-linux-arm64` with `node`,
   `npm`, `npx`, and `corepack` symlinks in `~/.local/bin`.
 - uv **0.12.24**: downloaded the versioned official installer at
-  `https://astral.sh/uv/0.12.24/install.sh`, inspected it, then executed
-  `UV_NO_MODIFY_PATH=1 sh ~/eforge-build-setup/uv-install.sh`.
+  `https://astral.sh/uv/0.12.24/install.sh` and ran the inspected installer without modifying the login profile.
   `uv` and `uvx` are installed in `~/.local/bin`. No pip installation was used.
 - Rust/Cargo **1.99.0**, rustup **1.29.1**: downloaded and inspected
-  `https://sh.rustup.rs`, then ran
-  `sh ~/eforge-build-setup/rustup-install.sh -y --profile minimal --default-toolchain stable --no-modify-path`.
+  `https://sh.rustup.rs`, then ran the installer with a minimal stable toolchain and no profile modification.
   Host target is `aarch64-unknown-linux-gnu`. Toolchains live under `~/.rustup`
   and executables under `~/.cargo/bin`. Stable resolved to Rust 1.99.0 in this session;
-  an exact replay can select `--default-toolchain 1.99.0` instead of `stable`.
+  this record retains the installed version for reproducibility.
 
-The stock Ubuntu `~/.profile` already adds `~/.local/bin` when it exists.
-Added this block to `~/.profile` for Rust:
-
-```sh
-# Rust toolchain for EvidenceForge builds.
-if [ -f "$HOME/.cargo/env" ]; then
-    . "$HOME/.cargo/env"
-fi
-```
-
-Verified tools in a fresh `bash -lc` login shell. For noninteractive SSH commands,
-use a login shell or explicitly set
-`PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"`.
+The stock Ubuntu profile already handled the user executable directory. Added Rust environment
+loading to the login profile and verified discovery in a fresh login shell. The maintained
+PATH procedure is in [CONTRIBUTING.md](../../CONTRIBUTING.md#uv-rust-and-login-shell-path).
 
 ## Verification and retained evidence
 
@@ -117,9 +101,7 @@ use a login shell or explicitly set
 In a subsequent October 9 request, the user authorized cloning EvidenceForge
 under the VM's home directory and selecting `dev`:
 
-```bash
-git clone --branch dev https://github.com/Cisco-Talos/EvidenceForge.git "$HOME/EvidenceForge"
-```
+Source checkout creation follows [CONTRIBUTING.md](../../CONTRIBUTING.md#checkout-and-locked-dependencies).
 
 Checkout: `/home/eforge/EvidenceForge`. Branch `dev` tracks `origin/dev`; the
 working tree was clean at `0aa8a2aee160334808159f6d34e11b2f1962ae67`
@@ -129,10 +111,7 @@ working tree was clean at `0aa8a2aee160334808159f6d34e11b2f1962ae67`
 
 After the user's snapshot/reboot, synced locked project dependencies:
 
-```bash
-uv sync --frozen --extra studio --extra dev
-npm --prefix desktop-ui ci
-```
+Locked dependency preparation follows [CONTRIBUTING.md](../../CONTRIBUTING.md#checkout-and-locked-dependencies).
 
 uv installed 57 packages into `.venv`; npm installed 312 packages. npm reported
 one high-severity advisory for `source-map-js` (GHSA-68fv-2mgg-jv7q); retained
@@ -142,9 +121,7 @@ the audit JSON without changing the lockfile. CLI version output and
 Started the following development build with limited parallelism and debug
 symbols disabled because the root filesystem had only 6.4 GiB available:
 
-```bash
-CARGO_BUILD_JOBS=2 CARGO_PROFILE_DEV_DEBUG=0 npm --prefix desktop-ui run tauri -- build --debug --no-bundle -- --locked
-```
+The source-build procedure is maintained in [CONTRIBUTING.md](../../CONTRIBUTING.md#source-launch-and-studio-tests).
 
 The frontend build succeeded. Rust compilation was interrupted when the user
 asked to expand storage; no successful native build or packaged artifact is
@@ -239,9 +216,7 @@ Unauthenticated curl to `https://chatgpt.com/` failed certificate validation
 Access, terminating at `Cisco Secure Access Root CA`. Exported the existing
 public root certificate from the Mac Keychain, without accessing private keys:
 
-```bash
-security find-certificate -a -c 'Cisco Secure Access Root CA' -p
-```
+The public root was exported through the Mac Keychain; no private key was accessed.
 
 Root SHA256 fingerprint:
 `5E:4B:0E:86:FC:DB:40:5D:15:5E:67:40:55:3B:56:DE:D9:C5:98:F9:BE:23:57:97:69:3A:B3:02:2E:26:82:82`.
@@ -263,10 +238,7 @@ the Mac export to one PEM certificate with `openssl x509` (the export contained
 multiple matching certificates), retained it as
 `~/eforge-build-setup/cisco-secure-access-root-ca.crt`, then installed it:
 
-```bash
-sudo install -m 0644 ~/eforge-build-setup/cisco-secure-access-root-ca.crt /usr/local/share/ca-certificates/cisco-secure-access-root-ca.crt
-sudo update-ca-certificates
-```
+Installed the approved root into Ubuntu's system CA store and refreshed its trust bundle.
 
 Verified the normalized root has the recorded SHA256 fingerprint. Reconnected
 through Studio's `/v1/codex/reconnect` with `interrupt_active=false`, preserving
@@ -346,11 +318,9 @@ read its extra profile without loading it. Its bwrap parent permits sandbox
 setup capabilities; its child profile denies capabilities. Checked existing
 AppArmor profile files for conflicting bwrap attachments; none were found.
 
-[OpenAI's sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites)
-document installing `apparmor-profiles apparmor-utils`, copying the extra
-`bwrap-userns-restrict` profile into `/etc/apparmor.d`, and loading it with
-`apparmor_parser -r` for Ubuntu 24.04. macOS instead uses its built-in Seatbelt
-framework, which explains the different setup requirement.
+The official Ubuntu bubblewrap profile procedure is now maintained in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#codex-authoring-and-linux-sandbox-tests).
+macOS instead uses its built-in Seatbelt framework, which explains the different setup requirement.
 
 Automatic approval review rejected the combined package-install/profile-load
 command because this persistent AppArmor exception grants bubblewrap namespace,
@@ -358,13 +328,7 @@ capability and mount access, and diagnosing the sandbox did not explicitly
 authorize that boundary change. The rejected command did not run. The user then
 explicitly authorized installing and loading this exact Ubuntu profile.
 
-Completed the documented setup:
-
-```bash
-sudo apt-get -o Dpkg::Use-Pty=0 install -y apparmor-profiles apparmor-utils
-sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
-sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-```
+Loaded the approved Ubuntu bubblewrap profile.
 
 APT added four packages: `apparmor-profiles`, `apparmor-utils`,
 `python3-apparmor`, and `python3-libapparmor`, all version
@@ -374,9 +338,7 @@ Both `kernel.apparmor_restrict_unprivileged_userns` and
 
 Verified a fresh Codex sandbox command reads the installed skill successfully:
 
-```bash
-codex sandbox -- /usr/bin/head -n 3 /home/eforge/.agents/skills/eforge-scenario/SKILL.md
-```
+Executed a fresh sandboxed read of the installed scenario skill.
 
 It returned the skill's YAML frontmatter with exit code 0. Codex 0.162.0 uses
 `codex sandbox -- COMMAND` on this VM; the older `codex sandbox linux` spelling
@@ -529,12 +491,8 @@ configuration for restoration; the user will verify the Mac startup notice.
 Replaced manual tar/SCP source transfers with `scripts/sync_linux_vm.py`.
 Run from the Mac:
 
-```sh
-uv run --no-sync python scripts/sync_linux_vm.py --dry-run \
-  eforge@192.168.191.129 /home/eforge/EvidenceForge
-uv run --no-sync python scripts/sync_linux_vm.py \
-  eforge@192.168.191.129 /home/eforge/EvidenceForge
-```
+Source synchronization usage is maintained in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#remote-vm-source-synchronization).
 
 Both machines already have rsync installed. SSH uses the existing VM account;
 the script contains no password or machine-specific defaults. It copies tracked
@@ -603,15 +561,9 @@ authoring around one canonical source; recovery needs explicit moved/missing
 source handling that preserves associated conversations and runs rather than
 blindly deleting catalog/history. No fix or test run was performed.
 
-## Next work
+## Subsequent work
 
-Use this record to prepare the Linux developer setup section after the first
-successful build. Extend native GUI acceptance beyond initial startup/rendering.
-Linux standalone runtime/bootstrap and AppImage
-packaging are still implementation work. Actual GUI acceptance should use the
-VM desktop; SSH's `tty` session is not a graphical session.
-
-References: [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/),
-[uv installation](https://docs.astral.sh/uv/getting-started/installation/),
-[Rust installation](https://rust-lang.org/tools/install/),
-[AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
+Native AppImage packaging and verified CI previews are implemented; release and remaining
+acceptance evidence are in the [Linux build worklog](2026-10-11-linux-release-builds.md).
+Maintained environment setup and native acceptance procedures are in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#development-setup).

@@ -57,63 +57,16 @@ latest. Do not manually push a stable tag to initiate this path.
 The publisher requires all six assets: `EvidenceForge-Studio-VERSION-aarch64.dmg`,
 `EvidenceForge-Studio-VERSION-aarch64.AppImage`, `EvidenceForge-Studio-VERSION-x86_64.AppImage`,
 and each installer's adjacent `.sha256`. Developer test builds retain the `-test` suffix.
-The macOS release build command is:
+Installer environment setup, local macOS/Linux build and verification commands, and
+build-only CI dispatch/download instructions are maintained in
+[CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).
+Both native Linux architectures use Ubuntu 24.04/glibc 2.39; other distro acceptance remains
+open. Manual x86_64 desktop acceptance must pass before the 2.2.0a2 release.
 
-```sh
-uv run python scripts/package_studio_macos.py --build-app --release
-```
-
-Building locally does not publish. Automatic builds retain the current unsigned/unnotarized
-packaging policy. Signing/notarization and additional platform acceptance are separate work.
-
-## Local Linux AppImage builds
-
-Local builds use the unpublished `-test` filename and native architecture; building does not
-tag or upload anything. Use `--architecture x86_64` on a native x86_64 builder or
-`--architecture aarch64` on a native ARM64 builder. `--release` removes the test filename suffix
-but does not publish.
-On the Ubuntu 24.04 builder, after `uv sync --frozen --extra studio --extra dev` and
-`npm --prefix desktop-ui ci`, install the AppImage plugin build requirements and run:
-
-```sh
-sudo apt-get install patchelf gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-uv run --no-sync python scripts/package_studio_linux.py
-```
-
-The script reuses the macOS payload assembly path with a separate checksum-pinned Linux Python
-lock, installs locked runtime dependencies, and bundles a native AppImage. Outputs go to
-`dist/linux/` with a SHA256 file. GStreamer plugins and their scanner are bundled for WebKitGTK;
-`patchelf` is a build dependency, not a requirement on users' machines.
-Payload assembly verifies the source behavior manifest, rejects macOS transfer metadata in the
-wheel, and checks the installed package against its generation behavior declaration before
-creating runtime archives. The same integrity gates apply to local macOS assembly.
-Native `aarch64` and `x86_64` builds are supported by the script;
-CI uses `ubuntu-24.04-arm` and `ubuntu-24.04` respectively. Cross-compiling ARM AppImages is not
-supported by the upstream bundler. The build baseline is Ubuntu 24.04/glibc 2.39; other distro
-acceptance remains open. Manual x86_64 desktop acceptance must pass before the 2.2.0a2 release.
-See [Tauri's native ARM requirement](https://v2.tauri.app/distribute/appimage/#appimages-for-arm-based-devices).
-
-## Build-only CI artifacts
-
-`installers.yml` shares the same native builders and packaged verification with Release, with
-read-only repository permissions and no tag or publication steps. Packaging changes pushed to
-`dev` build all three preview installers automatically. Manual builds select one platform:
-
-```sh
-gh workflow run installers.yml --ref dev -f platform=linux-x86_64
-```
-
-The workflow must first be registered by its `dev` push. Download the completed run's
-`preview-installer-linux-x86_64` artifact (AppImage plus SHA256) from its Actions page, or:
-
-```sh
-gh run download RUN_ID --name preview-installer-linux-x86_64 --dir dist/linux
-```
-
-Preview Linux builders gate native helper lifecycle and state recovery, Rust shell contracts,
-then inspect the actual AppImage without requiring FUSE. The extracted private runtime runs
-without checkout/Python PATH entries in an isolated temporary home. The same runtime checks run
-for macOS. These automated checks do not replace the user's desktop acceptance.
+Building locally or dispatching the read-only installer workflow does not publish. Preview
+builds keep the `-test` suffix; `--release` removes it without publishing. The workflow uses
+the same native builders and packaged verification for previews and releases. Signing,
+notarization and additional platform acceptance remain separate release work.
 
 ## Failed runs and retries
 
@@ -141,7 +94,7 @@ the tag or merge main. Instrumented Linux release coverage has a 60-minute job b
 Linux checks retain their 25-minute budget. Prefer the original run's failed-job retry when a
 draft already contains assets, since rebuilding can change installer bytes.
 
-The build job uses a platform matrix. Future Linux/Windows support should add native build and
+The build job uses a platform matrix. Additional platform support should add native build and
 verification entries, versioned installer names and explicit required-asset validation. All enabled
 platforms must succeed before the shared publication job exposes a release. Keep routine PR CI's
 app ZIP artifacts separate from release installers.

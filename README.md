@@ -338,20 +338,12 @@ uv run eforge eval ./output
 ## Development
 
 EvidenceForge Studio is the local Tauri desktop app for scenario authoring and generation jobs.
-The GUI currently supports **macOS only**; Linux and Windows GUI support is deferred for later
-exploration. This does not change the engine or CLI platform support described above.
-Run it with `uv run eforge-desktop` after following
-[Studio development in CONTRIBUTING.md](CONTRIBUTING.md#studio-development-on-macos).
+Native developer builds target Apple Silicon macOS and Ubuntu 24.04 ARM64/x86_64. Linux
+installers remain previews pending desktop acceptance; Windows Studio delivery is deferred.
+Engine and CLI platform support is described above.
 
-```bash
-uv sync --all-extras
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-```
-
-See [Contributing](CONTRIBUTING.md) for the complete development workflow, extended test tiers,
-coverage gate, coding conventions, and external-parser validation requirements.
+See [Contributing](CONTRIBUTING.md#development-setup) for all build/test environment setup,
+source launches, installer builds, test tiers, coding conventions and external-parser validation.
 
 ## Documentation
 

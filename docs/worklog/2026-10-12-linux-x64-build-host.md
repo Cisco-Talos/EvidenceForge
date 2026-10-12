@@ -23,30 +23,18 @@ Passwords and private/public key contents are not recorded here.
   ChatGPT returns HTTP 403 to an anonymous HEAD request with valid TLS; this does not
   establish authenticated Codex access. No missing CA trust is observed.
 
-## Missing build tools and dependencies
+## Readiness against contributor requirements
 
-User toolchains: uv, Node.js 22/npm and stable Rust/rustup/Cargo. Codex is absent and must
-be installed and authenticated separately for assisted-authoring acceptance.
-The stock login profile already supports `~/.local/bin`; it does not yet source
-`~/.cargo/env`, so Rust's login-shell PATH setup remains to be added with its installation.
+The maintained toolchain/package list, PATH configuration and sandbox diagnostics are in
+[CONTRIBUTING.md](../../CONTRIBUTING.md#ubuntu-2404-prerequisites).
+At this audit, the native compiler, uv/Node/Rust toolchains and Tauri development libraries
+were absent. Codex was absent, the login profile did not source Rust's environment,
+FUSE 2 was absent, and the bubblewrap namespace probe failed with
+`setting up uid map: Permission denied`. Ubuntu's general namespace restriction was enabled;
+no expected bubblewrap policy was found during the initial file check.
 
-APT build and AppImage dependencies:
-
-```text
-build-essential curl git pkg-config
-libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
-libayatana-appindicator3-dev librsvg2-dev
-patchelf libfuse2t64
-```
-
-Bubblewrap 0.9.0 is installed, but the unprivileged namespace probe fails with
-`setting up uid map: Permission denied`. Ubuntu's AppArmor user-namespace restriction is
-enabled; neither expected bubblewrap profile file is present. Follow the existing approved
-Ubuntu profile workflow when sandbox setup is authorized; retain the general restriction.
-`apparmor-utils` is absent and would be useful for diagnosis, rather than a compiler prerequisite.
-
-Source checkout synchronization and frozen Python/npm dependencies remain to be prepared
-before a local build. No source was copied to the VM during this audit.
+No prerequisites were installed and no source was copied during this audit. Package setup
+and native acceptance remain separate from the authorized SSH key installation below.
 
 ## Shared SSH key setup
 

@@ -62,12 +62,8 @@ uses FUSE 2 (`libfuse2t64` on Ubuntu 24.04). If FUSE is unavailable, use
 See [Tauri's AppImage limitations](https://v2.tauri.app/distribute/appimage/#limitations) and
 [AppImage FUSE guidance](https://docs.appimage.org/user-guide/troubleshooting/fuse.html).
 
-On Ubuntu 24.04, install the FUSE compatibility library if ordinary launch reports that
-`libfuse.so.2` is missing:
-
-```sh
-sudo apt-get install libfuse2t64
-```
+If ordinary launch reports that `libfuse.so.2` is missing, follow the
+[AppImage launch prerequisites in CONTRIBUTING.md](../CONTRIBUTING.md#appimage-launch-prerequisites).
 
 AppImage launch and runtime extraction do not require sudo. The image bundles its application
 dependencies, including WebKitGTK's GStreamer plugins, but still depends on compatible host
@@ -97,8 +93,9 @@ that Studio failed to launch.
 
 ### Connect Codex for assisted authoring
 
-Install and sign in to Codex before authoring, or use Studio's
-**Settings → Authoring & tools → Sign in** after installing it. Studio uses Codex for its
+Codex installation and environment setup are maintained in
+[CONTRIBUTING.md](../CONTRIBUTING.md#codex-authoring-and-linux-sandbox-tests).
+After installation, use Studio's **Settings → Authoring & tools → Sign in**. Studio uses Codex for its
 scenario and pack conversations. Your Codex credentials remain in Codex's own storage.
 
 Studio looks for `codex` on PATH, in `~/.local/bin` on Linux, in common macOS CLI locations,
@@ -117,82 +114,14 @@ explicitly update or repair an installation.
 
 ### Linux Codex sandbox setup and troubleshooting
 
-Linux Studio delivery is still under development. These instructions apply to local AppImage
-previews and source checkouts. Codex-assisted authoring needs a working command sandbox,
-including `bubblewrap` (`bwrap`) and access to the Linux user namespaces it uses.
-Install your distribution's `bubblewrap` package. Codex may use a bundled helper when the
-system package is missing, but the namespace requirement still applies.
+Linux assisted authoring needs a working Codex command sandbox. Package installation,
+Ubuntu AppArmor configuration, diagnostics and the sandbox smoke test are maintained in
+[CONTRIBUTING.md](../CONTRIBUTING.md#codex-authoring-and-linux-sandbox-tests).
 
-Studio surfaces relevant warnings from Codex's existing startup check on Linux, with setup
-instructions. It starts no additional probe process and adds no startup wait. The notice
-identifies a likely setup problem and depends on warnings from the installed Codex version;
-it does not validate every sandbox operation. Studio does not install packages, load
-profiles, or change system security settings automatically.
-
-#### Symptoms, including on other distributions
-
-Codex may connect and answer a simple message successfully, then fail when it tries to read
-a skill or execute a command. Typical symptoms include:
-
-- An approval request saying **the sandbox could not start the read command**.
-- A bubblewrap warning about being unable to create user namespaces.
-- Errors such as `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted` or
-  `bwrap: setting up uid map: Permission denied`.
-
-These symptoms can come from AppArmor, another security policy, or restrictions imposed by
-a container/host. They do not by themselves identify AppArmor as the cause. On systems with
-AppArmor, inspect the kernel log for a matching denial involving `bwrap` or `userns`:
-
-```sh
-sudo journalctl -k -b --no-pager --grep='apparmor|userns|bwrap'
-```
-
-The optional `/proc/sys/kernel/apparmor_restrict_unprivileged_userns` setting reports whether
-AppArmor's general namespace restriction is enabled. A value of `1`, together with matching
-kernel denials, can indicate that bubblewrap needs an application-specific profile. The
-setting alone does not mean the sandbox is broken: a suitable profile may already be loaded.
-
-Use your distribution's supplied AppArmor policy for bubblewrap when available. If a profile
-already covers `/usr/bin/bwrap`, have the administrator or package maintainer repair that
-policy instead of installing an overlapping profile or overwriting local customizations.
-
-#### Ubuntu 24.04: install the additional bubblewrap profile
-
-Ubuntu 24.04 may require this additional profile even with `bubblewrap` installed. For a
-system without an existing profile covering `/usr/bin/bwrap`, install and load the official
-Ubuntu profile:
-
-```sh
-sudo apt-get update
-sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils
-sudo install -m 0644 \
-  /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
-  /etc/apparmor.d/bwrap-userns-restrict
-sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
-```
-
-The profile activates immediately and loads again at boot; no reboot is needed to apply it.
-Ubuntu's general namespace restriction remains enabled. Ubuntu 25.04 ships this profile
-with AppArmor, so installing `bubblewrap` should normally be sufficient. Other distributions
-can package policies differently; use the symptom-based diagnosis above rather than copying
-Ubuntu commands onto an unrelated distribution.
-
-#### Verify and reconnect
-
-Use `codex help sandbox` to check the syntax supported by your installed Codex version.
-With the CLI used for Linux bring-up (0.162.0), this harmless command checks sandbox startup:
-
-```sh
-codex sandbox -- /usr/bin/true
-```
-
-It should complete with exit status `0`. When authoring is idle, reconnect Codex using
-Studio's header status dot to refresh startup warnings. An already pending approval for an
-unsandboxed fallback is not replaced by loading the profile: decline that old request and
-ask Codex to retry the command inside the sandbox.
-
-See [Codex sandbox prerequisites](https://learn.chatgpt.com/docs/sandboxing#prerequisites)
-and [Ubuntu's namespace restriction notes](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions).
+Studio surfaces relevant warnings from Codex's existing startup check. The notice identifies
+a likely setup problem; it does not validate every sandbox operation or modify system settings.
+After repairing the environment, reconnect through Studio's header status dot when authoring
+is idle and retry the failed command.
 
 ## Start with a workspace
 
@@ -529,9 +458,6 @@ conversations, bundles, and state-upgrade backups are outside runtime cleanup. K
 runtime does not undo a state migration or restore deleted content.
 
 For launching or building from a checkout, see
-[Studio development in CONTRIBUTING.md](../CONTRIBUTING.md#studio-development-on-macos).
-The current Linux builder setup, installed packages, toolchains and source-build commands are
-recorded in the [Linux setup worklog](worklog/2026-10-09-studio-linux-setup.md); AppImage packaging
-commands and acceptance limits are in the [local installer worklog](worklog/2026-10-09-studio-a2-local-installers.md).
+[development setup and build/test instructions in CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).
 Product release preparation and installer publication are documented separately in
 [release instructions](releases.md).
