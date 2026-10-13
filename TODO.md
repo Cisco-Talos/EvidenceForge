@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a1 published from dev; next stable release targets 2.2.0
+**Status:** 2.2.0a2 publication authorized and prepared; next stable release targets 2.2.0
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-09
+**Last Roadmap Review:** 2026-10-12
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -72,7 +72,7 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P2** Streamline Studio object actions with complete, consistent three dots menus,
+- [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
   behavior. The agreed requirements, implementation and validation are recorded in the
   [object action worklog](docs/worklog/2026-10-12-studio-object-actions.md).
@@ -102,13 +102,15 @@ without turning `TODO.md` back into a high-conflict work journal.
   smoke test passed on October 9; clean-machine acceptance remains open. See the
   [release installer worklog](docs/worklog/2026-10-09-release-installers.md) and
   [release instructions](docs/releases.md).
-- [ ] **P1 — 2.2.0a2 Linux installer acceptance:** Native Ubuntu 24.04 ARM64 and x86_64
+- [x] **P1 — 2.2.0a2 Linux installer acceptance:** Native Ubuntu 24.04 ARM64 and x86_64
   AppImage builders, packaged verification and Studio recovery CI are implemented; all three
   native installer jobs passed. The user reported the x86_64 setup works on the supplied VM
   on October 12. Updated x86_64/ARM64 previews include the publication workflow fix and pass
-  native packaged verification; their acceptance and other distro/clean-machine testing remain
-  open. See the [publication worklog](docs/worklog/2026-10-12-publication-draft-completion.md);
-  publication still requires explicit authorization. See the
+  native packaged verification. On October 12 the user accepted recent testing on all systems,
+  including the most recent macOS build, waived repeat interactive smoke tests and authorized
+  publication. Automated release gates still apply; other distro/clean-machine testing remains
+  open. See the [release worklog](docs/worklog/2026-10-12-release-2.2.0a2.md) and
+  [publication worklog](docs/worklog/2026-10-12-publication-draft-completion.md). See the
   [Linux release build worklog](docs/worklog/2026-10-11-linux-release-builds.md).
 - [x] **P2** Implement native Windows NTFS generation and checkpoint recovery, with passing
   Windows/Linux routine CI and local macOS validation in PR #419. Existing POSIX implementations

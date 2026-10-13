@@ -3,8 +3,10 @@
 EvidenceForge and Studio share the version in `pyproject.toml`. The Release workflow delivers
 the macOS Apple Silicon DMG and native Linux ARM64/x86_64 AppImages, each with a SHA256 file.
 Codex remains a separate install for authoring. The macOS installer has no Developer ID signature
-or notarization; Intel macOS and Windows installers are not enabled. Linux publication is prepared
-for 2.2.0a2 and remains on hold until the user's x86_64 acceptance passes.
+or notarization; Intel macOS and Windows installers are not enabled. For 2.2.0a2, the user accepted
+recent testing on all systems and explicitly waived repeating interactive smoke tests on October 12.
+Automated release and packaged-installer checks remain required. See the
+[release worklog](worklog/2026-10-12-release-2.2.0a2.md).
 See [Studio installation](studio.md#macos-installation).
 
 ## Prepare the source
@@ -61,7 +63,7 @@ Installer environment setup, local macOS/Linux build and verification commands, 
 build-only CI dispatch/download instructions are maintained in
 [CONTRIBUTING.md](../CONTRIBUTING.md#development-setup).
 Both native Linux architectures use Ubuntu 24.04/glibc 2.39; other distro acceptance remains
-open. Manual x86_64 desktop acceptance must pass before the 2.2.0a2 release.
+open. The 2.2.0a2 manual acceptance decision is recorded in the release worklog above.
 
 Building locally or dispatching the read-only installer workflow does not publish. Preview
 builds keep the `-test` suffix; `--release` removes it without publishing. The workflow uses
