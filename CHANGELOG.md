@@ -74,6 +74,9 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
   previews (`a21b7272`). Recognize Tauri's native `amd64` bundle name while retaining
   `x86_64` in public AppImage filenames (`52918e62`).
 - Recover tagged release publication after CI workflow failures (`99a0b5e1`).
+- Declare the captured-source cache registration as behavior revision 163 with no rendering
+  impact, keeping checkpoint fingerprints current. Preserve Unicode Windows durability failure
+  reports without masking the child process's exit code (`6a43f56c`).
 - Record successful first-alpha publication and installer acceptance (`3f31c0d1`, `0aa8a2ae`).
 
 **Alpha availability and acceptance**
