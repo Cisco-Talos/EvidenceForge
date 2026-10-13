@@ -1,5 +1,0 @@
-baseline_activity:
-  description: "Low-volume but varied healthcare IT baseline activity"
-  intensity: low
-  variation: medium
-  suspicious_noise: medium

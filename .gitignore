@@ -65,16 +65,6 @@ checkpoints/
 
 # EvidenceForge project-local config overlay
 .eforge/
-!.eforge/
-.eforge/*
-!.eforge/packs/
-.eforge/packs/*
-!.eforge/packs/organization/
-.eforge/packs/organization/*
-!.eforge/packs/organization/meridian-healthcare-solutions/
-.eforge/packs/organization/meridian-healthcare-solutions/*
-!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/
-!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/**
 
 # Ignore any scenarios we might produce
 scenarios/*

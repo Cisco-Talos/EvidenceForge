@@ -14,9 +14,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-scope:
+    name: Release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cleanup: ${{ steps.scope.outputs.cleanup }}
+    steps:
+      - name: Checkout exact event snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Recognize bounded project-state cleanup
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] || { [ "$EVENT_NAME" = "push" ] && [ "$EVENT_REF" = "refs/heads/main" ]; }; then
+            python3 scripts/check_eforge_cleanup.py --base "$BASE_SHA"
+          else
+            echo "cleanup=false" >> "$GITHUB_OUTPUT"
+          fi
+
   validate-release-version:
     name: Release version guard
-    if: github.event_name == 'pull_request'
+    needs: [release-scope]
+    if: github.event_name == 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -104,7 +132,8 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: github.event_name == 'push'
+    needs: [release-scope]
+    if: github.event_name == 'push' && needs.release-scope.outputs.cleanup != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
