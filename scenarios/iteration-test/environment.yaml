@@ -110,6 +110,27 @@ environment:
       ips: ["203.14.220.11"]
       tags: ["email", "smtp"]
       dns: true
+    - id: westbridge_services
+      hosts:
+        - "api.westbridge-services.net"
+        - "edge.westbridge-services.net"
+        - "metrics.westbridge-services.net"
+        - "ns1.westbridge-services.net"
+        - "ns1.westbridge-services.cloud"
+      ips: ["45.33.32.30"]
+      tags: ["web", "dns", "external"]
+      dns: true
+    - id: ubuntu_archive
+      hosts: ["archive.ubuntu.com"]
+      ips: ["91.189.91.82"]
+      tags: ["software", "package_repository", "external"]
+      dns: true
+    - id: valeworks_support
+      hosts: ["support.valeworks-health.net"]
+      ips: ["52.44.186.73"]
+      tags: ["web", "vendor", "support", "external"]
+      dns: true
+
   systems:
     - hostname: WS-LNGUYEN-01
       ip: "10.10.1.21"
@@ -498,6 +519,7 @@ environment:
     listener_port: 8080
 
   email:
+    corpus: email_corpus.yaml
     accepted_domains:
       - meridianhcs.com
       - research.meridianhcs.com

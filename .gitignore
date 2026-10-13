@@ -65,16 +65,6 @@ checkpoints/
 
 # EvidenceForge project-local config overlay
 .eforge/
-!.eforge/
-.eforge/*
-!.eforge/packs/
-.eforge/packs/*
-!.eforge/packs/organization/
-.eforge/packs/organization/*
-!.eforge/packs/organization/meridian-healthcare-solutions/
-.eforge/packs/organization/meridian-healthcare-solutions/*
-!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/
-!.eforge/packs/organization/meridian-healthcare-solutions/1.0.0/**
 
 # Ignore any scenarios we might produce
 scenarios/*
@@ -96,6 +86,8 @@ scenarios/llm-injection-demo/*
 !scenarios/iteration-test/
 scenarios/iteration-test/*
 !scenarios/iteration-test/scenario.yaml
+!scenarios/iteration-test/environment.yaml
+!scenarios/iteration-test/baseline_activity.yaml
 !scenarios/iteration-test/email_corpus.yaml
 !scenarios/iteration-test/ENVIRONMENT.md
 !scenarios/iteration-test-1_0/
