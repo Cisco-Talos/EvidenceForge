@@ -307,6 +307,7 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     assert triggers["workflow_dispatch"]["inputs"]["tag"]["required"] is True
     jobs = workflow["jobs"]
     assert jobs["publish-release"]["needs"] == [
+        "release-scope",
         "validate-release-version",
         "release-ci",
         "release-slow",
@@ -316,7 +317,9 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     source = "${{ needs.validate-release-version.outputs.sha }}"
     for job in ("release-ci", "release-slow"):
         assert jobs[job]["with"]["source-ref"] == source
-        assert jobs[job]["if"] == "github.event_name != 'pull_request'"
+        assert jobs[job]["if"] == (
+            "github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'"
+        )
     assert jobs["validate-release-version"]["steps"][0]["with"]["ref"] == (
         "${{ inputs.tag || github.sha }}"
     )
@@ -333,6 +336,7 @@ def test_workflow_joins_all_gates_and_pins_the_build_commit() -> None:
     assert jobs["build-installers"]["uses"] == "./.github/workflows/installers.yml"
     assert jobs["build-installers"]["with"] == {"source-ref": source, "release": True}
     assert jobs["build-installers"]["needs"] == [
+        "release-scope",
         "validate-release-version",
         "release-ci",
         "release-slow",
