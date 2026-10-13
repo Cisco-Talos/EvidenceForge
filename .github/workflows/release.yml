@@ -25,8 +25,37 @@ env:
   RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
 jobs:
+  release-scope:
+    name: Release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cleanup: ${{ steps.scope.outputs.cleanup }}
+    steps:
+      - name: Checkout exact event snapshot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          fetch-depth: 0
+      - name: Recognize bounded project-state cleanup
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] || { [ "$EVENT_NAME" = "push" ] && [ "$EVENT_REF" = "refs/heads/main" ]; }; then
+            python3 scripts/check_eforge_cleanup.py --base "$BASE_SHA"
+          else
+            echo "cleanup=false" >> "$GITHUB_OUTPUT"
+          fi
+
   validate-release-version:
     name: Release version guard
+    needs: [release-scope]
+    if: needs.release-scope.outputs.cleanup != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -57,23 +86,23 @@ jobs:
           uv run --no-sync python -m scripts.release_pipeline prepare
 
   release-ci:
-    if: github.event_name != 'pull_request'
-    needs: validate-release-version
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/ci.yml
     with:
       release-coverage: true
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   release-slow:
-    if: github.event_name != 'pull_request'
-    needs: validate-release-version
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    needs: [release-scope, validate-release-version]
     uses: ./.github/workflows/release-slow.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
 
   build-installers:
-    if: github.event_name != 'pull_request'
-    needs: [validate-release-version, release-ci, release-slow]
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    needs: [release-scope, validate-release-version, release-ci, release-slow]
     uses: ./.github/workflows/installers.yml
     with:
       source-ref: ${{ needs.validate-release-version.outputs.sha }}
@@ -81,8 +110,8 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    if: github.event_name != 'pull_request'
-    needs: [validate-release-version, release-ci, release-slow, build-installers]
+    if: github.event_name != 'pull_request' && needs.release-scope.outputs.cleanup != 'true'
+    needs: [release-scope, validate-release-version, release-ci, release-slow, build-installers]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
