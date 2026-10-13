@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a2 publication authorized and prepared; next stable release targets 2.2.0
+**Status:** 2.2.0a2 published from dev; next stable release targets 2.2.0
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-12
+**Last Roadmap Review:** 2026-10-13
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -96,11 +96,11 @@ without turning `TODO.md` back into a high-conflict work journal.
 - [ ] **P2** Investigate generation coverage for Zeek packet-filter/reporter/weird diagnostic
   sources separately from their dedicated renderer/parser/validator fixture coverage.
 
-- Published the `2.2.0a1` preview from `dev` with automatic macOS DMG delivery and passing
-  routine, coverage, slow, checkpoint portability and native macOS gates. Target `2.2.0`
-  for the next stable `dev` → `main` release. The user confirmed that the downloaded-installer
-  smoke test passed on October 9; clean-machine acceptance remains open. See the
-  [release installer worklog](docs/worklog/2026-10-09-release-installers.md) and
+- Published the `2.2.0a2` prerelease from `dev` with verified Apple Silicon macOS and Linux
+  ARM64/x86_64 installers and checksums. All routine, coverage, slow, portability and native gates
+  passed; recent manual acceptance was retained by explicit user decision. Target `2.2.0`
+  for the next stable `dev` → `main` release. Other-distro and clean-machine acceptance remain
+  open. See the [release worklog](docs/worklog/2026-10-12-release-2.2.0a2.md) and
   [release instructions](docs/releases.md).
 - [x] **P1 — 2.2.0a2 Linux installer acceptance:** Native Ubuntu 24.04 ARM64 and x86_64
   AppImage builders, packaged verification and Studio recovery CI are implemented; all three
