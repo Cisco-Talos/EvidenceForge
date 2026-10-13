@@ -339,3 +339,13 @@ kinds. The focused lifecycle, draft completion, captured-source and configuratio
 without coverage. Production build, generated API types, Ruff checks and whitespace checks passed.
 These fixes are committed locally, separately from the still-uncommitted Codex status indicator;
 no push or product version change is performed.
+
+## Follow-up: bundle run disclosure
+
+Collapse all runs now closes the individual Studio and imported run disclosures while leaving
+their scenario-family list open. The command remains visible but disabled when that list is
+closed; manual header toggles update its availability. Expand all runs still opens the list and
+every run, and Open latest run opens only the newest entry. A regression exercises the full
+expand/collapse/manual-toggle cycle on a mixed five-run family. All 21 bundle/run interface tests,
+the production build, Ruff and whitespace checks pass. This fix is committed locally without
+pushing, preserving the separate uncommitted Codex indicator work.

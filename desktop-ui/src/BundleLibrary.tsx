@@ -69,8 +69,12 @@ function BundleGroupRow({ group, snapshot, sizes, api, onError, onChanged, onOpe
   onError: (message: string) => void; onChanged: () => Promise<void>; onOpenScenario: (item: CatalogItem) => void; disambiguate: boolean;
 }) {
   const row = useRef<HTMLDetailsElement>(null);
+  const [listExpanded, setListExpanded] = useState(false);
   function expand(mode: "latest" | "all" | "none") {
-    if (row.current) row.current.open = mode !== "none";
+    if (row.current && mode !== "none") {
+      row.current.open = true;
+      setListExpanded(true);
+    }
     const runs = row.current?.querySelectorAll<HTMLDetailsElement>(".job-list > .job-row");
     runs?.forEach((entry, index) => { entry.open = mode === "all" || (mode === "latest" && index === 0); });
     if (mode === "latest") runs?.[0]?.querySelector<HTMLElement>("summary")?.focus();
@@ -79,10 +83,10 @@ function BundleGroupRow({ group, snapshot, sizes, api, onError, onChanged, onOpe
   const actions: ObjectAction[] = [
     { id: "latest", label: "Open latest run", group: "inspect", run: () => expand("latest") },
     { id: "expand", label: "Expand all runs", group: "inspect", run: () => expand("all") },
-    { id: "collapse", label: "Collapse all runs", group: "inspect", run: () => expand("none") },
+    { id: "collapse", label: "Collapse all runs", group: "inspect", disabled: !listExpanded, reason: "Expand the run list first", run: () => expand("none") },
     { id: "scenario", label: "Open scenario", group: "inspect", disabled: !sourceActions.length, reason: "The original scenario is no longer in the library", ...(sourceActions.length > 1 ? { children: sourceActions } : { run: sourceActions[0]?.run }) },
   ];
-  return <details ref={row} className="bundle-group job-group">
+  return <details ref={row} className="bundle-group job-group" onToggle={(event) => setListExpanded(event.currentTarget.open)}>
     <summary><ChevronRight size={17} className="disclosure-chevron" /><strong>{group.name}{disambiguate && group.publisher && <small className="bundle-publisher">{group.publisher}</small>}</strong><span>{group.jobs.length + group.imports.length}</span><small className="group-summary"><HeaderSummary summary={bundleSummary(group.jobs, group.imports, sizes)} /></small><ObjectMenu label={`Bundle group actions for ${group.name}${disambiguate ? ` (${group.publisher || "unassigned"})` : ""}`} actions={actions} /></summary>
     <div className="job-list">{orderedBundles(group.jobs, group.imports).map((entry) => entry.kind === "job"
       ? <JobCard key={entry.id} job={entry.job} name={group.name} grouped sourceLabel={capturedVersion(entry.job.scenario_source)} sizeBytes={sizes[entry.id]} api={api} onError={onError} onChanged={onChanged} />

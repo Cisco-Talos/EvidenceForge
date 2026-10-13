@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Tooltip } from "radix-ui";
 import { afterEach, expect, test, vi } from "vitest";
@@ -53,6 +53,7 @@ test("bundle group menus contain navigation and disclosure actions and leave gen
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Bundle group actions for test-1" }));
   expect(screen.getAllByRole("menuitem").map((item) => item.getAttribute("aria-label"))).toEqual(["Open latest run", "Expand all runs", "Collapse all runs", "Open scenario"]);
+  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).toHaveAttribute("data-disabled");
   expect(screen.queryByRole("menuitem", { name: /Validate|Forecast|Generate|Publish|Delete scenario|New conversation/ })).toBeNull();
   await user.click(screen.getByRole("menuitem", { name: "Expand all runs" }));
   expect([...container.querySelectorAll<HTMLDetailsElement>(".job-list > .job-row")].every((row) => row.open)).toBe(true);
@@ -68,6 +69,39 @@ test("bundle group menus contain navigation and disclosure actions and leave gen
   await user.click(screen.getByRole("button", { name: "Bundle options for latest" }));
   await user.click(screen.getByRole("menuitem", { name: "Hide log", exact: true }));
   expect(screen.queryByText("Saved generator log")).toBeNull();
+});
+
+test("collapse all folds Studio and imported runs while keeping the group open, and is disabled for a closed list", async () => {
+  const { container } = setup();
+  const user = userEvent.setup();
+  const group = container.querySelector<HTMLDetailsElement>(".bundle-group")!;
+  const menu = screen.getByRole("button", { name: "Bundle group actions for test-1" });
+  const runs = () => [...group.querySelectorAll<HTMLDetailsElement>(".job-list > .job-row")];
+
+  await user.click(menu);
+  await user.click(screen.getByRole("menuitem", { name: "Expand all runs" }));
+  expect(group.open).toBe(true);
+  expect(runs()).toHaveLength(5);
+  expect(runs().every((row) => row.open)).toBe(true);
+
+  await user.click(menu);
+  expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).not.toHaveAttribute("data-disabled");
+  await user.click(screen.getByRole("menuitem", { name: "Collapse all runs" }));
+  expect(group.open).toBe(true);
+  expect(runs().every((row) => !row.open)).toBe(true);
+  expect(screen.getByText("Run #latest")).toBeVisible();
+
+  await user.click(group.querySelector("summary")!);
+  expect(group.open).toBe(false);
+  await user.click(menu);
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).toHaveAttribute("data-disabled"));
+  await user.keyboard("{Escape}");
+
+  await user.click(group.querySelector("summary")!);
+  await user.click(menu);
+  await waitFor(() => expect(screen.getByRole("menuitem", { name: "Collapse all runs" })).not.toHaveAttribute("data-disabled"));
+  await user.click(screen.getByRole("menuitem", { name: "Open latest run" }));
+  expect(runs().map((row) => row.open)).toEqual([true, false, false, false, false]);
 });
 
 test("same-name scenarios from different publishers stay distinct, and retired source groups still have menus", async () => {
