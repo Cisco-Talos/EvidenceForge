@@ -139,7 +139,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap \
+            apparmor-profiles apparmor-utils
+
+      - name: Load Ubuntu bubblewrap user-namespace profile
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          sudo aa-status
 
       - name: Install Studio dependencies
         run: uv sync --extra studio --extra dev
