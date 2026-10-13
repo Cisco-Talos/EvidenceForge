@@ -1279,6 +1279,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{conversation_id}/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chat Snapshot */
+        get: operations["chat_snapshot_v1_conversations__conversation_id__chat_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Chat Message */
+        post: operations["chat_message_v1_conversations__conversation_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/messages/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Chat Message */
+        delete: operations["remove_chat_message_v1_conversations__conversation_id__messages__message_id__delete"];
+        options?: never;
+        head?: never;
+        /** Edit Chat Message */
+        patch: operations["edit_chat_message_v1_conversations__conversation_id__messages__message_id__patch"];
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/queue/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Chat Queue */
+        post: operations["resume_chat_queue_v1_conversations__conversation_id__queue_resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save Chat View */
+        put: operations["save_chat_view_v1_conversations__conversation_id__view_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/chat/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chat Preferences */
+        get: operations["chat_preferences_v1_chat_preferences_get"];
+        /** Save Chat Preferences */
+        put: operations["save_chat_preferences_v1_chat_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/conversations/{conversation_id}/results/{turn_id}/{result_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chat Result */
+        get: operations["chat_result_v1_conversations__conversation_id__results__turn_id___result_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/conversations/{conversation_id}/interrupt": {
         parameters: {
             query?: never;
@@ -2506,6 +2627,237 @@ export interface components {
             version?: string | null;
             /** Based On Version */
             based_on_version?: string | null;
+        };
+        /**
+         * ChatAnchor
+         * @description A reading position remains valid when transcript rows change height.
+         */
+        ChatAnchor: {
+            /** Turn Id */
+            turn_id: string;
+            /** Item Id */
+            item_id: string;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+        };
+        /**
+         * ChatDraftSubmission
+         * @description Retain the composer's dispatch identity across navigation or lost responses.
+         */
+        ChatDraftSubmission: {
+            /** Id */
+            id: string;
+            /** Text */
+            text: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "start" | "queue" | "steer";
+        };
+        /**
+         * ChatInput
+         * @description A durable dispatch claim; uncertain work must never be blindly replayed.
+         */
+        ChatInput: {
+            /** Id */
+            id: string;
+            /** Conversation Id */
+            conversation_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "start" | "queue" | "steer";
+            /** Skill Name */
+            skill_name?: string | null;
+            /** Expected Turn Id */
+            expected_turn_id?: string | null;
+            /**
+             * State
+             * @default queued
+             * @enum {string}
+             */
+            state: "queued" | "dispatching" | "accepted" | "uncertain" | "rejected";
+            /** Turn Id */
+            turn_id?: string | null;
+            /** Created At */
+            created_at: number;
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * ChatMessageRequest
+         * @description Explicit delivery intent and a stable client dispatch identity.
+         */
+        ChatMessageRequest: {
+            /** Message Id */
+            message_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Mode
+             * @default start
+             * @enum {string}
+             */
+            mode: "start" | "queue" | "steer";
+            /** Skill Name */
+            skill_name?: string | null;
+            /** Expected Turn Id */
+            expected_turn_id?: string | null;
+        };
+        /**
+         * ChatPreference
+         * @description Workspace-scoped conversation rail preference.
+         */
+        ChatPreference: {
+            /** Workspace */
+            workspace: string;
+            /**
+             * Sidebar Collapsed
+             * @default false
+             */
+            sidebar_collapsed: boolean;
+        };
+        /**
+         * ChatQueuedUpdate
+         * @description An edit only applies to messages that have not been dispatched.
+         */
+        ChatQueuedUpdate: {
+            /** Text */
+            text: string;
+            /** Skill Name */
+            skill_name?: string | null;
+        };
+        /**
+         * ChatResult
+         * @description A source-local file observed changing during one turn.
+         */
+        ChatResult: {
+            /** Id */
+            id: string;
+            /** Path */
+            path: string;
+            /**
+             * Kind
+             * @default modified
+             */
+            kind: string;
+            /** Diff */
+            diff?: string | null;
+            /** Item Id */
+            item_id?: string | null;
+            /** Item Kind */
+            item_kind?: ("scenario" | "industry_pack" | "organization_pack") | null;
+        };
+        /**
+         * ChatResultContent
+         * @description Verified source contents and an optional recorded change diff.
+         */
+        ChatResultContent: {
+            /** Path */
+            path: string;
+            /** Text */
+            text: string;
+            /** Diff */
+            diff?: string | null;
+            /** Item Id */
+            item_id?: string | null;
+        };
+        /**
+         * ChatSnapshot
+         * @description A cursor-consistent timeline plus private per-conversation state.
+         */
+        ChatSnapshot: {
+            /** Conversation Id */
+            conversation_id: string;
+            /** Seq */
+            seq: number;
+            /** Turns */
+            turns: components["schemas"]["ChatTurn"][];
+            /** Queue */
+            queue: components["schemas"]["ChatInput"][];
+            /** Queue Paused */
+            queue_paused: boolean;
+            /** Active Turn Id */
+            active_turn_id: string | null;
+            view: components["schemas"]["ChatViewState"];
+            /**
+             * History Pending
+             * @default false
+             */
+            history_pending: boolean;
+        };
+        /**
+         * ChatTurn
+         * @description Retained turn identity, item projection and terminal observations.
+         */
+        ChatTurn: {
+            /** Id */
+            id: string;
+            /** Conversation Id */
+            conversation_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /**
+             * Status
+             * @default inProgress
+             */
+            status: string;
+            /** Started At */
+            started_at?: number | null;
+            /** Completed At */
+            completed_at?: number | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Items */
+            items?: {
+                [key: string]: unknown;
+            }[];
+            /** Results */
+            results?: components["schemas"]["ChatResult"][];
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Sha256 */
+            source_sha256?: string | null;
+        };
+        /**
+         * ChatViewState
+         * @description Private composer and reading state, independent of authored files.
+         */
+        ChatViewState: {
+            /**
+             * Draft
+             * @default
+             */
+            draft: string;
+            /**
+             * Skill Name
+             * @default
+             */
+            skill_name: string;
+            /**
+             * Follow Bottom
+             * @default true
+             */
+            follow_bottom: boolean;
+            anchor?: components["schemas"]["ChatAnchor"] | null;
+            /** Answers */
+            answers?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            pending_message?: components["schemas"]["ChatDraftSubmission"] | null;
         };
         /**
          * ClearJobHistoryRequest
@@ -4612,6 +4964,12 @@ export interface components {
              * @enum {string}
              */
             skill_install_agent: "all" | "chatgpt" | "claude";
+            /**
+             * Chat Followup Mode
+             * @default queue
+             * @enum {string}
+             */
+            chat_followup_mode: "queue" | "steer";
             /** Codex Path */
             codex_path?: string | null;
             /** Eforge Path */
@@ -4680,6 +5038,8 @@ export interface components {
             text: string;
             /** Skill Name */
             skill_name?: string | null;
+            /** Client Message Id */
+            client_message_id?: string | null;
         };
         /**
          * TurnSubmission
@@ -7941,6 +8301,323 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TurnSubmission"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_snapshot_v1_conversations__conversation_id__chat_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_message_v1_conversations__conversation_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatInput"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_chat_message_v1_conversations__conversation_id__messages__message_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_chat_message_v1_conversations__conversation_id__messages__message_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatQueuedUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatInput"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_chat_queue_v1_conversations__conversation_id__queue_resume_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_chat_view_v1_conversations__conversation_id__view_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatViewState"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatViewState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_preferences_v1_chat_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPreference"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_chat_preferences_v1_chat_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatPreference"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatPreference"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_result_v1_conversations__conversation_id__results__turn_id___result_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+                turn_id: string;
+                result_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatResultContent"];
                 };
             };
             /** @description Validation Error */

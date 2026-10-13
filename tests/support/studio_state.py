@@ -196,6 +196,10 @@ def inventory(database: Path) -> dict[str, list[tuple[object, ...]]]:
         "library_preferences",
         "dependency_health",
         "resource_predictions",
+        "chat_turns",
+        "chat_inputs",
+        "chat_controls",
+        "chat_preferences",
     ):
         result.setdefault(table, [])
     return result

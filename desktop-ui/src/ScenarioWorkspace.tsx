@@ -131,6 +131,19 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
   const generateAction = getAction("generate", { id: "generate", label: "Generate", group: "work", disabled: busy || starter || health?.ready === false, reason: starter ? "Continue authoring before generation" : health?.ready === false ? "Resolve dependency errors first" : "An operation is in progress", run: onGenerate });
   const packExportAction = getAction("export-release", { id: "export-release", label: "Export release…", group: "reuse", disabled: !item.version, reason: "Publish a release before exporting", run: onExportPack });
   const localForecastDialog = <Dialog.Root open={forecastOpen} onOpenChange={setForecastOpen}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="environment-picker run-forecast-dialog"><Dialog.Title>Generation forecast</Dialog.Title><Dialog.Description>Estimates for the current scenario and generation settings.</Dialog.Description><ResourceForecastPanel item={item} snapshot={snapshot} api={api} onError={onError} onChanged={onChanged} /><footer><Dialog.Close className="button-quiet">Close</Dialog.Close><button className="button-primary" onClick={() => { setForecastOpen(false); void onGenerate(); }} disabled={busy || starter || health?.ready === false}>Generate</button></footer></Dialog.Content></Dialog.Portal></Dialog.Root>;
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    if (!chatFocus) return;
+    let canceled = false;
+    void api.request<{ sidebar_collapsed?: boolean }>("/v1/chat/preferences").then((value) => {
+      if (!canceled) setSidebarCollapsed(value?.sidebar_collapsed || false);
+    }).catch(() => undefined);
+    return () => { canceled = true; };
+  }, [api, snapshot.settings.workspace, chatFocus]);
+  function toggleChatSidebar() {
+    const collapsed = !sidebarCollapsed; setSidebarCollapsed(collapsed);
+    void api.request("/v1/chat/preferences", "PUT", { workspace: snapshot.settings.workspace, sidebar_collapsed: collapsed }).catch((error) => { setSidebarCollapsed(!collapsed); onError(String(error)); });
+  }
   const conversationList = <ConversationList conversations={conversations} selectedId={selectedConversation} onOpen={onOpenConversation} onRename={onRenameConversation} onDelete={onDeleteConversation} />;
 
   return <div className={`scenario-page scenario-workspace ${chatFocus ? "focused" : ""}`}>
@@ -174,9 +187,9 @@ export function ScenarioWorkspace({ item, snapshot, conversations, selectedConve
       </>}
     </div>
     <div className="workspace-chat-focus" hidden={!chatFocus}>
-      <div className="workspace-chat-toolbar"><button className="button-quiet" onClick={() => onNavigate("overview", focusJobId)}><ArrowLeft size={16} /> Back to workspace</button></div>
-      <div className="conversation-layout"><aside className="conversation-rail"><div className="rail-header"><span>CONVERSATIONS</span><ObjectMenu label="Conversation rail actions" actions={[continueAction, conversationAction]} /></div><div className="rail-create"><ActionShortcut action={conversationAction} /></div>{conversationList}</aside>
-        {selected && <ChatView item={item} conversation={selected} codexHealth={codexHealth} api={api} subscribeEvents={subscribeEvents} initialDraft={initialDraft} onRenamed={onChanged} onDraftSubmitted={onDraftSubmitted} onError={onError} />}
+      <div className="workspace-chat-toolbar"><button className="button-quiet" onClick={() => onNavigate("overview", focusJobId)}><ArrowLeft size={16} /> Back to workspace</button><button className="button-quiet" aria-label={sidebarCollapsed ? "Show conversation list" : "Hide conversation list"} aria-expanded={!sidebarCollapsed} onClick={toggleChatSidebar}><MessageSquareText size={16} />{sidebarCollapsed ? "Show chats" : "Hide chats"}</button><ActionShortcut action={conversationAction} /></div>
+      <div className={`conversation-layout ${sidebarCollapsed ? "rail-collapsed" : ""}`}><aside hidden={sidebarCollapsed} className="conversation-rail"><div className="rail-header"><span>CONVERSATIONS</span><ObjectMenu label="Conversation rail actions" actions={[continueAction, conversationAction]} /></div><div className="rail-create"><ActionShortcut action={conversationAction} /></div>{conversationList}</aside>
+        {selected && <ChatView followupMode={snapshot.settings.chat_followup_mode || "queue"} item={item} conversation={selected} codexHealth={codexHealth} api={api} subscribeEvents={subscribeEvents} initialDraft={initialDraft} onRenamed={onChanged} onDraftSubmitted={onDraftSubmitted} onError={onError} />}
       </div>
     </div>
   </div>;

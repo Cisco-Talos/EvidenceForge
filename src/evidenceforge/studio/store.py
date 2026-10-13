@@ -214,6 +214,9 @@ class StudioStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")
+        from evidenceforge.studio.chat_store import ChatStore
+
+        self.chat = ChatStore(self._db, self._lock)
 
     def close(self) -> None:
         """Close the owned SQLite connection."""
@@ -1108,7 +1111,14 @@ class StudioStore:
     def delete_conversation(self, conversation_id: str) -> None:
         """Remove one Studio conversation association and its local preferences."""
         with self._lock, self._db:
+            self.chat.remove_conversation(conversation_id)
             self._db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+
+    def conversations_all(self) -> list[Conversation]:
+        """Read every private chat association for startup queue recovery."""
+        with self._lock:
+            rows = self._db.execute("SELECT payload FROM conversations").fetchall()
+        return [Conversation.model_validate_json(row[0]) for row in rows]
 
     def conversation_for_thread(self, thread_id: str) -> Conversation | None:
         """Resolve Codex events without depending on the current UI workspace."""

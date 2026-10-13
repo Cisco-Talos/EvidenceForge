@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 163
+current_revision: 164
 history_start_revision: 1
-behavior_surface_sha256: 0a35207424914905c6295861aeefab721b113a29ee4c49daa8fe4fa8813abbad
+behavior_surface_sha256: 0aa7df4dc07f6dfb84b03740bfc114bcf4c7ef121e7b103967df4e3d72ac3941
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1633,3 +1633,11 @@ changes:
       - artifact-display-metadata
     formats: []
     summary: Registers the exact bounded captured-source metadata caches for provider-owned cleanup so Studio validation and publication work after bundle inspection. Equivalent resolved inputs and deterministic rendering are unchanged.
+  - revision: 164
+    id: discover-managed-schema3-pack-publications
+    impact: none
+    domains:
+      - pack-discovery
+      - pack-dependency-resolution
+    formats: []
+    summary: Includes verified managed Schema 3 packs in project discovery and dependency locking, deduplicates identical identities and rejects conflicting contents. Equivalent resolved inputs and deterministic rendering are unchanged.

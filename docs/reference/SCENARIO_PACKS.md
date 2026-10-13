@@ -250,6 +250,14 @@ that pack fields affect evidence rather than merely serialize.
 
 ## CLI lifecycle
 
+`pack list` discovers published Schema 3 industry and organization packs in the selected
+workspace's `.eforge/artifacts/releases` repository. These immutable `project-release` entries
+are directly resolvable through their exact `project:publisher:type:name@version` references.
+Inventory and direct resolution deduplicate identical copies and reject conflicting contents
+for the same exact identity. Damaged publications are reported individually while other valid
+entries remain available. Imported Schema 2 release-library entries retain their explicit
+hydration workflow.
+
 Use exact CLI references in the form `source:publisher:type:name@version`. Configure the authoring
 identity explicitly before `pack init` or `pack copy`:
 

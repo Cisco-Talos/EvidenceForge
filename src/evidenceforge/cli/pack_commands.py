@@ -57,7 +57,14 @@ def _pack_payload(pack: LoadedPack) -> dict[str, Any]:
         "publisher_display_name": pack.manifest.publisher_display_name,
         "type": pack.manifest.type,
         "name": pack.manifest.name,
+        "display_name": pack.manifest.display_name,
+        "pack_schema_version": pack.manifest.pack_schema_version,
         "version": None if pack.source == "draft" else pack.manifest.version,
+        "reference": (
+            f"{pack.source}:{pack.manifest.publisher}:{pack.manifest.type}:{pack.manifest.name}@{pack.manifest.version}"
+            if pack.source in {"package", "project"}
+            else None
+        ),
         "description": pack.manifest.description,
         "requires_evidenceforge": pack.manifest.requires_evidenceforge,
         "digest": pack.digest,
@@ -222,21 +229,40 @@ def list_packs(
         )
     root = resolve_management_project_root(project_root)
     try:
-        packs = _repository(project_root).list() if scope in {"all", "package", "project"} else []
+        if scope == "user-release":
+            packs, native_issues = [], []
+        else:
+            sources = (
+                ("package",)
+                if scope == "package"
+                else ("project",)
+                if scope in {"project", "project-release"}
+                else ("package", "project")
+            )
+            packs, native_issues = _repository(project_root).inventory(sources=sources)
     except PackError as exc:
         _fail(exc, json_output=json_output, json_payload={"packs": [], "issues": []})
-    payload = [
-        {
-            **_pack_payload(pack),
-            "scope": pack.source,
-            "mutable": pack.source == "project",
-            "resolvable": True,
-            "hydration_state": "native",
-        }
-        for pack in packs
-        if scope == "all" or pack.source == scope
+    payload: list[dict[str, Any]] = []
+    for pack in packs:
+        managed = pack.source == "project" and pack.root.is_relative_to(
+            root / ".eforge/artifacts/releases"
+        )
+        if scope == "project-release" and not managed:
+            continue
+        payload.append(
+            {
+                **_pack_payload(pack),
+                "scope": "project-release" if managed else pack.source,
+                "mutable": pack.source == "project" and pack.manifest.status != "published",
+                "resolvable": True,
+                "hydration_state": "native",
+            }
+        )
+    issues: list[dict[str, str]] = [
+        issue.model_dump(mode="json")
+        for issue in native_issues
+        if scope != "project-release" or issue.scope == "project-release"
     ]
-    issues: list[dict[str, str]] = []
     for release_scope in ("project", "user"):
         public_scope = f"{release_scope}-release"
         if scope not in {"all", public_scope}:

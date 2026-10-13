@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shlex
 from pathlib import Path
@@ -9,9 +10,15 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from evidenceforge.models.exceptions import ConfigurationError, SchemaValidationError
+from evidenceforge.models.exceptions import (
+    ConfigurationError,
+    EvidenceForgeError,
+    SchemaValidationError,
+)
 from evidenceforge.schema import identify_document
 from evidenceforge.utils import load_scenario_source_graph
+
+logger = logging.getLogger(__name__)
 
 
 class LibraryItem(BaseModel):
@@ -255,6 +262,11 @@ def discover_scenarios(workspace: Path, imported_paths: list[Path]) -> list[Libr
 
 def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
     """Find bundled and workspace industry or organization packs."""
+    if kind not in {"industry", "organization"}:
+        return []
+    from evidenceforge.artifacts.discovery import publication_roots
+    from evidenceforge.artifacts.lifecycle import _safe_path, safe_relative
+
     bundled = Path(__file__).resolve().parents[1] / "config" / "packs"
     roots = [bundled, workspace / ".eforge" / "packs"]
     items: list[LibraryItem] = []
@@ -262,16 +274,18 @@ def discover_packs(workspace: Path, kind: str) -> list[LibraryItem]:
     artifacts = workspace / ".eforge" / "artifacts"
     import json
 
+    published, issues = publication_roots(workspace, kinds=(kind,))
+    for issue in issues:
+        logger.debug("Pack publication discovery: %s", issue.error)
     for marker in (
         *artifacts.glob(f"drafts/{kind}/*/*/draft.json"),
-        *artifacts.glob(f"releases/*/{kind}/*/*/release.json"),
+        *(root / "release.json" for root in published),
     ):
         try:
+            _safe_path(marker)
             entry = json.loads(marker.read_bytes())["entrypoint"]
-            from evidenceforge.artifacts.lifecycle import safe_relative
-
             artifact_sources.append(marker.parent / safe_relative(entry))
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError, EvidenceForgeError):
             continue
     for root in roots:
         if not root.is_dir():

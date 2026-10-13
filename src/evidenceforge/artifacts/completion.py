@@ -5,13 +5,12 @@ from pathlib import Path
 
 from evidenceforge.models.exceptions import EvidenceForgeError
 
+from .discovery import discover_publications
 from .lifecycle import (
     _safe_path,
     artifact_root,
     inspect_artifact,
     safe_relative,
-    storage_name,
-    verify_release,
 )
 
 
@@ -34,31 +33,18 @@ def published_draft_sources(
         except (OSError, ValueError, KeyError):
             continue
     releases: dict[tuple[str, str, str, str], tuple[tuple[int, ...], Path]] = {}
-    for marker in artifacts.glob("releases/*/*/*/*/release.json"):
-        try:
-            receipt = verify_release(marker.parent)
-            expected = (
-                artifacts
-                / "releases"
-                / str(receipt.lifecycle.publisher)
-                / receipt.kind
-                / storage_name(receipt.name)
-                / str(receipt.lifecycle.version)
-            )
-            if marker.parent != expected:
-                continue
-            if not receipt.lifecycle.parents:
-                continue
-            parent = receipt.lifecycle.parents[-1]
-            if not parent.draft_id or (parent.kind, parent.name) != (receipt.kind, receipt.name):
-                continue
-            key = (parent.kind, parent.name, str(parent.draft_id), parent.digest)
-            version = tuple(int(part) for part in str(receipt.lifecycle.version).split("."))
-            if key not in releases or version > releases[key][0]:
-                releases[key] = (version, marker.parent / receipt.entrypoint)
-        except (EvidenceForgeError, OSError, ValueError, TypeError, AttributeError):
-            # Damaged releases are repairable; never suppress a draft on unverified evidence.
+    publications, _issues = discover_publications(project_root)
+    for publication in publications:
+        receipt = publication.receipt
+        if not receipt.lifecycle.parents:
             continue
+        parent = receipt.lifecycle.parents[-1]
+        if not parent.draft_id or (parent.kind, parent.name) != (receipt.kind, receipt.name):
+            continue
+        key = (parent.kind, parent.name, str(parent.draft_id), parent.digest)
+        version = tuple(int(part) for part in str(receipt.lifecycle.version).split("."))
+        if key not in releases or version > releases[key][0]:
+            releases[key] = (version, publication.source)
     completed: dict[Path, Path] = {}
     from .removal import retired_draft_publications
 

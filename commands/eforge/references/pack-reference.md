@@ -77,6 +77,20 @@ path     an explicit directory named by the scenario or CLI
 `package` is installed and read-only. `project` is the editable project repository. `path` is for
 an explicitly named external directory. There is no implicit user-global pack registry.
 
+Published Schema 3 packs also resolve through exact `project` references from
+`.eforge/artifacts/releases/<publisher>/<type>/<storage-name>/<version>/source/pack.yaml`.
+`pack list` includes these verified publications as `project-release` entries with
+`source: project`, `mutable: false`, `resolvable: true` and `hydration_state: native`.
+`--scope project` includes usable project references, including these publications;
+`--scope project-release` includes both managed publications and older imported release records.
+Imported Schema 2 records in `.eforge/releases` retain their dehydrated/hydrated reporting and
+require explicit hydration before their project reference becomes usable.
+
+An identical copy under `.eforge/packs` is deduplicated to the verified publication. Different
+contents claiming the same project publisher/type/name/version are reported as an issue and
+cannot resolve through that exact identity. Explicit paths remain available for inspection.
+Discovery does not create repositories, follow links, or search parent directories.
+
 Scenario compilation and pack-management commands use the current working directory as their
 implicit project root. `--project-root` overrides it only when explicitly supplied. EvidenceForge
 does not search scenario ancestors, working-directory ancestors, home directories, installed
@@ -926,6 +940,13 @@ Success:
 ```json
 {"packs": [{"source": "package", "publisher": "evidenceforge", "type": "industry", "name": "healthcare", "version": "1.0.0", "digest": "...", "location": "...", "exports": {}, "model_contributions": {"environment_fields": [], "baseline_activity_fields": []}}], "issues": []}
 ```
+
+Resolvable entries additionally report `reference`, `pack_schema_version`, optional
+`display_name`, `scope`, `mutable`, `resolvable` and `hydration_state`. Use the identifier and
+exact reference for selection; friendly display names are presentation metadata. Managed
+publications report their captured dependencies and exports through the same payload as `show`.
+An invalid entry produces an isolated `issues` record with `scope`, `location` and `error`;
+other valid entries remain in `packs`, `valid` is false and the exit code is 2.
 
 Failure, exit 1:
 

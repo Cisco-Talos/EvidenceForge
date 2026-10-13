@@ -66,9 +66,11 @@ eforge pack list --json
 eforge pack show <source:publisher:type:name@version> --json
 ```
 
-`pack list` includes package, editable project, project-release, and user-release scopes by
-default. Immutable records report dehydrated/hydrated state and remain non-resolving. Preserve
-valid records when `issues` reports a corrupt immutable entry; the command exits nonzero.
+`pack list` includes package, project, project-release, and user-release scopes by default.
+Published Schema 3 packs appear as immutable `project-release` entries with `source: project`,
+`resolvable: true`, `hydration_state: native` and an exact `reference`. Imported Schema 2 library
+records report dehydrated/hydrated state and remain non-resolving. Preserve valid entries when
+`issues` reports a damaged release or conflicting exact identity; the command exits nonzero.
 
 Use exact references such as `package:evidenceforge:industry:healthcare@1.0.0` and
 `project:evidenceforge:organization:northstar-health@1.0.0`. A bare directory may be supplied only to commands

@@ -19,7 +19,7 @@ test("published chat permits questions and displays its read-only status", async
     subscribeEvents={() => () => undefined} onError={vi.fn()} />);
   expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
   expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).disabled).toBe(false);
-  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/messages"))).toBe(false);
 });
 
 test("publication refreshes the same conversation's access without reopening chat", async () => {
@@ -150,7 +150,6 @@ test("chat renders Markdown and highlighted code while commands and summaries ex
   expect(screen.getByRole("link", { name: "guide" }).getAttribute("href")).toBe("https://example.com/guide");
   expect(screen.queryByText("private reasoning")).toBeNull();
   const user = userEvent.setup();
-  await user.click(screen.getByText(/Earlier activity/));
   const command = container.querySelectorAll<HTMLDetailsElement>(".activity-entry")[0];
   expect(command.querySelector(".activity-preview")?.textContent).toHaveLength(181);
   expect(command.open).toBe(false);
@@ -217,11 +216,12 @@ test("a fast follow-up keeps its own user and agent messages when the start even
     ] },
   ] } };
   const request = vi.fn(async (path: string, method?: string) => {
+    if (path.endsWith("/view")) return {};
     if (path.endsWith("/history")) return history;
     if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
     if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
     if (path === "/v1/codex/pending") return [];
-    if (path.endsWith("/turns") && method === "POST") {
+    if (path.endsWith("/messages") && method === "POST") {
       history = { thread: { turns: [...history.thread.turns, {
         id: "turn-2", status: "completed", items: [
           { type: "userMessage", content: [{ type: "text", text: "Follow-up question" }] },
@@ -261,10 +261,11 @@ test("completion arriving before the turn response does not duplicate the submit
     type: string; text?: string; content?: { type: string; text: string }[];
   }> }> } };
   const request = vi.fn(async (path: string, method?: string) => {
+    if (path.endsWith("/view")) return {};
     if (path.endsWith("/history")) return history;
     if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
     if (path === "/v1/codex/pending") return [];
-    if (path.endsWith("/turns") && method === "POST") {
+    if (path.endsWith("/messages") && method === "POST") {
       history = { thread: { turns: [{ id: "turn-2", status: "completed", items: [
         { type: "userMessage", content: [{ type: "text", text: "Review this" }] },
         { type: "agentMessage", text: "Reviewed" },
@@ -310,7 +311,7 @@ test("a signed-out Codex account cannot send a chat turn", async () => {
   await screen.findByText(/Sign in to Codex under Settings/);
   await userEvent.setup().type(screen.getByRole("textbox", { name: "Message to Codex" }), "Hello{enter}");
   expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
-  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/messages"))).toBe(false);
 });
 
 test("header login and logout refresh an open chat without losing its message draft", async () => {
@@ -339,7 +340,7 @@ test("header login and logout refresh an open chat without losing its message dr
   await screen.findByText(/use Login in the Codex status dialog/);
   expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("Keep this draft");
   expect(request.mock.calls.filter(([path]) => path.endsWith("/history"))).toHaveLength(1);
-  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/messages"))).toBe(false);
 });
 
 test("an uncertain submission reconciles from history without duplicating a repeated prompt", async () => {
@@ -353,10 +354,11 @@ test("an uncertain submission reconciles from history without duplicating a repe
   ] };
   let history = { thread: { turns: [oldTurn] } };
   const request = vi.fn(async (path: string, method?: string) => {
+    if (path.endsWith("/view")) return {};
     if (path.endsWith("/history")) return history;
     if (path === "/v1/codex/status") return { available: true, account_ready: true, models: { data: [] }, skills: { data: [] } };
     if (path === "/v1/codex/pending") return [];
-    if (path.endsWith("/turns") && method === "POST") return { ...base, active: true, turn_id: null, delivery: "uncertain" };
+    if (path.endsWith("/messages") && method === "POST") return { ...base, active: true, turn_id: null, delivery: "uncertain" };
     throw new Error(`Unexpected request: ${path}`);
   });
   const renderView = (conversation: Conversation) => <ChatView
@@ -368,7 +370,7 @@ test("an uncertain submission reconciles from history without duplicating a repe
   const view = render(renderView(base));
   expect(await screen.findByText("Earlier review")).toBeTruthy();
   await userEvent.setup().type(screen.getByRole("textbox", { name: "Message to Codex" }), "Review this{enter}");
-  await waitFor(() => expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(true));
+  await waitFor(() => expect(request.mock.calls.some(([path]) => path.endsWith("/messages"))).toBe(true));
   view.rerender(renderView({ ...base, active: true }));
   history = { thread: { turns: [oldTurn, { id: "new-turn", status: "completed", items: [
     { type: "userMessage", content: [{ type: "text", text: "Review this" }] },

@@ -23,22 +23,25 @@ function label(item: ActivityItem): string {
   if (item.type === "commandExecution") return "Command";
   if (item.type === "fileChange") return "File changes";
   if (item.type === "reasoning") return "Reasoning summary";
+  if (item.type === "mcpToolCall") return [item.server, item.tool].filter((value) => typeof value === "string").join(" · ") || "Tool call";
+  if (item.type === "webSearch") return "Web search";
+  if (item.type === "collabToolCall") return "Agent activity";
+  if (item.type === "dynamicToolCall") return String(item.tool || "Tool call");
   return item.type.replace(/([a-z])([A-Z])/g, "$1 $2");
 }
 
 function preview(item: ActivityItem): string {
   if (item.command) return item.command;
+  if (typeof item.query === "string") return item.query;
   if (item.type === "reasoning") return item.summary?.join("\n") || (item.status === "inProgress" ? "Waiting for a reasoning summary…" : "No reasoning summary provided");
   if (item.changes) return item.changes.map((change) => change.path).join(", ");
   if (item.text) return item.text;
   return [item.server, item.tool, item.name].filter((value) => typeof value === "string").join(" · ") || "Details available when expanded";
 }
 
-export function ChatActivity({ items, working = false }: { items: ActivityItem[]; working?: boolean }) {
+export function ChatActivity({ items, working = false, inline = false }: { items: ActivityItem[]; working?: boolean; inline?: boolean }) {
   if (!items.length) return null;
-  return <details className="tool-activity" open={working}>
-    <summary><ChevronDown size={15} /> {working ? "Working" : "Earlier activity"} · {items.length} {items.length === 1 ? "activity" : "activities"}</summary>
-    <div className="activity-list">{items.map((item, index) => {
+  const content = <div className="activity-list">{items.map((item, index) => {
       const text = preview(item);
       const short = text.split("\n").slice(0, 2).join("\n");
       const status = (item.status || (working ? "inProgress" : "completed")).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
@@ -46,6 +49,6 @@ export function ChatActivity({ items, working = false }: { items: ActivityItem[]
         <summary><span className="activity-heading"><ChevronDown size={13} /><strong>{label(item)}</strong><span className={`activity-status ${status.replace(/\s/g, "-")}`}>{status}</span></span><span className={`activity-preview ${item.command ? "command-preview" : ""}`}>{short.length > 180 ? `${short.slice(0, 180)}…` : short}{text !== short && short.length <= 180 ? "…" : ""}</span></summary>
         <div className="activity-details">{item.type === "reasoning" ? item.summary?.length ? <ChatMarkdown text={item.summary.join("\n\n")} /> : <p>No reasoning summary was provided.</p> : item.command ? <><pre>{item.command}</pre>{item.cwd && <small>Working directory: {item.cwd}</small>}{item.aggregatedOutput && <pre className="activity-output">{item.aggregatedOutput}</pre>}</> : item.changes ? item.changes.map((change) => <div key={change.path}><strong>{change.path}</strong>{change.diff && <pre>{change.diff}</pre>}</div>) : item.text ? <ChatMarkdown text={item.text} /> : <pre>{JSON.stringify(item, null, 2)}</pre>}</div>
       </details>;
-    })}</div>
-  </details>;
+    })}</div>;
+  return inline ? content : <details className="tool-activity" open={working}><summary><ChevronDown size={15} /> {working ? "Working" : "Earlier activity"} · {items.length} {items.length === 1 ? "activity" : "activities"}</summary>{content}</details>;
 }

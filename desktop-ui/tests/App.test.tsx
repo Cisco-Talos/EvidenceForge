@@ -710,7 +710,7 @@ test("validation findings open a new chat with a reviewable repair draft", async
     expect(request.mock.calls.some(([path]) => String(path).endsWith("/turns"))).toBe(false);
     await user.type(draft, "{enter}");
     await waitFor(() => expect(request).toHaveBeenCalledWith(
-      "/v1/conversations/chat-fix/turns", "POST", expect.objectContaining({ text: expect.stringContaining("Unknown host") }),
+      "/v1/conversations/chat-fix/messages", "POST", expect.objectContaining({ text: expect.stringContaining("Unknown host") }),
     ));
     await user.click(screen.getByRole("button", { name: "Back to workspace" }));
     await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
@@ -1190,7 +1190,7 @@ test("Enter submits a turn while Shift+Enter inserts a newline", async () => {
   await user.type(input, "check{shift>}{enter}{/shift}this{enter}");
   const client = useStudio().api;
   await waitFor(() => expect(client?.request).toHaveBeenCalledWith(
-    "/v1/conversations/chat-1/turns", "POST", { text: "check\nthis", skill_name: null },
+    "/v1/conversations/chat-1/messages", "POST", expect.objectContaining({ text: "check\nthis", skill_name: null, mode: "start", message_id: expect.any(String) }),
   ));
 });
 

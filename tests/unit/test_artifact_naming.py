@@ -33,7 +33,12 @@ from evidenceforge.desktop.library import discover_packs, discover_scenarios
 from evidenceforge.naming import storage_name, validate_display_name, validate_name
 from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.service import create_app
-from evidenceforge.studio.state_database import MIGRATIONS, inspect_database, migrate_database
+from evidenceforge.studio.state_database import (
+    DATABASE_VERSION,
+    MIGRATIONS,
+    inspect_database,
+    migrate_database,
+)
 from evidenceforge.studio.state_upgrade import StateCoordinator
 from tests.support.studio_state import inventory, legacy
 from tests.unit.test_studio_service import _paths
@@ -194,7 +199,7 @@ def test_version_one_database_gets_reviewed_naming_migration(project: Path) -> N
     try:
         assert coordinator.status.state == "pending" and coordinator.status.incompatible
         assert coordinator.apply(coordinator.status.operation_id).state == "ready"
-        assert inspect_database(selected.database_file) == 2
+        assert inspect_database(selected.database_file) == DATABASE_VERSION
         assert inventory(selected.database_file) == before
         assert coordinator.status.backup_path
     finally:
@@ -291,7 +296,7 @@ def test_completed_version_one_installation_reopens_with_separate_reviewed_upgra
         assert current.status.state == "pending", current.status.error
         assert current.status.warning and current.status.incompatible
         assert current.apply(current.status.operation_id).state == "ready", current.status.error
-        assert inspect_database(selected.database_file) == 2
+        assert inspect_database(selected.database_file) == DATABASE_VERSION
         assert current.status.backup_path
     finally:
         current.close()

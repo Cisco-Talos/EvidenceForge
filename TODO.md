@@ -72,6 +72,15 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Include published Schema 3 industry/organization packs in CLI discovery.
+  Studio publication uses `.eforge/artifacts/releases`, which `pack list` currently omits even
+  though exact project references resolve there. Scenario chat therefore reports existing
+  published packs as missing. See the
+  [pack discovery investigation](docs/worklog/2026-10-13-studio-pack-discovery.md).
+- [ ] **P1** Improve Studio chat: reliable Stop, Queue/Steer follow-ups, an ordered commentary
+  and tool timeline, timers, clarification cards, result links, copy controls, saved drafts and
+  reading positions, and an expandable conversation layout. See the
+  [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
   behavior. The agreed requirements, implementation and validation are recorded in the

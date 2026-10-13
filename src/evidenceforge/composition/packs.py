@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -15,13 +16,13 @@ import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.config import get_config_directory
-from evidenceforge.models.exceptions import ConfigurationError, PackError
+from evidenceforge.models.exceptions import ConfigurationError, EvidenceForgeError, PackError
 from evidenceforge.utils import (
     LoadedSourceGraph,
     ScenarioIncludeBudget,
@@ -60,6 +61,7 @@ from .semantic_validation import (
 )
 
 PACK_CAPABILITY_VERSION = "2.0.0"
+logger = logging.getLogger(__name__)
 PACK_MANIFEST_FILENAME = "pack.yaml"
 PACK_LOCK_FILENAME = "pack.lock.yaml"
 PACKAGED_INDEX_FILENAME = "index.json"
@@ -89,6 +91,17 @@ class PackTreeBudget:
 
 
 PACK_TREE_BUDGET = PackTreeBudget()
+
+
+class PackInventoryIssue(BaseModel):
+    """An isolated invalid repository entry in the stable inventory envelope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    scope: Literal["package", "project", "project-release"] = Field(
+        description="Affected repository scope"
+    )
+    location: Path = Field(description="Invalid or conflicting entry location")
+    error: str = Field(description="Actionable discovery or resolution failure")
 
 
 def pack_namespace(publisher: str, name: str) -> str:
@@ -1062,26 +1075,36 @@ class PackRepository:
                     )
                 ]
             else:
-                name_root = (
+                available, issues = self.inventory(sources=(dependency.source,))
+                from evidenceforge.artifacts.lifecycle import artifact_root, storage_name
+
+                expected_roots = [
                     self.root_for(dependency.source)
                     / dependency.publisher
                     / "industry"
                     / dependency.name
-                )
-                if name_root.is_dir() and not name_root.is_symlink():
-                    for version_root in name_root.iterdir():
-                        if not version_root.is_dir() or version_root.is_symlink():
-                            continue
-                        try:
-                            reference = PackReference(
-                                source=dependency.source,
-                                publisher=dependency.publisher,
-                                name=dependency.name,
-                                version=version_root.name,
-                            )
-                        except ValidationError:
-                            continue
-                        candidates.append(self.resolve(reference, expected_type="industry"))
+                ]
+                if dependency.source == "project":
+                    expected_roots.append(
+                        artifact_root(self.project_root)
+                        / "releases"
+                        / dependency.publisher
+                        / "industry"
+                        / storage_name(dependency.name)
+                    )
+                for issue in issues:
+                    if any(
+                        issue.location.is_relative_to(root) or root.is_relative_to(issue.location)
+                        for root in expected_roots
+                    ):
+                        raise PackError(issue.error)
+                candidates = [
+                    candidate
+                    for candidate in available
+                    if candidate.manifest.type == "industry"
+                    and candidate.manifest.publisher == dependency.publisher
+                    and candidate.manifest.name == dependency.name
+                ]
             compatible = [
                 candidate
                 for candidate in candidates
@@ -1148,11 +1171,15 @@ class PackRepository:
             return self.project_pack_root
         raise PackError("source: path does not have a repository root")
 
-    def list(self) -> list[LoadedPack]:
-        """List valid package and project packs without consulting a global registry."""
+    def inventory(
+        self, *, sources: tuple[Literal["package", "project"], ...] = ("package", "project")
+    ) -> tuple[list[LoadedPack], list[PackInventoryIssue]]:
+        """Discover usable exact identities while retaining isolated entry failures."""
+        from evidenceforge.artifacts.discovery import discover_publications
 
-        packs: list[LoadedPack] = []
-        for source in ("package", "project"):
+        issues: list[PackInventoryIssue] = []
+        candidates: dict[tuple[str, str, PackType, str, str], tuple[PackReference, Path]] = {}
+        for source in sources:
             root = self.root_for(source)
             if not root.is_dir():
                 continue
@@ -1161,7 +1188,7 @@ class PackRepository:
                     continue
                 for pack_type in ("industry", "organization"):
                     type_root = publisher_root / pack_type
-                    if not type_root.is_dir():
+                    if not type_root.is_dir() or type_root.is_symlink():
                         continue
                     for name_root in sorted(type_root.iterdir()):
                         if not name_root.is_dir() or name_root.is_symlink():
@@ -1176,11 +1203,69 @@ class PackRepository:
                                     name=name_root.name,
                                     version=version_root.name,
                                 )
-                            except ValidationError as exc:
-                                raise PackError(
-                                    f"invalid {source} pack directory identity: {version_root}"
-                                ) from exc
-                            packs.append(self.resolve(reference, expected_type=pack_type))
+                                candidates[
+                                    (
+                                        source,
+                                        publisher_root.name,
+                                        pack_type,
+                                        reference.name,
+                                        reference.version,
+                                    )
+                                ] = (reference, version_root)
+                            except ValidationError as error:
+                                issues.append(
+                                    PackInventoryIssue(
+                                        scope=source,
+                                        location=version_root,
+                                        error=f"invalid {source} pack directory identity: {error}",
+                                    )
+                                )
+        if "project" in sources:
+            published, damaged = discover_publications(
+                self.project_root, kinds=("industry", "organization")
+            )
+            issues.extend(
+                PackInventoryIssue(
+                    scope="project-release", location=issue.location, error=issue.error
+                )
+                for issue in damaged
+            )
+            for publication in published:
+                receipt = publication.receipt
+                reference = PackReference(
+                    source="project",
+                    publisher=receipt.lifecycle.publisher,
+                    name=receipt.name,
+                    version=receipt.lifecycle.version,
+                )
+                candidates[
+                    (
+                        "project",
+                        reference.publisher,
+                        receipt.kind,
+                        reference.name,
+                        reference.version,
+                    )
+                ] = (reference, publication.root)
+        packs: list[LoadedPack] = []
+        for key, (reference, location) in candidates.items():
+            source, _publisher, pack_type, _name, _version = key
+            scope = (
+                "project-release"
+                if location.is_relative_to(self.project_root / ".eforge/artifacts/releases")
+                else source
+            )
+            try:
+                packs.append(self.resolve(reference, expected_type=pack_type))
+            except (EvidenceForgeError, OSError, ValueError) as error:
+                issues.append(PackInventoryIssue(scope=scope, location=location, error=str(error)))
+        return packs, issues
+
+    def list(self) -> list[LoadedPack]:
+        """List package and project packs, including canonical Schema 3 publications."""
+        packs, issues = self.inventory()
+        if issues:
+            raise PackError(issues[0].error)
         return packs
 
     def resolve(
@@ -1220,19 +1305,47 @@ class PackRepository:
                 self.project_pack_root.resolve()
             ):
                 raise PackError(f"project pack path escapes repository root: {root}")
-        if not root.is_dir() and reference.source == "project":
-            from evidenceforge.artifacts.lifecycle import ArtifactError, resolve_reference
+        if reference.source == "project":
+            from evidenceforge.artifacts.lifecycle import (
+                ArtifactError,
+                artifact_root,
+                resolve_reference,
+                storage_name,
+            )
 
             try:
-                published = resolve_reference(
-                    f"project:{reference.publisher}:{expected_type}:{reference.name}@{reference.version}",
-                    self.project_root,
+                canonical = (
+                    artifact_root(self.project_root)
+                    / "releases"
+                    / str(reference.publisher)
+                    / expected_type
+                    / storage_name(reference.name)
+                    / str(reference.version)
                 )
+                if canonical.exists() or not root.is_dir():
+                    published = resolve_reference(
+                        f"project:{reference.publisher}:{expected_type}:{reference.name}@{reference.version}",
+                        self.project_root,
+                    )
+                    release = self._load(
+                        published.parent,
+                        source="project",
+                        reference=reference,
+                        expected_type=expected_type,
+                    )
+                    if root.is_dir() and root != published.parent:
+                        legacy = self._load(
+                            root, source="project", reference=reference, expected_type=expected_type
+                        )
+                        if legacy.digest != release.digest:
+                            raise PackError(
+                                f"conflicting contents for project:{reference.publisher}:{expected_type}:{reference.name}@{reference.version}: {root} and {published.parent}"
+                            )
+                    return release
             except ArtifactError as exc:
                 raise PackError(
-                    f"project {expected_type} pack {reference.name}@{reference.version} was not found at {root}: {exc}"
+                    f"project {expected_type} pack {reference.name}@{reference.version} could not be resolved: {exc}"
                 ) from exc
-            root = published.parent
         if root.is_symlink() or not root.is_dir():
             raise PackError(
                 f"{reference.source} {expected_type} pack "

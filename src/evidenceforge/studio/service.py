@@ -93,6 +93,13 @@ from evidenceforge.studio.assets import (
     inventory_revision,
     save_asset,
 )
+from evidenceforge.studio.chat import (
+    ChatMessageRequest,
+    ChatQueuedUpdate,
+    ChatResultContent,
+    ChatRuntime,
+    ChatSnapshot,
+)
 from evidenceforge.studio.chat_permissions import (
     CHAT_CONFIG,
     ChatAccess,
@@ -169,6 +176,7 @@ from evidenceforge.studio.runtime_cleanup import (
 from evidenceforge.studio.sessions import WindowSessions
 from evidenceforge.studio.settings import SettingsStore, StudioSettings
 from evidenceforge.studio.state_io import StudioStateError
+from evidenceforge.studio.state_records_v3 import ChatInput, ChatPreference, ChatViewState
 from evidenceforge.studio.state_upgrade import (
     OperationRequest,
     StateCoordinator,
@@ -400,6 +408,7 @@ class TurnRequest(BaseModel):
 
     text: str = Field(min_length=1)
     skill_name: str | None = None
+    client_message_id: str | None = None
 
 
 class TurnSubmission(Conversation):
@@ -896,6 +905,7 @@ class StudioService:
         self.prediction_wakeup = asyncio.Event()
         self.runtime_cleanup = RuntimeCleanup(paths.data)
         self._last_runtime_cleanup = 0.0
+        self.chat = ChatRuntime(self)
 
     async def start(self) -> None:
         """Index the selected workspace and start durable job reconciliation."""
@@ -934,6 +944,7 @@ class StudioService:
                 await self.codex_task
             except asyncio.CancelledError:
                 pass
+        await self.chat.close()
         await self.codex.stop()
         for plan in self.imports.values():
             plan.close()
@@ -969,13 +980,38 @@ class StudioService:
                 "The Codex connection ended during this turn. Review its history before continuing."
             )
             return
+        if method == "serverRequest/resolved":
+            request_id = params.get("requestId")
+            pending = self.pending_codex_requests.pop(request_id, None)
+            if pending:
+                await self.emit("codex", "codex.input_cleared", {"request_id": request_id})
+                thread_id = pending.get("params", {}).get("threadId")
+                waiting = (
+                    self.store.conversation_for_thread(thread_id)
+                    if isinstance(thread_id, str)
+                    else None
+                )
+                if waiting and not any(
+                    entry.get("params", {}).get("threadId") == thread_id
+                    for entry in self.pending_codex_requests.values()
+                ):
+                    waiting.needs_attention = False
+                    self.store.save_conversation(waiting)
+                    await self.emit(
+                        waiting.id, "conversation.updated", waiting.model_dump(mode="json")
+                    )
+            return
         thread_id = params.get("threadId")
         conversation = (
             self.store.conversation_for_thread(thread_id) if isinstance(thread_id, str) else None
         )
         if conversation is None:
             return
+        self.chat.observe(conversation, method, params)
         await self.emit(conversation.id, "conversation.event", {"method": method, "params": params})
+        item = params.get("item")
+        if isinstance(item, dict) and item.get("type") == "userMessage":
+            await self.emit(conversation.id, "chat.updated", {})
         if method == "turn/completed":
             self._last_runtime_cleanup = 0.0
             conversation.active = False
@@ -1000,6 +1036,11 @@ class StudioService:
                 json.loads(conversation.model_dump_json()),
             )
             await self.scan()
+            await self.chat.finish_results(
+                conversation, turn.get("id") if isinstance(turn, dict) else None
+            )
+            if turn_status == "completed":
+                self.chat.schedule_queue(conversation.id)
         elif method == "thread/name/updated" and isinstance(params.get("threadName"), str):
             conversation.title = params["threadName"]
             self.store.save_conversation(conversation)
@@ -1187,9 +1228,7 @@ class StudioService:
                 if not conversation.thread_id:
                     continue
                 try:
-                    await self.codex.call(
-                        "turn/interrupt", {"threadId": conversation.thread_id}, timeout=5
-                    )
+                    await self.chat.interrupt(conversation)
                 except CodexUnavailableError as error:
                     current = self.store.conversation(conversation.id)
                     if current is not None and current.active:
@@ -1242,7 +1281,12 @@ class StudioService:
         last_turn = turns[-1] if isinstance(turns, list) and turns else {}
         last_turn_status = last_turn.get("status") if isinstance(last_turn, dict) else None
         changed = False
-        if conversation.active and status_type in {"idle", "notLoaded", "systemError"}:
+        if (
+            conversation.active
+            and conversation.id not in self.chat.starting
+            and status_type in {"idle", "notLoaded", "systemError"}
+        ):
+            self.chat.abandon(conversation.id)
             conversation.active = False
             conversation.needs_attention = False
             conversation.connection_note = (
@@ -1275,6 +1319,7 @@ class StudioService:
             await self.emit("codex", "codex.input_cleared", {"request_id": request_id})
         self.pending_codex_requests.clear()
         for conversation in self.store.active_conversations():
+            self.chat.abandon(conversation.id)
             conversation.active = False
             conversation.needs_attention = False
             conversation.connection_note = note
@@ -3594,6 +3639,7 @@ def create_app(
             and studio.workspace_coordinator.status.state == "ready"
         ):
             return studio.snapshot()
+        studio.chat.pause_workspace(studio.settings.workspace)
         registered = selection.path.absolute() in {
             studio.settings.workspace.absolute(),
             *(path.absolute() for path in studio.settings.recent_workspaces),
@@ -3629,6 +3675,7 @@ def create_app(
             raise HTTPException(status_code=409, detail={"code": "workspace_state_not_ready"})
         studio.store.record_workspace_migrations(candidate.layout)
         previous = studio.settings.workspace
+        studio.chat.pause_workspace(previous)
         if studio.workspace_coordinator:
             studio.workspace_coordinator.close()
         studio.workspace_coordinator = candidate
@@ -4067,6 +4114,7 @@ def create_app(
                     raise HTTPException(
                         status_code=503,
                         detail="Codex returned no models. Reconnect Codex and choose a model before sending.",
+                        headers={"X-EForge-Delivery": "rejected"},
                     )
                 # Match the picker's displayed default instead of inheriting a
                 # potentially incompatible model from the user's Codex config.
@@ -4191,10 +4239,18 @@ def create_app(
                 "conversation.updated",
                 json.loads(conversation.model_dump_json()),
             )
-            started_turn = await studio.codex.call("turn/start", parameters)
+            if request.client_message_id:
+                parameters["clientUserMessageId"] = request.client_message_id
+            studio.chat.before_submit(conversation, access.source)
+            try:
+                started_turn = await studio.codex.call("turn/start", parameters)
+            finally:
+                studio.chat.starting.discard(conversation.id)
             turn = started_turn.get("turn")
             if isinstance(turn, dict) and isinstance(turn.get("id"), str):
                 turn_id = turn["id"]
+                current_turn = studio.store.conversation(conversation.id) or conversation
+                studio.chat.bind_turn(current_turn, turn)
         except CodexTimeoutError as error:
             await studio.report_codex_failure(error)
             if conversation.active:
@@ -4213,7 +4269,9 @@ def create_app(
                 return TurnSubmission.model_validate(
                     {**current.model_dump(), "delivery": "uncertain"}
                 )
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise HTTPException(
+                status_code=503, detail=str(error), headers={"X-EForge-Delivery": "rejected"}
+            ) from error
         except CodexUnavailableError as error:
             current = studio.store.conversation(conversation.id) or conversation
             if current.active or current.thread_id is None:
@@ -4224,9 +4282,185 @@ def create_app(
                     "conversation.updated",
                     json.loads(conversation.model_dump_json()),
                 )
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise HTTPException(
+                status_code=503,
+                detail=str(error),
+                headers={
+                    "X-EForge-Delivery": "uncertain"
+                    if isinstance(error, CodexDisconnectedError) and conversation.active
+                    else "rejected"
+                },
+            ) from error
         current = studio.store.conversation(conversation.id) or conversation
         return TurnSubmission.model_validate({**current.model_dump(), "turn_id": turn_id})
+
+    def chat_conversation(conversation_id: str, studio: StudioService) -> Conversation:
+        conversation = studio.store.conversation(conversation_id)
+        if conversation is None or conversation.workspace != studio.settings.workspace:
+            raise HTTPException(404, "Conversation not found")
+        return conversation
+
+    def configure_chat_submission(studio: StudioService) -> None:
+        async def submit(identity: str, entry: ChatInput) -> dict[str, Any]:
+            async with studio.asset_lock:
+                result = await submit_turn(
+                    identity,
+                    TurnRequest(
+                        text=entry.text, skill_name=entry.skill_name, client_message_id=entry.id
+                    ),
+                    studio,
+                )
+                return result.model_dump(mode="json")
+
+        studio.chat.submit = submit
+
+    @app.get("/v1/conversations/{conversation_id}/chat")
+    async def chat_snapshot(
+        conversation_id: str, studio: StudioService = Depends(authorized)
+    ) -> ChatSnapshot:
+        conversation = chat_conversation(conversation_id, studio)
+        try:
+            history = await conversation_history(conversation_id, studio)
+        except HTTPException as error:
+            if error.status_code != 503:
+                raise
+            history = {"history_pending": True}
+        current = studio.store.conversation(conversation_id) or conversation
+        return studio.chat.snapshot(current, history)
+
+    @app.post("/v1/conversations/{conversation_id}/messages")
+    async def chat_message(
+        conversation_id: str,
+        request: ChatMessageRequest,
+        studio: StudioService = Depends(authorized),
+    ) -> ChatInput:
+        conversation = chat_conversation(conversation_id, studio)
+        configure_chat_submission(studio)
+        return await studio.chat.send(conversation, request)
+
+    @app.patch("/v1/conversations/{conversation_id}/messages/{message_id}")
+    async def edit_chat_message(
+        conversation_id: str,
+        message_id: str,
+        request: ChatQueuedUpdate,
+        studio: StudioService = Depends(authorized),
+    ) -> ChatInput:
+        chat_conversation(conversation_id, studio)
+        async with studio.chat.lock(conversation_id):
+            entry = studio.store.chat.input(message_id)
+            if entry is None or entry.conversation_id != conversation_id:
+                raise HTTPException(404, "Queued message not found")
+            if entry.state != "queued":
+                raise HTTPException(409, "This message has already been dispatched")
+            entry.text, entry.skill_name = request.text, request.skill_name
+            studio.store.chat.save_input(entry)
+            await studio.emit(conversation_id, "chat.updated", {})
+            return entry
+
+    @app.delete("/v1/conversations/{conversation_id}/messages/{message_id}")
+    async def remove_chat_message(
+        conversation_id: str, message_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, str]:
+        chat_conversation(conversation_id, studio)
+        async with studio.chat.lock(conversation_id):
+            entry = studio.store.chat.input(message_id)
+            if entry is None or entry.conversation_id != conversation_id:
+                raise HTTPException(404, "Queued message not found")
+            if entry.state != "queued":
+                raise HTTPException(409, "This message has already been dispatched")
+            studio.store.chat.remove_input(message_id)
+            await studio.emit(conversation_id, "chat.updated", {})
+            return {"status": "removed"}
+
+    @app.post("/v1/conversations/{conversation_id}/queue/resume")
+    async def resume_chat_queue(
+        conversation_id: str, studio: StudioService = Depends(authorized)
+    ) -> dict[str, str]:
+        chat_conversation(conversation_id, studio)
+        configure_chat_submission(studio)
+        async with studio.chat.lock(conversation_id):
+            if any(
+                entry.state in {"dispatching", "uncertain"}
+                for entry in studio.store.chat.inputs(conversation_id)
+            ):
+                raise HTTPException(409, "An earlier message is still being reconciled")
+            studio.store.chat.update_control(conversation_id, queue_paused=False)
+        studio.chat.schedule_queue(conversation_id)
+        await studio.emit(conversation_id, "chat.updated", {})
+        return {"status": "resumed"}
+
+    @app.put("/v1/conversations/{conversation_id}/view")
+    def save_chat_view(
+        conversation_id: str,
+        request: ChatViewState,
+        studio: StudioService = Depends(authorized),
+    ) -> ChatViewState:
+        conversation = chat_conversation(conversation_id, studio)
+        # Secret clarification inputs are never persisted, even by an alternative client.
+        secret_keys = {
+            (str(identity), question["id"])
+            for identity, pending in studio.pending_codex_requests.items()
+            if pending.get("params", {}).get("threadId") == conversation.thread_id
+            for question in pending.get("params", {}).get("questions", [])
+            if question.get("isSecret") and isinstance(question.get("id"), str)
+        }
+        request.answers = {
+            key: {
+                field: value
+                for field, value in values.items()
+                if (key, field.removesuffix(":text").removesuffix(":choice")) not in secret_keys
+            }
+            for key, values in request.answers.items()
+        }
+        studio.store.chat.update_control(conversation_id, view=request)
+        return request
+
+    @app.get("/v1/chat/preferences")
+    def chat_preferences(studio: StudioService = Depends(authorized)) -> ChatPreference:
+        return studio.store.chat.preference(str(studio.settings.workspace))
+
+    @app.put("/v1/chat/preferences")
+    def save_chat_preferences(
+        request: ChatPreference, studio: StudioService = Depends(authorized)
+    ) -> ChatPreference:
+        if Path(request.workspace).resolve() != studio.settings.workspace.resolve():
+            raise HTTPException(409, "The active workspace changed")
+        studio.store.chat.save_preference(request)
+        return request
+
+    @app.get("/v1/conversations/{conversation_id}/results/{turn_id}/{result_id}")
+    def chat_result(
+        conversation_id: str,
+        turn_id: str,
+        result_id: str,
+        studio: StudioService = Depends(authorized),
+    ) -> ChatResultContent:
+        chat_conversation(conversation_id, studio)
+        turn = next(
+            (turn for turn in studio.store.chat.turns(conversation_id) if turn.id == turn_id), None
+        )
+        result = (
+            next((result for result in turn.results if result.id == result_id), None)
+            if turn
+            else None
+        )
+        if result is None or turn is None or not turn.source_path:
+            raise HTTPException(404, "Chat result not found")
+        try:
+            access = chat_access(Path(turn.source_path))
+            path = Path(result.path).resolve()
+            if not path.is_relative_to(access.directory.resolve()) or not path.is_file():
+                raise HTTPException(404, "This source file is no longer available")
+            if path.stat().st_size > 2 * 1024 * 1024:
+                raise HTTPException(413, "This file is too large for the source viewer")
+            return ChatResultContent(
+                path=str(path),
+                text=path.read_text(encoding="utf-8"),
+                diff=result.diff,
+                item_id=result.item_id,
+            )
+        except (OSError, ValueError, EvidenceForgeError) as error:
+            raise HTTPException(409, str(error)) from error
 
     @app.post("/v1/conversations/{conversation_id}/interrupt")
     async def interrupt_turn(
@@ -4235,9 +4469,9 @@ def create_app(
         conversation = studio.store.conversation(conversation_id)
         if conversation is None or conversation.workspace != studio.settings.workspace:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        if conversation.thread_id:
+        if conversation.active:
             try:
-                await studio.codex.call("turn/interrupt", {"threadId": conversation.thread_id})
+                await studio.chat.interrupt(conversation)
             except CodexUnavailableError as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
         return {"status": "interrupt requested"}
@@ -4262,7 +4496,7 @@ def create_app(
                 detail="Chat permissions cannot be widened; use New draft to revise a published item",
             )
         await studio.codex.respond(reply.request_id, reply.result)
-        studio.pending_codex_requests.pop(reply.request_id)
+        studio.pending_codex_requests.pop(reply.request_id, None)
         params = pending.get("params", {})
         thread_id = params.get("threadId") if isinstance(params, dict) else None
         conversation = (
@@ -5179,6 +5413,7 @@ def create_app(
                 generation_exceptions=choices.generation_exceptions,
             )
         )
+        studio.chat.pause_workspace(studio.settings.workspace)
         if quit_settings.authoring_turns == "stop":
             studio.schedule_authoring_stop()
         await studio.emit("session", "session.closed", {"action": studio.intent.action})

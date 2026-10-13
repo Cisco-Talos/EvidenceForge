@@ -37,7 +37,7 @@ class JsonChange(BaseModel):
     """Explicit field operations with frozen literal defaults; no current-model factories."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    action: Literal["rename", "default", "wrap"]
+    action: Literal["rename", "default", "wrap", "set"]
     field: str
     target: str = ""
     literal: str = "null"
@@ -45,7 +45,18 @@ class JsonChange(BaseModel):
     def apply(self, record: dict[str, object]) -> dict[str, object]:
         """Transform one object without regenerating IDs, timestamps or unspecified fields."""
         result = dict(record)
-        if self.action == "rename" and self.field in result:
+        if self.action in {"default", "set"} and "." in self.field:
+            parent, field = self.field.split(".", 1)
+            nested = result.get(parent)
+            if not isinstance(nested, dict):
+                raise StudioStateError("Historical JSON field parent is not an object")
+            copied = dict(nested)
+            if self.action == "set" or field not in copied:
+                copied[field] = json.loads(self.literal)
+            result[parent] = copied
+        elif self.action == "set":
+            result[self.field] = json.loads(self.literal)
+        elif self.action == "rename" and self.field in result:
             if self.target in result:
                 raise StudioStateError("Historical JSON rename would overwrite an existing field")
             result[self.target] = result.pop(self.field)
@@ -89,6 +100,17 @@ SETTINGS_MIGRATIONS = (
         description="Wrap preserved preferences in the Studio settings version envelope",
         affected=("settings",),
         changes=(JsonChange(action="wrap", field="settings", literal='{"schema_version":1}'),),
+    ),
+    SettingsMigration(
+        id="studio-settings-0002",
+        source=1,
+        target=2,
+        description="Remember the default Queue or Steer follow-up behavior",
+        affected=("settings",),
+        changes=(
+            JsonChange(action="default", field="settings.chat_followup_mode", literal='"queue"'),
+            JsonChange(action="set", field="schema_version", literal="2"),
+        ),
     ),
 )
 LAYOUT_MIGRATIONS = tuple(

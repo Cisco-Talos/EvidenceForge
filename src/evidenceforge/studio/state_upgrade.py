@@ -188,16 +188,18 @@ def settings_document(path: Path) -> tuple[int, dict[str, object]]:
         return 0, CurrentSettings().model_dump(mode="json")
     raw = read_json(path)
     version = raw.get("schema_version", 0)
-    if type(version) is not int or version not in (0, 1):
+    if type(version) is not int or version not in (0, 1, 2):
         raise StudioStateError(
             f"Unsupported Studio settings version {version}; use a compatible release"
         )
-    if version == 1:
+    if version >= 1:
         if set(raw) != {"schema_version", "settings"} or not isinstance(raw["settings"], dict):
             raise StudioStateError("Invalid versioned Studio settings envelope")
         values = raw["settings"]
     else:
         values = raw
+    if version == 2:
+        from evidenceforge.studio.state_records_v3 import StudioSettings
     StudioSettings.model_validate(values)
     return version, values
 
@@ -300,7 +302,7 @@ class StateCoordinator:
             raise StudioStateError("Workspace file migrations require a workspace scope")
         self.layout_target = file_migrations[-1].target if file_migrations else 1
         self.database_receipts = (
-            SETTINGS_MIGRATIONS[0],
+            *SETTINGS_MIGRATIONS,
             next(entry for entry in LAYOUT_MIGRATIONS if entry.family == "private_layout"),
         )
         ordered_chain(file_migrations, "workspace_layout", 1, self.layout_target)
@@ -314,7 +316,7 @@ class StateCoordinator:
             if workspace
             else {
                 "database": DATABASE_VERSION,
-                "settings": 1,
+                "settings": 2,
                 "private_layout": 1,
             },
         )
@@ -488,13 +490,13 @@ class StateCoordinator:
                     if self.layout.exists()
                     else 0,
                 }
-                if database == DATABASE_VERSION and settings == 1 and self.layout.exists():
+                if database == DATABASE_VERSION and settings == 2 and self.layout.exists():
                     self.verify_private_receipts()
                     self.status.state = "ready"
                     return
                 self.status.incompatible = bool(
                     self.paths.settings_file.exists()
-                    and settings == 0
+                    and settings < 2
                     or self.paths.database_file.exists()
                     and any(entry.incompatible and entry.target > database for entry in MIGRATIONS)
                 )
@@ -509,7 +511,7 @@ class StateCoordinator:
                 self.status.target_versions = (
                     {"workspace_layout": self.layout_target}
                     if self.workspace
-                    else {"database": DATABASE_VERSION, "settings": 1, "private_layout": 1}
+                    else {"database": DATABASE_VERSION, "settings": 2, "private_layout": 1}
                 )
                 self.journal = OperationJournal(status=self.status)
             self.status.state = "pending"
@@ -576,7 +578,7 @@ class StateCoordinator:
         layout, values = self.journal.initial_layout, self.journal.initial_settings
         if layout is None or values is None:
             raise StudioStateError("Fresh initialization has no frozen input proof")
-        settings_image = json_bytes({"schema_version": 1, "settings": values})
+        settings_image = json_bytes({"schema_version": 2, "settings": values})
         layout_image = json_bytes(layout)
         for path in self.destinations().values():
             safe_path(path)
@@ -746,8 +748,14 @@ class StateCoordinator:
                         self.io.copy(proposed, proposal)
                     after = file_checksum(proposed) if proposal is not None else None
                 elif key == "settings":
-                    _version, values = settings_document(path)
-                    content = json_bytes(SETTINGS_MIGRATIONS[0].apply(values))
+                    version, values = settings_document(path)
+                    document = (
+                        {"schema_version": version, "settings": values} if version else values
+                    )
+                    for migration in SETTINGS_MIGRATIONS:
+                        if migration.source >= version:
+                            document = migration.apply(document)
+                    content = json_bytes(document)
                     self.io.write(proposed, content)
                     after = sha(content)
                 else:

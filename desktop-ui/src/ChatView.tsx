@@ -1,405 +1,348 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, Check, CirclePause, Pencil, MessageSquareText, X } from "lucide-react";
-import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type TurnSubmission, type ChatAccess } from "./api";
-import { ChatActivity, upsertActivity, type ActivityItem } from "./ChatActivity";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUp, Check, ChevronDown, CirclePause, Pencil, MessageSquareText, X } from "lucide-react";
+import { Dialog, DropdownMenu } from "radix-ui";
+import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type ChatAccess } from "./api";
+import { ChatActivity, type ActivityItem } from "./ChatActivity";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { SourceTextPreview } from "./BundleFileBrowser";
+import { ChatCopyButton } from "./ChatCopyButton";
+import { ChatQuestions, type ChatQuestion } from "./ChatQuestions";
+import { applyChatEvent, finalItemId, formatDuration, historyTurns, mergeTurns, terminalTurn, type TimelineTurn, type TimelineItem, type TimelineResult } from "./chatTimeline";
 
-interface HistoryItem { type: string; text?: string; content?: { type: string; text?: string }[]; [key: string]: unknown }
 interface TurnError { message?: string }
-interface HistoryTurn { id?: string; status?: string; error?: TurnError | null; items?: HistoryItem[] }
-interface CodexHistory { thread?: { turns?: HistoryTurn[] }; history_pending?: boolean }
+interface CodexHistory { thread?: { turns?: Record<string, unknown>[] }; history_pending?: boolean }
 interface CodexModel { id: string; displayName?: string; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: { reasoningEffort: string }[] }
 interface CodexStatus { available: boolean; account_ready?: boolean; error?: string; models?: { data?: CodexModel[] }; skills?: { data?: { skills?: { name: string; enabled?: boolean }[] }[] } }
 interface PendingRequest { request_id: number | string; method: string; params: Record<string, unknown> }
-interface Message { id: string; role: "user" | "agent" | "error"; text: string }
-interface LocalTurn { localId: string; turnId: string | null; userText: string; agentText: string; errorText?: string; completed: boolean; afterTurnCount: number }
+interface SavedView { draft: string; skill_name: string; follow_bottom: boolean; anchor: { turn_id: string; item_id: string; offset: number } | null; answers: Record<string, Record<string, string>>; pending_message?: { text: string; mode: SendMode; id: string } | null }
+interface QueueMessage { id: string; text: string; skill_name?: string | null; state: string; turn_id?: string | null; error?: string | null }
+interface ChatState { seq: number; turns: TimelineTurn[]; queue: QueueMessage[]; queue_paused: boolean; active_turn_id: string | null; view: SavedView; history_pending?: boolean }
+type SendMode = "start" | "queue" | "steer";
+const emptyView = (): SavedView => ({ draft: "", skill_name: "", follow_bottom: true, anchor: null, answers: {} });
 
 function failedTurnText(status?: string, error?: TurnError | null): string | undefined {
-  if (status !== "failed") return undefined;
+  if (status !== "failed" && !error?.message) return undefined;
   const message = error?.message || "Codex could not complete this turn. Try again or choose another model.";
-  try {
-    const detail = JSON.parse(message) as { error?: { message?: unknown } };
-    if (typeof detail?.error?.message === "string") return detail.error.message;
-  } catch {
-    // Most Codex errors are already plain text.
-  }
+  try { const detail = JSON.parse(message) as { error?: { message?: unknown } }; if (typeof detail?.error?.message === "string") return detail.error.message; } catch { /* Plain errors remain readable. */ }
   return message;
 }
+function userText(item: TimelineItem): string { return (item.content || []).filter((part) => part.type === "text").map((part) => part.text || "").join("\n"); }
 
-function startLocalTurn(turns: LocalTurn[], turnId: string, localId: string): LocalTurn[] {
-  if (turns.some((turn) => turn.turnId === turnId)) return turns;
-  const pendingIndex = turns.findIndex((turn) => turn.turnId === null && !turn.completed);
-  if (pendingIndex >= 0) return turns.map((turn, index) => index === pendingIndex ? { ...turn, turnId } : turn);
-  return [...turns, { localId, turnId, userText: "", agentText: "", completed: false, afterTurnCount: 0 }];
-}
-
-function appendAgentDelta(turns: LocalTurn[], turnId: string, delta: string, localId: string): LocalTurn[] {
-  const started = startLocalTurn(turns, turnId, localId);
-  return started.map((turn) => turn.turnId === turnId ? { ...turn, agentText: turn.agentText + delta } : turn);
-}
-
-function flattenHistory(history: CodexHistory, localTurns: LocalTurn[]): { messages: Message[]; activities: HistoryItem[] } {
-  const messages: Message[] = [];
-  const activities: HistoryItem[] = [];
-  const localTurnIds = new Set(localTurns.filter((turn) => turn.userText).map((turn) => turn.turnId).filter(Boolean));
-  for (const turn of history.thread?.turns || []) {
-    if (turn.id && localTurnIds.has(turn.id)) continue;
-    for (const [index, item] of (turn.items || []).entries()) {
-      if (item.type === "userMessage") {
-        const text = (item.content || []).filter((part) => part.type === "text").map((part) => part.text || "").join("\n");
-        if (text) messages.push({ id: `${turn.id}-${index}`, role: "user", text });
-      } else if (item.type === "agentMessage" && item.text) {
-        messages.push({ id: `${turn.id}-${index}`, role: "agent", text: item.text });
-      } else if (item.type !== "userMessage" && item.type !== "agentMessage") {
-        activities.push({ ...item, id: typeof item.id === "string" ? item.id : `${turn.id}-${index}`, status: typeof item.status === "string" ? item.status : turn.status || "completed" });
-      }
-    }
-    const error = failedTurnText(turn.status, turn.error);
-    if (error) messages.push({ id: `${turn.id}-error`, role: "error", text: error });
-  }
-  return { messages, activities };
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
-export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, onDraftSubmitted, onRenamed, onError }: {
-  item: Pick<CatalogItem, "name" | "kind"> & Partial<Pick<CatalogItem, "path">>;
-  conversation: Conversation | null;
-  codexHealth: CodexHealth;
-  api: StudioApi;
-  subscribeEvents: (listener: (event: StudioEvent) => void) => () => void;
-  initialDraft?: string;
-  onDraftSubmitted?: (conversationId: string) => void;
-  onRenamed?: () => Promise<void>;
-  onError: (error: string) => void;
+export function ChatView({ item, conversation, codexHealth, api, subscribeEvents, initialDraft, followupMode = "queue", onDraftSubmitted, onRenamed, onError }: {
+  item: Pick<CatalogItem, "name" | "kind"> & Partial<Pick<CatalogItem, "path">>; conversation: Conversation | null;
+  codexHealth: CodexHealth; api: StudioApi; subscribeEvents: (listener: (event: StudioEvent) => void) => () => void;
+  initialDraft?: string; followupMode?: "queue" | "steer"; onDraftSubmitted?: (conversationId: string) => void;
+  onRenamed?: () => Promise<void>; onError: (error: string) => void;
 }) {
-  const [history, setHistory] = useState<CodexHistory>({});
-  const [status, setStatus] = useState<CodexStatus | null>(null);
-  const [pending, setPending] = useState<PendingRequest[]>([]);
-  const [access, setAccess] = useState<ChatAccess | null>(null);
-  const [draft, setDraft] = useState("");
-  const [skill, setSkill] = useState("");
-  const [sending, setSending] = useState(false);
-  const [localTurns, setLocalTurns] = useState<LocalTurn[]>([]);
-  const [liveActivity, setLiveActivity] = useState<ActivityItem[]>([]);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [title, setTitle] = useState(conversation?.title || "");
-  const [titleDraft, setTitleDraft] = useState("");
-  const [savingTitle, setSavingTitle] = useState(false);
-  const [historyPending, setHistoryPending] = useState(false);
-  const [historyWarning, setHistoryWarning] = useState(false);
-  const [answer, setAnswer] = useState("");
   const conversationId = conversation?.id;
-  const historyRequest = useRef(0);
-  const historyAttempts = useRef(0);
-  const historyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const expectedTurnId = useRef<string | null>(null);
-  const completedTurnIds = useRef(new Set<string>());
-  const nextLocalId = useRef(0);
-  const chatBody = useRef<HTMLDivElement | null>(null);
-  const followBottom = useRef(true);
-  const shownConversation = useRef<string | undefined>(undefined);
-  const activeRef = useRef(conversation?.active);
-  const previousActivity = useRef({ id: conversationId, active: conversation?.active });
-  const previousHealth = useRef(codexHealth.state);
-  const previousAccountStatus = useRef({ availability: codexHealth.availability, label: codexHealth.account_label });
-  activeRef.current = conversation?.active;
+  const currentConversation = useRef(conversationId); currentConversation.current = conversationId;
+  const initialDraftRef = useRef(initialDraft); initialDraftRef.current = initialDraft;
+  const [turns, setTurns] = useState<TimelineTurn[]>([]); const [queue, setQueue] = useState<QueueMessage[]>([]);
+  const [queuePaused, setQueuePaused] = useState(false); const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
+  const [draft, setDraft] = useState(""); const [skill, setSkill] = useState(""); const [sending, setSending] = useState(false);
+  const [status, setStatus] = useState<CodexStatus | null>(null); const [access, setAccess] = useState<ChatAccess | null>(null);
+  const [pending, setPending] = useState<PendingRequest[]>([]); const [answers, setAnswers] = useState<SavedView["answers"]>({});
+  const [editingTitle, setEditingTitle] = useState(false); const [title, setTitle] = useState(conversation?.title || "");
+  const [titleDraft, setTitleDraft] = useState(""); const [savingTitle, setSavingTitle] = useState(false);
+  const [historyPending, setHistoryPending] = useState(false); const [historyWarning, setHistoryWarning] = useState(false);
+  const [following, setFollowing] = useState(true); const [now, setNow] = useState(Date.now()); const [sendMenu, setSendMenu] = useState(false);
+  const [editingQueue, setEditingQueue] = useState<string | null>(null); const [queueText, setQueueText] = useState("");
+  const [resultViewer, setResultViewer] = useState<{ path: string; text: string } | null>(null);
+  const [resultValidation, setResultValidation] = useState<Record<string, string>>({});
+  const [answeredAsync, setAnsweredAsync] = useState<string[]>([]);
+  const body = useRef<HTMLDivElement>(null); const savedView = useRef<SavedView>(emptyView());
+  const composerTouched = useRef(false);
+  const answersTouched = useRef(false);
+  const loadedView = useRef(false); const restoring = useRef(false); const followBottom = useRef(true);
+  const eventBuffer = useRef<StudioEvent[]>([]); const cursor = useRef(0); const requestId = useRef(0);
+  const historyTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const attempts = useRef(0);
+  const expectedTurn = useRef<string | null>(null); const completedTurns = useRef(new Set<string>());
+  const activeRef = useRef(conversation?.active); activeRef.current = conversation?.active;
+  const previousHealth = useRef(codexHealth.state); const previousActive = useRef({ id: conversationId, active: conversation?.active });
+  const previousAccount = useRef({ availability: codexHealth.availability, label: codexHealth.account_label });
+  const optimistic = useRef(new Map<string, { turnId: string; text: string }>());
+  const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryId = useRef<{ text: string; mode: SendMode; id: string } | null>(null);
 
-  useEffect(() => {
-    setAccess(null);
-    if (!conversationId) return;
-    let cancelled = false;
-    void api.request<ChatAccess>(`/v1/conversations/${conversationId}/access`)
-      .then((value) => { if (!cancelled && value?.mode) setAccess(value); })
-      .catch((error) => { if (!cancelled) onError(String(error)); });
-    return () => { cancelled = true; };
-  }, [api, conversationId, conversation?.draft_path, conversation?.active, item.path]);
+  function restoreOptimistic(incoming: TimelineTurn[]): TimelineTurn[] {
+    let result = [...incoming];
+    for (const [id, entry] of optimistic.current) {
+      const actual = result.find((turn) => turn.items.some((item) => item.type === "userMessage" && (item.clientId === id || (!item.clientId && userText(item) === entry.text))));
+      if (actual) { optimistic.current.delete(id); continue; }
+      const turn = result.find((turn) => turn.id === entry.turnId);
+      const message: TimelineItem = { id, clientId: id, type: "userMessage", content: [{ type: "text", text: entry.text }] };
+      if (turn) result = result.map((current) => current.id === turn.id ? { ...current, items: [message, ...current.items.filter((item) => item.id !== id)] } : current);
+      else result.push({ id: entry.turnId, status: "inProgress", items: [message] });
+    }
+    return result;
+  }
 
-  const loadHistory = useCallback(async (completedTurnId?: string, retry = false) => {
+  const loadHistory = useCallback(async (completedId?: string, retry = false) => {
     if (!conversationId) return;
+    const identity = ++requestId.current;
     if (historyTimer.current) clearTimeout(historyTimer.current);
-    historyTimer.current = null;
-    if (!retry) {
-      historyAttempts.current = 0;
-      expectedTurnId.current = completedTurnId || null;
-      setHistoryWarning(false);
-    }
-    const requestId = ++historyRequest.current;
+    if (!retry) { attempts.current = 0; setHistoryWarning(false); }
     try {
-      const result = await api.request<CodexHistory>(`/v1/conversations/${conversationId}/history`);
-      if (requestId !== historyRequest.current) return;
-      const turns = result.thread?.turns || [];
-      const completedTurnSaved = !completedTurnId || turns.some(
-        (turn) => turn.id === completedTurnId && ["completed", "failed", "interrupted"].includes(turn.status || ""),
-      );
-      if (result.history_pending || !completedTurnSaved) {
-        setHistoryPending(true);
-        if (historyAttempts.current < 6) {
-          const delay = Math.min(350 * 2 ** historyAttempts.current, 3000);
-          historyAttempts.current += 1;
-          historyTimer.current = setTimeout(() => void loadHistory(completedTurnId, true), delay);
-        } else {
-          setHistoryWarning(true);
+      let snapshot: ChatState | null = null;
+      try { snapshot = await api.request<ChatState>(`/v1/conversations/${conversationId}/chat`); } catch { /* A previous helper can still supply history. */ }
+      if (identity !== requestId.current) return;
+      let incoming: TimelineTurn[]; let historyIsPending = false;
+      if (Array.isArray(snapshot?.turns)) {
+        incoming = snapshot.turns.map((turn) => ({ ...turn, items: (turn.items || []).map((entry, position) => ({ ...entry, id: entry.id || `${turn.id}-${position}` })) }));
+        const replay = eventBuffer.current.filter((event) => event.seq > snapshot.seq);
+        incoming = replay.reduce(applyChatEvent, incoming);
+        cursor.current = Math.max(snapshot.seq, ...replay.map((event) => event.seq));
+        eventBuffer.current = replay;
+        let replayActive = snapshot.active_turn_id;
+        for (const event of replay) {
+          const nativeTurn = (event.payload.params as { turn?: { id: string } })?.turn;
+          if (event.payload.method === "turn/started" && nativeTurn?.id) replayActive = nativeTurn.id;
+          if (event.payload.method === "turn/completed" && nativeTurn?.id === replayActive) replayActive = null;
         }
-        return;
+        setQueue(snapshot.queue || []); setQueuePaused(snapshot.queue_paused); setActiveTurnId(replayActive);
+        historyIsPending = !!snapshot.history_pending;
+        if (!loadedView.current) {
+          const local = savedView.current;
+          savedView.current = { ...emptyView(), ...snapshot.view,
+            ...(composerTouched.current ? { draft: local.draft, skill_name: local.skill_name } : {}),
+            ...(answersTouched.current ? { answers: { ...(snapshot.view?.answers || {}), ...local.answers } } : {}),
+          };
+          setDraft(savedView.current.draft || initialDraftRef.current || ""); setSkill(savedView.current.skill_name);
+          const retained = savedView.current.pending_message;
+          retryId.current = retained?.text === savedView.current.draft.trim() ? retained : null;
+          setAnswers(savedView.current.answers); followBottom.current = savedView.current.follow_bottom;
+          setFollowing(followBottom.current); loadedView.current = true; restoring.current = true;
+        }
+        setTurns(restoreOptimistic(incoming));
+      } else {
+        // Keep compatibility with a previous helper while the app is handed off.
+        const history = await api.request<CodexHistory>(`/v1/conversations/${conversationId}/history`);
+        if (identity !== requestId.current) return;
+        incoming = historyTurns(history); historyIsPending = !!history.history_pending;
+        setTurns((current) => restoreOptimistic(mergeTurns(incoming, current.filter((turn) => !incoming.some((entry) => entry.id === turn.id && terminalTurn(entry))))));
+        if (!loadedView.current) { loadedView.current = true; setDraft(initialDraftRef.current || ""); }
       }
-      expectedTurnId.current = null;
-      setHistory(result);
-      setHistoryPending(false);
-      setHistoryWarning(false);
-      const savedTurnIds = new Set(turns.filter(
-        (turn) => ["completed", "failed", "interrupted"].includes(turn.status || ""),
-      ).map((turn) => turn.id));
-      setLocalTurns((current) => current.filter((turn) => {
-        if (turn.turnId) return !savedTurnIds.has(turn.turnId);
-        if (!turn.userText || activeRef.current) return true;
-        return !turns.slice(turn.afterTurnCount).some((saved) => {
-          if (!["completed", "failed", "interrupted"].includes(saved.status || "")) return false;
-          return (saved.items || []).some((item) => item.type === "userMessage"
-            && (item.content || []).filter((part) => part.type === "text").map((part) => part.text || "").join("\n") === turn.userText);
-        });
-      }));
-    } catch (error) {
-      if (requestId === historyRequest.current && !(activeRef.current && isAbortError(error))) onError(String(error));
-    }
+      const missing = !!completedId && !incoming.some((turn) => turn.id === completedId && terminalTurn(turn));
+      setHistoryPending(historyIsPending || missing);
+      if (historyIsPending || missing) {
+        if (attempts.current < 6) { const delay = Math.min(350 * 2 ** attempts.current++, 3000); historyTimer.current = setTimeout(() => void loadHistory(completedId, true), delay); }
+        else setHistoryWarning(true);
+      } else expectedTurn.current = null;
+    } catch (error) { if (identity === requestId.current && !(activeRef.current && error instanceof Error && error.name === "AbortError")) onError(String(error)); }
   }, [api, conversationId, onError]);
 
   useEffect(() => {
-    let cancelled = false;
-    expectedTurnId.current = null;
-    completedTurnIds.current.clear();
-    setHistory({}); setLocalTurns([]); setLiveActivity([]); setSkill("");
-    setHistoryPending(false); setHistoryWarning(false);
+    composerTouched.current = false; answersTouched.current = false; retryId.current = null; optimistic.current.clear(); loadedView.current = false; savedView.current = emptyView(); eventBuffer.current = []; cursor.current = 0;
+    completedTurns.current.clear(); expectedTurn.current = null;
+    setTurns([]); setQueue([]); setDraft(""); setSkill(""); setAnswers({}); setAnsweredAsync([]); setActiveTurnId(null);
+    setResultViewer(null); setResultValidation({}); setHistoryPending(false); setHistoryWarning(false); followBottom.current = true; setFollowing(true);
     if (!conversationId) return;
     void loadHistory();
-    const reportError = (error: unknown) => {
-      if (!cancelled && !(activeRef.current && isAbortError(error))) onError(String(error));
-    };
-    void api.request<CodexStatus>("/v1/codex/status").then((result) => { if (!cancelled) setStatus(result); }).catch(reportError);
-    void api.request<PendingRequest[]>("/v1/codex/pending").then((result) => { if (!cancelled) setPending(result); }).catch(reportError);
+    let canceled = false;
+    void api.request<CodexStatus>("/v1/codex/status").then((value) => { if (!canceled) setStatus(value); }).catch((error) => { if (!canceled) onError(String(error)); });
+    void api.request<PendingRequest[]>("/v1/codex/pending").then((value) => { if (!canceled) setPending(Array.isArray(value) ? value : []); }).catch((error) => { if (!canceled) onError(String(error)); });
     return () => {
-      cancelled = true;
-      historyRequest.current += 1;
+      canceled = true; requestId.current++;
       if (historyTimer.current) clearTimeout(historyTimer.current);
-      historyTimer.current = null;
+      if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
+      if (loadedView.current) void api.request(`/v1/conversations/${conversationId}/view`, "PUT", savedView.current).catch(() => undefined);
     };
   }, [api, conversationId, loadHistory, onError]);
 
-  useEffect(() => { setDraft(""); }, [conversationId]);
+  useEffect(() => {
+    savedView.current = { ...savedView.current, draft, skill_name: skill, answers };
+    if (!conversationId || !loadedView.current) return;
+    const timer = setTimeout(() => { void api.request(`/v1/conversations/${conversationId}/view`, "PUT", savedView.current).catch(onError); }, 300);
+    return () => clearTimeout(timer);
+  }, [api, conversationId, draft, skill, answers, following, onError]);
   useEffect(() => { setTitle(conversation?.title || ""); setEditingTitle(false); }, [conversationId, conversation?.title]);
-  useEffect(() => { if (initialDraft) setDraft(initialDraft); }, [conversationId, initialDraft]);
-
+  useEffect(() => { if (initialDraft && loadedView.current) setDraft((current) => current || initialDraft); }, [initialDraft]);
   useEffect(() => {
+    let canceled = false; setAccess(null);
+    if (conversationId) void api.request<ChatAccess>(`/v1/conversations/${conversationId}/access`).then((value) => { if (!canceled && value?.mode) setAccess(value); }).catch((error) => { if (!canceled) onError(String(error)); });
+    return () => { canceled = true; };
+  }, [api, conversationId, item.path, conversation?.active, onError]);
+  useEffect(() => {
+    const changed = previousAccount.current.availability !== codexHealth.availability || previousAccount.current.label !== codexHealth.account_label;
     const recovered = previousHealth.current !== "connected" && codexHealth.state === "connected";
-    previousHealth.current = codexHealth.state;
-    if (recovered && conversationId) {
-      void loadHistory();
+    previousAccount.current = { availability: codexHealth.availability, label: codexHealth.account_label }; previousHealth.current = codexHealth.state;
+    if ((changed || recovered) && conversationId && codexHealth.state === "connected") {
       void api.request<CodexStatus>("/v1/codex/status").then(setStatus).catch((error) => onError(String(error)));
+      if (recovered) void loadHistory();
     }
-  }, [api, codexHealth.state, conversationId, loadHistory, onError]);
-
+  }, [api, codexHealth.availability, codexHealth.account_label, codexHealth.state, conversationId, loadHistory, onError]);
   useEffect(() => {
-    const previous = previousAccountStatus.current;
-    previousAccountStatus.current = { availability: codexHealth.availability, label: codexHealth.account_label };
-    const changed = previous.availability !== codexHealth.availability || previous.label !== codexHealth.account_label;
-    if (!changed || !conversationId || codexHealth.state !== "connected" || codexHealth.availability === "disconnected") return;
-    let cancelled = false;
-    void api.request<CodexStatus>("/v1/codex/status").then((result) => { if (!cancelled) setStatus(result); })
-      .catch((error) => { if (!cancelled) onError(String(error)); });
-    return () => { cancelled = true; };
-  }, [api, codexHealth.availability, codexHealth.account_label, codexHealth.state, conversationId, onError]);
-
-  useEffect(() => {
-    const previous = previousActivity.current;
-    previousActivity.current = { id: conversationId, active: conversation?.active };
-    if (previous.id === conversationId && previous.active && !conversation?.active) {
-      void loadHistory(expectedTurnId.current || undefined);
-    }
+    const previous = previousActive.current; previousActive.current = { id: conversationId, active: conversation?.active };
+    if (previous.id === conversationId && previous.active && !conversation?.active) void loadHistory(expectedTurn.current || undefined);
   }, [conversationId, conversation?.active, loadHistory]);
+  useEffect(() => {
+    if (!conversation?.active) return;
+    setNow(Date.now()); const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [conversation?.active, activeTurnId]);
 
   useEffect(() => {
     if (!conversationId) return;
     return subscribeEvents((event) => {
-      if (event.kind === "skills.installed") {
-        void api.request<CodexStatus>("/v1/codex/status").then(setStatus).catch((error) => onError(String(error)));
-        return;
-      }
-      if (event.kind === "codex.input_answered" || event.kind === "codex.input_cleared") {
-        setPending((current) => current.filter((entry) => entry.request_id !== event.payload.request_id));
-        return;
-      }
+      if (event.kind === "skills.installed") { void api.request<CodexStatus>("/v1/codex/status").then(setStatus).catch(onError); return; }
+      if (event.kind === "codex.input_answered" || event.kind === "codex.input_cleared") { setPending((current) => current.filter((entry) => entry.request_id !== event.payload.request_id)); return; }
       if (event.entity_id !== conversationId) return;
-      if (event.kind === "codex.input_requested") {
-        setPending((current) => [...current, event.payload as unknown as PendingRequest]);
-        return;
-      }
-      if (event.kind !== "conversation.event") return;
-      const method = event.payload.method as string;
-      const params = event.payload.params as Record<string, unknown>;
-      const turnId = typeof params.turnId === "string" ? params.turnId : null;
-      if (method === "turn/started") {
-        const startedId = (params.turn as { id?: string } | undefined)?.id;
-        if (startedId) setLocalTurns((current) => startLocalTurn(current, startedId, `event-${event.seq}`));
-        setLiveActivity([]);
-      } else if (method === "item/agentMessage/delta" && turnId) {
-        setLocalTurns((current) => appendAgentDelta(current, turnId, String(params.delta || ""), `event-${event.seq}`));
-      } else if (method === "turn/completed") {
-        const completed = params.turn as HistoryTurn | undefined;
-        const completedId = completed?.id;
-        if (completedId) {
-          completedTurnIds.current.add(completedId);
-          setLocalTurns((current) => {
-            const pending = current.some((turn) => turn.turnId === completedId)
-              ? null : current.find((turn) => !turn.turnId && !turn.completed);
-            return current.map((turn) => turn.turnId === completedId || turn === pending
-              ? { ...turn, turnId: completedId, completed: true,
-                errorText: failedTurnText(completed?.status, completed?.error || { message: turn.errorText }) } : turn);
-          });
-        }
-        setLiveActivity([]);
-        void loadHistory(completedId);
-      } else if (method === "error" && turnId && params.willRetry === false) {
-        setLocalTurns((current) => startLocalTurn(current, turnId, `event-${event.seq}`).map((turn) =>
-          turn.turnId === turnId ? { ...turn, errorText: failedTurnText("failed", params.error as TurnError) } : turn));
-      } else if (method === "item/started" || method === "item/completed") {
-        const activity = params.item as ActivityItem;
-        if (activity && activity.type !== "agentMessage" && activity.type !== "userMessage") {
-          setLiveActivity((current) => upsertActivity(current, { ...activity, status: activity.status || (method === "item/completed" ? "completed" : "inProgress") }));
-        }
-      } else if (method === "item/reasoning/summaryTextDelta" || method === "item/commandExecution/outputDelta") {
-        const id = String(params.itemId || "");
-        if (!id) return;
-        setLiveActivity((current) => {
-          const entry = current.find((activity) => activity.id === id) || { id, type: method.includes("reasoning") ? "reasoning" : "commandExecution", status: "inProgress" };
-          if (method.includes("reasoning")) {
-            const summary = [...(entry.summary || [])];
-            const index = typeof params.summaryIndex === "number" ? params.summaryIndex : 0;
-            if (index < 0 || index > 100) return current;
-            summary[index] = (summary[index] || "") + String(params.delta || "");
-            return upsertActivity(current, { ...entry, summary });
-          }
-          return upsertActivity(current, { ...entry, aggregatedOutput: ((entry.aggregatedOutput || "") + String(params.delta || "")).slice(-256 * 1024) });
-        });
+      if (event.kind === "chat.updated") { void loadHistory(); return; }
+      if (event.kind === "codex.input_requested") { setPending((current) => [...current.filter((entry) => entry.request_id !== event.payload.request_id), event.payload as unknown as PendingRequest]); return; }
+      if (event.kind !== "conversation.event" || event.seq <= cursor.current) return;
+      eventBuffer.current.push(event); cursor.current = event.seq;
+      if (eventBuffer.current.length === 500) void loadHistory();
+      setTurns((current) => applyChatEvent(current, event));
+      const method = String(event.payload.method); const params = event.payload.params as Record<string, unknown>;
+      if (method === "turn/started") { const id = (params.turn as { id?: string })?.id; if (id) setActiveTurnId(id); }
+      if (method === "turn/completed") {
+        const id = (params.turn as { id?: string })?.id;
+        if (id) completedTurns.current.add(id);
+        setActiveTurnId(null); void loadHistory(id);
       }
     });
   }, [api, conversationId, loadHistory, onError, subscribeEvents]);
 
-  const { messages, activities } = useMemo(() => flattenHistory(history, localTurns), [history, localTurns]);
-
+  function restoreAnchor() {
+    const target = body.current; const anchor = savedView.current.anchor;
+    if (!target || !anchor) return;
+    const row = Array.from(target.querySelectorAll<HTMLElement>("[data-chat-item]")).find((node) => node.dataset.chatTurn === anchor.turn_id && node.dataset.chatItem === anchor.item_id);
+    if (row) target.scrollTop += row.getBoundingClientRect().top - target.getBoundingClientRect().top - anchor.offset;
+  }
   useLayoutEffect(() => {
-    if (shownConversation.current !== conversationId) {
-      shownConversation.current = conversationId;
-      followBottom.current = true;
-    }
-    if (chatBody.current && followBottom.current) {
-      chatBody.current.scrollTop = chatBody.current.scrollHeight;
-    }
-  }, [conversationId, history, localTurns, liveActivity, pending, historyPending, conversation?.active]);
-
+    if (!body.current) return;
+    if (restoring.current) { restoring.current = false; if (!followBottom.current) restoreAnchor(); }
+    if (followBottom.current) body.current.scrollTop = body.current.scrollHeight;
+    else restoreAnchor();
+  }, [turns, pending, queue, historyPending]);
   useEffect(() => {
-    const body = chatBody.current;
-    const list = body?.firstElementChild;
-    if (!body || !list || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      if (followBottom.current) body.scrollTop = body.scrollHeight;
-    });
-    observer.observe(body);
-    observer.observe(list);
+    const target = body.current; if (!target || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => { if (followBottom.current) target.scrollTop = target.scrollHeight; else restoreAnchor(); });
+    observer.observe(target); if (target.firstElementChild) observer.observe(target.firstElementChild);
     return () => observer.disconnect();
   }, [conversationId]);
-
-  function trackChatScroll(): void {
-    const body = chatBody.current;
-    if (!body) return;
-    followBottom.current = body.scrollHeight - body.scrollTop - body.clientHeight <= 2;
+  function trackScroll() {
+    const target = body.current; if (!target) return;
+    followBottom.current = target.scrollHeight - target.scrollTop - target.clientHeight <= 24;
+    setFollowing(followBottom.current);
+    const row = Array.from(target.querySelectorAll<HTMLElement>("[data-chat-item]")).find((node) => node.getBoundingClientRect().bottom > target.getBoundingClientRect().top);
+    savedView.current = { ...savedView.current, follow_bottom: followBottom.current, anchor: row ? { turn_id: row.dataset.chatTurn || "", item_id: row.dataset.chatItem || "", offset: row.getBoundingClientRect().top - target.getBoundingClientRect().top } : null };
+    if (scrollSaveTimer.current) clearTimeout(scrollSaveTimer.current);
+    if (conversationId && loadedView.current) scrollSaveTimer.current = setTimeout(() => { void api.request(`/v1/conversations/${conversationId}/view`, "PUT", savedView.current).catch(() => undefined); }, 300);
   }
 
-  const models = status?.models?.data || [];
-  const defaultModel = models.find((model) => model.isDefault) || models[0];
+  const models = status?.models?.data || []; const defaultModel = models.find((model) => model.isDefault) || models[0];
   const selectedModel = models.find((model) => model.id === conversation?.model_id) || defaultModel;
   const efforts = selectedModel?.supportedReasoningEfforts || [];
   const selectedEffort = conversation?.reasoning_effort || selectedModel?.defaultReasoningEffort || efforts[0]?.reasoningEffort || "medium";
-  const skills = Array.from(new Map((status?.skills?.data || [])
-    .flatMap((group) => group.skills || [])
-    .filter((entry) => entry.enabled !== false && entry.name.startsWith("eforge-"))
-    .map((entry) => [entry.name, entry])).values());
+  const skills = Array.from(new Map((status?.skills?.data || []).flatMap((group) => group.skills || []).filter((entry) => entry.enabled !== false && entry.name.startsWith("eforge-")).map((entry) => [entry.name, entry])).values());
   const threadPending = pending.filter((entry) => !entry.params.threadId || entry.params.threadId === conversation?.thread_id);
   const draftKindLabel = item.kind === "scenario" ? "Scenario" : item.kind === "industry_pack" ? "Industry pack" : "Organization pack";
   const isNewDraft = !!conversation?.draft_kind && !conversation.item_id;
+  const enabled = codexHealth.state === "connected" && status?.available && status.account_ready !== false && (codexHealth.availability === undefined || codexHealth.availability === "ready");
+  const currentMode: SendMode = conversation?.active ? followupMode : "start";
+  const modeLabel = (mode: SendMode) => mode === "start" ? "Send message" : mode === "queue" ? "Queue message" : "Steer current work";
 
   async function updatePreferences(changes: Record<string, string | null>) {
-    if (!conversationId) return;
-    try { await api.request(`/v1/conversations/${conversationId}`, "PATCH", changes); }
-    catch (error) { onError(String(error)); }
+    if (conversationId) try { await api.request(`/v1/conversations/${conversationId}`, "PATCH", changes); } catch (error) { onError(String(error)); }
   }
-
   async function saveTitle() {
-    const value = titleDraft.trim();
-    if (!conversationId || !value || savingTitle) return;
+    const value = titleDraft.trim(); if (!conversationId || !value || savingTitle) return;
     setSavingTitle(true);
-    try {
-      await api.request(`/v1/conversations/${conversationId}`, "PATCH", { title: value });
-      setTitle(value);
-      setEditingTitle(false);
-      await onRenamed?.();
-    } catch (error) { onError(String(error)); }
-    finally { setSavingTitle(false); }
+    try { await api.request(`/v1/conversations/${conversationId}`, "PATCH", { title: value }); setTitle(value); setEditingTitle(false); await onRenamed?.(); }
+    catch (error) { onError(String(error)); } finally { setSavingTitle(false); }
   }
-
-  async function send() {
-    const text = draft.trim();
-    if (!conversationId || !text || sending || conversation?.active || codexHealth.state !== "connected" || (codexHealth.availability !== undefined && codexHealth.availability !== "ready") || status?.account_ready === false) return;
-    const localId = `send-${++nextLocalId.current}`;
-    setLocalTurns((current) => [...current, { localId, turnId: null, userText: text, agentText: "", completed: false, afterTurnCount: history.thread?.turns?.length || 0 }]);
-    setDraft("");
-    setSending(true);
-    try {
-      const submitted = await api.request<TurnSubmission>(`/v1/conversations/${conversationId}/turns`, "POST", { text, skill_name: skill || null });
-      if (submitted.turn_id) {
-        expectedTurnId.current = submitted.turn_id;
-        setLocalTurns((current) => current.map((turn) => turn.localId === localId
-          ? { ...turn, turnId: submitted.turn_id || null, completed: !submitted.active }
-          : turn));
-      }
-      if (!submitted.active || (submitted.turn_id && completedTurnIds.current.has(submitted.turn_id))) {
-        void loadHistory(submitted.turn_id || undefined);
-      }
-      setSkill("");
-      onDraftSubmitted?.(conversationId);
-    } catch (error) {
-      setLocalTurns((current) => current.filter((turn) => turn.localId !== localId));
-      setDraft((current) => current || text);
-      onError(String(error));
+  async function send(mode: SendMode = currentMode, suppliedText?: string, messageId?: string) {
+    const text = (suppliedText ?? draft).trim(); if (!conversationId || !text || sending || !enabled) {
+      if (suppliedText !== undefined) throw new Error("Codex is unavailable. Your answers have not been sent.");
+      return;
     }
-    finally { setSending(false); }
-  }
-
-  async function answerRequest(entry: PendingRequest, result: Record<string, unknown>) {
+    const identity = messageId || (retryId.current?.text === text && retryId.current.mode === mode ? retryId.current.id : crypto.randomUUID());
+    retryId.current = { text, mode, id: identity }; setSending(true);
+    const submittedView = { ...savedView.current };
     try {
-      await api.request("/v1/codex/reply", "POST", { request_id: entry.request_id, result });
-      setPending((current) => current.filter((candidate) => candidate.request_id !== entry.request_id));
-      setAnswer("");
+      if (suppliedText === undefined) submittedView.pending_message = savedView.current.pending_message = retryId.current;
+      // Save the identity before delivery so a reopened composer retries the same claim.
+      await api.request(`/v1/conversations/${conversationId}/view`, "PUT", submittedView);
+      const entry = await api.request<QueueMessage>(`/v1/conversations/${conversationId}/messages`, "POST", { message_id: identity, text, mode, skill_name: mode === "steer" ? null : skill || null, expected_turn_id: mode === "steer" ? activeTurnId : null });
+      if (entry.state === "rejected") throw new Error(entry.error || "Your message was not sent");
+      if (entry.state === "uncertain") throw new Error("Codex has not confirmed delivery. Studio will check before sending again.");
+      if (currentConversation.current !== conversationId) {
+        if (suppliedText === undefined) await api.request(`/v1/conversations/${conversationId}/view`, "PUT", { ...submittedView, draft: "", skill_name: "", pending_message: null });
+        return;
+      }
+      if (entry.state !== "queued" && entry.turn_id) {
+        optimistic.current.set(identity, { turnId: entry.turn_id, text });
+        setTurns((current) => restoreOptimistic(current));
+      }
+      if (suppliedText === undefined) {
+        if (savedView.current.draft.trim() === text) { setDraft(""); setSkill(""); savedView.current = { ...savedView.current, draft: "", skill_name: "", pending_message: null }; }
+        else savedView.current.pending_message = null;
+      }
+      retryId.current = null;
+      if (entry.turn_id) { expectedTurn.current = entry.turn_id; if (!completedTurns.current.has(entry.turn_id)) setActiveTurnId(entry.turn_id); }
+      await loadHistory(entry.turn_id && completedTurns.current.has(entry.turn_id) ? entry.turn_id : undefined);
+      onDraftSubmitted?.(conversationId);
+    } catch (error) { onError(String(error)); if (currentConversation.current === conversationId) await loadHistory(); throw error; }
+    finally { setSending(false); setSendMenu(false); }
+  }
+  async function answerRequest(entry: PendingRequest, result: Record<string, unknown>) {
+    await api.request("/v1/codex/reply", "POST", { request_id: entry.request_id, result });
+    setPending((current) => current.filter((candidate) => candidate.request_id !== entry.request_id));
+    setAnswers((current) => { const next = { ...current }; delete next[String(entry.request_id)]; return next; });
+  }
+  async function viewResult(turnId: string, result: TimelineResult, diff = false) {
+    try {
+      const source = await api.request<{ path: string; text: string; diff?: string }>(`/v1/conversations/${conversationId}/results/${turnId}/${result.id}`);
+      setResultViewer({ path: source.path, text: diff ? source.diff || "No recorded diff available" : source.text });
     } catch (error) { onError(String(error)); }
   }
-
-  if (!conversation) return <section className="chat-panel"><div className="chat-body"><div className="chat-welcome"><MessageSquareText size={26} /><h2>Select a conversation</h2><p>Every conversation stays connected to {item.name}.</p></div></div></section>;
-
+  async function validateResult(turnId: string, result: TimelineResult) {
+    const key = `${turnId}:${result.id}`;
+    setResultValidation((current) => ({ ...current, [key]: "Validating…" }));
+    try {
+      const response = await api.request<{ valid?: boolean; exit_code?: number; report?: { valid?: boolean } }>(result.item_kind === "scenario" ? "/v1/validate" : `/v1/packs/${result.item_id}/review`, result.item_kind === "scenario" ? "POST" : "GET", result.item_kind === "scenario" ? { scenario_id: result.item_id } : undefined);
+      const valid = result.item_kind === "scenario" ? response.report?.valid : response.valid;
+      setResultValidation((current) => ({ ...current, [key]: valid === true ? "Validation passed" : valid === false || (response.exit_code != null && response.exit_code !== 0) ? "Validation found issues" : "Validation finished" }));
+      await onRenamed?.();
+    } catch (error) { setResultValidation((current) => ({ ...current, [key]: "Validation unavailable" })); onError(String(error)); }
+  }
+  async function editQueued(entry: QueueMessage) {
+    try { await api.request(`/v1/conversations/${conversationId}/messages/${entry.id}`, "PATCH", { text: queueText, skill_name: entry.skill_name || null }); setEditingQueue(null); await loadHistory(); } catch (error) { onError(String(error)); }
+  }
+  function saveAnswer(key: string, value: Record<string, string>) {
+    answersTouched.current = true;
+    savedView.current.answers = { ...savedView.current.answers, [key]: { ...savedView.current.answers[key], ...value } };
+    setAnswers((current) => ({ ...current, [key]: { ...current[key], ...value } }));
+  }
+  function renderItem(turn: TimelineTurn, entry: TimelineItem) {
+    const text = entry.type === "userMessage" ? userText(entry) : entry.text || "";
+    const final = entry.type === "agentMessage" && (entry.phase === "final_answer" || finalItemId(turn) === entry.id);
+    const questions = (entry.questions as { title: string; options?: string[] | null }[] | null)?.map((question, index) => ({ id: `${entry.id}-${index}`, question: question.title, options: question.options?.map((label) => ({ label })) }));
+    return <div key={entry.id} data-chat-item={entry.id} data-chat-turn={turn.id} className="timeline-entry">
+      {entry.type === "userMessage" || entry.type === "agentMessage" ? <>
+        {final && terminalTurn(turn) && turn.duration_ms != null && <div className="worked-duration">{turn.status === "completed" ? "Worked for" : turn.status === "failed" ? "Failed after" : "Stopped after"} {formatDuration(turn.duration_ms)}</div>}
+        {text && (entry.type === "userMessage" || final ? <div className={`message-row ${entry.type === "userMessage" ? "user" : "agent"}`}><div className="message-bubble"><div className="message-label"><span className="message-author">{entry.type === "userMessage" ? "You" : "Codex"}</span><ChatCopyButton text={text} onError={onError} /></div>{entry.type === "userMessage" ? <p>{text}</p> : <ChatMarkdown text={text} />}</div></div> : <div className="chat-commentary"><ChatMarkdown text={text} /><ChatCopyButton text={text} onError={onError} /></div>)}
+        {!!questions?.length && !answeredAsync.includes(entry.id) && answers[entry.id]?.__answered !== "1" && (!answers[entry.id]?.__submissionId || !turns.some((candidate) => candidate.items.some((message) => message.type === "userMessage" && message.clientId === answers[entry.id]?.__submissionId))) && <ChatQuestions key={entry.id} questions={questions} disabled={!enabled || sending || (!!conversation?.active && !activeTurnId)} saved={answers[entry.id]} onChange={(value) => saveAnswer(entry.id, value)} onSubmit={async (value) => { const answer = questions.map((question) => `${question.question}\n${value[question.id].answers.join("\n")}`).join("\n\n"); const identity = savedView.current.answers[entry.id]?.__submissionId || crypto.randomUUID(); saveAnswer(entry.id, { ...savedView.current.answers[entry.id], __submissionId: identity }); await send(conversation?.active ? "steer" : "start", answer, identity); setAnsweredAsync((current) => [...current, entry.id]); saveAnswer(entry.id, { ...savedView.current.answers[entry.id], __answered: "1" }); }} />}
+        {final && !!turn.results?.length && <div className="chat-results">{turn.results.map((result) => <div key={result.id}><span title={result.path}>{result.path.split(/[\\/]/).pop()}</span><button onClick={() => void viewResult(turn.id, result)}>Open source</button>{result.diff && <button onClick={() => void viewResult(turn.id, result, true)}>View changes</button>}{result.item_id && <button disabled={resultValidation[`${turn.id}:${result.id}`] === "Validating…"} onClick={() => void validateResult(turn.id, result)}>Validate</button>}{resultValidation[`${turn.id}:${result.id}`] && <span role="status">{resultValidation[`${turn.id}:${result.id}`]}</span>}</div>)}</div>}
+      </> : <ChatActivity items={[entry as ActivityItem]} working={!terminalTurn(turn)} inline />}
+    </div>;
+  }
+  if (!conversation) return <section className="chat-panel"><div className="chat-body"><div className="chat-welcome"><MessageSquareText size={26} /><h2>Select a conversation</h2></div></div></section>;
+  const working = [...turns].reverse().find((turn) => !terminalTurn(turn));
   return <section className="chat-panel">
-    <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" maxLength={80} value={titleDraft} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setEditingTitle(false); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={savingTitle || !titleDraft.trim()}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" disabled={savingTitle} onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{conversation.model_id && !models.some((model) => model.id === conversation.model_id) && <option value={conversation.model_id} disabled>{conversation.model_id} (unavailable)</option>}{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
-    {access?.mode === "discussion" && <p className="chat-connection-note" role="status">{access.version ? `Discussing published version ${access.version} — read-only.` : "Read-only discussion."}</p>}
-    {conversation.connection_note && <p className="chat-connection-note" role="status">{conversation.connection_note}</p>}
-    <div className="chat-body" ref={chatBody} onScroll={trackChatScroll}><div className="message-list">
-      {!messages.length && !localTurns.length && !conversation.active && <div className="chat-welcome"><div className="chat-symbol"><MessageSquareText size={25} /></div><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{access?.mode === "discussion" ? `Ask questions about this ${item.kind === "scenario" ? "scenario" : "pack"}. This conversation can read and explain its contents.` : isNewDraft ? "Describe what you want to build. Codex will use the appropriate EvidenceForge skill and save the authored file in this workspace." : `Ask Codex to build, revise, or explain this ${item.kind === "scenario" ? "scenario" : "pack"}. Its source path is already in conversation context.`}</p></div>}
-      {messages.map((message) => <div key={message.id} className={`message-row ${message.role}`}><div className="message-bubble" role={message.role === "error" ? "alert" : undefined}><span className="message-author">{message.role === "user" ? "You" : message.role === "error" ? "Codex error" : "Codex"}</span>{message.role === "agent" ? <ChatMarkdown text={message.text} /> : <p>{message.text}</p>}</div></div>)}
-      <ChatActivity items={activities} />
-      {localTurns.map((turn) => <Fragment key={turn.localId}>{turn.userText && <div className="message-row user"><div className="message-bubble"><span className="message-author">You</span><p>{turn.userText}</p></div></div>}{turn.agentText && <div className="message-row agent"><div className="message-bubble"><span className="message-author">Codex</span><ChatMarkdown text={turn.agentText} /></div></div>}{turn.errorText && <div className="message-row error"><div className="message-bubble" role="alert"><span className="message-author">Codex error</span><p>{turn.errorText}</p></div></div>}</Fragment>)}
-      <ChatActivity items={liveActivity} working={!!conversation.active || sending} />
-      {conversation.active && !localTurns.some((turn) => !turn.completed && turn.agentText) && <p className="working-note"><span className="active-pulse" /> {codexHealth.state === "connected" ? "Codex is working…" : "Codex connection is uncertain…"}</p>}
-      {historyPending && <p className="history-sync" role="status">{historyWarning ? "Conversation history is still unavailable. " : "Syncing conversation history…"}{historyWarning && <button type="button" onClick={() => void loadHistory(expectedTurnId.current || undefined)}>Retry</button>}</p>}
-      {threadPending.map((entry) => <div className="approval-card" key={entry.request_id}><strong>{entry.method.includes("requestUserInput") ? "Codex needs your input" : "Codex requests approval"}</strong><p>{String(entry.params.reason || entry.params.command || entry.method)}</p>{entry.method.includes("requestUserInput") ? <><input aria-label="Answer Codex" value={answer} onChange={(event) => setAnswer(event.target.value)} /><button className="button-primary" onClick={() => void answerRequest(entry, { answers: Object.fromEntries(((entry.params.questions as {id: string}[]) || []).map((question) => [question.id, { answers: [answer] }])) })}>Send answer</button></> : <div className="approval-actions"><button className="button-quiet" onClick={() => void answerRequest(entry, { decision: "decline" })}>Decline</button><button className="button-primary" onClick={() => void answerRequest(entry, { decision: "accept", permissions: entry.params.permissions || {} })}>Approve</button></div>}</div>)}
+    <div className="chat-topline"><div className="chat-title-area">{editingTitle ? <form className="chat-title-edit" onSubmit={(event) => { event.preventDefault(); void saveTitle(); }}><input autoFocus aria-label="Conversation title" value={titleDraft} maxLength={80} disabled={savingTitle} onChange={(event) => setTitleDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setEditingTitle(false); event.preventDefault(); } }} /><button className="icon-button" aria-label="Save conversation title" disabled={!titleDraft.trim() || savingTitle}><Check size={15} /></button><button type="button" className="icon-button" aria-label="Cancel rename" onClick={() => setEditingTitle(false)}><X size={15} /></button></form> : <button className="chat-title-button" aria-label={`Rename conversation ${title}`} title="Rename conversation" onClick={() => { setTitleDraft(title); setEditingTitle(true); }}><strong>{title}</strong><Pencil size={13} /></button>}<span>{item.name}</span></div><div className="chat-pickers"><label>Model<select aria-label="Model" value={conversation.model_id || defaultModel?.id || ""} onChange={(event) => void updatePreferences({ model_id: event.target.value })}>{conversation.model_id && !models.some((model) => model.id === conversation.model_id) && <option value={conversation.model_id} disabled>{conversation.model_id} (unavailable)</option>}{models.map((model) => <option key={model.id} value={model.id}>{model.displayName || model.id}</option>)}</select></label><label>Reasoning<select aria-label="Reasoning" value={selectedEffort} onChange={(event) => void updatePreferences({ reasoning_effort: event.target.value })}>{efforts.map((effort) => <option key={effort.reasoningEffort} value={effort.reasoningEffort}>{effort.reasoningEffort}</option>)}</select></label></div></div>
+    {access?.mode === "discussion" && <p className="chat-connection-note" role="status">{access.version ? `Discussing published version ${access.version} — read-only.` : "Read-only discussion."}</p>}{conversation.connection_note && <p className="chat-connection-note" role="status">{conversation.connection_note}</p>}
+    <div className="chat-body" ref={body} onScroll={trackScroll}><div className="message-list">
+      {!turns.length && !conversation.active && <div className="chat-welcome"><MessageSquareText size={25} /><h2>{isNewDraft ? `Create a ${draftKindLabel.toLowerCase()}` : `Work on ${item.name}`}</h2><p>{access?.mode === "discussion" ? `Ask questions about this ${item.kind === "scenario" ? "scenario" : "pack"}. This conversation can read and explain its contents.` : "Ask Codex to build, revise, or explain this source."}</p></div>}
+      {turns.map((turn) => <Fragment key={turn.id}>{turn.items.map((entry) => renderItem(turn, entry))}{failedTurnText(turn.status, turn.error) && <div className="message-row error"><div className="message-bubble" role="alert"><span className="message-author">Codex error</span><p>{failedTurnText(turn.status, turn.error)}</p></div></div>}{terminalTurn(turn) && !finalItemId(turn) && turn.duration_ms != null && <div className="worked-duration">{turn.status === "completed" ? "Worked for" : turn.status === "failed" ? "Failed after" : "Stopped after"} {formatDuration(turn.duration_ms)}</div>}</Fragment>)}
+      {(conversation.active || sending) && <p className="working-note"><span className="active-pulse" />{working?.started_at ? `Working for ${formatDuration(now - working.started_at * 1000)}` : codexHealth.state === "connected" ? "Codex is working…" : "Codex connection is uncertain…"}</p>}
+      {historyPending && <p className="history-sync" role="status">{historyWarning ? "Conversation history is still unavailable. " : "Syncing conversation history…"}{historyWarning && <button onClick={() => void loadHistory(expectedTurn.current || undefined)}>Retry</button>}</p>}
+      {threadPending.map((entry) => <ChatQuestions key={entry.request_id} disabled={codexHealth.state !== "connected"} questions={(entry.params.questions || []) as ChatQuestion[]} saved={answers[String(entry.request_id)]} onChange={(value) => saveAnswer(String(entry.request_id), value)} onSubmit={(value) => answerRequest(entry, { answers: value })} />)}
     </div></div>
-    <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" value={skill} onChange={(event) => setSkill(event.target.value)}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to send · Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label="Send message" disabled={!draft.trim() || sending || conversation.active || !status?.available || status.account_ready === false || codexHealth.state !== "connected" || (codexHealth.availability !== undefined && codexHealth.availability !== "ready")} onClick={() => void send()}><ArrowUp size={16} /></button></div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
+    {!following && <button className="jump-latest" onClick={() => { followBottom.current = true; setFollowing(true); savedView.current.follow_bottom = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>Jump to latest <ChevronDown size={14} /></button>}
+    {!!queue.length && <div className="chat-queue"><div className="queue-heading"><strong>{queuePaused ? "Queue paused" : "Queued messages"}</strong>{queuePaused && <button onClick={() => void api.request(`/v1/conversations/${conversationId}/queue/resume`, "POST").then(() => loadHistory()).catch(onError)}>Resume queue</button>}</div>{queue.map((entry) => <div className="queue-entry" key={entry.id}>{editingQueue === entry.id ? <><textarea aria-label="Edit queued message" value={queueText} onChange={(event) => setQueueText(event.target.value)} /><button disabled={!queueText.trim()} onClick={() => void editQueued(entry)}>Save</button><button onClick={() => setEditingQueue(null)}>Cancel</button></> : <><span>{entry.text}{entry.error && <small className="error-text">{entry.error}</small>}</span>{entry.state === "queued" ? <><button aria-label="Edit queued message" onClick={() => { setEditingQueue(entry.id); setQueueText(entry.text); }}>Edit</button><button aria-label="Remove queued message" onClick={() => void api.request(`/v1/conversations/${conversationId}/messages/${entry.id}`, "DELETE").then(() => loadHistory()).catch(onError)}>Remove</button></> : <small>{entry.state === "uncertain" ? "Checking delivery…" : "Sending…"}</small>}</>}</div>)}</div>}
+    <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => { composerTouched.current = true; setDraft(event.target.value); savedView.current.draft = event.target.value; }} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return; event.preventDefault(); const alternative = /Mac/i.test(navigator.platform) ? event.metaKey : event.ctrlKey; const mode = conversation.active && alternative ? followupMode === "queue" ? "steer" : "queue" : currentMode; void send(mode).catch(() => undefined); }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" title="Skills apply to new or queued turns" value={skill} onChange={(event) => { composerTouched.current = true; setSkill(event.target.value); savedView.current.skill_name = event.target.value; }}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to {currentMode === "start" ? "send" : currentMode} · {conversation.active ? "Cmd/Ctrl+Enter for the other mode · " : ""}Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").then(() => loadHistory()).catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label={modeLabel(currentMode)} title={modeLabel(currentMode)} disabled={!draft.trim() || sending || !enabled || (currentMode === "steer" && !activeTurnId)} onClick={() => void send().catch(() => undefined)}><ArrowUp size={16} /></button>{conversation.active && <DropdownMenu.Root open={sendMenu} onOpenChange={setSendMenu}><DropdownMenu.Trigger asChild><button aria-label="Choose Queue or Steer"><ChevronDown size={14} /></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="send-mode-menu" side="top" align="end" sideOffset={6}><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled} onSelect={() => void send("queue").catch(() => undefined)}>Queue message</DropdownMenu.Item><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled || !activeTurnId} onSelect={() => void send("steer").catch(() => undefined)}>Steer current work</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}</div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
+    {resultViewer && <Dialog.Root open onOpenChange={(open) => { if (!open) setResultViewer(null); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="chat-result-dialog"><Dialog.Title>{resultViewer.path}</Dialog.Title><Dialog.Description>Source contents or the recorded changes for this turn.</Dialog.Description><SourceTextPreview path={resultViewer.path} text={resultViewer.text} /><Dialog.Close className="button-quiet">Close</Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>}
   </section>;
 }

@@ -25,7 +25,7 @@ from evidenceforge.studio.state_migrations import (
 )
 from evidenceforge.studio.state_schema import BASELINE_SQL, FTS_SQL, LEDGER_SQL, LEGACY_TABLE_SETS
 
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 FTS_TABLES = {
     "items_fts",
     "items_fts_data",
@@ -92,6 +92,29 @@ MIGRATIONS = (
             ),
         ),
     ),
+    Migration(
+        id="studio-db-0003",
+        source=2,
+        target=3,
+        description="Retain chat turns, dispatch claims, composer state and layout preferences",
+        affected=("chat_turns", "chat_inputs", "chat_controls", "chat_preferences"),
+        sql="""
+            CREATE TABLE chat_turns (
+                conversation_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, id)
+            );
+            CREATE TABLE chat_inputs (
+                id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, payload TEXT NOT NULL
+            );
+            CREATE INDEX chat_inputs_conversation_idx ON chat_inputs(conversation_id);
+            CREATE TABLE chat_controls (
+                conversation_id TEXT PRIMARY KEY, payload TEXT NOT NULL
+            );
+            CREATE TABLE chat_preferences (
+                workspace TEXT PRIMARY KEY, payload TEXT NOT NULL
+            );
+        """,
+    ),
 )
 
 
@@ -154,6 +177,9 @@ def inspect_database(path: Path) -> int:
         # Derive accepted SQL shapes from the frozen baseline, never from today's store constructor.
         with closing(sqlite3.connect(":memory:")) as baseline:
             baseline.executescript(BASELINE_SQL)
+            for migration in MIGRATIONS:
+                if 1 < migration.target <= version:
+                    baseline.executescript(migration.sql)
             expected = set(tables(baseline))
             actual = set(tables(connection)) - {"studio_migrations"}
             recognized = (
@@ -246,6 +272,22 @@ def validate_records(connection: sqlite3.Connection) -> None:
         "library_preferences": LibraryPreferences,
         "control": ControlIntent,
     }
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 3:
+        from evidenceforge.studio.state_records_v3 import (
+            ChatControl,
+            ChatInput,
+            ChatPreference,
+            ChatTurn,
+        )
+
+        models.update(
+            {
+                "chat_turns": ChatTurn,
+                "chat_inputs": ChatInput,
+                "chat_controls": ChatControl,
+                "chat_preferences": ChatPreference,
+            }
+        )
     existing = set(tables(connection))
     for table, model in models.items():
         if table not in existing:
@@ -275,6 +317,10 @@ def validate_records(connection: sqlite3.Connection) -> None:
             if table == "control" and (row["id"] != 1 or not isinstance(payload.get("id"), str)):
                 raise StudioStateError("Studio control identity is invalid")
             model.model_validate(payload)
+            if table.startswith("chat_"):
+                for key in ("id", "conversation_id", "workspace"):
+                    if key in row and payload.get(key) != row[key]:
+                        raise StudioStateError(f"Studio chat identity mismatch in {table}")
     if "jobs" in existing:
         for identity, kind, raw in connection.execute("SELECT id, kind, payload FROM jobs"):
             payload = decode_record(raw, "jobs")

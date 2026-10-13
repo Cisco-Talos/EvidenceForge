@@ -76,7 +76,10 @@ def test_historical_upgrade_preserves_independent_inventory(tmp_path: Path, shap
         assert coordinator.status.warning and coordinator.status.incompatible
         assert coordinator.apply(coordinator.status.operation_id).state == "ready"
         assert inventory(selected.database_file) == before
-        assert json.loads(selected.settings_file.read_bytes())["settings"] == old_settings
+        assert json.loads(selected.settings_file.read_bytes())["settings"] == {
+            **old_settings,
+            "chat_followup_mode": "queue",
+        }
         assert all(path.read_bytes() == content for path, content in engine.items())
         manifest = coordinator.verify_backup()
         assert len(manifest.files) == 3

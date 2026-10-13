@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from evidenceforge.studio import state_io
 from evidenceforge.studio.service import create_app
 from evidenceforge.studio.state_database import MIGRATIONS
+from evidenceforge.studio.state_migrations import SETTINGS_MIGRATIONS
 from evidenceforge.studio.state_upgrade import LayoutDocument, StateCoordinator
 from evidenceforge.studio.store import StudioStore
 from tests.integration.test_studio_state_upgrade import fail_once
@@ -135,7 +136,7 @@ def test_duplicate_threads_apply_exactly_one_transition(tmp_path: Path) -> None:
         assert first.result(10).state == second.result(10).state == "ready"
     with closing(sqlite3.connect(selected.database_file)) as database, database:
         assert database.execute("SELECT COUNT(*) FROM studio_migrations").fetchone() == (
-            len(MIGRATIONS) + 2,
+            len(MIGRATIONS) + len(SETTINGS_MIGRATIONS) + 1,
         )
     assert len(list((selected.data / "studio-upgrades").glob("*/manifest.json"))) == 1
     coordinator.close()

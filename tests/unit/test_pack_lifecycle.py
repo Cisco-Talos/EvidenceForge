@@ -1232,7 +1232,7 @@ def test_pack_list_failure_has_a_stable_json_envelope(
     """Inventory failures never mix Rich diagnostics into JSON output."""
 
     class BrokenRepository:
-        def list(self) -> list[object]:
+        def inventory(self, **kwargs: Any) -> tuple[list[object], list[object]]:
             raise PackError("injected inventory failure")
 
     monkeypatch.setattr(pack_commands, "_repository", lambda _project_root: BrokenRepository())

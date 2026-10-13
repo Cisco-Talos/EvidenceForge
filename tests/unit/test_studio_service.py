@@ -1954,6 +1954,7 @@ def test_authoring_quit_choice_is_durable_and_stop_does_not_block_close(
     ) -> dict[str, object]:
         calls.append(method)
         if method == "turn/interrupt":
+            assert _params == {"threadId": "active-turn", "turnId": "turn-to-stop"}
             interrupted.set()
             await asyncio.sleep(0.4)
         if method == "thread/read":
@@ -1963,9 +1964,9 @@ def test_authoring_quit_choice_is_durable_and_stop_does_not_block_close(
     monkeypatch.setattr(studio.codex, "call", fake_call)
     headers = {"X-EForge-Token": "local-secret"}
     with TestClient(app) as client:
-        studio.store.save_conversation(
-            Conversation(workspace=workspace, thread_id="active-turn", active=True)
-        )
+        active_chat = Conversation(workspace=workspace, thread_id="active-turn", active=True)
+        studio.store.save_conversation(active_chat)
+        studio.chat.bind_turn(active_chat, {"id": "turn-to-stop", "status": "inProgress"})
         start = time.monotonic()
         response = client.post("/v1/session/close", headers=headers)
         assert response.status_code == 200

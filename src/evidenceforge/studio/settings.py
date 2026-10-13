@@ -12,6 +12,8 @@ from evidenceforge.desktop.state import AppSettings
 from evidenceforge.studio.paths import StudioPaths, default_workspace
 from evidenceforge.studio.state_io import StudioStateError, atomic_write
 
+SETTINGS_VERSION = 2
+
 
 class QuitSettings(BaseModel):
     """Actions selected for the next desktop-window close."""
@@ -41,6 +43,7 @@ class StudioSettings(BaseModel):
     quit: QuitSettings = Field(default_factory=QuitSettings)
     skill_install_scope: Literal["global", "workspace"] = "global"
     skill_install_agent: Literal["all", "chatgpt", "claude"] = "all"
+    chat_followup_mode: Literal["queue", "steer"] = "queue"
     codex_path: Path | None = None
     eforge_path: Path | None = None
 
@@ -75,7 +78,7 @@ class SettingsStore:
         from evidenceforge.studio.state_upgrade import settings_document
 
         version, values = settings_document(self.path)
-        if version != 1:
+        if version != SETTINGS_VERSION:
             raise StudioStateError("Studio settings need a backed-up upgrade before opening")
         return StudioSettings.model_validate(values)
 
@@ -86,7 +89,8 @@ class SettingsStore:
         atomic_write(
             self.path,
             json.dumps(
-                {"schema_version": 1, "settings": settings_payload(settings)}, indent=2
+                {"schema_version": SETTINGS_VERSION, "settings": settings_payload(settings)},
+                indent=2,
             ).encode(),
         )
 
