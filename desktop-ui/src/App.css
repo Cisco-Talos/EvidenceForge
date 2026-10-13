@@ -75,9 +75,17 @@ p { line-height: 1.5; }
 .topbar-actions { display: flex; align-items: center; gap: 18px; }
 .codex-indicator { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 50%; background: transparent; cursor: pointer; }
 .codex-indicator:hover, .codex-indicator:focus-visible { border-color: #4d6582; background: #1a2c42; }
-.codex-indicator-dot { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 4px #6bdcbe20; background: #6bdcbe; }
-.codex-indicator.checking .codex-indicator-dot, .codex-indicator.stalled .codex-indicator-dot { background: #e8bc70; box-shadow: 0 0 0 4px #e8bc7026; }
+.codex-indicator-dot { width: 10px; height: 10px; border-radius: 50%; }
+.codex-indicator.ready .codex-indicator-dot { background: #6bdcbe; box-shadow: 0 0 0 4px #6bdcbe20; }
+.codex-indicator.unavailable .codex-indicator-dot { background: #e8bc70; box-shadow: 0 0 0 4px #e8bc7026; }
 .codex-indicator.disconnected .codex-indicator-dot { background: #ef8997; box-shadow: 0 0 0 4px #ef89972b; }
+.close-modal.codex-status-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.codex-status-details { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--line-soft); border-radius: 8px; background: #0c1421; font-size: 13px; }
+.codex-status-details > div { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 12px; }
+.codex-status-details dt { color: var(--muted); }
+.codex-status-details dd { margin: 0; overflow-wrap: anywhere; }
+.codex-status-dialog .close-modal-actions { flex-wrap: wrap; }
+.codex-status-dialog .button-primary:disabled { color: #8795a7; border-color: #425165; background: #263242; box-shadow: none; opacity: 1; }
 .studio-tooltip { z-index: 60; display: flex; flex-direction: column; gap: 4px; max-width: 280px; padding: 9px 11px; border: 1px solid #44607f; border-radius: 8px; background: #192b41; color: #dce9f9; box-shadow: 0 8px 22px #0008; font-size: 11px; }
 .studio-tooltip span { color: #adc1d7; }
 .studio-tooltip .tooltip-action { color: #85aaff; }

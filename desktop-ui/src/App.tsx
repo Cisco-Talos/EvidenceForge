@@ -1,7 +1,7 @@
 import { latestPublishedItems } from "./artifactGrouping";
 import { StateMaintenance } from "./StateMaintenance";
 import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, RefreshCw, Search, Settings2, X } from "lucide-react";
+import { Activity, ArrowLeft, ArrowUpRight, Bookmark, Download, FileCode2, Filter, Folder, FolderOpen, Layers3, Search, Settings2, X } from "lucide-react";
 import { Dialog, DropdownMenu, Tooltip } from "radix-ui";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -13,6 +13,7 @@ import { ExportStatus } from "./ExportStatus";
 import { JobSections } from "./JobSections";
 import { completedSuccessfully } from "./jobOutcomes";
 import { SettingsView } from "./SettingsView";
+import { CodexStatusIndicator } from "./CodexStatusIndicator";
 import { RuntimeCleanupNotice } from "./RuntimeCleanupNotice";
 import { LinuxSandboxNotice } from "./LinuxSandboxNotice";
 import { PublisherSetup } from "./PublisherSetup";
@@ -126,7 +127,6 @@ function App() {
   const [exportRunId, setExportRunId] = useState("");
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
   const [fixDraft, setFixDraft] = useState<{ conversationId: string; text: string } | null>(null);
-  const [showReconnect, setShowReconnect] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
 
   useLibraryRecall(api, snapshot?.settings.workspace, section, {
@@ -183,9 +183,9 @@ function App() {
   const activeJobs = snapshot?.jobs.filter((job) => ["queued", "running", "paused"].includes(job.status)).length || 0;
   const hasPausedJobs = snapshot?.jobs.some((job) => job.status === "paused" && (job.kind === "evaluation" || job.can_resume)) || false;
   const codexHealth: CodexHealth = studio.liveState === "disconnected"
-    ? { state: "disconnected", detail: "Studio service connection lost; reconnecting automatically" }
+    ? { state: "disconnected", availability: "disconnected", detail: "Studio service connection lost; reconnecting automatically" }
     : studio.liveState === "connecting"
-      ? { state: "checking", detail: "Connecting to Studio service" }
+      ? { state: "checking", availability: "disconnected", detail: "Connecting to Studio service" }
       : snapshot?.codex_health ?? { state: "checking", detail: "Checking Codex connection" };
   const codexHealthy = codexHealth.state === "connected";
   const workingChats = snapshot?.conversations.filter((chat) => chat.active && !chat.needs_attention && codexHealthy) || [];
@@ -226,15 +226,15 @@ function App() {
     setCommandIndex(0);
   }
 
-  async function reconnectCodex() {
-    if (!api) return;
+  async function reconnectCodex(): Promise<boolean> {
+    if (!api) return false;
     setReconnecting(true);
     try {
-      await api.request("/v1/codex/reconnect", "POST", { interrupt_active: uncertainChats.length + attentionChats.length > 0 }, 30000);
+      await api.request("/v1/codex/reconnect", "POST", { interrupt_active: snapshot?.conversations.some((chat) => chat.active) || false }, 30000);
       await studio.reload();
-      setShowReconnect(false);
       showNotice("Codex reconnected. Review interrupted conversations before continuing.");
-    } catch (error) { setNotice(String(error)); }
+      return true;
+    } catch (error) { setNotice(String(error)); return false; }
     finally { setReconnecting(false); }
   }
 
@@ -863,7 +863,7 @@ function App() {
       <div className="sidebar-bottom"><button className={section === "settings" ? "selected" : ""} onClick={() => { setSection("settings"); setSelectedId(null); setDraftConversationId(null); }}><Settings2 size={18} /> Settings</button></div>
     </aside>
     <main className={`main-area ${showLibrary && ((item && workspaceTarget === "conversations") || draftConversationId) ? "chat-main" : ""}`}>
-      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="button-quiet" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}>Refresh library</button>}<Tooltip.Root><Tooltip.Trigger asChild><button className={`codex-indicator ${codexHealth.state}`} aria-label={`Codex ${codexHealth.state}: ${codexHealth.detail}`} onClick={() => studio.liveState === "disconnected" ? showNotice("Studio is reconnecting automatically.") : setShowReconnect(true)}><span className="codex-indicator-dot" /></button></Tooltip.Trigger><Tooltip.Portal><Tooltip.Content className="studio-tooltip" sideOffset={7}><strong>Codex {codexHealth.state}</strong><span>{codexHealth.detail}</span><span className="tooltip-action">{studio.liveState === "disconnected" ? "Reconnecting automatically" : "Click to reconnect"}</span></Tooltip.Content></Tooltip.Portal></Tooltip.Root></div></header>
+      <header className="topbar"><div className="topbar-title">{item || draftConversationId ? <><button className="back-link" onClick={() => { setSelectedId(null); setDraftConversationId(null); }}><ArrowLeft size={16} /> {sectionTitles[section]}</button><span className="breadcrumb-slash">/</span><strong>{item ? artifactTitle(item) : draftConversation ? draftTitle(draftConversation) : "New draft"}</strong></> : <strong>{sectionTitles[section]}</strong>}</div><div className="topbar-actions"><button className="icon-button" title="Open command menu (⌘K / Ctrl+K)" aria-label="Open command menu" onClick={() => { setCommandOpen(true); setCommandQuery(""); setCommandIndex(0); }}><Search size={17} /></button>{showLibrary && <button className="button-quiet" title="Refresh library" aria-label="Refresh library" onClick={() => void api.request("/v1/library/refresh", "POST").then(studio.reload).catch((error) => setNotice(String(error)))}>Refresh library</button>}<CodexStatusIndicator health={codexHealth} api={api} activeTurns={snapshot.conversations.filter((chat) => chat.active).length} reconnecting={reconnecting} canReconnect={studio.liveState === "connected"} onReconnect={reconnectCodex} onError={setNotice} /></div></header>
 
       <RuntimeCleanupNotice report={snapshot.runtime_cleanup} />
       <LinuxSandboxNotice notice={snapshot.linux_sandbox_notice} onError={setNotice} />
@@ -914,7 +914,6 @@ function App() {
       {section === "bundles" && <BundleLibrary snapshot={snapshot} api={api} onError={setNotice} onChanged={studio.reload} onOpenScenario={(entry) => { setSection("scenarios"); openItem(entry); }} />}
       {propertiesTarget && snapshot.items.find((entry) => entry.id === propertiesTarget.id) && <ArtifactPropertiesDialog key={`properties-${propertiesTarget.id}`} item={snapshot.items.find((entry) => entry.id === propertiesTarget.id)!} initialSection={propertiesTarget.section} snapshot={snapshot} api={api} onClose={() => setPropertiesTarget(null)} onChanged={studio.reload} onProjectChange={(projectId) => { const entry = snapshot.items.find((entry) => entry.id === propertiesTarget.id); if (entry) void assignProject(entry, projectId); }} onOpen={async (path) => { const entries = await api.request<CatalogItem[]>("/v1/items"); const found = entries.find((entry) => entry.path === path); if (found) { setSection(found.kind === "scenario" ? "scenarios" : "packs"); openItem(found); } }} />}
       {section === "settings" && <div className="page settings-page"><div className="page-intro"><div><span className="eyebrow">PREFERENCES</span><h1>Settings</h1><p>Keep your workspace and tools ready for the next task.</p></div></div><SettingsView settings={snapshot.settings} paths={snapshot.paths} runtimeCleanup={snapshot.runtime_cleanup} publisherStatus={snapshot.publisher_status} api={api} onSaved={studio.reload} onError={setNotice} /></div>}
-      {showReconnect && <div className="modal-backdrop"><div className="close-modal" role="dialog" aria-modal="true" aria-label="Reconnect Codex"><h2>Reconnect Codex</h2><p>{codexHealth.detail}</p>{uncertainChats.length + attentionChats.length > 0 && <p>Reconnecting will interrupt {uncertainChats.length + attentionChats.length} active {uncertainChats.length + attentionChats.length === 1 ? "turn" : "turns"}. Their conversation history remains available for review.</p>}<div className="close-modal-actions"><button className="button-quiet" onClick={() => setShowReconnect(false)}>Cancel</button><button className="button-primary" disabled={reconnecting} onClick={() => void reconnectCodex()}><RefreshCw size={16} /> {reconnecting ? "Reconnecting…" : "Reconnect"}</button></div></div></div>}
       {sourceViewer && <BundleFileBrowser jobId={sourceViewer.itemId} files={sourceViewer.files} api={api} kind="items" onClose={() => setSourceViewer(null)} onError={setNotice} />}
       {newScenarioForm && <ImportDialog kind="scenario" initialProjectId={newScenarioForm.projectId} projects={snapshot.projects} api={api} creating={busy} onCreate={createDraft} onClose={() => setNewScenarioForm(null)} onImported={async (imported) => { await studio.reload(); setNewScenarioForm(null); if (imported) openItem(imported); showNotice("Scenario imported."); }} />}
       {newPackKind && <NewPackDialog kind={newPackKind} initialProjectId={selectedProjectId && selectedProjectId !== "ungrouped" ? selectedProjectId : ""} projects={snapshot.projects} api={api} onClose={() => setNewPackKind(null)} onCreated={packCreated} />}

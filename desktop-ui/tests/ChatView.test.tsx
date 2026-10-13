@@ -313,6 +313,35 @@ test("a signed-out Codex account cannot send a chat turn", async () => {
   expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
 });
 
+test("header login and logout refresh an open chat without losing its message draft", async () => {
+  const conversation = { id: "chat-account", workspace: "/tmp/workspace", item_id: "scenario-1", thread_id: null, title: "New conversation", active: false } as Conversation;
+  let signedIn = false;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path.endsWith("/access")) return { mode: "authoring" };
+    if (path === "/v1/codex/status") return { available: true, account_ready: signedIn, models: { data: signedIn ? [{ id: "test-model" }] : [] }, skills: { data: [] } };
+    if (path === "/v1/codex/pending") return [];
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const props = { item: { name: "Scenario", kind: "scenario" as const }, conversation, api: { request } as unknown as StudioApi, subscribeEvents: () => () => undefined, onError: vi.fn() };
+  const { rerender } = render(<ChatView {...props} codexHealth={{ state: "connected", availability: "unavailable", account_label: "Signed out", detail: "Log in to start work" }} />);
+  await screen.findByText(/use Login in the Codex status dialog/);
+  await userEvent.setup().type(screen.getByRole("textbox", { name: "Message to Codex" }), "Keep this draft");
+  expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
+  signedIn = true;
+  rerender(<ChatView {...props} codexHealth={{ state: "connected", availability: "ready", account_label: "author@example.com", detail: "Ready for work" }} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(false));
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("Keep this draft");
+  expect(screen.getByRole("option", { name: "test-model" })).toBeTruthy();
+  signedIn = false;
+  rerender(<ChatView {...props} codexHealth={{ state: "connected", availability: "unavailable", account_label: "Signed out", detail: "Log in to start work" }} />);
+  expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
+  await screen.findByText(/use Login in the Codex status dialog/);
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("Keep this draft");
+  expect(request.mock.calls.filter(([path]) => path.endsWith("/history"))).toHaveLength(1);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+});
+
 test("an uncertain submission reconciles from history without duplicating a repeated prompt", async () => {
   const base = {
     id: "chat-uncertain", workspace: "/tmp/workspace", item_id: "scenario-1",

@@ -2535,7 +2535,7 @@ export interface components {
         };
         /**
          * CodexHealth
-         * @description Current health of the GUI-owned Codex app-server transport.
+         * @description Transport health and work availability of GUI-owned Codex.
          */
         CodexHealth: {
             /**
@@ -2549,6 +2549,14 @@ export interface components {
              * @default Checking Codex connection
              */
             detail: string;
+            /**
+             * Availability
+             * @default disconnected
+             * @enum {string}
+             */
+            availability: "disconnected" | "unavailable" | "ready";
+            /** Account Label */
+            account_label?: string | null;
         };
         /**
          * CodexReconnectRequest

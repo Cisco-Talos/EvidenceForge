@@ -102,6 +102,7 @@ from evidenceforge.studio.chat_permissions import (
 )
 from evidenceforge.studio.codex import (
     CodexClient,
+    CodexDisconnectedError,
     CodexThreadNotReadyError,
     CodexTimeoutError,
     CodexUnavailableError,
@@ -584,12 +585,14 @@ class ResumeRequest(BaseModel):
 
 
 class CodexHealth(BaseModel):
-    """Current health of the GUI-owned Codex app-server transport."""
+    """Transport health and work availability of GUI-owned Codex."""
 
     model_config = ConfigDict(extra="forbid")
 
     state: Literal["checking", "connected", "stalled", "disconnected"] = "checking"
     detail: str = "Checking Codex connection"
+    availability: Literal["disconnected", "unavailable", "ready"] = "disconnected"
+    account_label: str | None = None
 
 
 class ValidationRecord(BaseModel):
@@ -958,7 +961,7 @@ class StudioService:
                     await self.set_linux_sandbox_notice(notice)
         if method == "codex/connected":
             self.codex_failures = 0
-            await self.set_codex_health("connected", "Codex is responding")
+            await self.set_codex_health("connected", "Checking Codex account and work availability")
             return
         if method == "codex/disconnected":
             await self.set_codex_health("disconnected", "The Codex process exited")
@@ -1007,14 +1010,94 @@ class StudioService:
             )
 
     async def set_codex_health(
-        self, state: Literal["checking", "connected", "stalled", "disconnected"], detail: str
+        self,
+        state: Literal["checking", "connected", "stalled", "disconnected"],
+        detail: str,
+        *,
+        availability: Literal["disconnected", "unavailable", "ready"] | None = None,
+        account_label: str | None = None,
     ) -> None:
         """Broadcast health transitions without filling the event log with heartbeat entries."""
-        health = CodexHealth(state=state, detail=detail)
+        if availability is None:
+            connected = state == "connected" or (
+                state == "stalled"
+                and (self.codex.connected or self.codex_health.availability != "disconnected")
+            )
+            availability = "unavailable" if connected else "disconnected"
+        health = CodexHealth(
+            state=state,
+            detail=detail,
+            availability=availability,
+            account_label=account_label,
+        )
         if health == self.codex_health:
             return
         self.codex_health = health
         await self.emit("codex", "codex.health", health.model_dump())
+
+    async def read_codex_account(
+        self, *, timeout: float = 5
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Read account/tool availability and publish only the display identity."""
+        account = await self.codex.call("account/read", {"refreshToken": False}, timeout=timeout)
+        if self.codex_health.availability == "disconnected":
+            await self.set_codex_health("connected", "Checking Codex account and work availability")
+        identity = account.get("account")
+        if not isinstance(identity, dict):
+            await self.set_codex_health(
+                "connected", "Codex is connected. Log in to start work.", account_label="Signed out"
+            )
+            return account, {"data": []}, {"data": []}
+        account_type = str(identity.get("type", ""))
+        label: str = {
+            "apiKey": "API key authentication",
+            "amazonBedrock": "Amazon Bedrock",
+        }.get(account_type, "Signed in")
+        if account_type == "chatgpt":
+            email = identity.get("email")
+            label = email if isinstance(email, str) and email else "ChatGPT account"
+        try:
+            models, skills = await asyncio.gather(
+                self.codex.call("model/list", {"limit": 100}, timeout=timeout),
+                self.codex.call(
+                    "skills/list",
+                    {"cwds": [str(self.settings.workspace)], "forceReload": False},
+                    timeout=timeout,
+                ),
+            )
+        except CodexUnavailableError as error:
+            await self.report_codex_failure(error, account_label=label)
+            raise
+        model_data = models.get("data")
+        ready = isinstance(model_data, list) and bool(model_data)
+        await self.set_codex_health(
+            "connected",
+            "Codex is connected and logged in, ready for work."
+            if ready
+            else "Codex is logged in, but no models are available for work.",
+            availability="ready" if ready else "unavailable",
+            account_label=label,
+        )
+        return account, models, skills
+
+    async def report_codex_failure(
+        self, error: CodexUnavailableError, *, account_label: str | None = None
+    ) -> None:
+        """Keep connected RPC failures distinct from a missing transport."""
+        connected = not isinstance(error, CodexDisconnectedError) and (
+            self.codex.connected or self.codex_health.availability != "disconnected"
+        )
+        state: Literal["connected", "stalled", "disconnected"] = (
+            "connected" if connected else "disconnected"
+        )
+        if isinstance(error, CodexTimeoutError):
+            state = "stalled"
+        await self.set_codex_health(
+            state,
+            str(error),
+            availability="unavailable" if connected else "disconnected",
+            account_label=(account_label or self.codex_health.account_label) if connected else None,
+        )
 
     async def set_linux_sandbox_notice(self, notice: LinuxSandboxNotice | None) -> None:
         """Publish a deduplicated advisory from Codex's existing Linux startup check."""
@@ -1125,6 +1208,10 @@ class StudioService:
         async with self.codex_lock:
             try:
                 await self.codex.call("thread/loaded/list", {}, timeout=5)
+                if self.codex_health.availability == "disconnected":
+                    await self.set_codex_health(
+                        "connected", "Checking Codex account and work availability"
+                    )
                 for conversation in self.store.active_conversations():
                     if conversation.thread_id is None:
                         continue
@@ -1137,15 +1224,12 @@ class StudioService:
                     except CodexThreadNotReadyError:
                         continue
                     await self.reconcile_codex_thread(conversation, result)
-            except CodexTimeoutError as error:
-                self.codex_failures += 1
-                await self.set_codex_health("stalled", str(error))
+                await self.read_codex_account()
             except CodexUnavailableError as error:
                 self.codex_failures += 1
-                await self.set_codex_health("disconnected", str(error))
+                await self.report_codex_failure(error)
             else:
                 self.codex_failures = 0
-                await self.set_codex_health("connected", "Codex is responding")
 
     async def reconcile_codex_thread(
         self, conversation: Conversation, result: dict[str, Any]
@@ -3799,7 +3883,7 @@ def create_app(
         except (OSError, ValueError, ConfigurationError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
+            await studio.report_codex_failure(error)
             raise HTTPException(status_code=503, detail=str(error)) from error
         except CodexUnavailableError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -3822,36 +3906,27 @@ def create_app(
 
     @app.get("/v1/codex/status")
     async def codex_status(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            account = await studio.codex.call("account/read", {"refreshToken": False}, timeout=10)
-            if account.get("account") is None:
+        async with studio.codex_lock:
+            try:
+                account, models, skills = await studio.read_codex_account(timeout=10)
+                if account.get("account") is None:
+                    return {
+                        "available": True,
+                        "account_ready": False,
+                        "account": account,
+                        "models": {"data": []},
+                        "skills": {"data": []},
+                    }
                 return {
                     "available": True,
-                    "account_ready": False,
+                    "account_ready": True,
                     "account": account,
-                    "models": {"data": []},
-                    "skills": {"data": []},
+                    "models": models,
+                    "skills": skills,
                 }
-            models, skills = await asyncio.gather(
-                studio.codex.call("model/list", {"limit": 100}, timeout=10),
-                studio.codex.call(
-                    "skills/list",
-                    {"cwds": [str(studio.settings.workspace)], "forceReload": False},
-                    timeout=10,
-                ),
-            )
-            return {
-                "available": True,
-                "account_ready": True,
-                "account": account,
-                "models": models,
-                "skills": skills,
-            }
-        except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
-            return {"available": False, "error": str(error)}
-        except CodexUnavailableError as error:
-            return {"available": False, "error": str(error)}
+            except CodexUnavailableError as error:
+                await studio.report_codex_failure(error)
+                return {"available": False, "error": str(error)}
 
     @app.post("/v1/codex/reconnect")
     async def reconnect_codex(
@@ -3875,29 +3950,40 @@ def create_app(
             try:
                 await studio.codex.start()
                 await studio.codex.call("thread/loaded/list", {}, timeout=10)
+                await studio.set_codex_health(
+                    "connected", "Checking Codex account and work availability"
+                )
+                await studio.read_codex_account(timeout=10)
             except CodexUnavailableError as error:
-                await studio.set_codex_health("disconnected", str(error))
+                await studio.report_codex_failure(error)
                 raise HTTPException(status_code=503, detail=str(error)) from error
             studio.codex_failures = 0
-            await studio.set_codex_health("connected", "Codex is responding")
             return studio.codex_health
 
     @app.post("/v1/codex/account/login")
     async def codex_login(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            return await studio.codex.call(
-                "account/login/start",
-                {"type": "chatgpt", "useHostedLoginSuccessPage": True, "appBrand": "codex"},
-            )
-        except CodexUnavailableError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        async with studio.codex_lock:
+            try:
+                return await studio.codex.call(
+                    "account/login/start",
+                    {"type": "chatgpt", "useHostedLoginSuccessPage": True, "appBrand": "codex"},
+                )
+            except CodexUnavailableError as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.post("/v1/codex/account/logout")
     async def codex_logout(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            return await studio.codex.call("account/logout")
-        except CodexUnavailableError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        async with studio.codex_lock:
+            try:
+                result = await studio.codex.call("account/logout")
+                await studio.set_codex_health(
+                    "connected",
+                    "Codex is connected. Log in to start work.",
+                    account_label="Signed out",
+                )
+                return result
+            except CodexUnavailableError as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.post("/v1/codex/skills/install")
     async def install_studio_skills(
@@ -4110,7 +4196,7 @@ def create_app(
             if isinstance(turn, dict) and isinstance(turn.get("id"), str):
                 turn_id = turn["id"]
         except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
+            await studio.report_codex_failure(error)
             if conversation.active:
                 current = studio.store.conversation(conversation.id) or conversation
                 if current.active:

@@ -104,6 +104,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const activeRef = useRef(conversation?.active);
   const previousActivity = useRef({ id: conversationId, active: conversation?.active });
   const previousHealth = useRef(codexHealth.state);
+  const previousAccountStatus = useRef({ availability: codexHealth.availability, label: codexHealth.account_label });
   activeRef.current = conversation?.active;
 
   useEffect(() => {
@@ -198,6 +199,17 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
       void api.request<CodexStatus>("/v1/codex/status").then(setStatus).catch((error) => onError(String(error)));
     }
   }, [api, codexHealth.state, conversationId, loadHistory, onError]);
+
+  useEffect(() => {
+    const previous = previousAccountStatus.current;
+    previousAccountStatus.current = { availability: codexHealth.availability, label: codexHealth.account_label };
+    const changed = previous.availability !== codexHealth.availability || previous.label !== codexHealth.account_label;
+    if (!changed || !conversationId || codexHealth.state !== "connected" || codexHealth.availability === "disconnected") return;
+    let cancelled = false;
+    void api.request<CodexStatus>("/v1/codex/status").then((result) => { if (!cancelled) setStatus(result); })
+      .catch((error) => { if (!cancelled) onError(String(error)); });
+    return () => { cancelled = true; };
+  }, [api, codexHealth.availability, codexHealth.account_label, codexHealth.state, conversationId, onError]);
 
   useEffect(() => {
     const previous = previousActivity.current;
@@ -338,7 +350,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
 
   async function send() {
     const text = draft.trim();
-    if (!conversationId || !text || sending || conversation?.active || codexHealth.state !== "connected" || status?.account_ready === false) return;
+    if (!conversationId || !text || sending || conversation?.active || codexHealth.state !== "connected" || (codexHealth.availability !== undefined && codexHealth.availability !== "ready") || status?.account_ready === false) return;
     const localId = `send-${++nextLocalId.current}`;
     setLocalTurns((current) => [...current, { localId, turnId: null, userText: text, agentText: "", completed: false, afterTurnCount: history.thread?.turns?.length || 0 }]);
     setDraft("");
@@ -388,6 +400,6 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
       {historyPending && <p className="history-sync" role="status">{historyWarning ? "Conversation history is still unavailable. " : "Syncing conversation history…"}{historyWarning && <button type="button" onClick={() => void loadHistory(expectedTurnId.current || undefined)}>Retry</button>}</p>}
       {threadPending.map((entry) => <div className="approval-card" key={entry.request_id}><strong>{entry.method.includes("requestUserInput") ? "Codex needs your input" : "Codex requests approval"}</strong><p>{String(entry.params.reason || entry.params.command || entry.method)}</p>{entry.method.includes("requestUserInput") ? <><input aria-label="Answer Codex" value={answer} onChange={(event) => setAnswer(event.target.value)} /><button className="button-primary" onClick={() => void answerRequest(entry, { answers: Object.fromEntries(((entry.params.questions as {id: string}[]) || []).map((question) => [question.id, { answers: [answer] }])) })}>Send answer</button></> : <div className="approval-actions"><button className="button-quiet" onClick={() => void answerRequest(entry, { decision: "decline" })}>Decline</button><button className="button-primary" onClick={() => void answerRequest(entry, { decision: "accept", permissions: entry.params.permissions || {} })}>Approve</button></div>}</div>)}
     </div></div>
-    <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" value={skill} onChange={(event) => setSkill(event.target.value)}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to send · Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label="Send message" disabled={!draft.trim() || sending || conversation.active || !status?.available || status.account_ready === false || codexHealth.state !== "connected"} onClick={() => void send()}><ArrowUp size={16} /></button></div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools before sending a message.</p>}</div>
+    <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" value={skill} onChange={(event) => setSkill(event.target.value)}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to send · Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label="Send message" disabled={!draft.trim() || sending || conversation.active || !status?.available || status.account_ready === false || codexHealth.state !== "connected" || (codexHealth.availability !== undefined && codexHealth.availability !== "ready")} onClick={() => void send()}><ArrowUp size={16} /></button></div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
   </section>;
 }

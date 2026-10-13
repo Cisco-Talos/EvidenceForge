@@ -660,16 +660,16 @@ test("Codex status dot explains a stalled connection and reconnects with active-
   const user = userEvent.setup();
   const originalHealth = snapshot.codex_health;
   const originalConversations = snapshot.conversations;
-  snapshot.codex_health = { state: "stalled", detail: "Codex did not answer a health probe" };
+  snapshot.codex_health = { state: "stalled", availability: "unavailable", detail: "Codex did not answer a health probe" };
   snapshot.conversations = [{ ...originalConversations[0], active: true }, originalConversations[1]];
   try {
     await renderExpandedApp();
-    const dot = screen.getByRole("button", { name: /Codex stalled: Codex did not answer/ });
+    const dot = screen.getByRole("button", { name: /Codex connected, unavailable for work: Codex did not answer/ });
     expect(dot.querySelector(".codex-indicator-dot")).toBeTruthy();
     await user.hover(dot);
     expect(await screen.findByText("Codex did not answer a health probe")).toBeTruthy();
     await user.click(dot);
-    const dialog = screen.getByRole("dialog", { name: "Reconnect Codex" });
+    const dialog = screen.getByRole("dialog", { name: "Codex status" });
     expect(within(dialog).getByText(/interrupt 1 active turn/)).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Reconnect" }));
     expect(useStudio().api?.request).toHaveBeenCalledWith(

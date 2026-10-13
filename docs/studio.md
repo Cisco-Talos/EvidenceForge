@@ -95,8 +95,16 @@ that Studio failed to launch.
 
 Codex installation and environment setup are maintained in
 [CONTRIBUTING.md](../CONTRIBUTING.md#codex-authoring-and-linux-sandbox-tests).
-After installation, use Studio's **Settings → Authoring & tools → Sign in**. Studio uses Codex for its
-scenario and pack conversations. Your Codex credentials remain in Codex's own storage.
+After installation, click the Codex status dot in the header and choose **Login**, or use
+**Settings → Authoring & tools → Sign in**. Both open the same Codex browser login flow. Studio
+uses Codex for its scenario and pack conversations. Your Codex credentials remain in Codex's
+own storage.
+
+The status dot is red when disconnected, yellow when connected but signed out or unavailable
+for work, and green when connected with a signed-in account and an available model. Click it
+in any state to see connection, account and work details. **Login** is disabled while disconnected
+and stays available in yellow and green states. **Reconnect** replaces the connection; the dialog
+warns when that will interrupt active turns.
 
 Studio looks for `codex` on PATH, in `~/.local/bin` on Linux, in common macOS CLI locations,
 and in Codex.app's bundled CLI.

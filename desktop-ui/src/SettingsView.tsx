@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Activity, ArrowUpRight, Check, Folder, MessageSquareText } from "lucide-react";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { isTauri } from "@tauri-apps/api/core";
 import { PackPublisherStatus, RuntimeCleanupReport, StudioApi, StudioSettings } from "./api";
 import { PublisherSetup } from "./PublisherSetup";
 import { Help, shortPath } from "./components";
 import { CopyPathButton } from "./CopyPathButton";
+import { codexAccountIdentity, useCodexAccount, type CodexStatus } from "./CodexAccount";
 
 type Tab = "workspace" | "jobs" | "tools";
-interface CodexAccount { type?: string; email?: string }
-interface CodexStatus { available: boolean; error?: string; account?: { account?: CodexAccount | null } }
 
 export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus, api, onSaved, onError }: {
   settings: StudioSettings;
@@ -27,8 +26,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
   const [saveStatus, setSaveStatus] = useState("");
   const lastIncomingSettings = useRef(JSON.stringify(settings));
   const [workspace, setWorkspace] = useState(settings.workspace);
-  const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
-  const [loginPending, setLoginPending] = useState(false);
+  const { codexStatus, setCodexStatus, loginPending, loginStarting, login, logout } = useCodexAccount(api, tab === "tools", onError);
   const [installMessage, setInstallMessage] = useState("");
   const [rememberView, setRememberView] = useState(true);
   const [savedRememberView, setSavedRememberView] = useState(true);
@@ -66,32 +64,6 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
     setWorkspace(settings.workspace);
   }, [settings]);
   useEffect(() => { if (dirty) setSaveStatus(""); }, [dirty]);
-  useEffect(() => {
-    if (tab === "tools") void api.request<CodexStatus>("/v1/codex/status").then(setCodexStatus).catch((error) => onError(String(error)));
-  }, [api, tab, onError]);
-  useEffect(() => {
-    if (!loginPending || tab !== "tools") return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const deadline = Date.now() + 120_000;
-    async function poll() {
-      try {
-        const result = await api.request<CodexStatus>("/v1/codex/status");
-        if (cancelled) return;
-        setCodexStatus(result);
-        if (result.account?.account) {
-          setLoginPending(false);
-          return;
-        }
-      } catch (error) {
-        if (!cancelled) onError(String(error));
-      }
-      if (!cancelled && Date.now() < deadline) timer = setTimeout(() => void poll(), 2500);
-      else if (!cancelled) setLoginPending(false);
-    }
-    timer = setTimeout(() => void poll(), 2500);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [api, loginPending, onError, tab]);
 
   const updateQuit = (change: Partial<StudioSettings["quit"]>) =>
     setDraft({ ...draft, quit: { ...draft.quit, ...change } });
@@ -140,23 +112,6 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
     catch (error) { onError(String(error)); }
   }
 
-  async function accountAction() {
-    try {
-      if (codexStatus?.account?.account) {
-        await api.request("/v1/codex/account/logout", "POST");
-        setLoginPending(false);
-      } else {
-        const response = await api.request<{ authUrl?: string }>("/v1/codex/account/login", "POST");
-        if (response.authUrl) {
-          if (isTauri()) await openUrl(response.authUrl);
-          else window.open(response.authUrl, "_blank", "noopener,noreferrer");
-          setLoginPending(true);
-        }
-      }
-      setCodexStatus(await api.request<CodexStatus>("/v1/codex/status"));
-    } catch (error) { onError(String(error)); }
-  }
-
   async function installSkills() {
     try {
       const result = await api.request<{ installed: Record<string, number>; failures: Record<string, string> }>(
@@ -171,13 +126,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
   }
 
   const account = codexStatus?.account?.account;
-  const accountIdentity = !codexStatus ? "Checking Codex…"
-    : !codexStatus.available ? (codexStatus.error || "Codex unavailable")
-    : !account ? (loginPending ? "Waiting for sign-in…" : "Signed out")
-    : account.type === "chatgpt" ? (account.email || "ChatGPT account")
-    : account.type === "apiKey" ? "API key authentication"
-    : account.type === "amazonBedrock" ? "Amazon Bedrock"
-    : "Signed in";
+  const accountIdentity = codexAccountIdentity(codexStatus, loginPending);
 
   return <div className="settings-layout">
     <div className="settings-nav">
@@ -215,7 +164,7 @@ export function SettingsView({ settings, paths, runtimeCleanup, publisherStatus,
       </>}
       {tab === "tools" && <>
         <div className="section-heading"><div><h2>Authoring & tools</h2><p>Codex handles interactive work. eforge handles deterministic operations.</p></div></div>
-        <div className="setting-row"><div className="setting-copy"><strong>Codex account</strong><Help text="The identity is read from Codex. Credentials remain in Codex's own storage." /></div><div className="setting-control"><span className="path-label" role="status">{accountIdentity}</span><button className="button-quiet" disabled={!codexStatus?.available || loginPending} onClick={() => void accountAction()}>{account ? "Sign out" : "Sign in"}</button></div></div>
+        <div className="setting-row"><div className="setting-copy"><strong>Codex account</strong><Help text="The identity is read from Codex. Credentials remain in Codex's own storage." /></div><div className="setting-control"><span className="path-label" role="status">{accountIdentity}</span><button className="button-quiet" disabled={!codexStatus?.available || loginPending || loginStarting} onClick={() => void (account ? logout() : login())}>{account ? "Sign out" : "Sign in"}</button></div></div>
         <div className="setting-row"><div className="setting-copy"><strong>Skill install location</strong><Help text="Global installs are available across workspaces; workspace installs stay with this project." /></div><select value={draft.skill_install_scope} onChange={(event) => setDraft({ ...draft, skill_install_scope: event.target.value as StudioSettings["skill_install_scope"] })}><option value="global">Global</option><option value="workspace">This workspace</option></select></div>
         <div className="setting-row"><div className="setting-copy"><strong>Install for</strong><Help text="Choose which agent's skill directory receives EvidenceForge instructions." /></div><select value={draft.skill_install_agent} onChange={(event) => setDraft({ ...draft, skill_install_agent: event.target.value as StudioSettings["skill_install_agent"] })}><option value="all">All agents</option><option value="chatgpt">Codex</option><option value="claude">Claude Code</option></select></div>
         <div className="setting-row"><div className="setting-copy"><strong>EvidenceForge skills</strong><Help text="Missing Codex skills are installed automatically when needed, using the selected location. Install or update copies current skills to the selected agents and updates existing versions." /></div><div className="setting-control"><span className="path-label">{installMessage || `${draft.skill_install_scope} · ${draft.skill_install_agent}`}</span><button className="button-quiet" onClick={() => void installSkills()}>Install or update</button></div></div>
