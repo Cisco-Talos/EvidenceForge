@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 162
+current_revision: 163
 history_start_revision: 1
-behavior_surface_sha256: 8ac2ee1f38c0fcefa9ad9ab0ce64f5f190b23b00f6658b4b18a16d33f0f2baaa
+behavior_surface_sha256: 0a35207424914905c6295861aeefab721b113a29ee4c49daa8fe4fa8813abbad
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1625,3 +1625,11 @@ changes:
       - session-lifecycle
     formats: []
     summary: Anchors storyline and red-herring hour indexes to the scenario start so non-aligned runs execute authored events before baseline lifecycle cleanup. Hour-aligned scheduling is unchanged.
+  - revision: 163
+    id: register-captured-scenario-metadata-caches
+    impact: none
+    domains:
+      - configuration-cache-ownership
+      - artifact-display-metadata
+    formats: []
+    summary: Registers the exact bounded captured-source metadata caches for provider-owned cleanup so Studio validation and publication work after bundle inspection. Equivalent resolved inputs and deterministic rendering are unchanged.
