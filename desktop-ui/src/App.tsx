@@ -509,10 +509,12 @@ function App() {
     try {
       if (target.kind === "scenario") await api.request("/v1/validate", "POST", { scenario_id: target.id });
       else {
-        const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
-        await api.request(`/v1/items/${target.id}/lifecycle`, "POST", { action: "validate", expected_digest: info.digest }, 180000);
-        updatePackReview(target, await api.request<PackReview>(`/v1/packs/${target.id}/review`));
-        setPropertiesTarget({ id: target.id, section: "technical" });
+        try {
+          const info = await api.request<{ digest: string }>(`/v1/items/${target.id}/lifecycle`);
+          await api.request(`/v1/items/${target.id}/lifecycle`, "POST", { action: "validate", expected_digest: info.digest }, 180000);
+        } finally {
+          updatePackReview(target, await api.request<PackReview>(`/v1/packs/${target.id}/review`));
+        }
       }
       await studio.reload();
     }

@@ -291,8 +291,8 @@ commit and does not push either effort.
 - Pack Validation & release exposes Validate and its section menu while collapsed. Expanding
   it reveals findings and dependency information without duplicating those header controls.
 - Pack section menus are scoped explicitly. Conversations has Continue/New conversation;
-  Assets has View assets/Add asset; Validation & release has validation, repair, version and
-  publication commands. Properties, source inspection, cloning, project assignment, hiding and
+  Assets has View assets/Add asset; Validation & release has validation, repair, publication and
+  release export commands. Properties, source inspection, cloning, project assignment, hiding and
   removal remain in the complete pack menu. Import stays in the pack library. Published or
   protected packs explain why adding an asset requires a new draft or workspace clone.
 - Bundles groups related draft/release runs through canonical artifact families and retained
@@ -315,3 +315,27 @@ the conversation rail, full publication menu, asset menu, folded/expanded sectio
 access and merged bundle rows. The shortcut fits its rail at 1280, 736 and 320 px; bundle version,
 status, time, progress and size information remains available without horizontal page overflow.
 Temporary browser tabs, viewport overrides and the sample server were cleaned up.
+
+## Follow-up: inline pack validation and scenario publication failure
+
+The user reported that Validate still opened Technical Properties and that publishing the
+`test-1` draft returned `TypeError: Load failed`. Pack validation now expands and scrolls to
+Validation & release without opening Properties. Its review refreshes after both successful and
+failed validation so inline findings cannot retain an earlier successful result. The section
+menu retains only Validate, Fix in chat, Publish locally and Export release. Versions, New draft,
+Upgrade and Recover remain available through the complete pack menu and publication controls.
+
+The Studio service log identified an uncaught `untrusted derived cache wrapper discovered`
+exception while scenario publication entered its configuration scope. The previous bundle-family
+change introduced two metadata LRUs without registering their canonical owners with the existing
+provider registry. An isolated Studio publication test reproduced the exact failure before the
+fix and passed afterward. Both bounded caches now register their exact identities; unfamiliar or
+replaced caches still fail closed. Parsed models and filesystem cache keys have regression coverage
+for callback-free retained graphs and provider cleanup. No user draft or release was changed.
+
+Validation: all 325 frontend tests passed, including inline success/failure checks for both pack
+kinds. The focused lifecycle, draft completion, captured-source and configuration suite passed
+63 tests, with one slow test deselected; 15 relevant provider cache/cleanup guards also passed
+without coverage. Production build, generated API types, Ruff checks and whitespace checks passed.
+These fixes are committed locally, separately from the still-uncommitted Codex status indicator;
+no push or product version change is performed.

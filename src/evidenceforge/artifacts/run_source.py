@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from evidenceforge.composition.models import GenerationManifestDocument
+from evidenceforge.config.provider import _register_trusted_derived_cache
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,12 @@ def _read_manifest(
     except (OSError, ValueError) as error:
         logger.debug("Cannot inspect captured manifest (%s)", type(error).__name__)
         return None
+
+
+# These caches retain only filesystem identity keys and models parsed from YAML/JSON.
+# Register their exact owners so config scopes can clear them without accepting foreign LRUs.
+_register_trusted_derived_cache(__name__, "_read_source", globals(), _read_source)
+_register_trusted_derived_cache(__name__, "_read_manifest", globals(), _read_manifest)
 
 
 def captured_scenario(

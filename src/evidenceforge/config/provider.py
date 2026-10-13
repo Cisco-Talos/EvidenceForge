@@ -136,6 +136,8 @@ _TRUSTED_DERIVED_CACHE_SLOTS: tuple[tuple[str, str], ...] = (
     ("evidenceforge.generation.storage_world", "_load_catalog_config"),
     ("evidenceforge.evaluation.thresholds", "load_thresholds"),
     ("evidenceforge.formats.snare", "load_snare_projections"),
+    ("evidenceforge.artifacts.run_source", "_read_source"),
+    ("evidenceforge.artifacts.run_source", "_read_manifest"),
 )
 _TIMING_PROFILE_MODULE_NAME = "evidenceforge.generation.activity.timing_profiles"
 _TIMING_PROFILE_CACHE_SLOT = "_CACHED_TIMING_PROFILES"

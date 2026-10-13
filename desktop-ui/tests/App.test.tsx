@@ -959,9 +959,14 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
   test(`${kind} keeps validation and asset commands in their own collapsed section menus`, async () => {
     const originalItems = snapshot.items;
     const originalGroups = snapshot.artifact_groups;
+    const request = vi.mocked(useStudio().api!.request);
+    const originalRequest = request.getMockImplementation()!;
     const pack = { ...originalItems[0], id: "section-pack", kind, name: "Sector", version: "Draft", publisher: "team", pack_source: "workspace" as const };
     snapshot.items = [...originalItems, pack];
     snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    request.mockImplementation(async (...args: Parameters<StudioApi["request"]>) => args[0] === `/v1/packs/${pack.id}/review`
+      ? { valid: true, reference: "team:industry:sector@draft", digest: "validated-pack", dependencies: [], exports: {} }
+      : originalRequest(...args));
     try {
       await renderExpandedApp();
       const user = userEvent.setup();
@@ -980,10 +985,50 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       await user.click(within(assets).getByRole("button", { name: "Assets section actions" }));
       expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["View assets", "Add asset…"]);
       await user.keyboard("{Escape}");
-      await user.click(within(validation).getByRole("button", { name: "Validation & release", exact: true }));
+      await user.click(within(validation).getByRole("button", { name: "Validate", exact: true }));
+      await waitFor(() => expect(request).toHaveBeenCalledWith(`/v1/items/${pack.id}/lifecycle`, "POST", { action: "validate", expected_digest: "captured-title" }, 180000));
+      expect(within(validation).getByRole("button", { name: "Validation & release", exact: true })).toHaveAttribute("aria-expanded", "true");
+      expect(await within(validation).findByText("Pack and locked dependencies passed validation.")).toBeVisible();
+      expect(screen.queryByRole("dialog")).toBeNull();
       expect(within(validation).getAllByRole("button", { name: "Validate", exact: true })).toHaveLength(1);
       expect(within(validation).getAllByRole("button", { name: "Validation and release actions" })).toHaveLength(1);
-    } finally { snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+    } finally { request.mockImplementation(originalRequest); snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+  });
+
+  test(`${kind} refreshes inline findings when validation fails`, async () => {
+    const originalItems = snapshot.items;
+    const originalGroups = snapshot.artifact_groups;
+    const request = vi.mocked(useStudio().api!.request);
+    const originalRequest = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "invalid-pack", kind, name: "Sector", version: "Draft", pack_source: "workspace" as const };
+    snapshot.items = [...originalItems, pack];
+    snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    let checked = false;
+    request.mockImplementation(async (...args: Parameters<StudioApi["request"]>) => {
+      if (args[0] === `/v1/items/${pack.id}/lifecycle` && args[1] === "POST") {
+        checked = true;
+        throw new StudioApiError(409, "Missing locked dependency");
+      }
+      if (args[0] === `/v1/packs/${pack.id}/review`) return checked
+        ? { valid: false, error: "Missing locked dependency" }
+        : { valid: true, reference: "team:industry:sector@draft", digest: "previous-review", dependencies: [], exports: {} };
+      return originalRequest(...args);
+    });
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Packs", exact: true }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Open Sector Draft" }));
+      const validation = screen.getByRole("region", { name: "Validation & release", exact: true });
+      await user.click(within(validation).getByRole("button", { name: "Validation & release", exact: true }));
+      await within(validation).findByText("Pack and locked dependencies passed validation.");
+      await user.click(within(validation).getByRole("button", { name: "Validate", exact: true }));
+      expect(await within(validation).findByText("Missing locked dependency")).toBeVisible();
+      expect(within(validation).getByRole("button", { name: "Fix in chat" })).toBeEnabled();
+      expect(within(validation).queryByText("Pack and locked dependencies passed validation.")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally { request.mockImplementation(originalRequest); snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
   });
 }
 

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import weakref
 from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import BaseModel
 
+from evidenceforge.artifacts import run_source
 from evidenceforge.artifacts.run_source import captured_scenario
+from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.composition.models import GenerationManifestDocument
+from evidenceforge.config.provider import effective_config_scope
 from evidenceforge.desktop.state import GenerationJob
 from evidenceforge.studio.jobs import job_summary
 
@@ -135,3 +140,83 @@ def test_missing_oversize_and_malformed_sources_never_guess_a_release_version(
     with frozen.open("wb") as handle:
         handle.truncate(64 * 1024**2 + 1)
     assert captured_scenario(tmp_path, frozen, "a" * 64) is None
+
+
+def test_captured_identity_caches_allow_validation_and_have_callback_free_value_graphs(
+    tmp_path: Path,
+) -> None:
+    resolved = tmp_path / "RESOLVED_SCENARIO.yaml"
+    digest = _input(resolved, {"status": "published", "publisher": "team", "version": "1.0.0"})
+    manifest_digest = _manifest(tmp_path, digest)
+    source = captured_scenario(tmp_path, manifest_sha256=manifest_digest)
+    manifest = run_source._read_manifest(
+        tmp_path / "GENERATION_MANIFEST.json",
+        manifest_digest,
+        run_source._stamp(tmp_path / "GENERATION_MANIFEST.json", 8 * 1024**2),
+    )
+    assert source is not None and manifest is not None
+
+    # Audit retained keys and parsed values before permitting provider-owned cache cleanup.
+    stack: list[object] = [
+        resolved,
+        digest,
+        run_source._stamp(resolved, 64 * 1024**2),
+        source,
+        manifest,
+    ]
+    seen: set[int] = set()
+    while stack:
+        value = stack.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        assert all("__del__" not in vars(base) for base in type(value).__mro__)
+        assert not isinstance(
+            value,
+            (
+                weakref.ReferenceType,
+                weakref.WeakKeyDictionary,
+                weakref.WeakSet,
+                weakref.WeakValueDictionary,
+                weakref.finalize,
+            ),
+        )
+        if type(value) is dict:
+            stack.extend(value.keys())
+            stack.extend(value.values())
+        elif type(value) in {list, tuple, set, frozenset}:
+            stack.extend(value)
+        elif isinstance(value, BaseModel):
+            stack.extend(vars(value).values())
+
+    compiled = compile_scenario(
+        Path("tests/fixtures/scenarios/minimal.yaml"), project_root=tmp_path
+    )
+    with effective_config_scope(compiled.effective_config):
+        assert run_source._read_source.cache_info().currsize == 0
+        assert run_source._read_manifest.cache_info().currsize == 0
+        assert captured_scenario(tmp_path, manifest_sha256=manifest_digest) == source
+    assert captured_scenario(tmp_path, manifest_sha256=manifest_digest) == source
+
+
+@pytest.mark.parametrize("slot", ["_read_source", "_read_manifest"])
+def test_captured_identity_cache_replacement_cannot_acquire_provider_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slot: str
+) -> None:
+    from functools import lru_cache
+
+    compiled = compile_scenario(
+        Path("tests/fixtures/scenarios/minimal.yaml"), project_root=tmp_path
+    )
+
+    @lru_cache(maxsize=1)
+    def replacement() -> None:
+        pytest.fail("replaced cache was invoked")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_source, slot, replacement)
+        with pytest.raises(RuntimeError, match="trusted derived cache owner was replaced"):
+            with effective_config_scope(compiled.effective_config):
+                pytest.fail("scope with a replaced cache was entered")
+    with effective_config_scope(compiled.effective_config):
+        pass
