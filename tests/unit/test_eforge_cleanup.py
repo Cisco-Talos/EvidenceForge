@@ -5,9 +5,19 @@ from pathlib import Path
 
 import pytest
 import yaml
-from scripts.check_eforge_cleanup import git, is_eforge_cleanup
+from scripts.check_eforge_cleanup import ITERATION, PACK, git, is_eforge_cleanup, portable_iteration
 
-IGNORE = "# Local state\n.eforge/\n!.eforge/\n.eforge/*\n!.eforge/packs/\n.env\n"
+IGNORE = (
+    "# Local state\n.eforge/\n!.eforge/\n.eforge/*\n!.eforge/packs/\n.env\n"
+    f"!{ITERATION}scenario.yaml\n"
+)
+SCENARIO = (
+    'scenario_version: "2.0"\ncomposition:\n  organization:\n    source: project\n'
+    "    publisher: davidjbianco\n    name: meridian-healthcare-solutions\n"
+    '    version: "1.1.0"\nname: iteration-test\n\nenvironment:\n'
+    "  network_identities:\n    - id: local\n      hosts: [local.example]\n\n"
+    "  email:\n    corpus: email_corpus.yaml\n\ntime_window:\n  duration: 6h\n"
+)
 
 
 @pytest.fixture
@@ -20,12 +30,28 @@ def repository(tmp_path: Path) -> tuple[Path, str]:
     state.mkdir(parents=True)
     (state / "pack.yaml").write_text("name: local\n", encoding="utf-8")
     (state / "pack.lock.yaml").write_text("lock: local\n", encoding="utf-8")
+    model = tmp_path / PACK / "model"
+    model.mkdir(parents=True)
+    (model / "environment.yaml").write_text(
+        "environment:\n  network_identities:\n    - id: original\n"
+        "      hosts: [original.example]\n\n  systems:\n    - hostname: test\n"
+        "  email:\n    domain: example\n",
+        encoding="utf-8",
+    )
+    (model / "baseline_activity.yaml").write_text(
+        "baseline_activity:\n  intensity: low\n", encoding="utf-8"
+    )
+    scenario = tmp_path / ITERATION / "scenario.yaml"
+    scenario.parent.mkdir(parents=True)
+    scenario.write_text(SCENARIO, encoding="utf-8")
     (tmp_path / ".gitignore").write_text(IGNORE, encoding="utf-8")
     git(tmp_path, "add", "--force", ".")
     git(tmp_path, "commit", "-m", "test: tracked local state")
     base = git(tmp_path, "rev-parse", "HEAD").strip()
     git(tmp_path, "rm", "--cached", "-r", ".eforge")
-    (tmp_path / ".gitignore").write_text("# Local state\n.eforge/\n.env\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(
+        f"# Local state\n.eforge/\n.env\n!{ITERATION}scenario.yaml\n", encoding="utf-8"
+    )
     return tmp_path, base
 
 
@@ -84,6 +110,44 @@ def test_guard_bootstrap_files_can_accompany_cleanup(repository: tuple[Path, str
         destination.write_text("# Guard bootstrap\n", encoding="utf-8")
     commit(root)
     assert is_eforge_cleanup(root, base)
+
+
+@pytest.mark.parametrize(
+    "tampered", [None, "scenario.yaml", "environment.yaml", "baseline_activity.yaml"]
+)
+def test_fixture_relocation_must_preserve_exact_existing_content(
+    repository: tuple[Path, str], tampered: str | None
+) -> None:
+    root, base = repository
+    files = portable_iteration(
+        SCENARIO,
+        (root / PACK / "model/environment.yaml").read_text(encoding="utf-8"),
+        (root / PACK / "model/baseline_activity.yaml").read_text(encoding="utf-8"),
+    )
+    for name, content in files.items():
+        if name == f"{ITERATION}{tampered}":
+            content = "# Unrelated change\n" + content
+        (root / name).write_text(content, encoding="utf-8")
+    ignore = root / ".gitignore"
+    ignore.write_text(
+        ignore.read_text(encoding="utf-8")
+        + f"!{ITERATION}environment.yaml\n!{ITERATION}baseline_activity.yaml\n",
+        encoding="utf-8",
+    )
+    commit(root)
+    assert is_eforge_cleanup(root, base) is (tampered is None)
+
+
+def test_iteration_sample_compiles_without_project_state(tmp_path: Path) -> None:
+    from evidenceforge.composition import compile_scenario
+
+    root = Path(__file__).resolve().parents[2]
+    compiled = compile_scenario(root / ITERATION / "scenario.yaml", project_root=tmp_path)
+    assert {(pack.source, pack.name) for pack in compiled.selected_packs} == {
+        ("package", "technology")
+    }
+    assert compiled.scenario.environment.email is not None
+    assert not (tmp_path / ".eforge").exists()
 
 
 def test_missing_base_fails_closed(repository: tuple[Path, str]) -> None:

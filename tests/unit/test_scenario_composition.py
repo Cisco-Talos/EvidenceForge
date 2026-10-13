@@ -166,25 +166,11 @@ def test_iteration_pack_expansion_preserves_archived_assessment_lineage() -> Non
 
     assert {
         (pack.source, pack.type, pack.name, pack.version) for pack in packed.selected_packs
-    } == {
-        ("package", "industry", "technology", "1.0.0"),
-        (
-            "project",
-            "organization",
-            "meridian-healthcare-solutions",
-            "1.1.0",
-        ),
-    }
+    } == {("package", "industry", "technology", "1.0.0")}
     assert {pack.location for pack in packed.selected_packs} == {
         "package:evidenceforge:industry:technology@1.0.0",
-        "project:davidjbianco:organization:meridian-healthcare-solutions@1.1.0",
     }
-    assert packed.provenance["organization_model_origins"]["environment.domain"] == (
-        "model/environment.yaml"
-    )
-    assert packed.provenance["organization_model_origins"]["baseline_activity.intensity"] == (
-        "model/baseline_activity.yaml"
-    )
+    assert packed.provenance["organization_model_origins"] == {}
     assert (
         packed.provenance["catalog_origins"][
             "persona_catalog.evidenceforge/technology:platform_engineer"

@@ -1,10 +1,13 @@
 scenario_version: "2.0"
 composition:
-  organization:
-    source: project
-    publisher: davidjbianco
-    name: meridian-healthcare-solutions
-    version: "1.1.0"
+  industries:
+    - source: package
+      publisher: evidenceforge
+      name: technology
+      version: "1.0.0"
+includes:
+  - environment.yaml
+  - baseline_activity.yaml
 name: iteration-test
 description: |
   Canonical EvidenceForge iteration-test scenario for fast generate/evaluate/fix cycles. It
@@ -23,32 +26,6 @@ description: |
   egress, inbound/outbound/internal mail, explicit mailbox reads, rejected mail,
   and deterministic background email traffic. This benchmark epoch also adds one
   representative benign cleartext multipart support upload through the explicit proxy.
-
-environment:
-  network_identities:
-    - id: westbridge_services
-      hosts:
-        - "api.westbridge-services.net"
-        - "edge.westbridge-services.net"
-        - "metrics.westbridge-services.net"
-        - "ns1.westbridge-services.net"
-        - "ns1.westbridge-services.cloud"
-      ips: ["45.33.32.30"]
-      tags: ["web", "dns", "external"]
-      dns: true
-    - id: ubuntu_archive
-      hosts: ["archive.ubuntu.com"]
-      ips: ["91.189.91.82"]
-      tags: ["software", "package_repository", "external"]
-      dns: true
-    - id: valeworks_support
-      hosts: ["support.valeworks-health.net"]
-      ips: ["52.44.186.73"]
-      tags: ["web", "vendor", "support", "external"]
-      dns: true
-
-  email:
-    corpus: email_corpus.yaml
 
 time_window:
   start: "2024-03-18T12:00:00Z"
