@@ -10,6 +10,7 @@ from glob import escape
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.artifacts.run_source import captured_scenario
 from evidenceforge.composition.artifacts import write_resolved_scenario
 from evidenceforge.composition.compiler import compile_scenario
 from evidenceforge.desktop.controller import _running, _terminate_owned, _worker_tick
@@ -320,6 +321,10 @@ def job_summary(payload: dict[str, Any]) -> dict[str, Any]:
         summary["owned_output"] = generation.owned_output
         summary["progress"] = json.loads(progress_for(generation).model_dump_json())
         summary["can_resume"] = can_resume(generation)
+        source = captured_scenario(
+            generation.output_root, generation.input_snapshot, generation.input_sha256
+        )
+        summary["scenario_source"] = source.model_dump(mode="json") if source else None
     else:
         summary["kind"] = "evaluation"
         result_file = Path(payload["result_file"])

@@ -813,8 +813,8 @@ function App() {
     ];
     if (target.kind !== "scenario") actions.push(
       { id: "assets", label: "View assets", group: "inspect", disabled: sourceMissing, reason, run: () => setAssetTarget({ item: target, add: false }) },
-      { id: "add-asset", label: "Add asset…", group: "work", disabled: blocked, reason, run: () => setAssetTarget({ item: target, add: true }) },
-      { id: "export-release", label: "Export release…", group: "reuse", disabled: blocked || !target.version || !packReview?.valid, reason: blocked ? reason : !target.version ? "Publish a release before exporting" : !packReview ? "Inspect pack validation first" : "Repair validation findings before exporting", run: () => exportPack(target) });
+      { id: "add-asset", label: "Add asset…", group: "work", disabled: blocked || target.pack_source !== "workspace" || !!snapshot!.artifact_groups?.[target.id]?.published_version, reason: blocked ? reason : target.pack_source !== "workspace" ? "Clone into the workspace before adding assets" : "Create a new draft before adding assets", run: () => setAssetTarget({ item: target, add: true }) },
+      { id: "export-release", label: "Export release…", group: "reuse", disabled: blocked || !target.version || target.version === "Draft" || !packReview?.valid, reason: blocked ? reason : !target.version || target.version === "Draft" ? "Publish a release before exporting" : !packReview ? "Inspect pack validation first" : "Repair validation findings before exporting", run: () => exportPack(target) });
     if (target.kind === "scenario") actions.push(
       { id: "refresh-environment", label: "Refresh environment", group: "work", disabled: blocked || environmentRefreshingId === target.id, reason: environmentRefreshingId === target.id ? "Environment refresh is in progress" : reason, run: async () => {
         if (environmentRefreshingId === target.id) return;

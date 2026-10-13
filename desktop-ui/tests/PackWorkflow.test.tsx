@@ -11,28 +11,21 @@ const removable = { reference: "training:organization:office@1.0.0", revision: "
 afterEach(cleanup);
 
 for (const kind of ["industry_pack", "organization_pack"] as const) {
-  test(`${kind} validates exact identity and dependency closure before exporting`, async () => {
+  test(`${kind} shows the exact validation identity and dependency closure without duplicate section actions`, async () => {
     const request = vi.fn(async () => ({ valid: true, reference: "training:organization:office@1.0.0", digest: "pack-digest", dependencies: ["training:industry:sector@2.0.0"], exports: { persona_catalog: ["office-user"] } }));
-    const onExport = vi.fn();
-    render(<PackWorkflow item={{ ...item, kind }} api={{ request } as unknown as StudioApi} onPrepare={vi.fn()} onExport={onExport} />);
+    render(<PackWorkflow item={{ ...item, kind }} api={{ request } as unknown as StudioApi} onPrepare={vi.fn()} />);
     await screen.findByText("training:industry:sector@2.0.0");
     expect(screen.getByText("persona: 1")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Export release…" }));
-    expect(onExport).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Validate" }));
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: "Validate" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Options for office 1.0.0" })).toBeNull();
   });
 }
 
-test("invalid packs keep export disabled and prepare a repair without sending a turn", async () => {
+test("invalid pack details prepare a repair without sending a turn", async () => {
   const onPrepare = vi.fn(async () => undefined);
   const request = vi.fn(async () => ({ valid: false, error: "Missing locked dependency" }));
-  render(<PackWorkflow item={item} api={{ request } as unknown as StudioApi} onPrepare={onPrepare} onExport={vi.fn()} />);
+  render(<PackWorkflow item={item} api={{ request } as unknown as StudioApi} onPrepare={onPrepare} />);
   await screen.findByText("Missing locked dependency");
-  await userEvent.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
-  expect(screen.getByRole("menuitem", { name: "Export release…" })).toHaveAttribute("data-disabled");
-  await userEvent.keyboard("{Escape}");
   await userEvent.click(screen.getByRole("button", { name: "Fix in chat" }));
   expect(onPrepare).toHaveBeenCalledWith(expect.stringContaining("new version before editing"));
   expect(request).toHaveBeenCalledTimes(1);

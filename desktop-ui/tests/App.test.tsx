@@ -955,6 +955,38 @@ test("bundle groups and their owned/imported rows are newest-first without movin
   } finally { snapshot.jobs = originalJobs; snapshot.imported_bundles = originalImports; }
 });
 
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`${kind} keeps validation and asset commands in their own collapsed section menus`, async () => {
+    const originalItems = snapshot.items;
+    const originalGroups = snapshot.artifact_groups;
+    const pack = { ...originalItems[0], id: "section-pack", kind, name: "Sector", version: "Draft", publisher: "team", pack_source: "workspace" as const };
+    snapshot.items = [...originalItems, pack];
+    snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Packs", exact: true }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Open Sector Draft" }));
+      const validation = screen.getByRole("region", { name: "Validation & release", exact: true });
+      const assets = screen.getByRole("region", { name: "Assets", exact: true });
+      expect(within(validation).getByRole("button", { name: "Validate", exact: true })).toBeVisible();
+      expect(within(validation).getByRole("button", { name: "Validation & release", exact: true })).toHaveAttribute("aria-expanded", "false");
+      await user.click(within(validation).getByRole("button", { name: "Validation and release actions" }));
+      expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["Validate", "Fix in chat", "Export release…"]);
+      expect(screen.queryByRole("menuitem", { name: /Add asset|View assets|New conversation|Move to project|Clone|Delete version/ })).toBeNull();
+      expect(screen.getByRole("menuitem", { name: "Export release…" })).toHaveAttribute("data-disabled");
+      await user.keyboard("{Escape}");
+      await user.click(within(assets).getByRole("button", { name: "Assets section actions" }));
+      expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["View assets", "Add asset…"]);
+      await user.keyboard("{Escape}");
+      await user.click(within(validation).getByRole("button", { name: "Validation & release", exact: true }));
+      expect(within(validation).getAllByRole("button", { name: "Validate", exact: true })).toHaveLength(1);
+      expect(within(validation).getAllByRole("button", { name: "Validation and release actions" })).toHaveLength(1);
+    } finally { snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+  });
+}
+
 test("bundle library groups runs by scenario and filters their status", async () => {
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [

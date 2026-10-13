@@ -190,7 +190,12 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
         assert properties.status_code == 200, properties.text
         assert properties.json()["formats"] == ["zeek_conn"]
         assert properties.json()["size_bytes"] == bundle["size_bytes"]
-        assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == [bundle]
+        listed = client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"]
+        assert len(listed) == 1
+        source = listed[0].pop("scenario_source")
+        assert listed == [bundle]
+        assert source["name"] == "external"
+        assert source["version"] is None
         files = client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).json()
         assert {entry["path"] for entry in files["files"]} == {
             "GENERATION_MANIFEST.json",

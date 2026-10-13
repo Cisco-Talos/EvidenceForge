@@ -51,6 +51,7 @@ from evidenceforge.artifacts.removal import (
     retired_scenario_sources,
     review_scenario_deletion,
 )
+from evidenceforge.artifacts.run_source import CapturedScenario, captured_scenario
 from evidenceforge.artifacts.scaffolds import is_starter_draft
 from evidenceforge.cli.install_skills import (
     CHATGPT_SKILL_NAMES,
@@ -732,6 +733,7 @@ class JobSummary(BaseModel):
     status: str
     status_message: str = ""
     scenario: Path | None = None
+    scenario_source: CapturedScenario | None = None
     generation_id: str | None = None
     output_root: Path
     progress: GenerationProgress | None = None
@@ -749,6 +751,12 @@ class JobSummary(BaseModel):
     input_sha256: str | None = None
     compiled_sha256: str | None = None
     scorecard: JobScorecard | None = None
+
+
+class ImportedBundleSummary(ImportedBundle):
+    """Read-only bundle presentation, without changing its persisted registration."""
+
+    scenario_source: CapturedScenario | None = None
 
 
 class StudioSnapshot(BaseModel):
@@ -774,7 +782,7 @@ class StudioSnapshot(BaseModel):
     codex_health: CodexHealth
     jobs: list[JobSummary]
     removed_job_ids: list[str] = Field(default_factory=list)
-    imported_bundles: list[ImportedBundle]
+    imported_bundles: list[ImportedBundleSummary]
     runtime_cleanup: RuntimeCleanupReport | None = None
     linux_sandbox_notice: LinuxSandboxNotice | None = None
     publisher_status: PackPublisherStatus | None = None
@@ -1598,7 +1606,16 @@ class StudioService:
             "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
             "removed_job_ids": self.store.removed_job_ids(workspace),
             "imported_bundles": [
-                json.loads(bundle.model_dump_json())
+                {
+                    **json.loads(bundle.model_dump_json()),
+                    "scenario_source": source.model_dump(mode="json")
+                    if (
+                        source := captured_scenario(
+                            bundle.root, manifest_sha256=bundle.manifest_sha256
+                        )
+                    )
+                    else None,
+                }
                 for bundle in self.store.imported_bundles(workspace)
             ],
         }

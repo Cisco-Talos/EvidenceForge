@@ -2343,6 +2343,28 @@ export interface components {
             findings?: string[];
         };
         /**
+         * CapturedScenario
+         * @description The authored identity captured by one run, independent of later catalog changes.
+         */
+        CapturedScenario: {
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Draft Id */
+            draft_id?: string | null;
+            /**
+             * Status
+             * @default unknown
+             * @enum {string}
+             */
+            status: "draft" | "published" | "legacy" | "unknown";
+        };
+        /**
          * CatalogItem
          * @description Indexed scenario or pack; its source file remains authoritative.
          */
@@ -3033,6 +3055,33 @@ export interface components {
             manifest_sha256: string;
         };
         /**
+         * ImportedBundleSummary
+         * @description Read-only bundle presentation, without changing its persisted registration.
+         */
+        ImportedBundleSummary: {
+            /** Id */
+            id?: string;
+            /**
+             * Workspace
+             * Format: path
+             */
+            workspace: string;
+            /**
+             * Root
+             * Format: path
+             */
+            root: string;
+            /** Scenario Name */
+            scenario_name: string;
+            /** Created At */
+            created_at: number;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            scenario_source?: components["schemas"]["CapturedScenario"] | null;
+        };
+        /**
          * ItemUpdate
          * @description Update virtual organization without changing source YAML.
          */
@@ -3125,6 +3174,7 @@ export interface components {
             status_message: string;
             /** Scenario */
             scenario?: string | null;
+            scenario_source?: components["schemas"]["CapturedScenario"] | null;
             /** Generation Id */
             generation_id?: string | null;
             /**
@@ -4608,7 +4658,7 @@ export interface components {
             /** Removed Job Ids */
             removed_job_ids?: string[];
             /** Imported Bundles */
-            imported_bundles: components["schemas"]["ImportedBundle"][];
+            imported_bundles: components["schemas"]["ImportedBundleSummary"][];
             runtime_cleanup?: components["schemas"]["RuntimeCleanupReport"] | null;
             linux_sandbox_notice?: components["schemas"]["LinuxSandboxNotice"] | null;
             publisher_status?: components["schemas"]["PackPublisherStatus"] | null;

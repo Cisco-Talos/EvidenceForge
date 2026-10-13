@@ -278,3 +278,40 @@ Validation evidence:
 
 The user authorized committing the completed refactor locally without pushing. No product
 version or release was changed.
+## Follow-up review: section scope and bundle families
+
+The user reviewed the running app after the first local refactor commit (`27ccd099`) and
+requested five refinements. This follow-up keeps the separate Codex-status change out of its
+commit and does not push either effort.
+
+- The conversation rail gives New conversation its own compact row beneath the heading and
+  section menu, rather than squeezing all three controls onto one line.
+- Expanded runs no longer duplicate View log and the log menu. View, Hide, Refresh and log-path
+  copying remain in the run's complete menu; generator failure information remains in the body.
+- Pack Validation & release exposes Validate and its section menu while collapsed. Expanding
+  it reveals findings and dependency information without duplicating those header controls.
+- Pack section menus are scoped explicitly. Conversations has Continue/New conversation;
+  Assets has View assets/Add asset; Validation & release has validation, repair, version and
+  publication commands. Properties, source inspection, cloning, project assignment, hiding and
+  removal remain in the complete pack menu. Import stays in the pack library. Published or
+  protected packs explain why adding an asset requires a new draft or workspace clone.
+- Bundles groups related draft/release runs through canonical artifact families and retained
+  source-path aliases. Imported runs join an unambiguous family. Different publishers remain
+  distinct. Group menus provide latest-run/source navigation and disclosure commands, with each
+  run retaining its complete operation menu.
+
+The previous `source` heading was the parent-directory fallback for unmatched historical paths.
+Runs now expose bounded, cached scenario identity from their verified immutable input or completion
+manifest. Imported metadata also checks the registered manifest hash. The row shows the captured
+release version, Draft, Legacy scenario or Version unknown, independent of later source edits.
+Old source associations and captured names recover useful grouping after relocation or publication.
+These are derived response fields; persisted job and bundle registration schemas are unchanged.
+
+Verification: all 323 frontend tests passed, including section scoping and mixed-version bundle
+grouping. Service/job/source checks covered 109 cases; the changed imported-bundle response
+assertion passed its focused recheck. Production build, generated API types, Ruff and whitespace
+checks passed. Browser inspection of the actual React App with isolated sample data verified
+the conversation rail, full publication menu, asset menu, folded/expanded section headers, run-log
+access and merged bundle rows. The shortcut fits its rail at 1280, 736 and 320 px; bundle version,
+status, time, progress and size information remains available without horizontal page overflow.
+Temporary browser tabs, viewport overrides and the sample server were cleaned up.

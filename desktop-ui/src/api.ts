@@ -8,7 +8,8 @@ export type ItemKind = Schema["CatalogItem"]["kind"];
 // The service serializes every model field in snapshots, including fields with defaults.
 type PackMetadata = "publisher" | "publisher_display_name" | "requires_evidenceforge" | "pack_source" | "search_excerpt" | "search_field" | "search_matches" | "search_match_count" | "search_revision";
 export type CatalogItem = Omit<Required<Schema["CatalogItem"]>, PackMetadata> & Pick<Schema["CatalogItem"], PackMetadata>;
-export type ImportedBundle = Required<Schema["ImportedBundle"]>;
+export type CapturedScenario = Schema["CapturedScenario"];
+export type ImportedBundle = Omit<Required<Schema["ImportedBundleSummary"]>, "scenario_source"> & Pick<Schema["ImportedBundleSummary"], "scenario_source">;
 export type Project = Omit<Required<Schema["Project"]>, "overlay_enabled"> & Pick<Schema["Project"], "overlay_enabled">;
 type PackViewFilters = "publisher" | "version" | "pack_source" | "sort";
 export type SavedView = Omit<Required<Schema["SavedView"]>, PackViewFilters> & Pick<Schema["SavedView"], PackViewFilters>;
