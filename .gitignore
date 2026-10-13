@@ -86,6 +86,8 @@ scenarios/llm-injection-demo/*
 !scenarios/iteration-test/
 scenarios/iteration-test/*
 !scenarios/iteration-test/scenario.yaml
+!scenarios/iteration-test/environment.yaml
+!scenarios/iteration-test/baseline_activity.yaml
 !scenarios/iteration-test/email_corpus.yaml
 !scenarios/iteration-test/ENVIRONMENT.md
 !scenarios/iteration-test-1_0/

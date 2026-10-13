@@ -14,6 +14,43 @@ import re
 import subprocess
 from pathlib import Path
 
+ITERATION = "scenarios/iteration-test/"
+PACK = ".eforge/packs/davidjbianco/organization/meridian-healthcare-solutions/1.1.0/"
+
+
+def portable_iteration(original: str, environment: str, baseline: str) -> dict[str, str]:
+    """Move only the benchmark's existing pack model into scenario-local includes."""
+    old_composition = (
+        "composition:\n  organization:\n    source: project\n    publisher: davidjbianco\n"
+        '    name: meridian-healthcare-solutions\n    version: "1.1.0"\n'
+    )
+    new_composition = (
+        "composition:\n  industries:\n    - source: package\n      publisher: evidenceforge\n"
+        '      name: technology\n      version: "1.0.0"\n'
+        "includes:\n  - environment.yaml\n  - baseline_activity.yaml\n"
+    )
+    if original.count(old_composition) != 1:
+        raise ValueError("The iteration fixture must retain its original organization reference.")
+    start = original.index("\nenvironment:\n")
+    end = original.index("\ntime_window:\n", start)
+    local = original[start:end]
+    identities = local[local.index("  network_identities:\n") : local.index("  email:\n")]
+    email = local[local.index("  email:\n") + len("  email:\n") :].rstrip() + "\n"
+    model_start = environment.index("  network_identities:\n")
+    model_end = environment.index("  systems:\n", model_start)
+    environment = (
+        environment[:model_end]
+        + identities.removeprefix("  network_identities:\n")
+        + environment[model_end:]
+    )
+    environment = environment.replace("  email:\n", "  email:\n" + email, 1)
+    scenario = (original[:start] + original[end:]).replace(old_composition, new_composition, 1)
+    return {
+        f"{ITERATION}scenario.yaml": scenario,
+        f"{ITERATION}environment.yaml": environment,
+        f"{ITERATION}baseline_activity.yaml": baseline,
+    }
+
 
 def git(root: Path, *arguments: str) -> str:
     """Read committed Git data, failing closed on missing objects or Git errors."""
@@ -34,6 +71,10 @@ def is_eforge_cleanup(root: Path, base: str, head: str = "HEAD") -> bool:
         "scripts/check_eforge_cleanup.py": "A",
         "tests/unit/test_eforge_cleanup.py": "A",
         "tests/unit/test_release_pipeline.py": "M",
+        "tests/unit/test_scenario_composition.py": "M",
+        f"{ITERATION}scenario.yaml": "M",
+        f"{ITERATION}environment.yaml": "A",
+        f"{ITERATION}baseline_activity.yaml": "A",
     }
     removed = False
     for path, status in changes.items():
@@ -54,6 +95,22 @@ def is_eforge_cleanup(root: Path, base: str, head: str = "HEAD") -> bool:
         for line in before.splitlines(keepends=True)
         if not line.startswith(("!.eforge/", ".eforge/*", ".eforge/packs/"))
     )
+    migration = {path for path in changes if path.startswith(ITERATION)}
+    if migration:
+        files = portable_iteration(
+            git(root, "show", f"{base}:{ITERATION}scenario.yaml"),
+            git(root, "show", f"{base}:{PACK}model/environment.yaml"),
+            git(root, "show", f"{base}:{PACK}model/baseline_activity.yaml"),
+        )
+        if migration != files.keys():
+            return False
+        if any(git(root, "show", f"{head}:{path}") != content for path, content in files.items()):
+            return False
+        expected = expected.replace(
+            f"!{ITERATION}scenario.yaml\n",
+            f"!{ITERATION}scenario.yaml\n!{ITERATION}environment.yaml\n"
+            f"!{ITERATION}baseline_activity.yaml\n",
+        )
     return after == expected and ".eforge/" in after.splitlines()
 
 
