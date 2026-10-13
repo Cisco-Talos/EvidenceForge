@@ -10,9 +10,10 @@ from glob import escape
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.artifacts.run_source import captured_scenario
 from evidenceforge.composition.artifacts import write_resolved_scenario
 from evidenceforge.composition.compiler import compile_scenario
-from evidenceforge.desktop.controller import _worker_tick
+from evidenceforge.desktop.controller import _running, _terminate_owned, _worker_tick
 from evidenceforge.desktop.job_store import ControlIntent
 from evidenceforge.desktop.jobs import queue_evaluation, queue_generation, request_suspension
 from evidenceforge.desktop.progress import GenerationProgress, parse_progress_line
@@ -201,6 +202,47 @@ def reconcile_jobs(job_store: StudioJobStore, intent: ControlIntent) -> list[dic
     return [payload for payload in after if payload != before.get(payload["id"])]
 
 
+def stop_studio_job(
+    job_store: StudioJobStore, workspace: Path, job_id: str
+) -> GenerationJob | EvaluationJob:
+    """Stop one workspace-owned job while preserving its files and unrelated work.
+
+    The caller holds the service's job-cycle lock. Process termination delegates to
+    the controller's PID and creation-time ownership checks.
+    """
+    jobs: list[GenerationJob | EvaluationJob] = [
+        *job_store.load_generations(),
+        *job_store.load_evaluations(),
+    ]
+    job = next(
+        (
+            entry
+            for entry in jobs
+            if entry.id == job_id
+            and entry.workspace is not None
+            and entry.workspace.resolve() == workspace.resolve()
+        ),
+        None,
+    )
+    if job is None:
+        raise KeyError(job_id)
+    if job.status not in {"queued", "running", "paused"}:
+        raise ValueError("Only queued, running or paused jobs can be stopped")
+    if job.status == "running":
+        _terminate_owned(job)
+        if _running(job):
+            raise ValueError("The job is still running; retry Stop after checking its status")
+    job.status = (
+        "stopped" if isinstance(job, GenerationJob) and job.status == "running" else "cancelled"
+    )
+    job.status_message = "Stopped by user; files preserved"
+    if isinstance(job, GenerationJob):
+        job_store.save_generation(job)
+    else:
+        job_store.save_evaluation(job)
+    return job
+
+
 def progress_for(job: GenerationJob) -> GenerationProgress:
     """Restore a progress card from the durable CLI JSONL stream."""
     progress = GenerationProgress()
@@ -276,8 +318,13 @@ def job_summary(payload: dict[str, Any]) -> dict[str, Any]:
     if "scenario" in payload:
         summary["kind"] = "generation"
         generation = GenerationJob.model_validate(payload)
+        summary["owned_output"] = generation.owned_output
         summary["progress"] = json.loads(progress_for(generation).model_dump_json())
         summary["can_resume"] = can_resume(generation)
+        source = captured_scenario(
+            generation.output_root, generation.input_snapshot, generation.input_sha256
+        )
+        summary["scenario_source"] = source.model_dump(mode="json") if source else None
     else:
         summary["kind"] = "evaluation"
         result_file = Path(payload["result_file"])

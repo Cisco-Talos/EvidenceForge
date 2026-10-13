@@ -139,7 +139,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev bubblewrap \
+            apparmor-profiles apparmor-utils
+
+      - name: Load Ubuntu bubblewrap user-namespace profile
+        if: runner.os == 'Linux'
+        run: |
+          sudo install -m 0644 \
+            /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+            /etc/apparmor.d/bwrap-userns-restrict
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          sudo aa-status
 
       - name: Install Studio dependencies
         run: uv sync --extra studio --extra dev
@@ -153,6 +163,12 @@ jobs:
 
       - name: Test local service and job lifecycle
         run: uv run pytest --no-cov tests/unit/test_studio_*.py tests/unit/test_resource_prediction.py tests/unit/test_desktop_*.py
+
+      - name: Install Codex for model-free native permission checks
+        run: npm install --global @openai/codex@0.162.1
+
+      - name: Verify native chat sandbox restrictions
+        run: EFORGE_NATIVE_CODEX_BIN="$(command -v codex)" uv run pytest --no-cov tests/unit/test_studio_chat_sandbox.py
 
       - name: Check generated API types
         working-directory: desktop-ui

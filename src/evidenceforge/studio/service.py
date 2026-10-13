@@ -51,6 +51,7 @@ from evidenceforge.artifacts.removal import (
     retired_scenario_sources,
     review_scenario_deletion,
 )
+from evidenceforge.artifacts.run_source import CapturedScenario, captured_scenario
 from evidenceforge.artifacts.scaffolds import is_starter_draft
 from evidenceforge.cli.install_skills import (
     CHATGPT_SKILL_NAMES,
@@ -92,8 +93,16 @@ from evidenceforge.studio.assets import (
     inventory_revision,
     save_asset,
 )
+from evidenceforge.studio.chat_permissions import (
+    CHAT_CONFIG,
+    ChatAccess,
+    chat_access,
+    isolated_chat_config,
+    verify_chat_permissions,
+)
 from evidenceforge.studio.codex import (
     CodexClient,
+    CodexDisconnectedError,
     CodexThreadNotReadyError,
     CodexTimeoutError,
     CodexUnavailableError,
@@ -135,6 +144,7 @@ from evidenceforge.studio.jobs import (
     queue_studio_generation,
     reconcile_jobs,
     retain_latest_evaluations,
+    stop_studio_job,
     suspend_generation,
 )
 from evidenceforge.studio.lifecycle import clone_scenario, inspect_external_bundle, rename_scenario
@@ -575,12 +585,14 @@ class ResumeRequest(BaseModel):
 
 
 class CodexHealth(BaseModel):
-    """Current health of the GUI-owned Codex app-server transport."""
+    """Transport health and work availability of GUI-owned Codex."""
 
     model_config = ConfigDict(extra="forbid")
 
     state: Literal["checking", "connected", "stalled", "disconnected"] = "checking"
     detail: str = "Checking Codex connection"
+    availability: Literal["disconnected", "unavailable", "ready"] = "disconnected"
+    account_label: str | None = None
 
 
 class ValidationRecord(BaseModel):
@@ -724,12 +736,16 @@ class JobSummary(BaseModel):
     status: str
     status_message: str = ""
     scenario: Path | None = None
+    scenario_source: CapturedScenario | None = None
     generation_id: str | None = None
     output_root: Path
     progress: GenerationProgress | None = None
     started_at: float | None = None
     submitted_at: float | None = None
     created_at: float | None = None
+    owned_output: bool | None = Field(
+        default=None, description="Whether Studio owns this generation output directory"
+    )
     checkpoint_hours: int | None = None
     can_resume: bool = False
     source_sha256: str | None = None
@@ -738,6 +754,12 @@ class JobSummary(BaseModel):
     input_sha256: str | None = None
     compiled_sha256: str | None = None
     scorecard: JobScorecard | None = None
+
+
+class ImportedBundleSummary(ImportedBundle):
+    """Read-only bundle presentation, without changing its persisted registration."""
+
+    scenario_source: CapturedScenario | None = None
 
 
 class StudioSnapshot(BaseModel):
@@ -763,7 +785,7 @@ class StudioSnapshot(BaseModel):
     codex_health: CodexHealth
     jobs: list[JobSummary]
     removed_job_ids: list[str] = Field(default_factory=list)
-    imported_bundles: list[ImportedBundle]
+    imported_bundles: list[ImportedBundleSummary]
     runtime_cleanup: RuntimeCleanupReport | None = None
     linux_sandbox_notice: LinuxSandboxNotice | None = None
     publisher_status: PackPublisherStatus | None = None
@@ -848,7 +870,12 @@ class StudioService:
         self.replacement_ready = False
         self.active_requests = 0
         self.job_cycle_lock = asyncio.Lock()
-        self.codex = CodexClient(self.settings.codex_path, self._codex_event, self._codex_request)
+        self.codex = CodexClient(
+            self.settings.codex_path,
+            self._codex_event,
+            self._codex_request,
+            config_overrides=CHAT_CONFIG,
+        )
         self.codex_health = CodexHealth()
         self.linux_sandbox_notice: LinuxSandboxNotice | None = None
         self.codex_failures = 0
@@ -934,7 +961,7 @@ class StudioService:
                     await self.set_linux_sandbox_notice(notice)
         if method == "codex/connected":
             self.codex_failures = 0
-            await self.set_codex_health("connected", "Codex is responding")
+            await self.set_codex_health("connected", "Checking Codex account and work availability")
             return
         if method == "codex/disconnected":
             await self.set_codex_health("disconnected", "The Codex process exited")
@@ -983,14 +1010,94 @@ class StudioService:
             )
 
     async def set_codex_health(
-        self, state: Literal["checking", "connected", "stalled", "disconnected"], detail: str
+        self,
+        state: Literal["checking", "connected", "stalled", "disconnected"],
+        detail: str,
+        *,
+        availability: Literal["disconnected", "unavailable", "ready"] | None = None,
+        account_label: str | None = None,
     ) -> None:
         """Broadcast health transitions without filling the event log with heartbeat entries."""
-        health = CodexHealth(state=state, detail=detail)
+        if availability is None:
+            connected = state == "connected" or (
+                state == "stalled"
+                and (self.codex.connected or self.codex_health.availability != "disconnected")
+            )
+            availability = "unavailable" if connected else "disconnected"
+        health = CodexHealth(
+            state=state,
+            detail=detail,
+            availability=availability,
+            account_label=account_label,
+        )
         if health == self.codex_health:
             return
         self.codex_health = health
         await self.emit("codex", "codex.health", health.model_dump())
+
+    async def read_codex_account(
+        self, *, timeout: float = 5
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """Read account/tool availability and publish only the display identity."""
+        account = await self.codex.call("account/read", {"refreshToken": False}, timeout=timeout)
+        if self.codex_health.availability == "disconnected":
+            await self.set_codex_health("connected", "Checking Codex account and work availability")
+        identity = account.get("account")
+        if not isinstance(identity, dict):
+            await self.set_codex_health(
+                "connected", "Codex is connected. Log in to start work.", account_label="Signed out"
+            )
+            return account, {"data": []}, {"data": []}
+        account_type = str(identity.get("type", ""))
+        label: str = {
+            "apiKey": "API key authentication",
+            "amazonBedrock": "Amazon Bedrock",
+        }.get(account_type, "Signed in")
+        if account_type == "chatgpt":
+            email = identity.get("email")
+            label = email if isinstance(email, str) and email else "ChatGPT account"
+        try:
+            models, skills = await asyncio.gather(
+                self.codex.call("model/list", {"limit": 100}, timeout=timeout),
+                self.codex.call(
+                    "skills/list",
+                    {"cwds": [str(self.settings.workspace)], "forceReload": False},
+                    timeout=timeout,
+                ),
+            )
+        except CodexUnavailableError as error:
+            await self.report_codex_failure(error, account_label=label)
+            raise
+        model_data = models.get("data")
+        ready = isinstance(model_data, list) and bool(model_data)
+        await self.set_codex_health(
+            "connected",
+            "Codex is connected and logged in, ready for work."
+            if ready
+            else "Codex is logged in, but no models are available for work.",
+            availability="ready" if ready else "unavailable",
+            account_label=label,
+        )
+        return account, models, skills
+
+    async def report_codex_failure(
+        self, error: CodexUnavailableError, *, account_label: str | None = None
+    ) -> None:
+        """Keep connected RPC failures distinct from a missing transport."""
+        connected = not isinstance(error, CodexDisconnectedError) and (
+            self.codex.connected or self.codex_health.availability != "disconnected"
+        )
+        state: Literal["connected", "stalled", "disconnected"] = (
+            "connected" if connected else "disconnected"
+        )
+        if isinstance(error, CodexTimeoutError):
+            state = "stalled"
+        await self.set_codex_health(
+            state,
+            str(error),
+            availability="unavailable" if connected else "disconnected",
+            account_label=(account_label or self.codex_health.account_label) if connected else None,
+        )
 
     async def set_linux_sandbox_notice(self, notice: LinuxSandboxNotice | None) -> None:
         """Publish a deduplicated advisory from Codex's existing Linux startup check."""
@@ -1101,6 +1208,10 @@ class StudioService:
         async with self.codex_lock:
             try:
                 await self.codex.call("thread/loaded/list", {}, timeout=5)
+                if self.codex_health.availability == "disconnected":
+                    await self.set_codex_health(
+                        "connected", "Checking Codex account and work availability"
+                    )
                 for conversation in self.store.active_conversations():
                     if conversation.thread_id is None:
                         continue
@@ -1113,15 +1224,12 @@ class StudioService:
                     except CodexThreadNotReadyError:
                         continue
                     await self.reconcile_codex_thread(conversation, result)
-            except CodexTimeoutError as error:
-                self.codex_failures += 1
-                await self.set_codex_health("stalled", str(error))
+                await self.read_codex_account()
             except CodexUnavailableError as error:
                 self.codex_failures += 1
-                await self.set_codex_health("disconnected", str(error))
+                await self.report_codex_failure(error)
             else:
                 self.codex_failures = 0
-                await self.set_codex_health("connected", "Codex is responding")
 
     async def reconcile_codex_thread(
         self, conversation: Conversation, result: dict[str, Any]
@@ -1181,12 +1289,25 @@ class StudioService:
     async def _codex_request(
         self, request_id: int | str, method: str, params: dict[str, Any]
     ) -> None:
-        """Park approvals and questions until the user answers in the window."""
-        self.pending_codex_requests[request_id] = {"method": method, "params": params}
+        """Park questions for the user and refuse requests for broader capabilities."""
         thread_id = params.get("threadId")
         conversation = (
             self.store.conversation_for_thread(thread_id) if isinstance(thread_id, str) else None
         )
+        # Scoped authoring never grants wider permissions. Questions remain available;
+        # bypasses, external mutation approvals and client-side tool calls are refused.
+        if method != "item/tool/requestUserInput":
+            if method == "item/permissions/requestApproval":
+                result = {"permissions": {}, "scope": "turn"}
+            elif method == "mcpServer/elicitation/request":
+                result = {"action": "decline", "content": None}
+            elif method == "item/tool/call":
+                result = {"success": False, "contentItems": []}
+            else:
+                result = {"decision": "decline"}
+            await self.codex.respond(request_id, result)
+            return
+        self.pending_codex_requests[request_id] = {"method": method, "params": params}
         if conversation is not None:
             conversation.needs_attention = True
             self.store.save_conversation(conversation)
@@ -1569,7 +1690,16 @@ class StudioService:
             "jobs": [job_summary(payload) for payload in self.store.job_payloads(workspace)],
             "removed_job_ids": self.store.removed_job_ids(workspace),
             "imported_bundles": [
-                json.loads(bundle.model_dump_json())
+                {
+                    **json.loads(bundle.model_dump_json()),
+                    "scenario_source": source.model_dump(mode="json")
+                    if (
+                        source := captured_scenario(
+                            bundle.root, manifest_sha256=bundle.manifest_sha256
+                        )
+                    )
+                    else None,
+                }
                 for bundle in self.store.imported_bundles(workspace)
             ],
         }
@@ -3626,27 +3756,6 @@ def create_app(
             item = studio.store.item(request.item_id)
             if item is None or item.workspace.resolve() != studio.settings.workspace.resolve():
                 raise HTTPException(status_code=404, detail="Scenario or pack not found")
-            from evidenceforge.artifacts.lifecycle import _receipt_root, create_draft
-
-            if _receipt_root(item.path) is not None:
-                try:
-                    draft = await asyncio.to_thread(
-                        create_draft, item.path, project_root=item.workspace
-                    )
-                    await studio.scan()
-                    created = next(
-                        (
-                            entry
-                            for entry in studio.store.items(item.workspace)
-                            if entry.path == draft
-                        ),
-                        None,
-                    )
-                    if created is None:
-                        raise ValueError("new draft could not be indexed")
-                    request = request.model_copy(update={"item_id": created.id})
-                except (EvidenceForgeError, OSError, ValueError) as exc:
-                    raise HTTPException(status_code=409, detail=str(exc)) from exc
         if request.project_id:
             if not request.draft_kind:
                 raise HTTPException(
@@ -3671,12 +3780,14 @@ def create_app(
             async with studio.workspace_selection_lock, studio.asset_lock, studio.library_lock:
                 await studio.ensure_scenario_draft(conversation)
         elif request.draft_kind:
-            conversation.draft_path = (
-                studio.settings.workspace
-                / ".eforge"
-                / "packs"
-                / f"studio-{conversation.id}"
-                / "pack.yaml"
+            from evidenceforge.artifacts.lifecycle import create_new_draft
+
+            conversation.draft_path = await asyncio.to_thread(
+                create_new_draft,
+                request.draft_kind.removesuffix("_pack"),
+                request.name or "new-" + request.draft_kind.replace("_", "-"),
+                description="",
+                project_root=conversation.workspace,
             )
         studio.store.save_conversation(conversation)
         await studio.emit(
@@ -3772,43 +3883,50 @@ def create_app(
         except (OSError, ValueError, ConfigurationError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
+            await studio.report_codex_failure(error)
             raise HTTPException(status_code=503, detail=str(error)) from error
         except CodexUnavailableError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    @app.get("/v1/conversations/{conversation_id}/access")
+    async def conversation_access(
+        conversation_id: str, studio: StudioService = Depends(authorized)
+    ) -> ChatAccess:
+        conversation = studio.store.conversation(conversation_id)
+        if conversation is None or conversation.workspace != studio.settings.workspace:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        item = studio.store.item(conversation.item_id) if conversation.item_id else None
+        source = item.path if item else conversation.draft_path
+        if source is None:
+            raise HTTPException(status_code=409, detail="Select a scenario or pack before chatting")
+        try:
+            return await asyncio.to_thread(chat_access, source)
+        except (CodexUnavailableError, EvidenceForgeError, OSError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.get("/v1/codex/status")
     async def codex_status(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            account = await studio.codex.call("account/read", {"refreshToken": False}, timeout=10)
-            if account.get("account") is None:
+        async with studio.codex_lock:
+            try:
+                account, models, skills = await studio.read_codex_account(timeout=10)
+                if account.get("account") is None:
+                    return {
+                        "available": True,
+                        "account_ready": False,
+                        "account": account,
+                        "models": {"data": []},
+                        "skills": {"data": []},
+                    }
                 return {
                     "available": True,
-                    "account_ready": False,
+                    "account_ready": True,
                     "account": account,
-                    "models": {"data": []},
-                    "skills": {"data": []},
+                    "models": models,
+                    "skills": skills,
                 }
-            models, skills = await asyncio.gather(
-                studio.codex.call("model/list", {"limit": 100}, timeout=10),
-                studio.codex.call(
-                    "skills/list",
-                    {"cwds": [str(studio.settings.workspace)], "forceReload": False},
-                    timeout=10,
-                ),
-            )
-            return {
-                "available": True,
-                "account_ready": True,
-                "account": account,
-                "models": models,
-                "skills": skills,
-            }
-        except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
-            return {"available": False, "error": str(error)}
-        except CodexUnavailableError as error:
-            return {"available": False, "error": str(error)}
+            except CodexUnavailableError as error:
+                await studio.report_codex_failure(error)
+                return {"available": False, "error": str(error)}
 
     @app.post("/v1/codex/reconnect")
     async def reconnect_codex(
@@ -3832,29 +3950,40 @@ def create_app(
             try:
                 await studio.codex.start()
                 await studio.codex.call("thread/loaded/list", {}, timeout=10)
+                await studio.set_codex_health(
+                    "connected", "Checking Codex account and work availability"
+                )
+                await studio.read_codex_account(timeout=10)
             except CodexUnavailableError as error:
-                await studio.set_codex_health("disconnected", str(error))
+                await studio.report_codex_failure(error)
                 raise HTTPException(status_code=503, detail=str(error)) from error
             studio.codex_failures = 0
-            await studio.set_codex_health("connected", "Codex is responding")
             return studio.codex_health
 
     @app.post("/v1/codex/account/login")
     async def codex_login(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            return await studio.codex.call(
-                "account/login/start",
-                {"type": "chatgpt", "useHostedLoginSuccessPage": True, "appBrand": "codex"},
-            )
-        except CodexUnavailableError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        async with studio.codex_lock:
+            try:
+                return await studio.codex.call(
+                    "account/login/start",
+                    {"type": "chatgpt", "useHostedLoginSuccessPage": True, "appBrand": "codex"},
+                )
+            except CodexUnavailableError as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.post("/v1/codex/account/logout")
     async def codex_logout(studio: StudioService = Depends(authorized)) -> dict[str, Any]:
-        try:
-            return await studio.codex.call("account/logout")
-        except CodexUnavailableError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+        async with studio.codex_lock:
+            try:
+                result = await studio.codex.call("account/logout")
+                await studio.set_codex_health(
+                    "connected",
+                    "Codex is connected. Log in to start work.",
+                    account_label="Signed out",
+                )
+                return result
+            except CodexUnavailableError as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
     @app.post("/v1/codex/skills/install")
     async def install_studio_skills(
@@ -3944,6 +4073,22 @@ def create_app(
                 conversation.model_id = selected["id"]
                 if conversation.reasoning_effort is None:
                     conversation.reasoning_effort = selected.get("defaultReasoningEffort")
+            source = item.path if item is not None else conversation.draft_path
+            if source is None:
+                raise CodexUnavailableError("Select a scenario or pack before chatting")
+            try:
+                access = await asyncio.to_thread(chat_access, source)
+            except (EvidenceForgeError, OSError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            effective = await studio.codex.call(
+                "config/read", {"cwd": str(access.directory), "includeLayers": True}
+            )
+            protection = {
+                "cwd": str(access.directory),
+                "sandbox": "read-only" if access.mode == "discussion" else "workspace-write",
+                "approvalPolicy": "never",
+                "config": isolated_chat_config(effective, access),
+            }
             inputs: list[dict[str, str]] = [{"type": "text", "text": request.text}]
             if skill_name:
                 skill = await studio.resolve_turn_skill(skill_name, conversation.workspace)
@@ -3962,7 +4107,7 @@ def create_app(
                 if conversation.draft_kind == "scenario"
                 else None
             )
-            if context_source is not None:
+            if context_source is not None and access.version is None:
                 project_id = item.project_id if item is not None else conversation.draft_project_id
                 project = studio.store.project(project_id) if project_id else None
                 if item is None:
@@ -3995,42 +4140,44 @@ def create_app(
                         "write it in the Schema 3 YAML, separately from name. "
                     )
                 parameters: dict[str, Any] = {
-                    "cwd": str(conversation.workspace),
-                    "sandbox": "workspace-write",
+                    **protection,
                     "developerInstructions": (
                         f"This conversation concerns the EvidenceForge {context_kind} at {target}. "
-                        "For a new draft, create its authored file at that exact path when the user "
-                        "asks you to write it; keep companion files beside it. "
-                        "If that draft file already exists, resume and edit it in place. "
-                        "Do not run new-draft again, allocate another draft_id, or move only its YAML "
-                        "out of the managed directory; retain draft.json and all companion files. "
                         f"{draft_name_context}"
-                        "Treat that path as context for the user's requests. Wait for a user "
-                        "request before editing files. Keep deterministic generation in eforge."
-                        + configuration_instructions
+                        "Follow user requests and EvidenceForge skills. Keep deterministic "
+                        "generation in eforge." + configuration_instructions + access.instructions
                     ),
                 }
                 if conversation.model_id:
                     parameters["model"] = conversation.model_id
                 started = await studio.codex.call("thread/start", parameters)
+                verify_chat_permissions(started, access)
                 conversation.thread_id = str(started["thread"]["id"])
                 conversation.title = " ".join(request.text.strip().split()[:7])[:80]
             else:
-                await studio.codex.call(
+                # Codex 0.162 retains a loaded thread's old configuration on resume.
+                # Unload the idle session so the requested policy is actually applied.
+                await studio.codex.call("thread/unsubscribe", {"threadId": conversation.thread_id})
+                resumed = await studio.codex.call(
                     "thread/resume",
                     {
                         "threadId": conversation.thread_id,
+                        **protection,
                         "model": conversation.model_id,
                         "developerInstructions": f"This conversation concerns {str(item.path) if item is not None else str(conversation.draft_path)}. "
-                        "Resume and edit the existing draft at this exact path. Do not run new-draft "
-                        "again, allocate another draft_id, or move only its YAML out of the managed "
-                        "directory; retain draft.json and all companion files. Wait for the user's "
-                        "request before editing. Keep deterministic generation in eforge. "
-                        "Follow user requests and the EvidenceForge skills."
-                        + configuration_instructions,
+                        "Follow user requests and EvidenceForge skills. Keep deterministic "
+                        "generation in eforge." + configuration_instructions + access.instructions,
                     },
                 )
-            parameters = {"threadId": conversation.thread_id, "input": inputs, "summary": "auto"}
+                verify_chat_permissions(resumed, access)
+            parameters = {
+                "threadId": conversation.thread_id,
+                "input": inputs,
+                "summary": "auto",
+                "cwd": str(access.directory),
+                "approvalPolicy": "never",
+                "sandboxPolicy": access.sandbox,
+            }
             if conversation.model_id:
                 parameters["model"] = conversation.model_id
             if conversation.reasoning_effort:
@@ -4049,7 +4196,7 @@ def create_app(
             if isinstance(turn, dict) and isinstance(turn.get("id"), str):
                 turn_id = turn["id"]
         except CodexTimeoutError as error:
-            await studio.set_codex_health("stalled", str(error))
+            await studio.report_codex_failure(error)
             if conversation.active:
                 current = studio.store.conversation(conversation.id) or conversation
                 if current.active:
@@ -4109,6 +4256,11 @@ def create_app(
         pending = studio.pending_codex_requests.get(reply.request_id)
         if pending is None:
             raise HTTPException(status_code=404, detail="Codex request is no longer pending")
+        if pending.get("method") != "item/tool/requestUserInput":
+            raise HTTPException(
+                status_code=409,
+                detail="Chat permissions cannot be widened; use New draft to revise a published item",
+            )
         await studio.codex.respond(reply.request_id, reply.result)
         studio.pending_codex_requests.pop(reply.request_id)
         params = pending.get("params", {})
@@ -4930,6 +5082,22 @@ def create_app(
             summary = job_summary(json.loads(job.model_dump_json()))
             await studio.emit(job.id, "job.created", summary)
             return summary
+
+    @app.post("/v1/jobs/{job_id}/stop")
+    async def stop_job(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, str]:
+        async with studio.job_cycle_lock:
+            try:
+                await asyncio.to_thread(
+                    stop_studio_job, studio.jobs, studio.settings.workspace, job_id
+                )
+            except KeyError as error:
+                raise HTTPException(
+                    status_code=404, detail="Job not found in this workspace"
+                ) from error
+            except (OSError, ValueError) as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            await studio.emit(job_id, "job.stop_requested", {"id": job_id})
+        return {"status": "job stopped; files preserved"}
 
     @app.post("/v1/jobs/{job_id}/suspend")
     async def suspend(job_id: str, studio: StudioService = Depends(authorized)) -> dict[str, str]:

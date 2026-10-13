@@ -4,9 +4,10 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v2.2.0a2 (2026-10-11)
+## v2.2.0a2 (2026-10-12)
 
-Unpublished local build snapshot of the planned 2.2.0 release.
+Second alpha of the planned 2.2.0 release. Adds native Ubuntu ARM64/x86_64 AppImages alongside
+the Apple Silicon macOS DMG, a consistent Studio action interface and Codex account readiness.
 Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
 **Generation scheduling**
@@ -19,6 +20,22 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
 
 **Studio usability and recovery**
 
+- Unify object menus across libraries, workspaces, conversations, assets, runs and bundles.
+  Keep selected text shortcuts and collapsed status summaries; use stable action ordering,
+  disabled reasons and explicit destructive-action confirmations. Preserve sized generation
+  forecasts and live job pause/resume/stop controls (`27ccd099`).
+- Scope section menus to their own objects, group runs from related scenario drafts and releases,
+  and show each run's captured version. Remove duplicated expanded-run actions and improve the
+  conversation creation shortcut (`bf6ae31f`). Validate packs inline without opening Properties,
+  restore scenario publication after bundle-metadata inspection, and collapse individual bundle
+  runs while keeping the list open (`431c9e95`, `2a29953d`).
+- Show Codex as red when disconnected, yellow when connected but unavailable for work, and green
+  when signed in and ready. Open connection/account details and the shared Login flow from the
+  indicator; update open conversations after account changes without losing drafts (`48c564ca`).
+- Keep existing and new chats on published scenarios and packs as read-only discussions.
+  Require New draft and a new conversation for revisions; enforce and verify Codex sandbox
+  restrictions on every turn, refuse escalation and external mutation tools, and exercise
+  native permission checks on macOS and both Linux architectures (`a06d5dbc`, `fdc57c5c`).
 - Complete scenario and pack drafts after successful publication, preserving their
   conversations, project assignment and run history. Revise releases through a new
   draft; show the latest published version by default with older versions available
@@ -57,7 +74,20 @@ Studio usability, lifecycle, and Linux implementation changes are in `3c6ac0d7`.
   previews (`a21b7272`). Recognize Tauri's native `amd64` bundle name while retaining
   `x86_64` in public AppImage filenames (`52918e62`).
 - Recover tagged release publication after CI workflow failures (`99a0b5e1`).
+- Declare the captured-source cache registration as behavior revision 163 with no rendering
+  impact, keeping checkpoint fingerprints current. Preserve Unicode Windows durability failure
+  reports without masking the child process's exit code (`6a43f56c`).
 - Record successful first-alpha publication and installer acceptance (`3f31c0d1`, `0aa8a2ae`).
+
+**Alpha availability and acceptance**
+
+- Installers target Apple Silicon macOS and Ubuntu 24.04/glibc 2.39 on ARM64/x86_64. Intel macOS
+  and Windows installers are not included. The macOS app remains unsigned and not notarized;
+  Codex is installed separately for authoring.
+- The user accepted recent smoke tests on all systems, including the most recent macOS build,
+  and explicitly waived repeating interactive tests for this release. Automated release and
+  packaged-installer checks remain required. Other Linux distributions, clean-machine deployment
+  and separate OS-account acceptance remain outstanding.
 
 ## v2.2.0a1 (2026-10-09)
 

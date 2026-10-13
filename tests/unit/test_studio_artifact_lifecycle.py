@@ -275,7 +275,7 @@ def test_anonymous_draft_sessions_notes_publish_fork_and_export(
         )
         chat = client.post("/v1/conversations", headers=HEADERS, json={"item_id": released["id"]})
         assert chat.status_code == 200, chat.text
-        assert chat.json()["item_id"] != released["id"]
+        assert chat.json()["item_id"] == released["id"]
         assert release_path.read_bytes() == original
 
 

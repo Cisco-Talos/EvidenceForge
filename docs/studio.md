@@ -95,8 +95,16 @@ that Studio failed to launch.
 
 Codex installation and environment setup are maintained in
 [CONTRIBUTING.md](../CONTRIBUTING.md#codex-authoring-and-linux-sandbox-tests).
-After installation, use Studio's **Settings → Authoring & tools → Sign in**. Studio uses Codex for its
-scenario and pack conversations. Your Codex credentials remain in Codex's own storage.
+After installation, click the Codex status dot in the header and choose **Login**, or use
+**Settings → Authoring & tools → Sign in**. Both open the same Codex browser login flow. Studio
+uses Codex for its scenario and pack conversations. Your Codex credentials remain in Codex's
+own storage.
+
+The status dot is red when disconnected, yellow when connected but signed out or unavailable
+for work, and green when connected with a signed-in account and an available model. Click it
+in any state to see connection, account and work details. **Login** is disabled while disconnected
+and stays available in yellow and green states. **Reconnect** replaces the connection; the dialog
+warns when that will interrupt active turns.
 
 Studio looks for `codex` on PATH, in `~/.local/bin` on Linux, in common macOS CLI locations,
 and in Codex.app's bundled CLI.
@@ -226,6 +234,21 @@ New authored content uses Schema 3 drafts. Earlier scenario schemas 1/2 and pack
 readable. Use **Upgrade to latest schema** to prepare a separate upgraded draft, or **New draft**
 to revise an existing release. Published originals are immutable.
 
+After publication, existing conversations keep their history and become **read-only discussions**
+of the published version. New conversations on that version also allow questions without creating
+a draft. To make changes, select **New draft**, then start a **new conversation** on that draft.
+Chat keeps a short read-only warning visible for published discussions; editable drafts have no
+publication-origin notice. **New draft** is available in the item's workspace, outside chat.
+The same workflow applies to scenarios, industry packs and organization packs. Unmanaged legacy
+sources can be discussed; adopt them with **New draft** before assisted editing.
+
+Studio applies and verifies Codex's sandbox on every message. Discussion commands cannot write
+files or change permissions, including on the completed draft referenced in earlier messages.
+Editable conversations can write only inside their active managed draft container. Permission
+escalation, network-enabled shell commands, hooks, plugins and external MCP tools are disabled in
+Studio chats. If Codex cannot confirm the required protection, Studio refuses to send the message.
+Validation, generation and evaluation remain available through the workspace controls.
+
 Studio checks publisher setup when it connects to the local helper. If no identity is
 configured, a startup notice offers **Set up publisher** or **Later**. The same setup is
 available under **Settings → Workspace**. Enter a publisher ID (lowercase letters,
@@ -251,8 +274,11 @@ creates a release in the local workspace; it does not upload to GitHub or a remo
 The release replaces its completed draft in the library, keeping the same project assignment,
 conversations and links to earlier runs. Use **New draft** on the release to revise it; publishing
 that revision creates another immutable version. Independent drafts remain available. Libraries
-show the latest published version by default; **Show previous versions** reveals older versions
-without changing their files or dependency references.
+show the latest published version by default. Return to the **Scenarios** or **Packs** library and
+select **Show previous versions (N)** beside the search/filter controls to reveal older versions.
+Open an older version's row to inspect it, discuss it read-only, run it or create a new draft.
+The toggle appears when the current library filters include multiple published versions in the
+same family; it does not change their files or dependency references.
 Publish required pack dependencies before publishing a scenario that depends on them. If files
 change after review, refresh the review before confirming.
 

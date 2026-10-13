@@ -23,7 +23,13 @@ from evidenceforge.desktop.jobs import resume_generation
 from evidenceforge.desktop.state import AppSettings, EvaluationJob, GenerationJob
 from evidenceforge.evaluation.models import AcceptanceCriterion, QualityReport, SubScore
 from evidenceforge.evaluation.thresholds import load_thresholds
-from evidenceforge.studio.codex import CodexClient, CodexThreadNotReadyError, CodexTimeoutError
+from evidenceforge.studio.codex import (
+    CodexClient,
+    CodexDisconnectedError,
+    CodexThreadNotReadyError,
+    CodexTimeoutError,
+    CodexUnavailableError,
+)
 from evidenceforge.studio.jobs import StudioJobStore, job_summary, queue_studio_generation
 from evidenceforge.studio.lifecycle import clone_scenario, rename_scenario
 from evidenceforge.studio.paths import StudioPaths, default_workspace, studio_paths
@@ -190,7 +196,12 @@ def test_external_bundle_import_is_read_only_and_workspace_scoped(
         assert properties.status_code == 200, properties.text
         assert properties.json()["formats"] == ["zeek_conn"]
         assert properties.json()["size_bytes"] == bundle["size_bytes"]
-        assert client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"] == [bundle]
+        listed = client.get("/v1/bootstrap", headers=headers).json()["imported_bundles"]
+        assert len(listed) == 1
+        source = listed[0].pop("scenario_source")
+        assert listed == [bundle]
+        assert source["name"] == "external"
+        assert source["version"] is None
         files = client.get(f"/v1/bundles/{bundle['id']}/files", headers=headers).json()
         assert {entry["path"] for entry in files["files"]} == {
             "GENERATION_MANIFEST.json",
@@ -1048,12 +1059,11 @@ def test_draft_conversation_links_authored_file_and_project(
             json={"draft_kind": "industry_pack", "project_id": project["id"]},
         ).json()
         pack_path = Path(pack_draft["draft_path"])
-        assert pack_path.parent.parent == workspace / ".eforge" / "packs"
+        assert pack_path.is_relative_to(workspace / ".eforge" / "artifacts" / "drafts" / "industry")
+        assert (pack_path.parent.parent / "draft.json").is_file()
         assert pack_draft["draft_project_id"] == project["id"]
-        pack_path.parent.mkdir(parents=True)
         pack_path.write_text(
-            "name: training-industry\ntype: industry\nversion: '1.0'\n",
-            encoding="utf-8",
+            pack_path.read_text().replace("description: ''", "description: Training")
         )
         client.post("/v1/library/refresh", headers=headers)
         pack_item = next(
@@ -1602,7 +1612,13 @@ def test_codex_turn_uses_item_context_and_preserves_fast_completion(
         "    if method == 'skills/list':\n"
         f"        result = {{'data': [{{'skills': [{{'name': {skill!r}, "
         f"'path': '/tmp/skills/{skill}/SKILL.md', 'enabled': True}}]}}]}}\n"
-        "    elif method == 'thread/start': result = {'thread': {'id': 'thread-alpha'}}\n"
+        "    elif method == 'config/read': result = {'layers': []}\n"
+        "    elif method in ('thread/start', 'thread/resume'):\n"
+        "        p = request['params']; ro = p['sandbox'] == 'read-only'\n"
+        "        result = {'thread': {'id': 'thread-alpha'}, 'cwd': p['cwd'], "
+        "'approvalPolicy': 'never', 'sandbox': {'type': 'readOnly' if ro else 'workspaceWrite', "
+        "'writableRoots': [], 'networkAccess': False, 'excludeTmpdirEnvVar': True, "
+        "'excludeSlashTmp': True}}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'account/read': result = {'account': {'type': 'chatgpt'}}\n"
@@ -1687,6 +1703,15 @@ def test_uncertain_codex_turn_preserves_attempt_without_overwriting_fast_complet
     async def fake_call(method: str, params: dict[str, object], *, timeout: float = 30) -> dict:
         if method == "model/list":
             return {"data": [{"id": "test-model", "isDefault": True}]}
+        if method == "config/read":
+            return {"layers": []}
+        if method in {"thread/start", "thread/resume"}:
+            return {
+                "thread": {"id": params.get("threadId", "new")},
+                "cwd": params["cwd"],
+                "approvalPolicy": "never",
+                "sandbox": {"type": "readOnly", "networkAccess": False},
+            }
         if method == "turn/start":
             if params["threadId"] == "fast-completion":
                 await studio._codex_event(
@@ -1744,7 +1769,9 @@ def test_signed_out_codex_stays_available_for_login(tmp_path: Path, monkeypatch:
         assert response.json()["available"] is True
         assert response.json()["account_ready"] is False
         assert response.json()["models"] == {"data": []}
-        assert calls == ["account/read"]
+        assert calls and set(calls) == {"account/read"}
+        assert studio.codex_health.availability == "unavailable"
+        assert studio.codex_health.account_label == "Signed out"
 
 
 @pytest.mark.parametrize("legacy_pending", [False, True])
@@ -1767,7 +1794,13 @@ def test_new_draft_turn_uses_its_target_path_and_authoring_skill(
         "    if method == 'skills/list':\n"
         "        result = {'data': [{'skills': [{'name': 'eforge-scenario', "
         "'path': '/tmp/skills/eforge-scenario/SKILL.md', 'enabled': True}]}]}\n"
-        "    elif method == 'thread/start': result = {'thread': {'id': 'thread-draft'}}\n"
+        "    elif method == 'config/read': result = {'layers': []}\n"
+        "    elif method in ('thread/start', 'thread/resume'):\n"
+        "        p = request['params']; ro = p['sandbox'] == 'read-only'\n"
+        "        result = {'thread': {'id': 'thread-draft'}, 'cwd': p['cwd'], "
+        "'approvalPolicy': 'never', 'sandbox': {'type': 'readOnly' if ro else 'workspaceWrite', "
+        "'writableRoots': [], 'networkAccess': False, 'excludeTmpdirEnvVar': True, "
+        "'excludeSlashTmp': True}}\n"
         "    elif method == 'model/list': result = {'data': [{'id': 'test-model', 'isDefault': True}]}\n"
         "    elif method == 'thread/read': result = {'thread': {'turns': []}}\n"
         "    if method == 'turn/start':\n"
@@ -1961,6 +1994,8 @@ def test_codex_health_reports_stall_and_recovers(tmp_path: Path, monkeypatch: ob
         method: str, params: dict[str, object] | None = None, *, timeout: float = 30
     ) -> dict[str, object]:
         nonlocal probes
+        if method == "account/read":
+            return {"account": None}
         assert method == "thread/loaded/list"
         assert params == {}
         probes += 1
@@ -1980,6 +2015,240 @@ def test_codex_health_reports_stall_and_recovers(tmp_path: Path, monkeypatch: ob
         asyncio.run(exercise())
     finally:
         studio.store.close()
+
+
+@pytest.mark.parametrize(
+    ("account", "models", "failure", "availability", "label"),
+    [
+        (None, [], None, "unavailable", "Signed out"),
+        (
+            {"type": "chatgpt", "email": "author@example.com"},
+            [{}],
+            None,
+            "ready",
+            "author@example.com",
+        ),
+        ({"type": "apiKey"}, [{}], None, "ready", "API key authentication"),
+        ({"type": "amazonBedrock"}, [{}], None, "ready", "Amazon Bedrock"),
+        ({"type": "chatgpt"}, [], None, "unavailable", "ChatGPT account"),
+        ({"type": "chatgpt"}, [], "timeout", "unavailable", "ChatGPT account"),
+        ({"type": "chatgpt"}, [], "rejected", "unavailable", "ChatGPT account"),
+        ({"type": "chatgpt"}, [{}], "skills-rejected", "unavailable", "ChatGPT account"),
+        ({"type": "chatgpt"}, [], "disconnected", "disconnected", None),
+    ],
+)
+def test_codex_work_availability_requires_account_and_models(
+    tmp_path: Path,
+    monkeypatch: object,
+    account: dict[str, str] | None,
+    models: list[dict[str, object]],
+    failure: str | None,
+    availability: str,
+    label: str | None,
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    studio = StudioService(_paths(tmp_path / "private"), "secret")
+    calls: list[str] = []
+    health_events: list[dict[str, object]] = []
+
+    async def probe(
+        method: str, params: dict[str, object] | None = None, *, timeout: float = 30
+    ) -> dict[str, object]:
+        assert timeout == 5
+        calls.append(method)
+        if method == "thread/loaded/list":
+            return {"data": []}
+        if method == "account/read":
+            assert params == {"refreshToken": False}
+            return {"account": account, "credentials": "must-not-enter-health-events"}
+        if method == "skills/list":
+            if failure == "skills-rejected":
+                raise CodexUnavailableError("Codex could not discover tools")
+            return {"data": []}
+        assert method == "model/list"
+        if failure == "timeout":
+            raise CodexTimeoutError("Codex model discovery timed out")
+        if failure == "rejected":
+            raise CodexUnavailableError("Codex rejected model discovery")
+        if failure == "disconnected":
+            raise CodexDisconnectedError("Codex process exited")
+        return {"data": models}
+
+    async def emit(entity_id: str, kind: str, payload: dict[str, object]) -> None:
+        assert entity_id == "codex" and kind == "codex.health"
+        health_events.append(payload)
+
+    monkeypatch.setattr(studio.codex, "call", probe)
+    monkeypatch.setattr(studio, "emit", emit)
+    try:
+        assert studio.codex_health.availability == "disconnected"
+        asyncio.run(studio.check_codex_health())
+        assert studio.codex_health.availability == availability
+        assert studio.codex_health.account_label == label
+        assert "credentials" not in studio.codex_health.model_dump()
+        assert "must-not-enter-health-events" not in studio.codex_health.model_dump_json()
+        if availability != "ready":
+            assert all(event["availability"] != "ready" for event in health_events)
+        if account is None:
+            assert "model/list" not in calls
+        if failure == "timeout":
+            assert studio.codex_health.state == "stalled"
+        elif failure == "disconnected":
+            assert studio.codex_health.state == "disconnected"
+        else:
+            assert studio.codex_health.state == "connected"
+    finally:
+        studio.store.close()
+
+
+def test_codex_availability_tracks_login_logout_stall_and_disconnect_without_heartbeat_noise(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    studio = StudioService(_paths(tmp_path / "private"), "secret")
+    signed_in = False
+    failure: CodexUnavailableError | None = None
+    health_events: list[dict[str, object]] = []
+
+    async def probe(
+        method: str, params: dict[str, object] | None = None, *, timeout: float = 30
+    ) -> dict[str, object]:
+        if failure:
+            raise failure
+        if method == "account/read":
+            return {"account": {"type": "apiKey"} if signed_in else None}
+        return {"data": [{"id": "test-model"}]}
+
+    async def emit(entity_id: str, kind: str, payload: dict[str, object]) -> None:
+        assert entity_id == "codex" and kind == "codex.health"
+        health_events.append(payload)
+
+    monkeypatch.setattr(studio.codex, "call", probe)
+    monkeypatch.setattr(studio, "emit", emit)
+
+    async def exercise() -> None:
+        nonlocal signed_in, failure
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "unavailable"
+        signed_out_events = len(health_events)
+        await studio.check_codex_health()
+        assert len(health_events) == signed_out_events
+        signed_in = True
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "ready"
+        ready_events = len(health_events)
+        await studio.check_codex_health()
+        assert len(health_events) == ready_events
+        failure = CodexTimeoutError("Codex stopped responding")
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "unavailable"
+        assert studio.codex_health.account_label == "API key authentication"
+        failure = None
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "ready"
+        signed_in = False
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "unavailable"
+        failure = CodexDisconnectedError("Codex exited")
+        await studio.check_codex_health()
+        assert studio.codex_health.availability == "disconnected"
+        assert studio.codex_health.account_label is None
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        studio.store.close()
+
+
+def test_codex_login_keeps_existing_flow_and_logout_updates_live_health(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    monkeypatch.setenv("EFORGE_STUDIO_DEFAULT_WORKSPACE", str(tmp_path / "workspace"))
+    app = create_app(_paths(tmp_path / "private"), "secret")
+    studio = app.state.studio
+    signed_in = True
+    login_params: list[dict[str, object]] = []
+
+    async def call(
+        method: str, params: dict[str, object] | None = None, *, timeout: float = 30
+    ) -> dict[str, object]:
+        nonlocal signed_in
+        if method == "account/read":
+            return {
+                "account": {"type": "chatgpt", "email": "author@example.com"} if signed_in else None
+            }
+        if method == "account/login/start":
+            assert params is not None
+            login_params.append(params)
+            return {"authUrl": "https://example.com/login"}
+        if method == "account/logout":
+            signed_in = False
+            return {}
+        return {"data": [{"id": "test-model"}]}
+
+    monkeypatch.setattr(studio.codex, "call", call)
+    headers = {"X-EForge-Token": "secret"}
+    with TestClient(app) as client:
+        status = client.get("/v1/codex/status", headers=headers)
+        assert status.json()["account_ready"] is True
+        assert studio.codex_health.availability == "ready"
+        login = client.post("/v1/codex/account/login", headers=headers)
+        assert login.status_code == 200
+        assert login.json()["authUrl"] == "https://example.com/login"
+        assert login_params == [
+            {"type": "chatgpt", "useHostedLoginSuccessPage": True, "appBrand": "codex"}
+        ]
+        assert client.post("/v1/codex/account/logout", headers=headers).status_code == 200
+        assert studio.codex_health.availability == "unavailable"
+        assert studio.codex_health.account_label == "Signed out"
+        assert (
+            client.get("/v1/bootstrap", headers=headers).json()["codex_health"]["availability"]
+            == "unavailable"
+        )
+
+
+def test_codex_transport_distinguishes_rejection_timeout_and_process_exit(tmp_path: Path) -> None:
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!" + sys.executable + "\n"
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    request = json.loads(line)\n"
+        "    if 'id' not in request: continue\n"
+        "    method = request.get('method')\n"
+        "    if method == 'exit': sys.exit(0)\n"
+        "    if method == 'hang': continue\n"
+        "    reply = {'id': request['id'], 'result': {}}\n"
+        "    if method == 'reject':\n"
+        "        reply = {'id': request['id'], 'error': {'message': 'Request rejected'}}\n"
+        "    print(json.dumps(reply), flush=True)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    async def event(method: str, params: dict[str, object]) -> None:
+        pass
+
+    async def request(request_id: int | str, method: str, params: dict[str, object]) -> None:
+        pass
+
+    async def exercise() -> None:
+        client = CodexClient(fake, event, request)
+        try:
+            with pytest.raises(CodexUnavailableError) as rejected:
+                await client.call("reject")
+            assert not isinstance(rejected.value, CodexDisconnectedError)
+            assert client.connected
+            with pytest.raises(CodexTimeoutError):
+                await client.call("hang", timeout=0.05)
+            assert client.connected
+            with pytest.raises(CodexDisconnectedError):
+                await client.call("exit")
+            assert not client.connected
+        finally:
+            await client.stop()
+
+    asyncio.run(exercise())
 
 
 def test_completed_codex_history_clears_stale_interruption_note(

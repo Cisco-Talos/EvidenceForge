@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowUpRight, Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, Sparkles, TriangleAlert, X, XCircle } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ArrowUpRight, Check, CheckCircle2, ChevronDown, Copy, FolderOpen, Plus, RefreshCw, ShieldCheck, TriangleAlert, X, XCircle } from "lucide-react";
 import { Dialog, DropdownMenu } from "radix-ui";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { CatalogItem, DependencyRow, ImportResult, ImportReview, Project, StudioApi, ValidationResult } from "./api";
@@ -9,7 +9,7 @@ import { scenarioNameError } from "./scenarioName";
 import { packSelection } from "./packSelection";
 import { DisplayNameField } from "./DisplayNameField";
 
-export function DependencyRows({ rows, selection, onOpen, canOpen }: { rows: DependencyRow[]; onOpen?: (row: DependencyRow) => void; canOpen?: (row: DependencyRow) => boolean; selection?: {
+export function DependencyRows({ rows, selection, onOpen, canOpen, renderActions }: { renderActions?: (row: DependencyRow) => ReactNode; rows: DependencyRow[]; onOpen?: (row: DependencyRow) => void; canOpen?: (row: DependencyRow) => boolean; selection?: {
   selected: Set<string>; requiredBy: Map<string, string[]>; busy: boolean;
   onToggle: (key: string, checked: boolean) => void; onAll: () => void; onNone: () => void;
 } }) {
@@ -25,7 +25,7 @@ export function DependencyRows({ rows, selection, onOpen, canOpen }: { rows: Dep
         {required.length > 0 && <small className="required-pack-note" id={`required-${row.key}`}>Required by {required.join(", ")}</small>}
         {row.source && <div className="dependency-path path-with-copy"><small className="path-value" title={row.source}>{row.source}</small><CopyPathButton path={row.source} label={`Copy ${row.label} source path`} onError={setCopyError} /></div>}
         {row.source_digest && row.digest && row.source_digest !== row.digest && <details><summary>Digest changes</summary><code>Original: {row.source_digest}<br />Prepared: {row.digest}</code></details>}
-      </div><span>{row.status === "available" ? "Ready" : row.status === "copy" ? "Copy" : row.status === "warning" ? "Note" : row.status === "conflict" ? "Conflict" : "Missing"}</span>
+      </div><span>{row.status === "available" ? "Ready" : row.status === "copy" ? "Copy" : row.status === "warning" ? "Note" : row.status === "conflict" ? "Conflict" : "Missing"}</span>{renderActions?.(row)}
     </div>;
   })}{copyError && <p className="field-error" role="alert">{copyError}</p>}</div>;
 }
@@ -168,7 +168,7 @@ export function ImportDialog({ kind, initialProjectId = "", projects = [], api, 
         {error && <p className="field-error" role="alert">{error}</p>}
         <div className="close-modal-actions"><button type="button" className="button-quiet" disabled={busy} onClick={() => void close()}>Cancel</button>
           {review && <button type="button" className="button-quiet" disabled={busy} onClick={() => void preview()}><RefreshCw size={15} /> Refresh review</button>}
-          <div className="scenario-split-button"><button type="submit" className="button-primary" disabled={busy || (!!nameError && (action !== "import" || !/\.(efscenario|efpack)$/i.test(path.trim()))) || (action === "import" && (!path.trim() || !!review && (kind === "pack" ? selection.blocked : !review.can_import)))}>{action === "create" && !review && !portable && <Sparkles size={16} aria-hidden="true" />}{busy ? "Working…" : portable ? "Confirm import" : review ? review.rows.some((row) => row.status === "missing" || row.status === "conflict") && kind === "scenario" ? "Import with dependency errors" : "Confirm import" : action === "create" ? "Create scenario" : kind === "scenario" ? "Import scenario" : "Review packs"}</button>
+          <div className="scenario-split-button"><button type="submit" className="button-primary" disabled={busy || (!!nameError && (action !== "import" || !/\.(efscenario|efpack)$/i.test(path.trim()))) || (action === "import" && (!path.trim() || !!review && (kind === "pack" ? selection.blocked : !review.can_import)))}>{busy ? "Working…" : portable ? "Confirm import" : review ? review.rows.some((row) => row.status === "missing" || row.status === "conflict") && kind === "scenario" ? "Import with dependency errors" : "Confirm import" : action === "create" ? "Create scenario" : kind === "scenario" ? "Import scenario" : "Review packs"}</button>
             {kind === "scenario" && !review && !portable && <DropdownMenu.Root><DropdownMenu.Trigger type="button" className="button-primary split-trigger" aria-label="Choose scenario action" disabled={busy}><ChevronDown size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="conversation-menu import-action-menu" align="end" sideOffset={5}><DropdownMenu.RadioGroup value={action} onValueChange={(value) => setAction(value as "create" | "import")}><DropdownMenu.RadioItem value="create"><span>{action === "create" && <Check size={14} />}</span>Create scenario</DropdownMenu.RadioItem><DropdownMenu.RadioItem value="import"><span>{action === "import" && <Check size={14} />}</span>Import scenario</DropdownMenu.RadioItem></DropdownMenu.RadioGroup></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}
           </div>
         </div>

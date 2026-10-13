@@ -1160,6 +1160,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/conversations/{conversation_id}/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Conversation Access */
+        get: operations["conversation_access_v1_conversations__conversation_id__access_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/codex/status": {
         parameters: {
             query?: never;
@@ -1764,6 +1781,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{job_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop Job */
+        post: operations["stop_job_v1_jobs__job_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/jobs/{job_id}/suspend": {
         parameters: {
             query?: never;
@@ -2309,6 +2343,28 @@ export interface components {
             findings?: string[];
         };
         /**
+         * CapturedScenario
+         * @description The authored identity captured by one run, independent of later catalog changes.
+         */
+        CapturedScenario: {
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Version */
+            version?: string | null;
+            /** Draft Id */
+            draft_id?: string | null;
+            /**
+             * Status
+             * @default unknown
+             * @enum {string}
+             */
+            status: "draft" | "published" | "legacy" | "unknown";
+        };
+        /**
          * CatalogItem
          * @description Indexed scenario or pack; its source file remains authoritative.
          */
@@ -2427,6 +2483,31 @@ export interface components {
             search_revision: string;
         };
         /**
+         * ChatAccess
+         * @description File-backed discussion/authoring state; never persisted as artifact authority.
+         */
+        ChatAccess: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "discussion" | "draft";
+            /**
+             * Source
+             * Format: path
+             */
+            source: string;
+            /**
+             * Directory
+             * Format: path
+             */
+            directory: string;
+            /** Version */
+            version?: string | null;
+            /** Based On Version */
+            based_on_version?: string | null;
+        };
+        /**
          * ClearJobHistoryRequest
          * @description Remove matching history entries of one job type in the current workspace.
          */
@@ -2454,7 +2535,7 @@ export interface components {
         };
         /**
          * CodexHealth
-         * @description Current health of the GUI-owned Codex app-server transport.
+         * @description Transport health and work availability of GUI-owned Codex.
          */
         CodexHealth: {
             /**
@@ -2468,6 +2549,14 @@ export interface components {
              * @default Checking Codex connection
              */
             detail: string;
+            /**
+             * Availability
+             * @default disconnected
+             * @enum {string}
+             */
+            availability: "disconnected" | "unavailable" | "ready";
+            /** Account Label */
+            account_label?: string | null;
         };
         /**
          * CodexReconnectRequest
@@ -2974,6 +3063,33 @@ export interface components {
             manifest_sha256: string;
         };
         /**
+         * ImportedBundleSummary
+         * @description Read-only bundle presentation, without changing its persisted registration.
+         */
+        ImportedBundleSummary: {
+            /** Id */
+            id?: string;
+            /**
+             * Workspace
+             * Format: path
+             */
+            workspace: string;
+            /**
+             * Root
+             * Format: path
+             */
+            root: string;
+            /** Scenario Name */
+            scenario_name: string;
+            /** Created At */
+            created_at: number;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            scenario_source?: components["schemas"]["CapturedScenario"] | null;
+        };
+        /**
          * ItemUpdate
          * @description Update virtual organization without changing source YAML.
          */
@@ -3066,6 +3182,7 @@ export interface components {
             status_message: string;
             /** Scenario */
             scenario?: string | null;
+            scenario_source?: components["schemas"]["CapturedScenario"] | null;
             /** Generation Id */
             generation_id?: string | null;
             /**
@@ -3080,6 +3197,11 @@ export interface components {
             submitted_at?: number | null;
             /** Created At */
             created_at?: number | null;
+            /**
+             * Owned Output
+             * @description Whether Studio owns this generation output directory
+             */
+            owned_output?: boolean | null;
             /** Checkpoint Hours */
             checkpoint_hours?: number | null;
             /**
@@ -4544,7 +4666,7 @@ export interface components {
             /** Removed Job Ids */
             removed_job_ids?: string[];
             /** Imported Bundles */
-            imported_bundles: components["schemas"]["ImportedBundle"][];
+            imported_bundles: components["schemas"]["ImportedBundleSummary"][];
             runtime_cleanup?: components["schemas"]["RuntimeCleanupReport"] | null;
             linux_sandbox_notice?: components["schemas"]["LinuxSandboxNotice"] | null;
             publisher_status?: components["schemas"]["PackPublisherStatus"] | null;
@@ -7591,6 +7713,39 @@ export interface operations {
             };
         };
     };
+    conversation_access_v1_conversations__conversation_id__access_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatAccess"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     codex_status_v1_codex_status_get: {
         parameters: {
             query?: never;
@@ -8781,6 +8936,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_job_v1_jobs__job_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-eforge-token"?: string | null;
+            };
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };

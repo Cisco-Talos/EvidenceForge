@@ -6,6 +6,45 @@ import type { Conversation, StudioApi, StudioEvent } from "../src/api";
 
 afterEach(() => { cleanup(); });
 
+test("published chat permits questions and displays its read-only status", async () => {
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true, account_ready: true };
+  });
+  render(<ChatView item={{ name: "Published pack", kind: "industry_pack" }}
+    conversation={{ id: "published-chat", active: false } as Conversation}
+    codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
+    subscribeEvents={() => () => undefined} onError={vi.fn()} />);
+  expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).disabled).toBe(false);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+});
+
+test("publication refreshes the same conversation's access without reopening chat", async () => {
+  let published = false;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/access")) return published ? { mode: "discussion", version: "1.0.0" } : { mode: "draft", based_on_version: "0.9.0" };
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path === "/v1/codex/pending") return [];
+    return { available: true, account_ready: true };
+  });
+  const props = {
+    conversation: { id: "retained-chat", active: false } as Conversation,
+    codexHealth: { state: "connected" as const, detail: "Connected" },
+    api: { request } as unknown as StudioApi,
+    subscribeEvents: () => () => undefined,
+    onError: vi.fn(),
+  };
+  const view = render(<ChatView {...props} item={{ name: "Scenario", kind: "scenario", path: "/draft/source/scenario.yaml" }} />);
+  await waitFor(() => expect(request.mock.calls.some(([path]) => path.endsWith("/access"))).toBe(true));
+  published = true;
+  view.rerender(<ChatView {...props} item={{ name: "Scenario", kind: "scenario", path: "/release/source/scenario.yaml" }} />);
+  expect(await screen.findByText(/Discussing published version 1.0.0 — read-only/)).toBeTruthy();
+  expect(screen.getByText(/Ask questions about this scenario/)).toBeTruthy();
+});
+
 test("failed history shows the provider error beside the accepted user message", async () => {
   const message = "The 'selected-model' model is not supported for this account.";
   const request = vi.fn(async (path: string) => {
@@ -179,6 +218,7 @@ test("a fast follow-up keeps its own user and agent messages when the start even
   ] } };
   const request = vi.fn(async (path: string, method?: string) => {
     if (path.endsWith("/history")) return history;
+    if (path.endsWith("/access")) return { mode: "discussion", version: "1.0.0" };
     if (path === "/v1/codex/status") return { available: true, models: { data: [] }, skills: { data: [] } };
     if (path === "/v1/codex/pending") return [];
     if (path.endsWith("/turns") && method === "POST") {
@@ -270,6 +310,35 @@ test("a signed-out Codex account cannot send a chat turn", async () => {
   await screen.findByText(/Sign in to Codex under Settings/);
   await userEvent.setup().type(screen.getByRole("textbox", { name: "Message to Codex" }), "Hello{enter}");
   expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
+  expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
+});
+
+test("header login and logout refresh an open chat without losing its message draft", async () => {
+  const conversation = { id: "chat-account", workspace: "/tmp/workspace", item_id: "scenario-1", thread_id: null, title: "New conversation", active: false } as Conversation;
+  let signedIn = false;
+  const request = vi.fn(async (path: string) => {
+    if (path.endsWith("/history")) return { thread: { turns: [] } };
+    if (path.endsWith("/access")) return { mode: "authoring" };
+    if (path === "/v1/codex/status") return { available: true, account_ready: signedIn, models: { data: signedIn ? [{ id: "test-model" }] : [] }, skills: { data: [] } };
+    if (path === "/v1/codex/pending") return [];
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  const props = { item: { name: "Scenario", kind: "scenario" as const }, conversation, api: { request } as unknown as StudioApi, subscribeEvents: () => () => undefined, onError: vi.fn() };
+  const { rerender } = render(<ChatView {...props} codexHealth={{ state: "connected", availability: "unavailable", account_label: "Signed out", detail: "Log in to start work" }} />);
+  await screen.findByText(/use Login in the Codex status dialog/);
+  await userEvent.setup().type(screen.getByRole("textbox", { name: "Message to Codex" }), "Keep this draft");
+  expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
+  signedIn = true;
+  rerender(<ChatView {...props} codexHealth={{ state: "connected", availability: "ready", account_label: "author@example.com", detail: "Ready for work" }} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(false));
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("Keep this draft");
+  expect(screen.getByRole("option", { name: "test-model" })).toBeTruthy();
+  signedIn = false;
+  rerender(<ChatView {...props} codexHealth={{ state: "connected", availability: "unavailable", account_label: "Signed out", detail: "Log in to start work" }} />);
+  expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(true);
+  await screen.findByText(/use Login in the Codex status dialog/);
+  expect((screen.getByRole("textbox", { name: "Message to Codex" }) as HTMLTextAreaElement).value).toBe("Keep this draft");
+  expect(request.mock.calls.filter(([path]) => path.endsWith("/history"))).toHaveLength(1);
   expect(request.mock.calls.some(([path]) => path.endsWith("/turns"))).toBe(false);
 });
 

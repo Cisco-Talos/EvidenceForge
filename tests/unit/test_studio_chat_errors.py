@@ -54,8 +54,22 @@ def test_turn_sends_catalog_default_or_explicit_choice_on_start_and_resume(
             }
         if method == "skills/list":
             return {"data": [{"skills": [{"name": "eforge-scenario", "path": "/skill/SKILL.md"}]}]}
-        if method == "thread/start":
-            return {"thread": {"id": "new-thread"}}
+        if method == "config/read":
+            return {"layers": []}
+        if method in {"thread/start", "thread/resume"}:
+            policy = {
+                "type": "workspaceWrite",
+                "writableRoots": [],
+                "networkAccess": False,
+                "excludeTmpdirEnvVar": True,
+                "excludeSlashTmp": True,
+            }
+            return {
+                "thread": {"id": "new-thread"},
+                "cwd": params["cwd"],
+                "approvalPolicy": "never",
+                "sandbox": policy,
+            }
         if method == "turn/start":
             return {"turn": {"id": "turn-1", "status": "inProgress"}}
         return {}

@@ -52,7 +52,7 @@ test("embedded Environment shows dependency rows directly without readiness or p
   expect(screen.queryByText("Dependencies ready")).toBeNull();
   expect(screen.queryByRole("button", { name: "Refresh environment" })).toBeNull();
   expect(screen.queryByRole("button", { name: /Selected packs/ })).toBeNull();
-  await userEvent.setup().click(screen.getByRole("button", { name: "Import packs" }));
+  await userEvent.setup().click(screen.getByRole("button", { name: "Import packs…" }));
   expect(onImportPacks).toHaveBeenCalledOnce();
   await waitFor(() => expect(screen.queryByText("Resolving environment…")).toBeNull());
   rerender(<Tooltip.Provider><EnvironmentView {...props} refreshVersion={1} /></Tooltip.Provider>);
@@ -143,7 +143,7 @@ test("an exact organization choice prepares a reviewable request with locked dep
   const { onPrepare } = setup();
   await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "Choose packs" }));
+  await user.click(screen.getByRole("button", { name: "Choose packs…" }));
   const dialog = screen.getByRole("dialog", { name: "Choose environment packs" });
   expect(within(dialog).getByRole("radio", { name: "One organization" })).toBeChecked();
   await user.type(within(dialog).getByRole("textbox", { name: "Search environment packs" }), "3.0.0");
@@ -163,7 +163,7 @@ test("empty industry choices are gated and failed preparation retains the select
   const { onError } = setup(undefined, onPrepare);
   await screen.findByRole("heading", { name: "Packs 2" });
   const user = userEvent.setup();
-  const trigger = screen.getByRole("button", { name: "Choose packs" });
+  const trigger = screen.getByRole("button", { name: "Choose packs…" });
   await user.click(trigger);
   const dialog = screen.getByRole("dialog");
   await user.click(within(dialog).getByRole("radio", { name: "Industry packs" }));
@@ -229,7 +229,7 @@ test("inspection sections start folded, expose counts, and expand independently 
   expect(screen.getByText("project:team:organization:office@2.0.0")).toBeVisible();
   expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   expect(screen.queryByText("organization → scenario")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Choose packs" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Choose packs…" })).toBeVisible();
   overrides.focus();
   await userEvent.setup().keyboard("{Enter}");
   expect(overrides).toHaveAttribute("aria-expanded", "true");

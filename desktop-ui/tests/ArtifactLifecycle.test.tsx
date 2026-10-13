@@ -172,20 +172,23 @@ test("publication is explicit and no release number is assigned while editing", 
 
 test("published artifacts expose export and independent drafts, and legacy upgrades are conditional", async () => {
   const { user, download } = fixture({ status: "published", publisher: "test", version: "1.0.0", parents: [], release_notes: "Immutable note" });
-  await screen.findByRole("button", { name: "Export release…" });
+  await user.click(await screen.findByRole("button", { name: "Versions and publication actions" }));
+  await screen.findByRole("menuitem", { name: "Export release…" });
   expect(screen.queryByRole("textbox", { name: "Release notes" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Publish locally…" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Export release…" }));
+  await user.click(screen.getByRole("menuitem", { name: "Export release…" }));
   expect(download).toHaveBeenCalled();
   cleanup();
   const legacy = fixture(null, true);
-  await legacy.user.click(await screen.findByRole("button", { name: "Upgrade to latest schema" }));
+  await legacy.user.click(screen.getByRole("button", { name: "Versions and publication actions" }));
+  await legacy.user.click(await screen.findByRole("menuitem", { name: "Upgrade to latest schema" }));
   expect(legacy.request).toHaveBeenCalledWith("/v1/items/draft/lifecycle", "POST", { action: "upgrade", expected_digest: "captured-digest" }, 180000);
 });
 
 test("upgrades report repairable validation findings", async () => {
   const { user, onOpen } = fixture(null, true, [{ severity: "error", message: "Missing environment users" }]);
-  await user.click(await screen.findByRole("button", { name: "Upgrade to latest schema" }));
+  await user.click(screen.getByRole("button", { name: "Versions and publication actions" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Upgrade to latest schema" }));
   expect(await screen.findByText("error: Missing environment users")).toBeVisible();
   expect(onOpen).toHaveBeenCalledWith("/workspace/release/source/scenario.yaml");
 });

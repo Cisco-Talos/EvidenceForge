@@ -39,6 +39,7 @@ def main() -> None:
     """Fail on errors, timeouts, empty collection, or skipped Windows durability tests."""
     if os.name != "nt":
         raise SystemExit("The Windows durability gate requires native Windows Python")
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     from evidenceforge.utils import windows_filesystem as filesystem
 
     artifacts = Path(".artifacts/windows-checkpoint-durability").resolve()
@@ -79,7 +80,12 @@ def main() -> None:
         str(report),
     ]
     with (artifacts / "pytest.log").open("w+b") as log:
-        process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(
+            command,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
         try:
             process.wait(timeout=1000)
         finally:

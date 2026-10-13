@@ -51,13 +51,13 @@ const snapshot: StudioSnapshot = {
     { id: "chat-2", workspace, item_id: "alpha", draft_kind: null, draft_path: null, draft_project_id: null, thread_id: "thread-2", title: "Revise timeline", model_id: null, reasoning_effort: null, active: false, needs_attention: false, connection_note: null, updated_at: 1799999900 },
   ],
   jobs: [
-    { id: "job-1", kind: "generation", status: "running", status_message: "", scenario: `${workspace}/scenarios/alpha/scenario.yaml`, output_root: `${workspace}/runs/alpha/one`, progress: { phase: "Generating", completed_hours: 2, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 2" } },
-    { id: "job-2", kind: "generation", status: "running", status_message: "", scenario: `${workspace}/scenarios/bravo/scenario.yaml`, output_root: `${workspace}/runs/bravo/two`, progress: { phase: "Generating", completed_hours: 6, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 6" } },
+    { id: "job-1", kind: "generation", owned_output: true, status: "running", status_message: "", scenario: `${workspace}/scenarios/alpha/scenario.yaml`, output_root: `${workspace}/runs/alpha/one`, progress: { phase: "Generating", completed_hours: 2, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 2" } },
+    { id: "job-2", kind: "generation", owned_output: true, status: "running", status_message: "", scenario: `${workspace}/scenarios/bravo/scenario.yaml`, output_root: `${workspace}/runs/bravo/two`, progress: { phase: "Generating", completed_hours: 6, total_hours: 8, warmup_hours: 0, storyline_event: 0, storyline_total: 0, detail: "Hour 6" } },
   ],
   imported_bundles: [],
 };
 
-vi.mock("../src/ArtifactLifecycle", () => ({ ArtifactLifecycle: () => null }));
+vi.mock("../src/ArtifactLifecycle", () => ({ ArtifactLifecycle: ({ renderActions }: { renderActions?: (actions: []) => import("react").ReactNode }) => renderActions?.([]) || null }));
 vi.mock("../src/useStudio", () => ({
   useStudio: (() => {
     const api = { bundleSizes: vi.fn(async () => ({ "job-1": 1536 })), libraryPreferences: vi.fn(async () => ({ remember_view: true })), saveLibraryView: vi.fn(async (_workspace: string, _kind: string, view: unknown) => view), download: vi.fn(async () => ({ status: "browser" })), readTextPreview: vi.fn(async () => ({ text: "preview", truncated: false, binary: false })), request: vi.fn(async (path: string, method?: string, body?: unknown) => {
@@ -126,6 +126,22 @@ async function renderExpandedApp() {
   await expandLibraryGroups();
   return view;
 }
+
+test("an artifact has the same ordered actions and availability in its library and workspace", async () => {
+  await renderExpandedApp();
+  const user = userEvent.setup();
+  const menuState = () => screen.getAllByRole("menuitem").map((entry) => ({
+    name: entry.getAttribute("aria-label"), disabled: entry.hasAttribute("data-disabled"),
+  }));
+  await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+  const libraryActions = menuState();
+  expect(screen.getByRole("menuitem", { name: "Delete scenario" })).toHaveTextContent("Finish or stop active work first");
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
+  await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+  expect(menuState()).toEqual(libraryActions);
+  expect(screen.getByRole("menuitem", { name: "Delete scenario" }).querySelector(".lucide-trash-2")).not.toBeNull();
+});
 
 test("upgrade completion uses the existing five-second notification and is consumed", async () => {
   vi.useFakeTimers();
@@ -218,7 +234,8 @@ test("library rows keep operation icons beside the title without a redundant ser
   expect(card).not.toBeNull();
   expect(card?.querySelectorAll(".scenario-states.compact .state-icon")).toHaveLength(3);
   expect(card?.querySelector(".card-footer")).toBeNull();
-  expect(within(card as HTMLElement).getByRole("button", { name: "Download bundle for Alpha" })).toBeTruthy();
+  await userEvent.setup().click(within(card as HTMLElement).getByRole("button", { name: "Options for Alpha" }));
+  expect(screen.getByRole("menuitem", { name: "Export bundle…" })).toBeVisible();
   expect(screen.queryByText("Local service")).toBeNull();
 });
 
@@ -229,7 +246,7 @@ test("a scenario can be cloned from its library menu with a new name", async () 
   try {
     await renderExpandedApp();
     await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clone scenario…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clone…" }));
     expect(screen.getByRole("dialog", { name: "Clone scenario" })).toBeTruthy();
     const clone = { ...snapshot.items[0], id: "alpha-copy", name: "Alpha-copy", path: `${workspace}/scenarios/Alpha-copy/scenario.yaml` };
     snapshot.items = [...originalItems, clone];
@@ -260,7 +277,7 @@ test("a pack clone requests a workspace publisher when one is not configured", a
     await user.click(screen.getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
     await user.click(screen.getByRole("button", { name: "Options for finance 1.0.0" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clone pack…" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clone…" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Publisher ID" })).toBeTruthy());
     expect(screen.getByRole("textbox", { name: "Pack version" })).toHaveProperty("value", "1.0.0");
     await user.type(screen.getByRole("textbox", { name: "Publisher ID" }), "local-team");
@@ -340,15 +357,17 @@ test("a move into configured projects waits for confirmation and supports Escape
     const user = userEvent.setup();
     const request = vi.mocked(useStudio().api!.request);
     await renderExpandedApp();
-    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clinic" }));
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Clinic" }));
     const dialog = screen.getByRole("dialog", { name: "Move Alpha?" });
     expect(within(dialog).getByText(/Existing runs keep their captured inputs/)).toBeTruthy();
     expect(request.mock.calls.some(([path]) => path === "/v1/items/alpha")).toBe(false);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Move Alpha?" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
-    await user.click(screen.getByRole("menuitem", { name: "Clinic" }));
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Clinic" }));
     await user.click(screen.getByRole("button", { name: "Move scenario" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "clinic", confirm_configuration_change: true }));
     expect(screen.queryByRole("dialog", { name: "Move Alpha?" })).toBeNull();
@@ -376,7 +395,7 @@ test("hidden items can be revealed and unhidden from the library", async () => {
     await user.click(screen.getByRole("button", { name: "Show hidden items" }));
     expect(screen.getByText("Bravo", { selector: ".scenario-row-title strong" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Options for Bravo" }));
-    await user.click(screen.getByRole("menuitem", { name: "Unhide" }));
+    await user.click(screen.getByRole("menuitem", { name: "Show in library" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/items/bravo", "PATCH", { hidden: false },
     ));
@@ -408,7 +427,10 @@ test("saved views store and restore library search and filters", async () => {
       "/v1/views", "POST", { name: "Review set", kind: "scenario", search: "Alpha", folder: null,
         project_id: null, ungrouped: true, show_hidden: true, sort: "name", expanded_groups: [] },
     ));
-    await user.click(within(reopened).getByRole("button", { name: "Delete saved view Ungrouped review" }));
+    await user.click(within(reopened).getByRole("button", { name: "Options for saved view Ungrouped review" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete saved view" }));
+    expect(useStudio().api?.request).not.toHaveBeenCalledWith("/v1/views/Ungrouped%20review", "DELETE");
+    await user.click(within(screen.getByRole("dialog", { name: "Delete saved view?" })).getByRole("button", { name: "Delete saved view" }));
     await waitFor(() => expect(useStudio().api?.request).toHaveBeenCalledWith(
       "/v1/views/Ungrouped%20review", "DELETE",
     ));
@@ -461,8 +483,9 @@ test("pack rows can move through the project menu and drag into the shared rail"
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Packs" }));
     await expandLibraryGroups(".pack-group");
-    await user.click(screen.getByRole("button", { name: "Move Alpha to project" }));
-    await user.click(screen.getByRole("menuitem", { name: "Training" }));
+    await user.click(screen.getByRole("button", { name: "Options for Alpha 2.0" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to project" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Training" }));
     expect(useStudio().api!.request).toHaveBeenCalledWith("/v1/items/alpha", "PATCH", { project_id: "project" });
     const data = new Map<string, string>();
     const transfer = { effectAllowed: "", dropEffect: "", types: ["application/x-evidenceforge-item"], setData: (key: string, value: string) => data.set(key, value), getData: (key: string) => data.get(key) || "" };
@@ -471,7 +494,7 @@ test("pack rows can move through the project menu and drag into the shared rail"
     fireEvent.dragOver(target, { dataTransfer: transfer });
     expect(target.className).toContain("drop-target");
     fireEvent.drop(target, { dataTransfer: transfer });
-    await waitFor(() => expect(useStudio().api!.request).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(vi.mocked(useStudio().api!.request).mock.calls.filter(([, method]) => method === "PATCH")).toHaveLength(2));
   } finally { snapshot.items = originalItems; snapshot.projects = originalProjects; }
 });
 
@@ -637,16 +660,16 @@ test("Codex status dot explains a stalled connection and reconnects with active-
   const user = userEvent.setup();
   const originalHealth = snapshot.codex_health;
   const originalConversations = snapshot.conversations;
-  snapshot.codex_health = { state: "stalled", detail: "Codex did not answer a health probe" };
+  snapshot.codex_health = { state: "stalled", availability: "unavailable", detail: "Codex did not answer a health probe" };
   snapshot.conversations = [{ ...originalConversations[0], active: true }, originalConversations[1]];
   try {
     await renderExpandedApp();
-    const dot = screen.getByRole("button", { name: /Codex stalled: Codex did not answer/ });
+    const dot = screen.getByRole("button", { name: /Codex connected, unavailable for work: Codex did not answer/ });
     expect(dot.querySelector(".codex-indicator-dot")).toBeTruthy();
     await user.hover(dot);
     expect(await screen.findByText("Codex did not answer a health probe")).toBeTruthy();
     await user.click(dot);
-    const dialog = screen.getByRole("dialog", { name: "Reconnect Codex" });
+    const dialog = screen.getByRole("dialog", { name: "Codex status" });
     expect(within(dialog).getByText(/interrupt 1 active turn/)).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Reconnect" }));
     expect(useStudio().api?.request).toHaveBeenCalledWith(
@@ -735,7 +758,7 @@ test("conversation menu exposes rename and delete actions", async () => {
   await user.click(screen.getByRole("button", { name: "Open scenario Alpha" }));
   await user.click(screen.getByRole("button", { name: "Continue", exact: true }));
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
-  await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+  await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
   const name = screen.getByRole("textbox", { name: "Conversation name" });
   await user.clear(name);
   await user.type(name, "Credential timeline");
@@ -744,7 +767,7 @@ test("conversation menu exposes rename and delete actions", async () => {
     "/v1/conversations/chat-1", "PATCH", { title: "Credential timeline" },
   );
   await user.click(screen.getByRole("button", { name: "Options for Initial design" }));
-  await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+  await user.click(screen.getByRole("menuitem", { name: "Delete conversation" }));
   await user.click(screen.getByRole("button", { name: "Delete conversation" }));
   expect(useStudio().api?.request).toHaveBeenCalledWith("/v1/conversations/chat-1", "DELETE");
 });
@@ -759,7 +782,8 @@ test("bundle picker downloads the selected completed run", async () => {
   ];
   try {
     await renderExpandedApp();
-    await user.click(screen.getByRole("button", { name: "Download bundle for Alpha" }));
+    await user.click(screen.getByRole("button", { name: "Options for Alpha" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export bundle…" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Run to download" }), "run-1");
     await user.click(screen.getByRole("button", { name: "Download ZIP" }));
     await waitFor(() => expect(useStudio().api?.download).toHaveBeenCalledWith(
@@ -814,16 +838,17 @@ test("stopped run can regenerate, preview files, and confirm deletion", async ()
   await user.click(screen.getByRole("button", { name: "View files" }));
   expect(screen.getByRole("dialog", { name: "Bundle files" })).toBeTruthy();
   await waitFor(() => expect(screen.getByText("partial output")).toBeTruthy());
-  await user.click(screen.getByRole("button", { name: /partial.log/ }));
+  await user.click(screen.getByRole("button", { name: "partial.log42 B" }));
   expect(readTextPreview).toHaveBeenCalledWith(`/v1/jobs/${job.id}/files/partial.log`);
   await user.click(screen.getByRole("button", { name: "Download file" }));
   expect(download).toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Close bundle files" }));
-  await user.click(screen.getByRole("button", { name: "Regenerate" }));
+  await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
+  await user.click(screen.getByRole("menuitem", { name: "Regenerate" }));
   expect(request).toHaveBeenCalledWith(`/v1/jobs/${job.id}/regenerate`, "POST");
-  await user.click(screen.getByRole("button", { name: "Delete" }));
+  await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
-  const dialog = screen.getByRole("dialog", { name: "Delete bundle" });
+  const dialog = screen.getByRole("dialog", { name: "Delete this bundle?" });
   expect(dialog).toBeTruthy();
   await user.click(within(dialog).getByRole("button", { name: "Delete bundle" }));
   expect(request).toHaveBeenCalledWith(`/v1/jobs/${job.id}/incomplete-bundle`, "DELETE");
@@ -838,11 +863,12 @@ test("completed run exposes ZIP export and removes its bundle after confirmation
   const job = { ...snapshot.jobs[0], status: "completed", output_root: "/tmp/complete" };
   const { container } = render(<JobCard job={job} name="Alpha" api={{ request, downloadBundle } as unknown as StudioApi} onError={vi.fn()} onChanged={onChanged} />);
   await user.click(container.querySelector("summary")!);
-  await user.click(screen.getByRole("button", { name: "Download ZIP" }));
+  await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
+  await user.click(screen.getByRole("menuitem", { name: "Export ZIP…" }));
   expect(downloadBundle).toHaveBeenCalledWith(job.id, "Alpha-job-1.zip", expect.any(Function));
-  await user.click(screen.getByRole("button", { name: "Delete" }));
+  await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
-  await user.click(within(screen.getByRole("dialog", { name: "Delete bundle" })).getByRole("button", { name: "Delete bundle" }));
+  await user.click(within(screen.getByRole("dialog", { name: "Delete this bundle?" })).getByRole("button", { name: "Delete bundle" }));
   expect(request).toHaveBeenCalledWith(`/v1/jobs/${job.id}/bundle`, "DELETE");
   expect(onChanged).toHaveBeenCalledTimes(1);
 });
@@ -872,11 +898,12 @@ test("job rows stay newest-first in submission order and sections can collapse",
     await userEvent.setup().click(generations.querySelector("summary")!);
     expect(generations.open).toBe(false);
     await userEvent.setup().click(container.querySelector("#job-eval-1 > summary")!);
-    await userEvent.setup().click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Options for evaluation eval-1" }));
+    await userEvent.setup().click(screen.getByRole("menuitem", { name: "Open generation" }));
     expect(generations.open).toBe(true);
     expect((container.querySelector("#job-job-1") as HTMLDetailsElement).open).toBe(true);
     expect(container.querySelector("#job-job-1")?.classList.contains("source-highlight")).toBe(true);
-    expect(document.activeElement).toBe(container.querySelector("#job-job-1 > summary"));
+    await waitFor(() => expect(document.activeElement).toBe(container.querySelector("#job-job-1 > summary")));
   } finally {
     snapshot.jobs = originalJobs;
   }
@@ -928,6 +955,83 @@ test("bundle groups and their owned/imported rows are newest-first without movin
   } finally { snapshot.jobs = originalJobs; snapshot.imported_bundles = originalImports; }
 });
 
+for (const kind of ["industry_pack", "organization_pack"] as const) {
+  test(`${kind} keeps validation and asset commands in their own collapsed section menus`, async () => {
+    const originalItems = snapshot.items;
+    const originalGroups = snapshot.artifact_groups;
+    const request = vi.mocked(useStudio().api!.request);
+    const originalRequest = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "section-pack", kind, name: "Sector", version: "Draft", publisher: "team", pack_source: "workspace" as const };
+    snapshot.items = [...originalItems, pack];
+    snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    request.mockImplementation(async (...args: Parameters<StudioApi["request"]>) => args[0] === `/v1/packs/${pack.id}/review`
+      ? { valid: true, reference: "team:industry:sector@draft", digest: "validated-pack", dependencies: [], exports: {} }
+      : originalRequest(...args));
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Packs", exact: true }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Open Sector Draft" }));
+      const validation = screen.getByRole("region", { name: "Validation & release", exact: true });
+      const assets = screen.getByRole("region", { name: "Assets", exact: true });
+      expect(within(validation).getByRole("button", { name: "Validate", exact: true })).toBeVisible();
+      expect(within(validation).getByRole("button", { name: "Validation & release", exact: true })).toHaveAttribute("aria-expanded", "false");
+      await user.click(within(validation).getByRole("button", { name: "Validation and release actions" }));
+      expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["Validate", "Fix in chat", "Export release…"]);
+      expect(screen.queryByRole("menuitem", { name: /Add asset|View assets|New conversation|Move to project|Clone|Delete version/ })).toBeNull();
+      expect(screen.getByRole("menuitem", { name: "Export release…" })).toHaveAttribute("data-disabled");
+      await user.keyboard("{Escape}");
+      await user.click(within(assets).getByRole("button", { name: "Assets section actions" }));
+      expect(screen.getAllByRole("menuitem").map((node) => node.getAttribute("aria-label"))).toEqual(["View assets", "Add asset…"]);
+      await user.keyboard("{Escape}");
+      await user.click(within(validation).getByRole("button", { name: "Validate", exact: true }));
+      await waitFor(() => expect(request).toHaveBeenCalledWith(`/v1/items/${pack.id}/lifecycle`, "POST", { action: "validate", expected_digest: "captured-title" }, 180000));
+      expect(within(validation).getByRole("button", { name: "Validation & release", exact: true })).toHaveAttribute("aria-expanded", "true");
+      expect(await within(validation).findByText("Pack and locked dependencies passed validation.")).toBeVisible();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(within(validation).getAllByRole("button", { name: "Validate", exact: true })).toHaveLength(1);
+      expect(within(validation).getAllByRole("button", { name: "Validation and release actions" })).toHaveLength(1);
+    } finally { request.mockImplementation(originalRequest); snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+  });
+
+  test(`${kind} refreshes inline findings when validation fails`, async () => {
+    const originalItems = snapshot.items;
+    const originalGroups = snapshot.artifact_groups;
+    const request = vi.mocked(useStudio().api!.request);
+    const originalRequest = request.getMockImplementation()!;
+    const pack = { ...originalItems[0], id: "invalid-pack", kind, name: "Sector", version: "Draft", pack_source: "workspace" as const };
+    snapshot.items = [...originalItems, pack];
+    snapshot.artifact_groups = { ...originalGroups, [pack.id]: { key: "sector-family", name: "Sector", publisher: "team", published_version: null } };
+    let checked = false;
+    request.mockImplementation(async (...args: Parameters<StudioApi["request"]>) => {
+      if (args[0] === `/v1/items/${pack.id}/lifecycle` && args[1] === "POST") {
+        checked = true;
+        throw new StudioApiError(409, "Missing locked dependency");
+      }
+      if (args[0] === `/v1/packs/${pack.id}/review`) return checked
+        ? { valid: false, error: "Missing locked dependency" }
+        : { valid: true, reference: "team:industry:sector@draft", digest: "previous-review", dependencies: [], exports: {} };
+      return originalRequest(...args);
+    });
+    try {
+      await renderExpandedApp();
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Packs", exact: true }));
+      await expandLibraryGroups(".pack-group");
+      await user.click(screen.getByRole("button", { name: "Open Sector Draft" }));
+      const validation = screen.getByRole("region", { name: "Validation & release", exact: true });
+      await user.click(within(validation).getByRole("button", { name: "Validation & release", exact: true }));
+      await within(validation).findByText("Pack and locked dependencies passed validation.");
+      await user.click(within(validation).getByRole("button", { name: "Validate", exact: true }));
+      expect(await within(validation).findByText("Missing locked dependency")).toBeVisible();
+      expect(within(validation).getByRole("button", { name: "Fix in chat" })).toBeEnabled();
+      expect(within(validation).queryByText("Pack and locked dependencies passed validation.")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    } finally { request.mockImplementation(originalRequest); snapshot.items = originalItems; snapshot.artifact_groups = originalGroups; }
+  });
+}
+
 test("bundle library groups runs by scenario and filters their status", async () => {
   const originalJobs = snapshot.jobs;
   snapshot.jobs = [
@@ -969,11 +1073,12 @@ test("imported bundles appear beside Studio runs with read-only management", asy
     expect(screen.getByText("3.0 MB", { selector: ".bundle-size" })).toBeTruthy();
     await user.click(screen.getByText("cli-output"));
     expect(screen.getByText(/Studio did not create this bundle/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Remove from Studio" }));
-    const dialog = screen.getByRole("dialog", { name: "Remove imported bundle" });
+    await user.click(screen.getByRole("button", { name: "Bundle options for external-1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from Studio" }));
+    const dialog = screen.getByRole("dialog", { name: "Remove from Studio?" });
     await user.click(within(dialog).getByRole("button", { name: "Remove from Studio" }));
     await waitFor(() => expect(request).toHaveBeenCalledWith("/v1/bundles/external-1", "DELETE"));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove imported bundle" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove from Studio?" })).toBeNull());
   } finally {
     snapshot.imported_bundles = original;
   }
@@ -1159,12 +1264,14 @@ test("Markdown files render safely with a source toggle and XML logs highlight t
   expect(screen.getByRole("table")).toBeTruthy();
   expect(container.querySelector("script")).toBeNull();
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "View source" }));
+  await user.click(screen.getAllByRole("button", { name: "Actions for file GROUND_TRUTH.md" }).at(-1)!);
+  await user.click(screen.getByRole("menuitem", { name: "View source" }));
   expect(screen.queryByRole("heading", { name: "Investigation" })).toBeNull();
   expect(screen.getByText("# Investigation")).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: "Rendered view" }));
+  await user.click(screen.getAllByRole("button", { name: "Actions for file GROUND_TRUTH.md" }).at(-1)!);
+  await user.click(screen.getByRole("menuitem", { name: "Rendered view" }));
   expect(screen.getByRole("heading", { name: "Investigation" })).toBeTruthy();
-  await user.click(screen.getByRole("button", { name: /windows.log/ }));
+  await user.click(within(screen.getByRole("navigation", { name: "Bundle file list" })).getByRole("button", { name: /^windows.log/ }));
   await waitFor(() => expect(container.querySelector(".language-xml")).toBeTruthy());
   expect(screen.getByText("<Event", { selector: ".syntax-key" })).toBeTruthy();
   expect(screen.getByText('"User"', { selector: ".syntax-string" })).toBeTruthy();
@@ -1183,8 +1290,10 @@ test("Job center removes finished history entries while preserving scenario runs
     const finished = container.querySelector("#job-job-1")!;
     const paused = container.querySelector("#job-job-2")!;
     expect(within(paused as HTMLElement).queryByRole("button", { name: "Delete job" })).toBeNull();
-    await user.click(within(finished as HTMLElement).getByRole("button", { name: "Delete" }));
-    await user.click(screen.getByRole("menuitem", { name: /Delete job/ }));
+    await user.click(within(finished as HTMLElement).getByRole("button", { name: "Bundle options for job-1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from history" }));
+    expect(request).not.toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
+    await user.click(within(screen.getByRole("dialog", { name: "Remove from history?" })).getByRole("button", { name: "Remove from history" }));
     expect(request).toHaveBeenCalledWith("/v1/jobs/job-1/history", "DELETE");
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
@@ -1212,13 +1321,16 @@ test("Clear Completed targets one job type and removed source runs can still be 
     await user.click(screen.getByRole("button", { name: /Job center/ }));
     expect(container.querySelector("#job-job-1")).toBeNull();
     expect(screen.getByRole("button", { name: "Clear completed generations" }).hasAttribute("disabled")).toBe(true);
-    await user.click(screen.getByRole("button", { name: "Jump to generation #job-1" }));
+    await user.click(screen.getByRole("button", { name: "Options for evaluation evaluation-1" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open generation" }));
     await waitFor(() => expect(container.querySelector("#job-job-1")?.hasAttribute("open")).toBe(true));
     await user.click(screen.getByRole("button", { name: "Clear completed evaluations" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Clear completed evaluations?" })).getByRole("button", { name: "Clear completed" }));
     expect(request).toHaveBeenCalledWith("/v1/jobs/history/clear-completed", "POST", { kind: "evaluation" });
     await waitFor(() => expect(container.querySelector("#job-evaluation-1")).toBeNull());
     expect(container.querySelector("#job-job-2")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Clear completed generations" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Clear completed generations?" })).getByRole("button", { name: "Clear completed" }));
     await waitFor(() => expect(container.querySelector("#job-job-1")).toBeNull());
   } finally { snapshot.jobs = originalJobs; snapshot.removed_job_ids = originalRemoved; }
 });
@@ -1243,7 +1355,7 @@ test.each([false, true])("View YAML uses the built-in viewer in browser and nati
     await waitFor(() => expect(within(viewer).getByLabelText("Preview of scenario.yaml").textContent).toContain("name: Alpha"));
     expect(readTextPreview).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml");
     expect(openPath).not.toHaveBeenCalled();
-    await user.click(within(viewer).getByRole("button", { name: native ? "Save a copy" : "Download file" }));
+    await user.click(within(viewer).getByRole("button", { name: native ? "Save a copy…" : "Download file" }));
     expect(useStudio().api!.download).toHaveBeenCalledWith("/v1/items/alpha/files/scenario.yaml", "scenario.yaml", expect.any(Function));
     await user.click(within(viewer).getByRole("button", { name: "Close source yaml" }));
     expect(screen.queryByRole("dialog", { name: "Source YAML" })).toBeNull();
@@ -1288,22 +1400,24 @@ test("Delete menu keeps history removal and bundle deletion together with distin
   const { container } = render(<JobCard job={{ ...snapshot.jobs[0], status: "completed" }} api={{ request } as unknown as StudioApi} onDeleteHistory={onDeleteHistory} onError={vi.fn()} onChanged={vi.fn(async () => undefined)} />);
   await user.click(container.querySelector("summary")!);
   expect(screen.queryByRole("button", { name: "Delete job" })).toBeNull();
-  const trigger = screen.getByRole("button", { name: "Delete" });
+  const trigger = screen.getByRole("button", { name: "Bundle options for job-1" });
   trigger.focus();
   await user.keyboard("{Enter}");
-  expect(screen.getByRole("menuitem", { name: /Delete job/ })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: /Delete bundle/ })).toBeTruthy();
   await user.keyboard("{Escape}");
   expect(document.activeElement).toBe(trigger);
   expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
   await user.click(trigger);
   await user.click(screen.getByRole("menuitem", { name: /Delete bundle/ }));
-  expect(screen.getByRole("dialog", { name: "Delete bundle" })).toBeTruthy();
+  expect(screen.getByRole("dialog", { name: "Delete this bundle?" })).toBeTruthy();
   expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
   expect(onDeleteHistory).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Cancel" }));
   await user.click(trigger);
-  await user.click(screen.getByRole("menuitem", { name: /Delete job/ }));
+  await user.click(screen.getByRole("menuitem", { name: "Remove from history" }));
+  expect(onDeleteHistory).not.toHaveBeenCalled();
+  await user.click(within(screen.getByRole("dialog", { name: "Remove from history?" })).getByRole("button", { name: "Remove from history" }));
   expect(onDeleteHistory).toHaveBeenCalledOnce();
   expect(request.mock.calls.filter((call) => !String(call[0]).endsWith("/diagnostics"))).toHaveLength(0);
 });
@@ -1314,12 +1428,14 @@ test("evaluations only offer history deletion and active generations offer neith
   const callbacks = { onError: vi.fn(), onChanged: vi.fn(async () => undefined), onDeleteHistory: vi.fn(async () => undefined) };
   const { container, unmount } = render(<JobCard job={{ id: "eval", kind: "evaluation", status: "completed", output_root: "/tmp/run" }} api={api} {...callbacks} />);
   await user.click(container.querySelector("summary")!);
-  await user.click(screen.getByRole("button", { name: "Delete" }));
-  expect(screen.getByRole("menuitem", { name: /Delete job/ })).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Options for evaluation eval" }));
+  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toBeTruthy();
   expect(screen.queryByRole("menuitem", { name: /Delete bundle/ })).toBeNull();
   unmount();
   render(<JobCard job={snapshot.jobs[0]} api={api} {...callbacks} />);
-  expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Bundle options for job-1" }));
+  expect(screen.getByRole("menuitem", { name: "Remove from history" })).toHaveAttribute("data-disabled");
+  expect(screen.getByRole("menuitem", { name: "Delete bundle" })).toHaveAttribute("data-disabled");
 });
 
 test("Packs combines both types in stable sections, retains filters, and opens the exact pack", async () => {
@@ -1511,7 +1627,7 @@ test("workspace title and actions open the same Properties popup", async () => {
   expect(await within(dialog).findByRole("textbox", { name: "Display name" })).toHaveValue("");
   expect(within(dialog).getByRole("navigation", { name: "Properties sections" })).toBeVisible();
   await user.click(within(dialog).getByRole("button", { name: "Close properties" }));
-  await user.click(screen.getAllByRole("button", { name: "Alpha actions" })[0]);
+  await user.click(screen.getAllByRole("button", { name: "Options for Alpha" })[0]);
   await user.click(screen.getByRole("menuitem", { name: "Properties…" }));
   expect(await screen.findByRole("textbox", { name: "Display name" })).toHaveValue("");
 });
@@ -2073,10 +2189,10 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       await user.click(within(screen.getByRole("navigation", { name: "Main navigation" })).getByRole("button", { name: "Packs" }));
       await expandLibraryGroups(".pack-group");
       await user.click(screen.getByRole("button", { name: "Options for office 2.0.0" }));
-      expect(screen.queryByRole("menuitem", { name: "Delete version…" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Delete version" })).not.toBeInTheDocument();
       await user.keyboard("{Escape}");
       await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
-      await user.click(screen.getByRole("menuitem", { name: "Delete version…" }));
+      await user.click(screen.getByRole("menuitem", { name: "Delete version" }));
       const dialog = await screen.findByRole("dialog", { name: "Delete office 1.0.0?" });
       await user.click(within(dialog).getByText("Affected items (1)"));
       expect(within(dialog).getByText("practice")).toBeVisible();
@@ -2085,8 +2201,8 @@ for (const kind of ["industry_pack", "organization_pack"] as const) {
       expect(request.mock.calls.some(([, method]) => method === "POST")).toBe(false);
       await user.click(screen.getByRole("button", { name: "Open office 1.0.0" }));
       expect(screen.getByRole("button", { name: "Validation & release" })).toBeVisible();
-      await user.click(screen.getByRole("button", { name: "office actions" }));
-      expect(screen.getByRole("menuitem", { name: "Delete version…" })).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Options for office 1.0.0" }));
+      expect(screen.getByRole("menuitem", { name: "Delete version" })).toBeVisible();
     } finally { snapshot.items = originalItems; request.mockImplementation(implementation); }
   });
 }
