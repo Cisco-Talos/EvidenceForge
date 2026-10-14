@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a3 recovery authorized with corrected source; stable target 2.2.0
+**Status:** 2.2.0a3 tag recovery rejected by automatic approval review; fixed source ready; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-14
 
@@ -83,9 +83,9 @@ without turning `TODO.md` back into a high-conflict work journal.
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
 - The reviewed `2.2.0a3` snapshot was tagged, but release CI found a missing-project-pack
   diagnostic regression and blocked publication. The correction is verified and pushed. The user
-  directed recovery under the same unpublished a3 version; replace only that failed tag under this
-  explicit exception and run every release, native recovery, installer and uploaded-byte verification
-  gate on the corrected snapshot. See the
+  requested the same unpublished a3 version, but automatic approval review rejected changing its
+  tag even with user approval. The tag remains on its original commit; a new alpha is required to
+  publish corrected source through every release and installer verification gate. See the
   [a3 release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
