@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a4 release authorized and in preparation; stable target 2.2.0
+**Status:** 2.2.0a4 prerelease published and verified; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-14
 
@@ -81,9 +81,9 @@ without turning `TODO.md` back into a high-conflict work journal.
   drafts and reading positions, and an expandable conversation layout. Chat file-action shortcuts
   were removed at the user's request. Search and broader status descriptions remain deferred; see the
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
-- The user authorized `2.2.0a4` with the verified missing-project-pack diagnostic correction.
-  Preserve the failed, unpublished a3 tag and run every release, native recovery, installer and
-  uploaded-byte verification gate on the new snapshot. See the
+- Published and verified `2.2.0a4` with the missing-project-pack diagnostic correction.
+  All 24 release jobs passed, including native recovery, 74.04% coverage and three installers
+  with verified public checksums. The failed, unpublished a3 tag is preserved. See the
   [alpha release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
