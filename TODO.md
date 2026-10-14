@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a3 release authorized and in progress; stable target 2.2.0
+**Status:** 2.2.0a3 publication blocked by release CI; corrective source verified; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-14
 
@@ -81,9 +81,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   drafts and reading positions, and an expandable conversation layout. Chat file-action shortcuts
   were removed at the user's request. Search and broader status descriptions remain deferred; see the
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
-- The user reviewed the `2.2.0a3` README and CHANGELOG changes and authorized publication.
-  Publish the prepared dev snapshot through every automated release,
-  native recovery, installer and uploaded-byte verification gate. See the
+- The reviewed `2.2.0a3` snapshot was tagged, but release CI found a missing-project-pack
+  diagnostic regression and blocked publication. The source correction is verified locally;
+  publishing corrected source requires the next alpha number because the existing tag is immutable.
+  Retain every release, native recovery, installer and uploaded-byte verification gate. See the
   [a3 release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal

@@ -1322,7 +1322,7 @@ class PackRepository:
                     / storage_name(reference.name)
                     / str(reference.version)
                 )
-                if canonical.exists() or not root.is_dir():
+                if canonical.exists() or canonical.is_symlink():
                     published = resolve_reference(
                         f"project:{reference.publisher}:{expected_type}:{reference.name}@{reference.version}",
                         self.project_root,

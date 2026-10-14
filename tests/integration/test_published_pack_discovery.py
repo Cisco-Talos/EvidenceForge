@@ -67,6 +67,23 @@ def _files(root: Path) -> dict[str, bytes]:
 
 
 @pytest.mark.parametrize("kind", ["industry", "organization"])
+def test_missing_project_pack_preserves_not_found_diagnostic(project: Path, kind: PackType) -> None:
+    before = _files(project)
+    reference = PackReference(
+        source="project", publisher="testing", name="missing", version="1.0.0"
+    )
+
+    with pytest.raises(PackError) as missing:
+        PackRepository(project).resolve(reference, expected_type=kind)
+
+    expected_root = project / ".eforge/packs/testing" / kind / "missing/1.0.0"
+    assert (
+        str(missing.value) == f"project {kind} pack missing@1.0.0 was not found at {expected_root}"
+    )
+    assert _files(project) == before
+
+
+@pytest.mark.parametrize("kind", ["industry", "organization"])
 def test_published_pack_is_listed_shown_and_discovered_without_writes(
     project: Path, kind: PackType
 ) -> None:
@@ -203,6 +220,25 @@ def test_identical_project_and_published_copies_have_one_authoritative_entry(pro
         expected_type="industry",
     )
     assert selected.root == release.parent
+
+
+def test_dangling_publication_link_cannot_fall_back_to_a_legacy_copy(project: Path) -> None:
+    _draft, release = _publish(project, "industry")
+    _legacy_copy(project, release)
+    version = release.parent.parent
+    shutil.rmtree(version)
+    try:
+        version.symlink_to(project / "missing-release", target_is_directory=True)
+    except OSError:
+        pytest.skip("Native symlink creation is unavailable")
+
+    with pytest.raises(PackError, match="symbolic links"):
+        PackRepository(project).resolve(
+            PackReference(
+                source="project", publisher="testing", name="talos-enterprises", version="1.0.0"
+            ),
+            expected_type="industry",
+        )
 
 
 def test_conflicting_project_identity_is_reported_and_cannot_resolve(project: Path) -> None:

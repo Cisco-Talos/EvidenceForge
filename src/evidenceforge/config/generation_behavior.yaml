@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 164
+current_revision: 165
 history_start_revision: 1
-behavior_surface_sha256: 0aa7df4dc07f6dfb84b03740bfc114bcf4c7ef121e7b103967df4e3d72ac3941
+behavior_surface_sha256: e25cf1529ae25f2d99453e7ccf8ee8213e213116b6208cfedfa8ba77ea11da88
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1641,3 +1641,11 @@ changes:
       - pack-dependency-resolution
     formats: []
     summary: Includes verified managed Schema 3 packs in project discovery and dependency locking, deduplicates identical identities and rejects conflicting contents. Equivalent resolved inputs and deterministic rendering are unchanged.
+  - revision: 165
+    id: preserve-missing-project-pack-diagnostics
+    impact: none
+    domains:
+      - pack-discovery
+      - pack-resolution-diagnostics
+    formats: []
+    summary: Retains not-found diagnostics when neither project repository has a pack and rejects dangling publication links before legacy fallback. Equivalent resolved inputs and deterministic rendering are unchanged.
