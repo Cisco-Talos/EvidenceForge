@@ -1,8 +1,8 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a2 published from dev; next stable release targets 2.2.0
+**Status:** 2.2.0a3 release authorized and in progress; stable target 2.2.0
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-13
+**Last Roadmap Review:** 2026-10-14
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -72,15 +72,19 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Include published Schema 3 industry/organization packs in CLI discovery.
-  Studio publication uses `.eforge/artifacts/releases`, which `pack list` currently omits even
-  though exact project references resolve there. Scenario chat therefore reports existing
-  published packs as missing. See the
-  [pack discovery investigation](docs/worklog/2026-10-13-studio-pack-discovery.md).
-- [ ] **P1** Improve Studio chat: reliable Stop, Queue/Steer follow-ups, an ordered commentary
-  and tool timeline, timers, clarification cards, result links, copy controls, saved drafts and
-  reading positions, and an expandable conversation layout. See the
+- [x] **P1** Include verified published Schema 3 industry/organization packs in CLI discovery
+  and dependency locking, with exact references, isolated integrity findings and consistent
+  duplicate handling. Generation behavior revision 164 covers the composition change. See the
+  [pack discovery worklog](docs/worklog/2026-10-13-studio-pack-discovery.md).
+- [x] **P1** Improve Studio chat with reliable Stop, Queue/Steer follow-ups, an ordered commentary
+  and tool timeline, timers, clarification cards, grouped file summaries, copy controls, saved
+  drafts and reading positions, and an expandable conversation layout. Chat file-action shortcuts
+  were removed at the user's request. Search and broader status descriptions remain deferred; see the
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
+- The user reviewed the `2.2.0a3` README and CHANGELOG changes and authorized publication.
+  Publish the prepared dev snapshot through every automated release,
+  native recovery, installer and uploaded-byte verification gate. See the
+  [a3 release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
   behavior. The agreed requirements, implementation and validation are recorded in the

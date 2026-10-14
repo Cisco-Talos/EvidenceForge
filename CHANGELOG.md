@@ -4,6 +4,60 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v2.2.0a3 (2026-10-14)
+
+Third alpha of the planned 2.2.0 release. Improves Studio chat control, progress visibility,
+file summaries and discovery of Studio-published environment packs.
+
+**Studio conversations**
+
+- Fix Stop and stop-on-quit requests by retaining the actual Codex turn ID. Add Queue and Steer
+  follow-ups with a configurable default, an accessible send menu and Cmd/Ctrl+Enter for the
+  opposite mode. Queues retain separate editable messages, pause after interruption, failure,
+  uncertain delivery or leaving the workspace, and require explicit resumption. Stable client
+  IDs and serialized dispatch prevent duplicate submissions (`bca61b03`).
+- Render commentary, partial answers and tools chronologically, retaining interim text after
+  the final answer. Add readable expandable tool entries, live "Working for" and completed
+  "Worked for" durations, bottom following with Jump to latest, saved drafts and anchored
+  reading positions, and message/code copying (`bca61b03`).
+- Add structured clarification cards with independent answers, option descriptions and a
+  UI-provided Other text field. Retire resolved requests and preserve secret-input masking.
+  Collapse the conversation list completely and remove fixed message-width caps while keeping
+  compact short messages and proportional bubble widths (`bca61b03`).
+- Group affected files by created, edited, removed and renamed/moved operations. Show relative
+  paths, rename origins, recorded line additions/removals and explicitly current file sizes.
+  Preserve completed deletions and recorded patches without inferring changes from answer prose.
+  Remove Open source, View changes and Validate shortcuts from chat; workspace actions and copy
+  controls remain available (`52464e46`).
+- Append database version 3 and settings version 2 through Studio's reviewed upgrade,
+  verified-backup and recovery flow. Preserve released migration declarations and source files;
+  chat UI state stays in Studio's private storage (`bca61b03`).
+
+**Published pack discovery**
+
+- Include verified Schema 3 industry and organization publications in CLI inventory, exposing
+  their exact references, display names, dependencies and resolvability. Align discovery and
+  dependency locking with exact-reference lookup, preserving legacy imported-release hydration.
+  Deduplicate identical project identities, reject conflicting contents and report damaged
+  entries individually while retaining valid peers (`bca61b03`).
+- Record the composition change as generation behavior revision 164 with its matching surface
+  digest, fixing the generation guard failure. Equivalent resolved-input rendering remains
+  unchanged (`bca61b03`).
+
+**Repository and release maintenance**
+
+- Untrack project-local EvidenceForge state and prevent state-cleanup-only changes from
+  publishing a release (`d29874a6`). Make the iteration benchmark self-contained and independent
+  of local project packs and configuration (`5a775300`).
+- Record the verified 2.2.0a2 publication and its installer checksums (`38f49f87`).
+
+**Alpha availability**
+
+Installers target Apple Silicon macOS and Ubuntu 24.04/glibc 2.39 on ARM64/x86_64. Intel macOS
+and Windows installers are not included. The macOS app remains unsigned and not notarized;
+Codex is installed separately for authoring. Other Linux distributions, clean-machine deployment
+and separate OS-account acceptance remain outstanding.
+
 ## v2.2.0a2 (2026-10-12)
 
 Second alpha of the planned 2.2.0 release. Adds native Ubuntu ARM64/x86_64 AppImages alongside

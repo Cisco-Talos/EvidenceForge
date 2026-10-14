@@ -68,18 +68,36 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
-## What's New in 2.2.0a1 (Alpha)
+## What's New in 2.2.0a3 (Alpha)
+
+The third alpha improves Studio conversations and discovery of published environment packs.
+
+- **Queue or steer follow-ups:** Queue messages while Codex works, or send guidance to the
+  active turn. Choose the default in Settings; Cmd+Enter on macOS or Ctrl+Enter elsewhere uses
+  the other mode. Stop now targets the active turn correctly.
+- **Clearer progress:** Commentary stays interleaved with readable tool entries. Live
+  "Working for" and completed "Worked for" counters show elapsed time, and the chat follows
+  new output until you scroll up to read.
+- **More comfortable conversations:** Preserve composer drafts and reading positions, copy
+  messages and code, collapse the conversation list, and let longer messages use wider windows.
+- **Questions and file summaries:** Answer structured clarification cards with suggested choices
+  or your own text. See files grouped by creation, editing, removal and renaming, with recorded
+  line changes and current sizes.
+- **Published pack discovery:** Scenario authoring can find Studio-published industry and
+  organization packs through the CLI inventory and use their exact references.
+
+### Studio and portable releases
 
 - **EvidenceForge Studio:** A desktop workspace for authoring scenarios and packs,
   generating logs, and reviewing evaluations.
-- **Standalone macOS app:** An Apple Silicon DMG bundles Python, the engine,
-  resources, and skills. Codex-assisted authoring requires you to install Codex
-  yourself; it is not included with EvidenceForge.
+- **Standalone installers:** An Apple Silicon macOS DMG and Ubuntu 24.04 ARM64/x86_64
+  AppImages bundle Python, the engine, resources, and skills. Codex-assisted authoring
+  requires a separate Codex installation.
 - **Portable authored releases:** Version, freeze, export, and share scenarios
   and packs with their dependencies and release history.
 
-Existing CLI and chat-skill workflows are still supported.
-EvidenceForge Studio is a supplement, not a replacement.
+The CLI and native agent-skill workflows remain supported. Older Studio state uses a reviewed
+upgrade with a verified backup and recovery support; scenario and pack source files are unchanged.
 
 See the [Studio guide](docs/studio.md) for installation, workflows, and backup/restore.
 
