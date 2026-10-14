@@ -4,10 +4,11 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
-## v2.2.0a3 (2026-10-14)
+## v2.2.0a4 (2026-10-14)
 
-Third alpha of the planned 2.2.0 release. Improves Studio chat control, progress visibility,
-file summaries and discovery of Studio-published environment packs.
+Fourth alpha of the planned 2.2.0 release. Includes the Studio chat, file-summary and published
+pack-discovery improvements prepared for a3, plus the missing-pack diagnostic correction that
+unblocks release CI. The a3 snapshot was not published.
 
 **Studio conversations**
 
@@ -54,6 +55,8 @@ file summaries and discovery of Studio-published environment packs.
   publishing a release (`d29874a6`). Make the iteration benchmark self-contained and independent
   of local project packs and configuration (`5a775300`).
 - Record the verified 2.2.0a2 publication and its installer checksums (`38f49f87`).
+- Record the failed a3 release checks and recovery, preserving its original tag while preparing
+  the corrected source for a new alpha (`7e04752b`, `4063f496`, `2e0b2867`).
 
 **Alpha availability**
 
@@ -61,6 +64,14 @@ Installers target Apple Silicon macOS and Ubuntu 24.04/glibc 2.39 on ARM64/x86_6
 and Windows installers are not included. The macOS app remains unsigned and not notarized;
 Codex is installed separately for authoring. Other Linux distributions, clean-machine deployment
 and separate OS-account acceptance remain outstanding.
+
+## v2.2.0a3 (2026-10-14)
+
+Prepared but not published. The tagged snapshot (`cca6c071`) contained the Studio chat and
+published-pack discovery changes (`bca61b03`, `52464e46`). Release CI found a changed diagnostic
+for a missing project pack and blocked installer builds and publication. The original tag is
+retained; the correction (`5a4aadd7`) ships in a4. See the
+[alpha release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md) for the checks and recovery.
 
 ## v2.2.0a2 (2026-10-12)
 

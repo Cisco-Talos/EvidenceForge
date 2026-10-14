@@ -312,7 +312,7 @@ wheels = [
 
 [[package]]
 name = "evidence-forge"
-version = "2.2.0a3"
+version = "2.2.0a4"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

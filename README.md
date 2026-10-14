@@ -68,9 +68,9 @@ systems and sensors.
   while the generation engine makes no LLM calls. The same scenario, seed, formats, and version
   reproduce the same dataset without API costs or model variability.
 
-## What's New in 2.2.0a3 (Alpha)
+## What's New in 2.2.0a4 (Alpha)
 
-The third alpha improves Studio conversations and discovery of published environment packs.
+The fourth alpha improves Studio conversations and discovery of published environment packs.
 
 - **Queue or steer follow-ups:** Queue messages while Codex works, or send guidance to the
   active turn. Choose the default in Settings; Cmd+Enter on macOS or Ctrl+Enter elsewhere uses

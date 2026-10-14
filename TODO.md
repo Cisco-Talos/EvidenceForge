@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a3 tag recovery rejected by automatic approval review; fixed source ready; stable target 2.2.0
+**Status:** 2.2.0a4 release authorized and in preparation; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-14
 
@@ -81,12 +81,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   drafts and reading positions, and an expandable conversation layout. Chat file-action shortcuts
   were removed at the user's request. Search and broader status descriptions remain deferred; see the
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
-- The reviewed `2.2.0a3` snapshot was tagged, but release CI found a missing-project-pack
-  diagnostic regression and blocked publication. The correction is verified and pushed. The user
-  requested the same unpublished a3 version, but automatic approval review rejected changing its
-  tag even with user approval. The tag remains on its original commit; a new alpha is required to
-  publish corrected source through every release and installer verification gate. See the
-  [a3 release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
+- The user authorized `2.2.0a4` with the verified missing-project-pack diagnostic correction.
+  Preserve the failed, unpublished a3 tag and run every release, native recovery, installer and
+  uploaded-byte verification gate on the new snapshot. See the
+  [alpha release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal
   behavior. The agreed requirements, implementation and validation are recorded in the
