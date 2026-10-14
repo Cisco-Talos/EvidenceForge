@@ -124,3 +124,39 @@ The user subsequently authorized committing and pushing the combined chat and pa
 work on the existing `dev` branch. Pre-commit Ruff, generated API types, product-version
 synchronization and generation behavior-manifest checks passed. This authorization does not
 include an installer replacement, release bump, release tag or publication.
+
+## File-result presentation follow-up
+
+After the source commit, the user requested grouped file operations and quantitative context.
+While this follow-up was being implemented, they explicitly changed the action-button requirement
+to remove the shortcuts from chat. The final file list has **no Open source, View changes or
+Validate buttons**; the ordinary workspace actions and message-copy controls remain available.
+
+- Added `ChatResults` with groups for edited, created, renamed/moved, removed and other recorded
+  operations. Rows show source-relative paths, rename origins, recorded line additions/removals
+  and explicitly labeled current line/character sizes. Non-text or oversized files can show
+  byte sizes. Unavailable patch counts remain labeled unavailable rather than inferred.
+- Native completed operations now retain deletions and update-with-move destinations. Multiple
+  changes for one path retain their recorded patches; file additions followed by edits remain
+  creations. Both sides of a rename must stay inside the permitted source directory, and
+  symbolic links are rejected.
+- Captured a bounded in-memory before-image of the linked source, bound to its exact turn, so
+  shell-driven edits can produce a recorded diff when Codex supplies no file-change diff.
+  Repeated completion retains that diff; failure, abandonment and completion release temporary
+  data. This does not change turn timing or dispatch.
+- `chat_results.py` supplies additive API summaries from frozen result records. Current file
+  sizes are read once per unique path per snapshot, bounded to 2 MiB for text. Frozen database
+  v3 records, migration checksums, settings and authored scenario/pack files were not changed.
+- Removed the chat-only result viewer, validation callbacks and their unused styles with the
+  shortcuts. The existing result API stays compatible. Result rows use the existing dark
+  surfaces, borders, typography and file icons and fit narrow and wide chat widths.
+
+Verification: **30** existing chat/state-contract tests and **28** focused frontend tests passed;
+the existing result test now checks grouping, metrics and the absence of shortcut buttons.
+Frontend build, generated API types, Ruff checks and the unchanged behavior revision 164 checker
+passed. Browser review used the actual component with sample files at 420px and 1280px, with
+no page horizontal overflow. Temporary preview files, server and tab were removed afterward.
+At initial follow-up delivery, no installation, restart, release or further commit/push was
+performed. The user subsequently authorized committing and pushing this follow-up on the
+existing `dev` branch. Final pre-commit Ruff, generated API types, product-version synchronization
+and generation behavior-manifest checks passed. Product version remains `2.2.0a2`.

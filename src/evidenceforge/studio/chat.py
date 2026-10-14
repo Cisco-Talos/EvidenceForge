@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evidenceforge.models.exceptions import EvidenceForgeError
 from evidenceforge.studio.chat_permissions import chat_access
+from evidenceforge.studio.chat_results import (
+    ChatTurnSummary,
+    recorded_changes,
+    result_path,
+    source_text,
+    summarize_turn,
+)
 from evidenceforge.studio.codex import (
     CodexDisconnectedError,
     CodexTimeoutError,
@@ -59,7 +67,7 @@ class ChatSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
     conversation_id: str
     seq: int
-    turns: list[ChatTurn]
+    turns: list[ChatTurnSummary]
     queue: list[ChatInput]
     queue_paused: bool
     active_turn_id: str | None
@@ -115,7 +123,8 @@ class ChatRuntime:
         self.locks: dict[str, asyncio.Lock] = {}
         self.ready: dict[str, asyncio.Event] = {}
         self.starting: set[str] = set()
-        self.pending_sources: dict[str, tuple[str, str | None, float]] = {}
+        self.pending_sources: dict[str, tuple[str, str | None, float, str | None]] = {}
+        self.pending_source_turns: dict[str, str] = {}
         self.tasks: set[asyncio.Task[None]] = set()
         self.submit: ChatSubmit | None = None
         # Retained claims are held on startup; a lost response is never resent automatically.
@@ -157,7 +166,14 @@ class ChatRuntime:
 
     def before_submit(self, conversation: Conversation, source: Path) -> None:
         """Capture the owning source once before inference begins."""
-        self.pending_sources[conversation.id] = (str(source), file_digest(source), time.time())
+        before = source_text(source)
+        digest = (
+            hashlib.sha256(before.encode()).hexdigest()
+            if before is not None
+            else file_digest(source)
+        )
+        self.pending_sources[conversation.id] = (str(source), digest, time.time(), before)
+        self.pending_source_turns.pop(conversation.id, None)
         self.ready[conversation.id] = asyncio.Event()
         self.starting.add(conversation.id)
 
@@ -170,9 +186,11 @@ class ChatRuntime:
             (entry for entry in self.store.turns(conversation.id) if entry.id == identity), None
         )
         if turn is None:
-            source, digest, observed = self.pending_sources.get(
-                conversation.id, (None, None, time.time())
+            source, digest, observed, _before = self.pending_sources.get(
+                conversation.id, (None, None, time.time(), None)
             )
+            if conversation.id in self.pending_sources:
+                self.pending_source_turns[conversation.id] = identity
             turn = ChatTurn(
                 id=identity,
                 conversation_id=conversation.id,
@@ -202,6 +220,13 @@ class ChatRuntime:
             if turn.duration_ms is None and turn.started_at is not None:
                 turn.duration_ms = max(0, (turn.completed_at - turn.started_at) * 1000)
         self.store.save_turn(turn)
+        if (
+            turn.status in TERMINAL
+            and turn.status != "completed"
+            and self.pending_source_turns.get(conversation.id) == identity
+        ):
+            self.pending_sources.pop(conversation.id, None)
+            self.pending_source_turns.pop(conversation.id, None)
         self.ready.setdefault(conversation.id, asyncio.Event()).set()
         return turn
 
@@ -282,6 +307,8 @@ class ChatRuntime:
     def abandon(self, conversation_id: str) -> None:
         """Retire process-bound identities on confirmed abandonment."""
         self.pause(conversation_id)
+        self.pending_sources.pop(conversation_id, None)
+        self.pending_source_turns.pop(conversation_id, None)
         for turn in self.store.turns(conversation_id):
             if turn.status not in TERMINAL:
                 turn.status = "interrupted"
@@ -370,10 +397,21 @@ class ChatRuntime:
         result.extend(saved.values())
         self.reconcile_inputs(result, conversation.id)
         control = self.store.control(conversation.id)
+        directories: dict[str, Path | None] = {}
+        sizes: dict[Path, tuple[int | None, int | None, int | None]] = {}
+        presented: list[ChatTurnSummary] = []
+        for turn in result:
+            source = turn.source_path
+            if source and source not in directories:
+                try:
+                    directories[source] = chat_access(Path(source)).directory
+                except (OSError, ValueError, EvidenceForgeError):
+                    directories[source] = None
+            presented.append(summarize_turn(turn, directories.get(source or ""), sizes))
         return ChatSnapshot(
             conversation_id=conversation.id,
             seq=self.studio.store.latest_seq(),
-            turns=result,
+            turns=presented,
             queue=[
                 entry
                 for entry in self.store.inputs(conversation.id)
@@ -531,6 +569,10 @@ class ChatRuntime:
         )
         if not turn or turn.status != "completed":
             return
+        baseline = None
+        if self.pending_source_turns.get(conversation.id) == identity:
+            baseline = self.pending_sources.pop(conversation.id, None)
+            self.pending_source_turns.pop(conversation.id, None)
         source = Path(turn.source_path) if turn.source_path else None
         if source is None:
             return
@@ -538,26 +580,56 @@ class ChatRuntime:
             access = chat_access(source)
         except (OSError, ValueError, EvidenceForgeError):
             return
-        candidates: dict[str, tuple[str, str | None]] = {}
-        for item in turn.items:
-            if item.get("type") == "fileChange" and item.get("status") == "completed":
-                for change in item.get("changes") or []:
-                    if isinstance(change, dict) and isinstance(change.get("path"), str):
-                        kind = change.get("kind", "modified")
-                        candidates[change["path"]] = (
-                            str(kind.get("type", "modified") if isinstance(kind, dict) else kind),
-                            change.get("diff") if isinstance(change.get("diff"), str) else None,
-                        )
+        candidates: dict[Path, tuple[str, list[str]]] = {}
+        for change in recorded_changes(turn.items):
+            try:
+                path = result_path(change.path, access.directory)
+                previous = (
+                    result_path(change.previous_path, access.directory)
+                    if change.previous_path
+                    else path
+                )
+            except (OSError, ValueError, EvidenceForgeError):
+                continue
+            prior_kind, patches = candidates.pop(previous, (change.operation, []))
+            if path != previous:
+                patches += candidates.pop(path, (change.operation, []))[1]
+            kind = change.operation
+            if kind in {"edited", "renamed"} and prior_kind in {"created", "renamed"}:
+                kind = prior_kind
+            if change.diff:
+                patches.append(change.diff)
+            candidates[path] = (kind, patches)
         if turn.source_sha256 != file_digest(source) and source.is_file():
-            candidates.setdefault(
-                str(source), ("modified" if turn.source_sha256 else "created", None)
-            )
+            candidates.setdefault(source, ("edited" if turn.source_sha256 else "created", []))
+            if (
+                not candidates[source][1]
+                and baseline
+                and baseline[:2] == (str(source), turn.source_sha256)
+                and baseline[3] is not None
+                and (after := source_text(source)) is not None
+            ):
+                diff = "\n".join(
+                    difflib.unified_diff(
+                        baseline[3].splitlines(),
+                        after.splitlines(),
+                        fromfile=str(source),
+                        tofile=str(source),
+                        lineterm="",
+                    )
+                )
+                if diff:
+                    candidates[source][1].append(diff)
+            if not candidates[source][1]:
+                previous_diff = next(
+                    (result.diff for result in turn.results if result.path == str(source)), None
+                )
+                if previous_diff:
+                    candidates[source][1].append(previous_diff)
         results: list[ChatResult] = []
         catalog = self.studio.store.items(conversation.workspace)
-        for raw, (kind, diff) in candidates.items():
-            path = Path(raw)
-            path = (path if path.is_absolute() else access.directory / path).resolve()
-            if not path.is_relative_to(access.directory.resolve()) or not path.is_file():
+        for path, (kind, patches) in candidates.items():
+            if kind != "removed" and not path.is_file():
                 continue
             item = next((item for item in catalog if item.path.resolve() == path), None)
             results.append(
@@ -565,7 +637,7 @@ class ChatRuntime:
                     id=hashlib.sha256(str(path).encode()).hexdigest()[:24],
                     path=str(path),
                     kind=kind,
-                    diff=diff,
+                    diff="\n\n".join(patches) or None,
                     item_id=item.id if item else None,
                     item_kind=item.kind if item else None,
                 )

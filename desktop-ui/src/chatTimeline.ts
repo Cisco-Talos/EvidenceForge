@@ -5,7 +5,13 @@ export interface TimelineItem {
   content?: { type: string; text?: string }[]; clientId?: string | null;
   summary?: string[]; aggregatedOutput?: string; [key: string]: unknown;
 }
-export interface TimelineResult { id: string; path: string; kind?: string; diff?: string | null; item_id?: string | null; item_kind?: string | null }
+export interface TimelineResult {
+  id: string; path: string; kind?: string; diff?: string | null; item_id?: string | null; item_kind?: string | null;
+  operation?: "edited" | "created" | "removed" | "renamed" | "changed"; relative_path?: string;
+  previous_path?: string | null; previous_relative_path?: string | null; available?: boolean;
+  lines_added?: number | null; lines_removed?: number | null; current_lines?: number | null;
+  current_characters?: number | null; current_bytes?: number | null; metadata_only?: boolean;
+}
 export interface TimelineTurn {
   id: string; status: string; items: TimelineItem[]; started_at?: number | null;
   completed_at?: number | null; duration_ms?: number | null; error?: { message?: string } | null;

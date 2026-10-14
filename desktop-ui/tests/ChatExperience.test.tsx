@@ -225,23 +225,30 @@ test("text typed during delivery is retained as the next unsent draft", async ()
   expect(input.value).toBe("My next draft");
 });
 
-test("verified results open the source viewer and validate only on request", async () => {
+test("verified results show grouped file details without shortcut actions", async () => {
   const request = vi.fn(async (path: string) => {
-    if (path.endsWith("/chat")) return { seq: 0, queue: [], active_turn_id: null, view: emptyView, turns: [{ id: "done", status: "completed", items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Created the draft" }], results: [{ id: "source", path: "/draft/scenario.yaml", item_id: "scenario", item_kind: "scenario", diff: "Recorded changes" }] }] };
-    if (path.includes("/results/")) return { path: "/draft/scenario.yaml", text: "name: draft\n", diff: "Recorded changes" };
-    if (path === "/v1/validate") return { exit_code: 0, report: { valid: true } };
+    if (path.endsWith("/chat")) return { seq: 0, queue: [], active_turn_id: null, view: emptyView, turns: [{ id: "done", status: "completed", items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Created the draft" }], results: [
+      { id: "source", path: "/draft/source/scenario.yaml", relative_path: "source/scenario.yaml", operation: "edited", item_id: "scenario", item_kind: "scenario", diff: "Recorded changes", lines_added: 18, lines_removed: 6, current_lines: 156, current_characters: 6440, available: true },
+      { id: "briefing", path: "/draft/source/ENVIRONMENT.md", relative_path: "source/ENVIRONMENT.md", operation: "created", current_lines: 90, current_characters: 4016, available: true },
+      { id: "removed", path: "/draft/source/scratch.yaml", relative_path: "source/scratch.yaml", operation: "removed", diff: "Recorded deletion", available: false },
+    ] }] };
     if (path.endsWith("/pending")) return [];
     return { available: true, account_ready: true };
   });
   render(<ChatView item={{ name: "Pack", kind: "industry_pack" }} conversation={{ ...conversation, active: false }}
     codexHealth={{ state: "connected", detail: "Connected" }} api={{ request } as unknown as StudioApi}
     subscribeEvents={() => () => undefined} onError={vi.fn()} />);
-  await screen.findByText("scenario.yaml");
+  await screen.findByText("source/scenario.yaml");
+  expect(screen.getByRole("heading", { name: "Edited files 1" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Created files 1" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Removed files 1" })).toBeTruthy();
+  expect(screen.getByText("+18 lines")).toBeTruthy();
+  expect(screen.getByText("−6 lines")).toBeTruthy();
+  expect(screen.getByText("Current size: 156 lines · 6,440 characters")).toBeTruthy();
+  expect(screen.getByText("Current size: 90 lines · 4,016 characters")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Open source" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "View changes" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Validate", exact: true })).toBeNull();
   expect(request.mock.calls.some(([path]) => path === "/v1/validate")).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "Open source" }));
-  expect(await screen.findByLabelText("Preview of /draft/scenario.yaml")).toHaveProperty("textContent", expect.stringContaining("name: draft"));
-  fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
-  fireEvent.click(screen.getByRole("button", { name: "Validate", exact: true }));
-  expect(await screen.findByText("Validation passed")).toBeTruthy();
-  expect(request).toHaveBeenCalledWith("/v1/validate", "POST", { scenario_id: "scenario" });
+  expect(request.mock.calls.some(([path]) => path.includes("/results/"))).toBe(false);
 });

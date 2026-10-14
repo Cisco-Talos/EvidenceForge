@@ -2735,10 +2735,24 @@ export interface components {
             skill_name?: string | null;
         };
         /**
-         * ChatResult
-         * @description A source-local file observed changing during one turn.
+         * ChatResultContent
+         * @description Verified source contents and an optional recorded change diff.
          */
-        ChatResult: {
+        ChatResultContent: {
+            /** Path */
+            path: string;
+            /** Text */
+            text: string;
+            /** Diff */
+            diff?: string | null;
+            /** Item Id */
+            item_id?: string | null;
+        };
+        /**
+         * ChatResultSummary
+         * @description Additive API presentation; never written into the frozen database payload.
+         */
+        ChatResultSummary: {
             /** Id */
             id: string;
             /** Path */
@@ -2754,20 +2768,37 @@ export interface components {
             item_id?: string | null;
             /** Item Kind */
             item_kind?: ("scenario" | "industry_pack" | "organization_pack") | null;
-        };
-        /**
-         * ChatResultContent
-         * @description Verified source contents and an optional recorded change diff.
-         */
-        ChatResultContent: {
-            /** Path */
-            path: string;
-            /** Text */
-            text: string;
-            /** Diff */
-            diff?: string | null;
-            /** Item Id */
-            item_id?: string | null;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "edited" | "created" | "removed" | "renamed" | "changed";
+            /** Relative Path */
+            relative_path: string;
+            /** Previous Path */
+            previous_path?: string | null;
+            /** Previous Relative Path */
+            previous_relative_path?: string | null;
+            /** Lines Added */
+            lines_added?: number | null;
+            /** Lines Removed */
+            lines_removed?: number | null;
+            /** Current Lines */
+            current_lines?: number | null;
+            /** Current Characters */
+            current_characters?: number | null;
+            /** Current Bytes */
+            current_bytes?: number | null;
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /**
+             * Metadata Only
+             * @default false
+             */
+            metadata_only: boolean;
         };
         /**
          * ChatSnapshot
@@ -2779,7 +2810,7 @@ export interface components {
             /** Seq */
             seq: number;
             /** Turns */
-            turns: components["schemas"]["ChatTurn"][];
+            turns: components["schemas"]["ChatTurnSummary"][];
             /** Queue */
             queue: components["schemas"]["ChatInput"][];
             /** Queue Paused */
@@ -2794,10 +2825,10 @@ export interface components {
             history_pending: boolean;
         };
         /**
-         * ChatTurn
-         * @description Retained turn identity, item projection and terminal observations.
+         * ChatTurnSummary
+         * @description Present saved turns using derived result summaries, preserving their stored contract.
          */
-        ChatTurn: {
+        ChatTurnSummary: {
             /** Id */
             id: string;
             /** Conversation Id */
@@ -2824,7 +2855,7 @@ export interface components {
                 [key: string]: unknown;
             }[];
             /** Results */
-            results?: components["schemas"]["ChatResult"][];
+            results: components["schemas"]["ChatResultSummary"][];
             /** Source Path */
             source_path?: string | null;
             /** Source Sha256 */

@@ -1,13 +1,13 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronDown, CirclePause, Pencil, MessageSquareText, X } from "lucide-react";
-import { Dialog, DropdownMenu } from "radix-ui";
+import { DropdownMenu } from "radix-ui";
 import { CatalogItem, CodexHealth, Conversation, StudioApi, StudioEvent, type ChatAccess } from "./api";
 import { ChatActivity, type ActivityItem } from "./ChatActivity";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { SourceTextPreview } from "./BundleFileBrowser";
 import { ChatCopyButton } from "./ChatCopyButton";
 import { ChatQuestions, type ChatQuestion } from "./ChatQuestions";
-import { applyChatEvent, finalItemId, formatDuration, historyTurns, mergeTurns, terminalTurn, type TimelineTurn, type TimelineItem, type TimelineResult } from "./chatTimeline";
+import { ChatResults } from "./ChatResults";
+import { applyChatEvent, finalItemId, formatDuration, historyTurns, mergeTurns, terminalTurn, type TimelineTurn, type TimelineItem } from "./chatTimeline";
 
 interface TurnError { message?: string }
 interface CodexHistory { thread?: { turns?: Record<string, unknown>[] }; history_pending?: boolean }
@@ -47,8 +47,6 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
   const [historyPending, setHistoryPending] = useState(false); const [historyWarning, setHistoryWarning] = useState(false);
   const [following, setFollowing] = useState(true); const [now, setNow] = useState(Date.now()); const [sendMenu, setSendMenu] = useState(false);
   const [editingQueue, setEditingQueue] = useState<string | null>(null); const [queueText, setQueueText] = useState("");
-  const [resultViewer, setResultViewer] = useState<{ path: string; text: string } | null>(null);
-  const [resultValidation, setResultValidation] = useState<Record<string, string>>({});
   const [answeredAsync, setAnsweredAsync] = useState<string[]>([]);
   const body = useRef<HTMLDivElement>(null); const savedView = useRef<SavedView>(emptyView());
   const composerTouched = useRef(false);
@@ -135,7 +133,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     composerTouched.current = false; answersTouched.current = false; retryId.current = null; optimistic.current.clear(); loadedView.current = false; savedView.current = emptyView(); eventBuffer.current = []; cursor.current = 0;
     completedTurns.current.clear(); expectedTurn.current = null;
     setTurns([]); setQueue([]); setDraft(""); setSkill(""); setAnswers({}); setAnsweredAsync([]); setActiveTurnId(null);
-    setResultViewer(null); setResultValidation({}); setHistoryPending(false); setHistoryWarning(false); followBottom.current = true; setFollowing(true);
+    setHistoryPending(false); setHistoryWarning(false); followBottom.current = true; setFollowing(true);
     if (!conversationId) return;
     void loadHistory();
     let canceled = false;
@@ -291,22 +289,6 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     setPending((current) => current.filter((candidate) => candidate.request_id !== entry.request_id));
     setAnswers((current) => { const next = { ...current }; delete next[String(entry.request_id)]; return next; });
   }
-  async function viewResult(turnId: string, result: TimelineResult, diff = false) {
-    try {
-      const source = await api.request<{ path: string; text: string; diff?: string }>(`/v1/conversations/${conversationId}/results/${turnId}/${result.id}`);
-      setResultViewer({ path: source.path, text: diff ? source.diff || "No recorded diff available" : source.text });
-    } catch (error) { onError(String(error)); }
-  }
-  async function validateResult(turnId: string, result: TimelineResult) {
-    const key = `${turnId}:${result.id}`;
-    setResultValidation((current) => ({ ...current, [key]: "Validating…" }));
-    try {
-      const response = await api.request<{ valid?: boolean; exit_code?: number; report?: { valid?: boolean } }>(result.item_kind === "scenario" ? "/v1/validate" : `/v1/packs/${result.item_id}/review`, result.item_kind === "scenario" ? "POST" : "GET", result.item_kind === "scenario" ? { scenario_id: result.item_id } : undefined);
-      const valid = result.item_kind === "scenario" ? response.report?.valid : response.valid;
-      setResultValidation((current) => ({ ...current, [key]: valid === true ? "Validation passed" : valid === false || (response.exit_code != null && response.exit_code !== 0) ? "Validation found issues" : "Validation finished" }));
-      await onRenamed?.();
-    } catch (error) { setResultValidation((current) => ({ ...current, [key]: "Validation unavailable" })); onError(String(error)); }
-  }
   async function editQueued(entry: QueueMessage) {
     try { await api.request(`/v1/conversations/${conversationId}/messages/${entry.id}`, "PATCH", { text: queueText, skill_name: entry.skill_name || null }); setEditingQueue(null); await loadHistory(); } catch (error) { onError(String(error)); }
   }
@@ -324,7 +306,7 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
         {final && terminalTurn(turn) && turn.duration_ms != null && <div className="worked-duration">{turn.status === "completed" ? "Worked for" : turn.status === "failed" ? "Failed after" : "Stopped after"} {formatDuration(turn.duration_ms)}</div>}
         {text && (entry.type === "userMessage" || final ? <div className={`message-row ${entry.type === "userMessage" ? "user" : "agent"}`}><div className="message-bubble"><div className="message-label"><span className="message-author">{entry.type === "userMessage" ? "You" : "Codex"}</span><ChatCopyButton text={text} onError={onError} /></div>{entry.type === "userMessage" ? <p>{text}</p> : <ChatMarkdown text={text} />}</div></div> : <div className="chat-commentary"><ChatMarkdown text={text} /><ChatCopyButton text={text} onError={onError} /></div>)}
         {!!questions?.length && !answeredAsync.includes(entry.id) && answers[entry.id]?.__answered !== "1" && (!answers[entry.id]?.__submissionId || !turns.some((candidate) => candidate.items.some((message) => message.type === "userMessage" && message.clientId === answers[entry.id]?.__submissionId))) && <ChatQuestions key={entry.id} questions={questions} disabled={!enabled || sending || (!!conversation?.active && !activeTurnId)} saved={answers[entry.id]} onChange={(value) => saveAnswer(entry.id, value)} onSubmit={async (value) => { const answer = questions.map((question) => `${question.question}\n${value[question.id].answers.join("\n")}`).join("\n\n"); const identity = savedView.current.answers[entry.id]?.__submissionId || crypto.randomUUID(); saveAnswer(entry.id, { ...savedView.current.answers[entry.id], __submissionId: identity }); await send(conversation?.active ? "steer" : "start", answer, identity); setAnsweredAsync((current) => [...current, entry.id]); saveAnswer(entry.id, { ...savedView.current.answers[entry.id], __answered: "1" }); }} />}
-        {final && !!turn.results?.length && <div className="chat-results">{turn.results.map((result) => <div key={result.id}><span title={result.path}>{result.path.split(/[\\/]/).pop()}</span><button onClick={() => void viewResult(turn.id, result)}>Open source</button>{result.diff && <button onClick={() => void viewResult(turn.id, result, true)}>View changes</button>}{result.item_id && <button disabled={resultValidation[`${turn.id}:${result.id}`] === "Validating…"} onClick={() => void validateResult(turn.id, result)}>Validate</button>}{resultValidation[`${turn.id}:${result.id}`] && <span role="status">{resultValidation[`${turn.id}:${result.id}`]}</span>}</div>)}</div>}
+        {final && !!turn.results?.length && <ChatResults results={turn.results} />}
       </> : <ChatActivity items={[entry as ActivityItem]} working={!terminalTurn(turn)} inline />}
     </div>;
   }
@@ -343,6 +325,5 @@ export function ChatView({ item, conversation, codexHealth, api, subscribeEvents
     {!following && <button className="jump-latest" onClick={() => { followBottom.current = true; setFollowing(true); savedView.current.follow_bottom = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>Jump to latest <ChevronDown size={14} /></button>}
     {!!queue.length && <div className="chat-queue"><div className="queue-heading"><strong>{queuePaused ? "Queue paused" : "Queued messages"}</strong>{queuePaused && <button onClick={() => void api.request(`/v1/conversations/${conversationId}/queue/resume`, "POST").then(() => loadHistory()).catch(onError)}>Resume queue</button>}</div>{queue.map((entry) => <div className="queue-entry" key={entry.id}>{editingQueue === entry.id ? <><textarea aria-label="Edit queued message" value={queueText} onChange={(event) => setQueueText(event.target.value)} /><button disabled={!queueText.trim()} onClick={() => void editQueued(entry)}>Save</button><button onClick={() => setEditingQueue(null)}>Cancel</button></> : <><span>{entry.text}{entry.error && <small className="error-text">{entry.error}</small>}</span>{entry.state === "queued" ? <><button aria-label="Edit queued message" onClick={() => { setEditingQueue(entry.id); setQueueText(entry.text); }}>Edit</button><button aria-label="Remove queued message" onClick={() => void api.request(`/v1/conversations/${conversationId}/messages/${entry.id}`, "DELETE").then(() => loadHistory()).catch(onError)}>Remove</button></> : <small>{entry.state === "uncertain" ? "Checking delivery…" : "Sending…"}</small>}</>}</div>)}</div>}
     <div className="composer-wrap"><div className="composer"><textarea placeholder={isNewDraft ? `Describe your new ${draftKindLabel.toLowerCase()}…` : `Ask about ${item.name}…`} aria-label="Message to Codex" value={draft} onChange={(event) => { composerTouched.current = true; setDraft(event.target.value); savedView.current.draft = event.target.value; }} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return; event.preventDefault(); const alternative = /Mac/i.test(navigator.platform) ? event.metaKey : event.ctrlKey; const mode = conversation.active && alternative ? followupMode === "queue" ? "steer" : "queue" : currentMode; void send(mode).catch(() => undefined); }} /><div className="composer-bottom"><div className="composer-options"><select aria-label="Skill for this turn" title="Skills apply to new or queued turns" value={skill} onChange={(event) => { composerTouched.current = true; setSkill(event.target.value); savedView.current.skill_name = event.target.value; }}><option value="">{conversation.thread_id ? "Automatic skill" : `${draftKindLabel} skill`}</option>{skills.map((entry) => <option key={entry.name} value={entry.name}>{entry.name}</option>)}</select><span>Enter to {currentMode === "start" ? "send" : currentMode} · {conversation.active ? "Cmd/Ctrl+Enter for the other mode · " : ""}Shift/Alt+Enter for a new line</span></div><div className="composer-actions">{conversation.active && <button className="interrupt-button" aria-label="Stop Codex turn" onClick={() => void api.request(`/v1/conversations/${conversationId}/interrupt`, "POST").then(() => loadHistory()).catch((error) => onError(String(error)))}><CirclePause size={17} /></button>}<button aria-label={modeLabel(currentMode)} title={modeLabel(currentMode)} disabled={!draft.trim() || sending || !enabled || (currentMode === "steer" && !activeTurnId)} onClick={() => void send().catch(() => undefined)}><ArrowUp size={16} /></button>{conversation.active && <DropdownMenu.Root open={sendMenu} onOpenChange={setSendMenu}><DropdownMenu.Trigger asChild><button aria-label="Choose Queue or Steer"><ChevronDown size={14} /></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="send-mode-menu" side="top" align="end" sideOffset={6}><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled} onSelect={() => void send("queue").catch(() => undefined)}>Queue message</DropdownMenu.Item><DropdownMenu.Item disabled={!draft.trim() || sending || !enabled || !activeTurnId} onSelect={() => void send("steer").catch(() => undefined)}>Steer current work</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>}</div></div></div>{codexHealth.state !== "connected" && <p className="chat-unavailable">Codex {codexHealth.state}: {codexHealth.detail}. Use the status dot above to reconnect.</p>}{status && !status.available && codexHealth.state === "connected" && <p className="chat-unavailable">{status.error || "Codex is unavailable"}</p>}{status?.account_ready === false && <p className="chat-unavailable">Sign in to Codex under Settings → Authoring & tools, or use Login in the Codex status dialog, before sending a message.</p>}</div>
-    {resultViewer && <Dialog.Root open onOpenChange={(open) => { if (!open) setResultViewer(null); }}><Dialog.Portal><Dialog.Overlay className="radix-dialog-overlay" /><Dialog.Content className="chat-result-dialog"><Dialog.Title>{resultViewer.path}</Dialog.Title><Dialog.Description>Source contents or the recorded changes for this turn.</Dialog.Description><SourceTextPreview path={resultViewer.path} text={resultViewer.text} /><Dialog.Close className="button-quiet">Close</Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>}
   </section>;
 }
