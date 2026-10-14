@@ -1,6 +1,6 @@
 # EvidenceForge Implementation Plan
 
-**Status:** 2.2.0a3 publication blocked by release CI; corrective source verified; stable target 2.2.0
+**Status:** 2.2.0a3 recovery authorized with corrected source; stable target 2.2.0
 **Started:** 2026-03-11
 **Last Roadmap Review:** 2026-10-14
 
@@ -82,9 +82,10 @@ without turning `TODO.md` back into a high-conflict work journal.
   were removed at the user's request. Search and broader status descriptions remain deferred; see the
   [chat experience worklog](docs/worklog/2026-10-13-studio-chat-experience.md).
 - The reviewed `2.2.0a3` snapshot was tagged, but release CI found a missing-project-pack
-  diagnostic regression and blocked publication. The source correction is verified locally;
-  publishing corrected source requires the next alpha number because the existing tag is immutable.
-  Retain every release, native recovery, installer and uploaded-byte verification gate. See the
+  diagnostic regression and blocked publication. The correction is verified and pushed. The user
+  directed recovery under the same unpublished a3 version; replace only that failed tag under this
+  explicit exception and run every release, native recovery, installer and uploaded-byte verification
+  gate on the corrected snapshot. See the
   [a3 release worklog](docs/worklog/2026-10-14-release-2.2.0a3.md).
 - [x] **P2** Streamline Studio object actions with complete, consistent three dots menus,
   selected text shortcuts, stable disabled actions, shared ordering and confirmed removal

@@ -43,6 +43,10 @@ file summaries and discovery of Studio-published environment packs.
 - Record the composition change as generation behavior revision 164 with its matching surface
   digest, fixing the generation guard failure. Equivalent resolved-input rendering remains
   unchanged (`bca61b03`).
+- Preserve the established missing-project-pack diagnostic when neither repository contains the
+  requested pack, and reject dangling publication links before falling back to legacy copies.
+  Record the matching behavior revision 165; equivalent resolved-input rendering remains
+  unchanged (`5a4aadd7`).
 
 **Repository and release maintenance**
 
