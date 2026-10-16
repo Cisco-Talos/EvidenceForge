@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 173
+current_revision: 174
 history_start_revision: 1
-behavior_surface_sha256: 37a22f9f0475f3843933d644cba338a8c94f4c50d5b1e1c36f8625f538387b74
+behavior_surface_sha256: 0fef978421e0166d3552597f21f4781d4e4aca762aa5be440eb074a8b388ecc9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1724,3 +1724,11 @@ changes:
       - runtime-file-identity
     formats: [ecar]
     summary: Preserves literal backslashes in Mac content paths, executable names, compiled commands and durable artifact lookup. Retains Windows/Linux admission; does not infer APFS aliases or case policy.
+  - revision: 174
+    id: macos-explicit-boot-clock-projection
+    impact: none
+    domains:
+      - host-boot-identity
+      - native-clock-projection
+    formats: []
+    summary: Adds allocation-free Mac uptime projection from registered boot state and an explicit Mach timebase. Reuses existing service boot identities and preserves all generated source behavior; native sources remain unregistered.

@@ -58,6 +58,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     normalize_zeek_history,
 )
+from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
     DeferredSessionProtocol,
@@ -69,6 +70,7 @@ from evidenceforge.generation.indexes import (
     TemporalAllocationIndex,
 )
 from evidenceforge.generation.storage_world import CompiledStorageFile
+from evidenceforge.generation.timing.macos import MachTimebase, MacosBootClock
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.state import (
     ActiveSession,
@@ -24276,6 +24278,23 @@ class StateManager:
         """Get a system's registered boot time."""
         with self._lock:
             return self._system_boot_times.get(system)
+
+    def get_macos_boot_clock(self, system: str, *, timebase: MachTimebase) -> MacosBootClock:
+        """Project registered Mac boot truth without allocating another clock or identity.
+
+        The source profile must supply its explicit timebase. Unknown hosts, OS
+        classification or boot times cannot become inferred native clock facts.
+        """
+        with self._lock:
+            boot_time = self._system_boot_times.get(system)
+            if self._pid_os.get(system) != "macos" or boot_time is None:
+                raise StateError("Native Mac clock requires an established Mac host and boot time")
+            return MacosBootClock(
+                hostname=system,
+                boot_time=boot_time,
+                boot_uuid=modeled_boot_id(system, boot_time),
+                timebase=timebase,
+            )
 
     def validate_event_time(self, system: str, event_time: datetime) -> bool:
         """Check if an event timestamp is after the system's boot time.

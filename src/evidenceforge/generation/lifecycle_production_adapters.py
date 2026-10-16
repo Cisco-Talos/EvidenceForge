@@ -31,6 +31,7 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingRole,
 )
 from evidenceforge.events.network import NetworkTransactionPlan, NetworkTuple
+from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleClosedTransportAdmissionToken,
     LifecycleClosedTransportPreparationCensus,
@@ -51,7 +52,6 @@ from evidenceforge.generation.lifecycle_registry import (
 )
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
-from evidenceforge.utils.time import ensure_utc
 
 
 class _LifecycleDispatcher(Protocol):
@@ -156,11 +156,7 @@ class TransportLifecyclePublicationPlan:
 def service_boot_id(hostname: str, boot_time: datetime) -> str:
     """Return one deterministic boot-scope identity from canonical state time."""
 
-    return stable_uuid(
-        "lifecycle-service-boot",
-        hostname.strip().casefold(),
-        ensure_utc(boot_time).isoformat(),
-    )
+    return modeled_boot_id(hostname, boot_time)
 
 
 def installed_service_publication_plan(
