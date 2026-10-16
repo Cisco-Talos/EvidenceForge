@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 190
+current_revision: 191
 history_start_revision: 1
-behavior_surface_sha256: e06157de95c8b6a9798e8c455a9063f547e99e77f96c0816265eb0118201f680
+behavior_surface_sha256: bf7e501d7b909661c738c430d992315dfcd3c1031b48861db02d13f6d87dc38d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1878,3 +1878,14 @@ changes:
     formats:
       - ecar
     summary: Separates Mac close facts from Linux observations, retains versioned platform authentication facts in the existing SSH journal, and authenticates Mac terminal process publication against live audit and receiver roles.
+  - revision: 191
+    id: macos-ssh-shared-close-execution
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - checkpoint-runtime
+    formats:
+      - ecar
+      - syslog
+    summary: Executes Mac receiver child/root teardown and canonical logout through the retained SSH close owner, preserving current execution identity, application retirement, checkpoint barriers and source recovery without Linux observations.

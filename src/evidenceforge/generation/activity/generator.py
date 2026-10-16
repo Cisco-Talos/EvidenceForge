@@ -5574,7 +5574,7 @@ class ActivityGenerator:
             state,
             continuation=continuation,
         )
-        bundle._dispatch_linux_session_close_lifecycle(
+        bundle._dispatch_session_close_lifecycle(
             state,
             continuation.materialize_event(state),
             continuation.plan.auth_state,
@@ -5634,7 +5634,7 @@ class ActivityGenerator:
                     continue
                 if state.logon_id and self.state_manager.get_session(state.logon_id) is not None:
                     bundle._terminate_source_ssh_client_process(state)
-                    bundle._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                    bundle._dispatch_session_close_lifecycle(state, event, auth_state)
             with self._ssh_close_journal_lock:
                 for index, existing in enumerate(self._pending_ssh_session_closures):
                     if existing is item:

@@ -3077,7 +3077,7 @@ class SshSessionActionBundle:
                 if self.request.defer_session_close:
                     self.executor._defer_ssh_session_close(self, state, event, auth_state)
                 else:
-                    self._dispatch_linux_session_close_lifecycle(state, event, auth_state)
+                    self._dispatch_session_close_lifecycle(state, event, auth_state)
             if auth_plan is None:
                 raise StateError("SSH auth completion lost its frozen timing plan")
             auth_plan.ecar_after_accept.publish()
@@ -4718,7 +4718,11 @@ class SshSessionActionBundle:
             src_host=plan.target_host.materialize(),
             auth=AuthContext(
                 username=identity.principal,
-                user_sid=self.executor._get_sid(identity.principal),
+                user_sid=(
+                    ""
+                    if plan.target_host.os_category == "macos"
+                    else self.executor._get_sid(identity.principal)
+                ),
                 logon_id=identity.logon_id,
                 session_id=session_identity.session_id,
                 logon_type=10,
@@ -4782,7 +4786,11 @@ class SshSessionActionBundle:
             src_host=plan.target_host.materialize(),
             auth=AuthContext(
                 username=identity.principal,
-                user_sid=self.executor._get_sid(identity.principal),
+                user_sid=(
+                    ""
+                    if plan.target_host.os_category == "macos"
+                    else self.executor._get_sid(identity.principal)
+                ),
                 logon_id=identity.logon_id,
                 session_id=session_identity.session_id if session_identity is not None else 0,
                 logon_type=(
@@ -5680,16 +5688,18 @@ class SshSessionActionBundle:
             f"port {state.source_port} ssh2"
         )
 
-    def _dispatch_linux_session_close_lifecycle(
+    def _dispatch_session_close_lifecycle(
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         *,
         continuation: _SshCloseContinuation | None = None,
     ) -> None:
         """Dispatch source-native close/logout evidence for a modeled SSH session."""
 
+        if type(auth_state) is _SshMacAuthState and continuation is None:
+            raise StateError("Mac SSH close requires its exact retained continuation")
         if continuation is not None:
             continuation.prepared.require_projection_owner(self.executor)
         logout_complete = bool(
@@ -5745,14 +5755,14 @@ class SshSessionActionBundle:
             # A real dispatcher applies the logoff to StateManager immediately.
             # Capture and schedule responder termination before that logoff
             # consumes the live session/process graph.
-            self._terminate_receiver_sshd_process(
+            self._terminate_receiver_process(
                 state,
                 auth_state,
                 close_time,
                 continuation=continuation,
             )
             try:
-                self._dispatch_linux_session_logout(
+                self._dispatch_session_logout(
                     state,
                     event,
                     auth_state,
@@ -5765,6 +5775,9 @@ class SshSessionActionBundle:
                 raise
             if continuation is not None:
                 continuation.mark_projection_complete("logout")
+
+        if type(auth_state) is _SshMacAuthState:
+            return
 
         logind_complete = bool(
             continuation is not None
@@ -5793,11 +5806,11 @@ class SshSessionActionBundle:
                 logon_id=state.logon_id,
             )
 
-    def _dispatch_linux_session_logout(
+    def _dispatch_session_logout(
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         close_time: datetime,
         *,
         continuation: _SshCloseContinuation | None = None,
@@ -5808,6 +5821,8 @@ class SshSessionActionBundle:
 
         request = self.request
         if continuation is None:
+            if type(auth_state) is not _SshLinuxAuthState:
+                raise StateError("Mac SSH logout requires its exact retained continuation")
             self.executor.dispatcher.dispatch_builder(
                 OccurrenceBuilder(
                     timestamp=close_time,
@@ -5823,7 +5838,7 @@ class SshSessionActionBundle:
                     ),
                     syslog=SyslogContext(
                         app_name="sshd",
-                        pid=auth_state.sshd_pid,
+                        pid=auth_state.receiver.responder_pid,
                         facility=10,
                         severity=6,
                         message=(
@@ -5845,7 +5860,11 @@ class SshSessionActionBundle:
             timestamp=close_time,
             source_ip=plan.source_ip,
             source_port=plan.source_port,
-            linux_receiver_pid=plan.auth_state.receiver.responder_pid,
+            linux_receiver_pid=(
+                plan.auth_state.receiver.responder_pid
+                if type(plan.auth_state) is _SshLinuxAuthState
+                else None
+            ),
         )
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         state_builder.terminalize_session(identity, end_time=close_time)
@@ -5957,7 +5976,7 @@ class SshSessionActionBundle:
     def _plan_exact_receiver_descendant_terminations(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         continuation: _SshCloseContinuation,
     ) -> tuple[_SshReceiverDescendantTermination, ...]:
         """Freeze all SSH target processes in structural children-first order."""
@@ -5967,11 +5986,11 @@ class SshSessionActionBundle:
         expected_session_identity = plan.session_identity()
         receiver = self.executor.state_manager.get_process(
             plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         receiver_identity = self.executor.state_manager.get_process_identity(
             plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         receiver_snapshot = (
             authority.registry.get_process(receiver_identity.object_id)
@@ -5989,8 +6008,9 @@ class SshSessionActionBundle:
             or receiver_snapshot.closure_ticket is not None
             or receiver.ecar_object_id != receiver_identity.object_id
             or receiver_identity.hostname != plan.target_system.hostname
-            or receiver_identity.pid != auth_state.sshd_pid
-            or receiver_identity.image != "/usr/sbin/sshd"
+            or receiver_identity.pid != auth_state.receiver.responder_pid
+            or receiver_identity.image != plan.receiver_image
+            or receiver_identity.initial_image != plan.initial_receiver_image
             or receiver_identity.principal.casefold() != "root"
             or receiver_identity.started_at != plan.receiver_started_at
             or receiver_identity.logon_id != plan.logon_id
@@ -6001,7 +6021,11 @@ class SshSessionActionBundle:
             or receiver_snapshot.identity.object_id != receiver_identity.object_id
             or receiver_snapshot.identity.hostname != receiver_identity.hostname
             or receiver_snapshot.identity.pid != receiver_identity.pid
-            or receiver_snapshot.identity.image != receiver_identity.image
+            or receiver_snapshot.identity.image != receiver_identity.initial_image
+            or receiver_snapshot.current_view.image != receiver_identity.image
+            or receiver_snapshot.current_view.execution_ordinal
+            != receiver_identity.execution_ordinal
+            or receiver_snapshot.current_view.changed_at < receiver_identity.execution_started_at
             or receiver_snapshot.identity.started_at != receiver_identity.started_at
             or receiver_snapshot.current_view.token.logon_id != plan.logon_id
             or receiver_snapshot.current_view.token.session_id != plan.session_id
@@ -6187,7 +6211,7 @@ class SshSessionActionBundle:
     def _terminate_exact_receiver_descendants(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         continuation: _SshCloseContinuation,
     ) -> None:
         """Publish the frozen SSH target-process schedule before receiver close."""
@@ -6231,7 +6255,7 @@ class SshSessionActionBundle:
 
         receiver_identity = self.executor.state_manager.get_process_identity(
             continuation.plan.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if receiver_identity is None:
             raise StateError("Exact SSH descendant census lost its receiver identity")
@@ -6472,16 +6496,18 @@ class SshSessionActionBundle:
                 f"receiver={receiver_identity.object_id} residual={residual!r}"
             )
 
-    def _terminate_receiver_sshd_process(
+    def _terminate_receiver_process(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
         close_time: datetime,
         *,
         continuation: _SshCloseContinuation | None = None,
     ) -> None:
         """Emit receiver-side accepted sshd termination when the tuple child is modeled."""
 
+        if type(auth_state) is _SshMacAuthState and continuation is None:
+            raise StateError("Mac SSH receiver close requires its exact retained continuation")
         if continuation is not None and continuation.recover_projection(
             "receiver-terminate",
             self.executor.dispatcher,
@@ -6490,17 +6516,19 @@ class SshSessionActionBundle:
         request = self.request
         running = self.executor.state_manager.get_process(
             request.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if running is None:
+            if continuation is not None:
+                raise StateError("Exact SSH receiver lost live State without a retained receipt")
             return
         command_line = running.command_line or ""
-        if "sshd:" not in command_line:
+        if type(auth_state) is _SshLinuxAuthState and "sshd:" not in command_line:
             return
         seed = _stable_seed(
             "ssh_session_responder_terminate:"
             f"{request.target_system.hostname}:{request.source_ip}:{state.source_port}:"
-            f"{auth_state.sshd_pid}:{close_time.isoformat()}"
+            f"{auth_state.receiver.responder_pid}:{close_time.isoformat()}"
         )
         # PAM close has its own source-native delay (up to 2.5 seconds) before
         # collection delay is applied.  Leave a real teardown tail so an eCAR
@@ -6516,7 +6544,7 @@ class SshSessionActionBundle:
                 user=request.user,
                 system=request.target_system,
                 time=terminate_time,
-                pid=auth_state.sshd_pid,
+                pid=auth_state.receiver.responder_pid,
                 process_name=running.image,
                 logon_id=running.logon_id,
                 from_storyline=request.source.startswith("storyline"),
@@ -6527,12 +6555,13 @@ class SshSessionActionBundle:
             raise StateError("Exact SSH receiver lifetime leaves no interval before logout")
         identity = self.executor.state_manager.get_process_identity(
             request.target_system.hostname,
-            auth_state.sshd_pid,
+            auth_state.receiver.responder_pid,
         )
         if (
             identity is None
             or identity.object_id != running.ecar_object_id
-            or identity.image != "/usr/sbin/sshd"
+            or identity.image != continuation.plan.receiver_image
+            or identity.initial_image != continuation.plan.initial_receiver_image
             or identity.started_at != ensure_utc(running.start_time)
         ):
             raise StateError("Exact SSH receiver changed its canonical process identity")

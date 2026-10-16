@@ -2664,13 +2664,13 @@
           "call": "AuthContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1366,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "AuthContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1391,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "AuthContext",
@@ -4945,13 +4945,13 @@
           "call": "SyslogContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1374,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "SyslogContext",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1399,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "SyslogContext",
@@ -10122,7 +10122,7 @@
           ],
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 5747,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_logout"
+          "scope": "SshSessionActionBundle._dispatch_session_logout"
         },
         {
           "call": "OccurrenceBuilder",
@@ -10213,7 +10213,7 @@
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "kind": "call_keyword",
           "line": 5747,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_logout"
+          "scope": "SshSessionActionBundle._dispatch_session_logout"
         },
         {
           "call": "OccurrenceBuilder",
@@ -12892,7 +12892,7 @@
           ],
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1387,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "OccurrenceBuilder",
@@ -12974,7 +12974,7 @@
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "kind": "call_keyword",
           "line": 1387,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "OccurrenceBuilder",
@@ -15150,7 +15150,7 @@
         ],
         "file": "src/evidenceforge/generation/actions/ssh_session.py",
         "line": 1362,
-        "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+        "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
       },
       {
         "call": "OccurrenceBuilder",
@@ -15165,7 +15165,7 @@
         ],
         "file": "src/evidenceforge/generation/actions/ssh_session.py",
         "line": 1387,
-        "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+        "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
       },
       {
         "call": "OccurrenceBuilder",
@@ -16551,13 +16551,13 @@
           "call": "self.executor.dispatcher.dispatch_builder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1361,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "self.executor.dispatcher.dispatch_builder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1386,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "scope": "SshSessionActionBundle._dispatch_session_close_lifecycle"
         },
         {
           "call": "self._executor.dispatcher.dispatch_builder",
@@ -17890,7 +17890,7 @@
             "call": "self.executor.generate_process_termination",
             "file": "src/evidenceforge/generation/actions/ssh_session.py",
             "line": 1528,
-            "scope": "SshSessionActionBundle._terminate_receiver_sshd_process"
+            "scope": "SshSessionActionBundle._terminate_receiver_process"
           },
           {
             "call": "self._executor.generate_process_termination",
@@ -19745,7 +19745,7 @@
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "line": 1505,
           "receiver": "self.executor.state_manager",
-          "scope": "SshSessionActionBundle._terminate_receiver_sshd_process"
+          "scope": "SshSessionActionBundle._terminate_receiver_process"
         },
         {
           "call": "self._executor.state_manager.get_process",
