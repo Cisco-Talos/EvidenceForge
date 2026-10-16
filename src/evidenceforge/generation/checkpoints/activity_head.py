@@ -957,21 +957,92 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 _ssh_host_row(plan.source_host),
                 _ssh_host_row(plan.target_host),
                 encode_state_value(plan.source_identity),
-                [
-                    plan.auth_state.sshd_pid,
-                    plan.auth_state.logind_session_id,
-                    encode_state_value(plan.auth_state.syslog_seed),
-                    encode_state_value(plan.auth_state.connection_time),
-                    encode_state_value(plan.auth_state.accepted_time),
-                    encode_state_value(plan.auth_state.pam_time),
-                    encode_state_value(plan.auth_state.logind_time),
-                ],
+                _ssh_auth_row(plan.auth_state),
                 plan.source_tag,
                 list(completed_phases),
                 encode_state_value(continuation.transaction),
             ]
         )
     return rows
+
+
+def _ssh_auth_row(value: object) -> list[object]:
+    """Retain historical Linux rows and encode an explicitly tagged Mac profile."""
+    from evidenceforge.generation.actions.ssh_session import _SshLinuxAuthState, _SshMacAuthState
+
+    if type(value) not in {_SshLinuxAuthState, _SshMacAuthState}:
+        raise CheckpointError("SSH checkpoint authentication profile is unsupported")
+    receiver = value.receiver
+    times = [
+        encode_state_value(time)
+        for time in (
+            receiver.connection_time,
+            receiver.authenticated_at,
+            receiver.session_open_time,
+            receiver.ready_at,
+        )
+    ]
+    if type(value) is _SshLinuxAuthState:
+        return [
+            receiver.responder_pid,
+            receiver.session_id,
+            encode_state_value(value.syslog_seed),
+            *times,
+        ]
+    return [
+        "macos-v1",
+        receiver.responder_pid,
+        receiver.session_id,
+        times,
+        value.initial_receiver_image,
+        value.receiver_image,
+    ]
+
+
+def _decode_ssh_auth(value: object) -> object:
+    """Decode closed platform profiles without changing existing Linux semantics."""
+    from evidenceforge.generation.actions.ssh_session import (
+        SshReceiverAuthentication,
+        _SshLinuxAuthState,
+        _SshMacAuthState,
+    )
+
+    if type(value) is not list:
+        raise CheckpointCorruptionError("SSH checkpoint authentication profile is malformed")
+    macos = len(value) == 6 and value[0] == "macos-v1"
+    if macos:
+        pid, session_id = value[1:3]
+        if type(value[3]) is not list or len(value[3]) != 4:
+            raise CheckpointCorruptionError("Mac SSH checkpoint authentication times are malformed")
+        raw_times = value[3]
+        seed = None
+    elif len(value) == 7 and type(value[0]) is int:
+        pid, session_id = value[:2]
+        seed = decode_state_value(value[2])
+        if type(seed) is not tuple:
+            raise CheckpointCorruptionError("Linux SSH checkpoint syslog seed is malformed")
+        raw_times = value[3:]
+    else:
+        raise CheckpointCorruptionError("SSH checkpoint authentication profile is unsupported")
+    times = [decode_state_value(time) for time in raw_times]
+    if any(type(time) is not datetime or time.tzinfo is not UTC for time in times):
+        raise CheckpointCorruptionError("SSH checkpoint authentication times changed type")
+    try:
+        receiver = SshReceiverAuthentication(
+            responder_pid=pid,
+            session_id=session_id,
+            connection_time=times[0],
+            authenticated_at=times[1],
+            session_open_time=times[2],
+            ready_at=times[3],
+        )
+        if macos:
+            return _SshMacAuthState(receiver, value[4], value[5])
+        return _SshLinuxAuthState(receiver, seed)
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "SSH checkpoint authentication phases are invalid"
+        ) from error
 
 
 def _decode_ssh_user(value: object) -> object:
@@ -1262,10 +1333,8 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
         NetworkConnectionIdentityCapture,
     )
     from evidenceforge.generation.actions.ssh_session import (
-        SshReceiverAuthentication,
         _PreparedSshCloseContinuation,
         _PreparedSshClosePlan,
-        _SshLinuxAuthState,
     )
 
     if type(rows) is not list:
@@ -1290,11 +1359,6 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             or type(row[4]) is not int
             or type(row[17]) is not int
             or type(row[27]) is not list
-            or len(row[27]) != 7
-            or type(row[27][0]) is not int
-            or row[27][0] <= 0
-            or type(row[27][1]) is not int
-            or row[27][1] < 0
             or type(row[28]) is not str
             or not row[28]
             or type(row[29]) is not list
@@ -1304,35 +1368,13 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
         seen.add(row[0])
         source_identity = _canonical_process_identity(generator, row[26])
         transaction = decode_state_value(row[30])
-        auth_seed = decode_state_value(row[27][2])
-        auth_times = [decode_state_value(value) for value in row[27][3:]]
+        auth_state = _decode_ssh_auth(row[27])
         times = [decode_state_value(value) for value in row[5:15]]
-        if (
-            type(transaction) is not NetworkTransactionPlan
-            or type(auth_seed) is not tuple
-            or any(type(value) is not datetime or value.tzinfo is not UTC for value in auth_times)
-            or any(
-                value is not None and (type(value) is not datetime or value.tzinfo is not UTC)
-                for value in times
-            )
+        if type(transaction) is not NetworkTransactionPlan or any(
+            value is not None and (type(value) is not datetime or value.tzinfo is not UTC)
+            for value in times
         ):
             raise CheckpointCorruptionError("SSH checkpoint journal row changed type")
-        try:
-            auth_state = _SshLinuxAuthState(
-                receiver=SshReceiverAuthentication(
-                    responder_pid=row[27][0],
-                    session_id=row[27][1],
-                    connection_time=auth_times[0],
-                    authenticated_at=auth_times[1],
-                    session_open_time=auth_times[2],
-                    ready_at=auth_times[3],
-                ),
-                syslog_seed=auth_seed,
-            )
-        except (TypeError, ValueError) as error:
-            raise CheckpointCorruptionError(
-                "SSH checkpoint authentication phases are invalid"
-            ) from error
         plan = _PreparedSshClosePlan(
             continuation_id=row[0],
             username=row[1],
@@ -1386,7 +1428,7 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             ) from error
         try:
             for phase in row[29]:
-                prepared._progress._validate_phase(phase)
+                prepared.require_projection_phase(phase)
         except (StateError, TypeError, ValueError) as error:
             raise CheckpointCorruptionError("SSH checkpoint completed phase is invalid") from error
         if len(row[29]) != len(set(row[29])):

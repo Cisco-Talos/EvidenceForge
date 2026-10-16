@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 189
+current_revision: 190
 history_start_revision: 1
-behavior_surface_sha256: 226820bc5a818299af27e9bacbe51b1cc760a9ecb678c325b83a5bbd19b0a54a
+behavior_surface_sha256: e06157de95c8b6a9798e8c455a9063f547e99e77f96c0816265eb0118201f680
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1868,3 +1868,13 @@ changes:
       - ecar
       - syslog
     summary: Separates exact canonical SSH logout from Linux PAM observations and admits bounded Mac eCAR logout only with authenticated platform/session ownership and recoverable terminal publication.
+  - revision: 190
+    id: macos-ssh-close-platform-ownership
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - checkpoint-runtime
+    formats:
+      - ecar
+    summary: Separates Mac close facts from Linux observations, retains versioned platform authentication facts in the existing SSH journal, and authenticates Mac terminal process publication against live audit and receiver roles.

@@ -6155,6 +6155,35 @@ class EventDispatcher:
                         raise EventContractError(
                             "POSIX exit projection disagrees with its live State process"
                         )
+                if root_action_id.startswith("ssh-close:") and event.src_host is not None:
+                    platform = self.state_manager._pid_os.get(subject.hostname)
+                    if event.src_host.os_category != platform:
+                        raise EventContractError("SSH process close crossed its modeled platform")
+                    receiver_terminal = root_action_id.endswith(":receiver-terminate")
+                    receiver_descendant = ":receiver-descendant:" in root_action_id
+                    if platform == "macos" and (receiver_terminal or receiver_descendant):
+                        live_session = self.state_manager.get_session(subject.logon_id)
+                        expected_session = self.state_manager.get_session_identity(subject.logon_id)
+                        credentials = subject.credentials
+                        if (
+                            live_session is None
+                            or live_session.auth_protocol != "ssh"
+                            or live_session.audit_origin is None
+                            or identity_plan.session != expected_session
+                            or credentials is None
+                            or credentials.audit_uid != live_session.audit_origin.audit_uid
+                            or credentials.audit_session_id
+                            != live_session.audit_origin.audit_session_id
+                            or not live_session.transport_pid
+                            or receiver_terminal != (subject.pid == live_session.transport_pid)
+                            or (receiver_terminal and credentials.effective_uid != 0)
+                            or event.syslog is not None
+                            or event.auth is None
+                            or event.auth.user_sid
+                        ):
+                            raise EventContractError(
+                                "Mac SSH process close lost its authenticated receiver/session owner"
+                            )
                 if marker in observed_closes:
                     raise EventContractError("Action-cohort repeats a process-close projection")
                 observed_closes[marker] = position
@@ -7658,9 +7687,27 @@ class EventDispatcher:
                     source_terminal
                     and executable not in {"ssh", "ssh.exe", "scp", "scp.exe", "sftp", "sftp.exe"}
                 )
-                or (receiver_terminal and executable != "sshd")
+                or (
+                    receiver_terminal
+                    and event.src_host.os_category != "macos"
+                    and executable != "sshd"
+                )
                 or (receiver_terminal and identity.principal.casefold() != "root")
-                or (receiver_descendant_terminal and event.src_host.os_category != "linux")
+                or (
+                    receiver_descendant_terminal
+                    and event.src_host.os_category not in {"linux", "macos"}
+                )
+                or (
+                    (receiver_terminal or receiver_descendant_terminal)
+                    and event.src_host.os_category == "macos"
+                    and (
+                        identity.credentials is None
+                        or identity_plan.session is None
+                        or identity_plan.session.session_kind != "ssh"
+                        or event.auth.user_sid
+                        or event.syslog is not None
+                    )
+                )
                 or event.src_host.hostname != identity.hostname
                 or event.process.pid != identity.pid
                 or event.process.parent_pid not in {0, identity.parent_pid}

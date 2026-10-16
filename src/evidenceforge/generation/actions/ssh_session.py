@@ -848,6 +848,28 @@ class _SshLinuxAuthState:
 
 
 @dataclass(frozen=True, slots=True)
+class _SshMacAuthState:
+    """Mac receiver facts without Linux PAM/logind observation aliases."""
+
+    receiver: SshReceiverAuthentication
+    initial_receiver_image: str
+    receiver_image: str
+
+    def __post_init__(self) -> None:
+        if type(self.receiver) is not SshReceiverAuthentication:
+            raise TypeError("Mac SSH close requires exact receiver authentication facts")
+        for image in (self.initial_receiver_image, self.receiver_image):
+            if (
+                type(image) is not str
+                or not image.startswith("/")
+                or image.endswith("/")
+                or len(image) > 4_096
+                or any(character in image for character in "\x00\r\n")
+            ):
+                raise ValueError("Mac SSH close requires compiled absolute receiver image paths")
+
+
+@dataclass(frozen=True, slots=True)
 class _SshCloseUserFacts:
     """Immutable scalar copy of the user model needed by terminal generation."""
 
@@ -1065,7 +1087,7 @@ class _PreparedSshClosePlan:
     receiver_started_at: datetime
     receiver_terminate_time: datetime
     session_close_time: datetime
-    logind_remove_time: datetime
+    logind_remove_time: datetime | None
     terminal_window_end: datetime
     action_source_deadline: datetime | None
     session_object_id: str
@@ -1080,7 +1102,7 @@ class _PreparedSshClosePlan:
     source_host: _SshCloseHostFacts | None
     target_host: _SshCloseHostFacts
     source_identity: ProcessIdentity | None
-    auth_state: _SshLinuxAuthState
+    auth_state: _SshLinuxAuthState | _SshMacAuthState
     source_tag: str
 
     def __post_init__(self) -> None:
@@ -1122,13 +1144,18 @@ class _PreparedSshClosePlan:
             raise TypeError("Exact SSH close plan source-host facts changed type")
         if self.source_identity is not None and type(self.source_identity) is not ProcessIdentity:
             raise TypeError("Exact SSH close plan source process changed type")
-        if type(self.auth_state) is not _SshLinuxAuthState:
+        if type(self.auth_state) not in {_SshLinuxAuthState, _SshMacAuthState}:
             raise TypeError("Exact SSH close plan authentication state changed type")
+        macos = type(self.auth_state) is _SshMacAuthState
+        if self.target_host.os_category != ("macos" if macos else "linux"):
+            raise ValueError("Exact SSH close authentication crossed its platform owner")
+        if macos != (self.logind_remove_time is None):
+            raise ValueError("Exact SSH close must retain logind observations only on Linux")
         terminal_times = (
             self.receiver_started_at,
             self.receiver_terminate_time,
             self.session_close_time,
-            self.logind_remove_time,
+            *((self.logind_remove_time,) if self.logind_remove_time is not None else ()),
             self.terminal_window_end,
         )
         if (
@@ -1149,7 +1176,9 @@ class _PreparedSshClosePlan:
         receiver_started_at = ensure_utc(self.receiver_started_at)
         receiver_terminate_time = ensure_utc(self.receiver_terminate_time)
         session_close_time = ensure_utc(self.session_close_time)
-        logind_remove_time = ensure_utc(self.logind_remove_time)
+        logind_remove_time = (
+            ensure_utc(self.logind_remove_time) if self.logind_remove_time is not None else None
+        )
         terminal_window_end = ensure_utc(self.terminal_window_end)
         action_source_deadline = (
             ensure_utc(self.action_source_deadline)
@@ -1220,24 +1249,28 @@ class _PreparedSshClosePlan:
             username=self.username,
             source_ip=self.source_ip,
             source_port=self.source_port,
-            sshd_pid=self.auth_state.sshd_pid,
+            sshd_pid=self.auth_state.receiver.responder_pid,
             transport_close_time=self.close_time,
         )
         expected_receiver_terminate = _ssh_receiver_process_terminate_time(
             target_hostname=self.target_system.hostname,
             source_ip=self.source_ip,
             source_port=self.source_port,
-            sshd_pid=self.auth_state.sshd_pid,
+            sshd_pid=self.auth_state.receiver.responder_pid,
             receiver_started_at=self.receiver_started_at,
             session_close_time=expected_session_close,
         )
-        expected_logind_remove = _ssh_logind_removed_time(
-            target_hostname=self.target_system.hostname,
-            username=self.username,
-            source_ip=self.source_ip,
-            source_port=self.source_port,
-            logind_session_id=self.auth_state.logind_session_id,
-            session_close_time=expected_session_close,
+        expected_logind_remove = (
+            _ssh_logind_removed_time(
+                target_hostname=self.target_system.hostname,
+                username=self.username,
+                source_ip=self.source_ip,
+                source_port=self.source_port,
+                logind_session_id=self.auth_state.receiver.session_id,
+                session_close_time=expected_session_close,
+            )
+            if type(self.auth_state) is _SshLinuxAuthState
+            else None
         )
         expected_source_terminate = (
             _ssh_source_process_terminate_time(
@@ -1259,10 +1292,11 @@ class _PreparedSshClosePlan:
             raise StateError("Exact SSH terminal tail changed after precommit preparation")
         if (
             canonical_window_end - self.close_time < _SSH_TERMINAL_TAIL_RESERVATION
-            or not self.close_time
-            < self.session_close_time
-            < self.logind_remove_time
-            < canonical_window_end
+            or not self.close_time < self.session_close_time < canonical_window_end
+            or (
+                self.logind_remove_time is not None
+                and not self.session_close_time < self.logind_remove_time < canonical_window_end
+            )
             or not self.auth_state.receiver.ready_at
             < self.receiver_terminate_time
             < self.session_close_time
@@ -1274,6 +1308,24 @@ class _PreparedSshClosePlan:
             raise StateError(
                 "Exact SSH terminal tail does not fit inside its half-open generation window"
             )
+
+    @property
+    def initial_receiver_image(self) -> str:
+        """Return the executable belonging to the immutable receiver lifetime."""
+        return (
+            self.auth_state.initial_receiver_image
+            if type(self.auth_state) is _SshMacAuthState
+            else "/usr/sbin/sshd"
+        )
+
+    @property
+    def receiver_image(self) -> str:
+        """Return the expected final privileged receiver executable."""
+        return (
+            self.auth_state.receiver_image
+            if type(self.auth_state) is _SshMacAuthState
+            else "/usr/sbin/sshd"
+        )
 
     def session_identity(self) -> SessionIdentity:
         """Rebuild the exact immutable target-session identity from scalar facts."""
@@ -2182,14 +2234,14 @@ class _PreparedSshCloseContinuation:
             plan.open_time,
             plan.session_started_at,
             plan.receiver_started_at,
-            plan.auth_state.connection_time,
-            plan.auth_state.accepted_time,
-            plan.auth_state.pam_time,
+            plan.auth_state.receiver.connection_time,
+            plan.auth_state.receiver.authenticated_at,
+            plan.auth_state.receiver.session_open_time,
             plan.auth_state.receiver.ready_at,
             plan.close_time,
             plan.receiver_terminate_time,
             plan.session_close_time,
-            plan.logind_remove_time,
+            *((plan.logind_remove_time,) if plan.logind_remove_time is not None else ()),
             *((plan.source_terminate_time,) if plan.source_terminate_time is not None else ()),
         )
         gate = ensure_utc(output_start)
@@ -2256,9 +2308,17 @@ class _PreparedSshCloseContinuation:
 
         return self._binding.authenticates(continuation)
 
+    def require_projection_phase(self, phase: str) -> None:
+        """Reject Linux-only terminal observations on a Mac continuation."""
+
+        self._progress._validate_phase(phase)
+        if phase == "logind-remove" and type(self.plan.auth_state) is _SshMacAuthState:
+            raise StateError("Mac SSH close cannot publish Linux logind observations")
+
     def retain_projection_failure(self, phase: str, error: BaseException) -> None:
         """Retain one exact terminal projection receipt on the prepared owner."""
 
+        self.require_projection_phase(phase)
         self._progress.retain_failure(phase, error)
 
     def retain_projection_publication(
@@ -2269,6 +2329,7 @@ class _PreparedSshCloseContinuation:
     ) -> None:
         """Retain one committed action cohort directly on its prepared owner."""
 
+        self.require_projection_phase(phase)
         self._progress.retain_publication(phase, receipt, result)
 
     def bind_projection_phase(
@@ -2282,6 +2343,7 @@ class _PreparedSshCloseContinuation:
     ) -> None:
         """Bind a terminal phase to its sole exact action-cohort preimage."""
 
+        self.require_projection_phase(phase)
         self._progress.bind_action_phase(
             phase,
             root_action_id=root_action_id,
@@ -2293,16 +2355,19 @@ class _PreparedSshCloseContinuation:
     def cancel_projection_phase(self, phase: str) -> None:
         """Release one uncommitted terminal action-cohort binding."""
 
+        self.require_projection_phase(phase)
         self._progress.cancel_action_phase(phase)
 
     def mark_projection_complete(self, phase: str) -> None:
         """Record one terminal phase whose publisher returned successfully."""
 
+        self.require_projection_phase(phase)
         self._progress.mark_complete(phase)
 
     def recover_projection(self, phase: str, dispatcher: EventDispatcher) -> bool:
         """Recover one terminal phase from its exact retained dispatcher receipt."""
 
+        self.require_projection_phase(phase)
         return self._progress.recover(phase, dispatcher)
 
     def receiver_descendant_terminations(
@@ -2514,7 +2579,7 @@ class _SshCloseContinuation:
         """Build a fresh terminal input event without invoking a postcommit callback."""
 
         return OccurrenceBuilder(
-            timestamp=self.plan.auth_state.pam_time,
+            timestamp=self.plan.auth_state.receiver.session_open_time,
             event_type="ssh_session",
             src_host=state.src_host,
             dst_host=state.dst_host,
@@ -2523,7 +2588,7 @@ class _SshCloseContinuation:
                 source_ip=self.plan.source_ip,
                 source_port=self.plan.source_port,
                 logon_id=self.plan.logon_id,
-                session_id=self.plan.auth_state.logind_session_id,
+                session_id=self.plan.auth_state.receiver.session_id,
                 logon_type=10,
             ),
             process=state.source_process,
@@ -4701,7 +4766,7 @@ class SshSessionActionBundle:
         session_identity = planned.session_identity
         if (
             identity.hostname != plan.target_system.hostname
-            or identity.pid == plan.auth_state.sshd_pid
+            or identity.pid == plan.auth_state.receiver.responder_pid
             or planned.terminate_at >= plan.receiver_terminate_time
         ):
             raise StateError("Exact SSH descendant close crossed its receiver owner")
