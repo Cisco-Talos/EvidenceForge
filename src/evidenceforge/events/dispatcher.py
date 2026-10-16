@@ -4562,10 +4562,15 @@ class EventDispatcher:
         if not isinstance(state_intent, PreparedDispatchStateIntent):
             raise EventContractError("Prepared dispatch requires a typed state intent")
         if (
-            event.event_type is EventKind.PROCESS_EXEC
+            event.event_type
+            in {
+                EventKind.PROCESS_EXEC,
+                EventKind.PROCESS_AUDIT_BIND,
+                EventKind.PROCESS_PRIVILEGE_DROP,
+            }
             and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
         ):
-            raise EventContractError("Process exec requires its exact State action cohort")
+            raise EventContractError("Process mutation requires its exact State action cohort")
         if state_intent is not PreparedDispatchStateIntent.APPLY and lifecycle_ticket is None:
             raise EventContractError(
                 "Externally materialized dispatch requires an authority lifecycle ticket"
@@ -5924,6 +5929,12 @@ class EventDispatcher:
             *(("session", object_id) for object_id in session_closes),
         }
         executions = {item.target.object_id: item for item in state_plan.process_executions}
+        credential_patches = {
+            patch.target.object_id: patch
+            for patch in state_plan.process_activity_patches
+            if patch.audit_binding is not None or patch.privilege_drop is not None
+        }
+        observed_credentials: set[str] = set()
         observed_executions: set[str] = set()
         observed_starts: dict[tuple[str, str], int] = {}
         observed_closes: dict[tuple[str, str], int] = {}
@@ -6026,6 +6037,53 @@ class EventDispatcher:
                         "Process exec changed its State host or integrity facts"
                     )
                 observed_executions.add(after.object_id)
+            elif event.event_type in {
+                EventKind.PROCESS_AUDIT_BIND,
+                EventKind.PROCESS_PRIVILEGE_DROP,
+            }:
+                from evidenceforge.events.process import process_credential_identities
+
+                before, after = process_credential_identities(event)
+                patch = credential_patches.get(after.object_id)
+                change = (
+                    (
+                        patch.audit_binding
+                        if event.event_type is EventKind.PROCESS_AUDIT_BIND
+                        else patch.privilege_drop
+                    )
+                    if patch is not None
+                    else None
+                )
+                live = self.state_manager.get_process(before.hostname, before.pid)
+                expected_integrity = (
+                    change.after_integrity
+                    if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP and change is not None
+                    else live.integrity_level
+                    if live is not None
+                    else None
+                )
+                expected_principal = (
+                    change.after_principal
+                    if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP and change is not None
+                    else before.principal
+                )
+                if (
+                    patch is None
+                    or change is None
+                    or live is None
+                    or patch.target != before
+                    or change.before != before.credentials
+                    or change.after != after.credentials
+                    or after.principal != expected_principal
+                    or patch.activity_time != event.timestamp
+                    or event.process.integrity_level != expected_integrity
+                    or self.state_manager._pid_os.get(before.hostname) != "macos"
+                    or after.object_id in observed_credentials
+                ):
+                    raise EventContractError(
+                        "Action-cohort credential projection disagrees with its exact State transition"
+                    )
+                observed_credentials.add(after.object_id)
             elif event.event_type is EventKind.PROCESS_TERMINATE:
                 if type(subject) is not ProcessIdentity:
                     raise EventContractError(
@@ -6082,6 +6140,11 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort projection closes a State member before its start"
                 )
+
+        if observed_credentials != credential_patches.keys():
+            raise EventContractError(
+                "Action-cohort credential transitions lack exact source members"
+            )
 
         if observed_executions != executions.keys():
             raise EventContractError("Action-cohort exec transitions lack exact source members")
@@ -6711,6 +6774,8 @@ class EventDispatcher:
         if len(owned_keys) != sum(plan.occurrence_count for plan in owned_effect_plans):
             raise EventContractError("Action-cohort owned effect plans repeat an exact ordinal")
         bootstrap_kinds = {
+            EventKind.PROCESS_AUDIT_BIND,
+            EventKind.PROCESS_PRIVILEGE_DROP,
             EventKind.PROCESS_EXEC,
             EventKind.LOGON,
             EventKind.MACHINE_LOGON,
@@ -7583,6 +7648,11 @@ class EventDispatcher:
         """Return the authenticated closed semantic kind for exact cohort projection."""
 
         projection = record.trusted_projections[0]
+        if projection.occurrence.event_type in {
+            EventKind.PROCESS_AUDIT_BIND,
+            EventKind.PROCESS_PRIVILEGE_DROP,
+        }:
+            return self._require_process_credential_projection(record)
         if projection.occurrence.event_type is EventKind.PROCESS_EXEC:
             return self._require_posix_exec_projection(record)
         try:
@@ -7596,6 +7666,40 @@ class EventDispatcher:
                 except EventContractError:
                     return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_process_credential_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one credential change with its exact authenticated source member."""
+        from evidenceforge.events.process import process_credential_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact process credential projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_credential_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"{event.event_type}:{after.execution_id}"
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != before
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError(
+                "Exact process credential projection changed its singleton owner"
+            )
+        return "process_credentials"
 
     @staticmethod
     def _require_posix_exec_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -8206,14 +8310,16 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         record.exact_projection_kind = exact_kind
-        terminal_kind = exact_kind == "posix_exec" or exact_kind.startswith(
-            ("ssh_", "rdp_", "linux_sudo_")
-        )
+        terminal_kind = exact_kind in {
+            "posix_exec",
+            "process_credentials",
+        } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
+                if exact_kind in {"posix_exec", "process_credentials"}
+                or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
@@ -8237,7 +8343,9 @@ class EventDispatcher:
             self._ssh_terminal_exact_projection_participants(projection)
         elif exact_kind.startswith("rdp_"):
             self._rdp_terminal_exact_projection_participants(projection)
-        elif exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_"):
+        elif exact_kind in {"posix_exec", "process_credentials"} or exact_kind.startswith(
+            "linux_sudo_"
+        ):
             self._single_ecar_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
@@ -8257,14 +8365,16 @@ class EventDispatcher:
         exact_kind = self._exact_action_cohort_projection_kind(record)
         if exact_kind != record.exact_projection_kind:
             raise EventContractError("Exact action-cohort projection kind changed before rendering")
-        terminal_kind = exact_kind == "posix_exec" or exact_kind.startswith(
-            ("ssh_", "rdp_", "linux_sudo_")
-        )
+        terminal_kind = exact_kind in {
+            "posix_exec",
+            "process_credentials",
+        } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
+                if exact_kind in {"posix_exec", "process_credentials"}
+                or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
@@ -8280,7 +8390,8 @@ class EventDispatcher:
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
             else self._single_ecar_exact_projection_participants(projection)
-            if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
+            if exact_kind in {"posix_exec", "process_credentials"}
+            or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
         batch.reserve_participants(cast(tuple[object, ...], participants))
@@ -8876,14 +8987,6 @@ class EventDispatcher:
             raise EventContractError("Action-cohort batch requires a non-empty root action ID")
         if type(state_plan) is not ActionCohortMaterializationPlan:
             raise EventContractError("Action-cohort batch requires an exact State plan")
-        if any(patch.audit_binding is not None for patch in state_plan.process_activity_patches):
-            raise EventContractError(
-                "Process audit-origin cohorts have no supported canonical source projection yet"
-            )
-        if any(patch.privilege_drop is not None for patch in state_plan.process_activity_patches):
-            raise EventContractError(
-                "SSH privilege-drop cohorts have no supported canonical source projection yet"
-            )
         if type(dispatches) is not tuple or not dispatches:
             raise EventContractError("Action-cohort batch requires an ordered dispatch tuple")
         if len(dispatches) > _MAX_ACTION_COHORT_DISPATCHES:
@@ -15209,6 +15312,8 @@ class EventDispatcher:
             "process_terminate",
             "process_access",
             "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
             "create_remote_thread",
             "bash_command",
             "zsh_command",

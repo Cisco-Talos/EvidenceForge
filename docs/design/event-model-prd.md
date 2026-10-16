@@ -698,3 +698,5 @@ Use `tests/fixtures/scenarios/retail-store-ftp-attack.yaml` as the primary compa
 ### Internal POSIX exec extension
 
 `process_exec` requires source host, process, lifecycle and exact before/after identity roles; it is a dependent State mutation, with eCAR as its only current consumer. The post-exec subject and pre-exec actor share one lifetime. Authored `process` semantics are unchanged. See the architecture's POSIX exec publication section for exact cohort ownership and the evidence-format reference for the EvidenceForge eCAR extension.
+
+The internal `process_audit_bind` and `process_privilege_drop` kinds preserve lifetime and execution identity while projecting exact authenticated State credential patches. The eCAR modification extension distinguishes these aggregate transitions; native event families and authored entry points remain separate gates.

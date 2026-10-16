@@ -58,8 +58,8 @@ class IdentityLifecyclePlanner:
         or thread state remains missing; this layer never invents attribution.
         """
 
-        if event.event_type == "process_exec":
-            # Both snapshots belong to the State exec plan, including the pre-exec actor.
+        if event.event_type in {"process_exec", "process_audit_bind", "process_privilege_drop"}:
+            # Both snapshots belong to the State transition plan, including the prior actor.
             # Inferring from live state would overwrite the immutable role boundary.
             return
         session = self._session_identity(event)

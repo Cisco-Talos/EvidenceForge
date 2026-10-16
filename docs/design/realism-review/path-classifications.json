@@ -150,6 +150,15 @@
       "classification": "single_canonical_path",
       "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection",
       "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition."
+    },
+    {
+      "names": [
+        "process_audit_bind",
+        "process_privilege_drop"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
+      "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
     }
   ],
   "contexts": [

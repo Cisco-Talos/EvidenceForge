@@ -56,6 +56,8 @@ class EventKind(StrEnum):
     PROCESS_ACCESS = "process_access"
     PROCESS_CREATE = "process_create"
     PROCESS_EXEC = "process_exec"
+    PROCESS_AUDIT_BIND = "process_audit_bind"
+    PROCESS_PRIVILEGE_DROP = "process_privilege_drop"
     PROCESS_TERMINATE = "process_terminate"
     RDP_DISCONNECT = "rdp_disconnect"
     RDP_RECONNECT = "rdp_reconnect"
@@ -964,6 +966,34 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_formats(FormatKind.ECAR),
     ),
+    EventKind.PROCESS_AUDIT_BIND: _contract(
+        EventKind.PROCESS_AUDIT_BIND,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        optional=_contexts(ContextKind.AUTH),
+        forbidden=frozenset(ContextKind)
+        - _contexts(
+            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
+    EventKind.PROCESS_PRIVILEGE_DROP: _contract(
+        EventKind.PROCESS_PRIVILEGE_DROP,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        optional=_contexts(ContextKind.AUTH),
+        forbidden=frozenset(ContextKind)
+        - _contexts(
+            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_TERMINATE: _contract(
         EventKind.PROCESS_TERMINATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
@@ -1138,11 +1168,21 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
             )
         )
 
-    if contract.kind is EventKind.PROCESS_EXEC:
-        from evidenceforge.events.process import process_exec_identities
+    if contract.kind in {
+        EventKind.PROCESS_EXEC,
+        EventKind.PROCESS_AUDIT_BIND,
+        EventKind.PROCESS_PRIVILEGE_DROP,
+    }:
+        from evidenceforge.events.process import (
+            process_credential_identities,
+            process_exec_identities,
+        )
 
         try:
-            process_exec_identities(event)
+            if contract.kind is EventKind.PROCESS_EXEC:
+                process_exec_identities(event)
+            else:
+                process_credential_identities(event)
         except ValueError as exc:
             violations.append(
                 ContractViolation(

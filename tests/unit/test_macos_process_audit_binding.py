@@ -201,7 +201,7 @@ def test_adoption_preserves_lifecycle_identity_and_advances_its_activity_frontie
     assert registry.get_process(before.object_id).latest_dependent_at == transition.canonical_time
 
 
-def test_adoption_cannot_publish_unimplemented_source_projection() -> None:
+def test_adoption_requires_an_explicit_source_member() -> None:
     from evidenceforge.events.dispatcher import EventDispatcher
     from evidenceforge.models.exceptions import EventContractError
 
@@ -210,7 +210,7 @@ def test_adoption_cannot_publish_unimplemented_source_projection() -> None:
     builder.bind_macos_process_audit_origin(before, bound_at=_START + timedelta(seconds=1))
     plan = builder.seal()
     dispatcher = EventDispatcher(manager, {})
-    with pytest.raises(EventContractError, match="audit-origin cohorts"):
+    with pytest.raises(EventContractError, match="ordered dispatch tuple"):
         dispatcher.prepare_action_cohort_batch("audit-origin-test", plan, (), (), (), ())
 
 

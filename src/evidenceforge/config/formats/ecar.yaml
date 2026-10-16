@@ -256,12 +256,22 @@ fields:
   - name: operation
     type: string
     required: false
-    description: "EvidenceForge process transition operation; exec for image replacement"
+    description: "EvidenceForge process transition operation: exec, audit_bind or privilege_drop"
 
   - name: execution_id
     type: string
     required: false
     description: "Post-transition execution identity within the same process object"
+
+  - name: process_principal
+    type: string
+    required: false
+    description: "Process principal after a credential transition"
+
+  - name: previous_process_principal
+    type: string
+    required: false
+    description: "Process principal before a credential transition"
 
   - name: previous_execution_id
     type: string

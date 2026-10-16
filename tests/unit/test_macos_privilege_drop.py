@@ -275,14 +275,14 @@ def test_privilege_drop_rejects_later_dependent_frontier_and_retired_parent() ->
         _drop(manager, before)
 
 
-def test_native_source_projection_remains_unavailable_for_privilege_drop() -> None:
+def test_privilege_drop_requires_an_explicit_source_member() -> None:
     from evidenceforge.events.dispatcher import EventContractError, EventDispatcher
 
     manager, before = _child()
     builder = manager.begin_action_cohort_materialization()
     builder.drop_macos_ssh_child_privileges(before, dropped_at=_START + timedelta(seconds=3))
     dispatcher = EventDispatcher(manager, {})
-    with pytest.raises(EventContractError, match="privilege-drop.*no supported"):
+    with pytest.raises(EventContractError, match="ordered dispatch tuple"):
         dispatcher.prepare_action_cohort_batch("drop-test", builder.seal(), (), (), (), ())
 
 

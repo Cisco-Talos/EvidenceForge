@@ -218,6 +218,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "failed_logon",
         "process_create",
         "process_exec",
+        "process_audit_bind",
+        "process_privilege_drop",
         "process_terminate",
         "system_process_create",
         "ssh_session",
@@ -268,7 +270,9 @@ class EcarEmitter(HostMultiplexEmitter):
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
-            "process_exec": self._render_process_exec,
+            "process_exec": self._render_process_transition,
+            "process_audit_bind": self._render_process_transition,
+            "process_privilege_drop": self._render_process_transition,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
@@ -335,7 +339,14 @@ class EcarEmitter(HostMultiplexEmitter):
             elif (
                 isinstance(plan.subject, ProcessIdentity)
                 and event.event_type
-                in {"process_create", "system_process_create", "process_terminate", "process_exec"}
+                in {
+                    "process_create",
+                    "system_process_create",
+                    "process_terminate",
+                    "process_exec",
+                    "process_audit_bind",
+                    "process_privilege_drop",
+                }
                 and plan.subject.primary_thread is not None
             ):
                 event_data["tid"] = plan.subject.primary_thread.tid
@@ -706,11 +717,18 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
-    def _render_process_exec(self, event: CanonicalOccurrence) -> None:
-        """Render the EvidenceForge PROCESS/MODIFY exec extension."""
-        from evidenceforge.events.process import process_exec_identities
+    def _render_process_transition(self, event: CanonicalOccurrence) -> None:
+        """Render bounded EvidenceForge PROCESS/MODIFY transition extensions."""
+        from evidenceforge.events.process import (
+            process_credential_identities,
+            process_exec_identities,
+        )
 
-        before, after = process_exec_identities(event)
+        before, after = (
+            process_exec_identities(event)
+            if event.event_type == "process_exec"
+            else process_credential_identities(event)
+        )
         event_data = {
             "timestamp": self._after_process_create_timestamp(event, after),
             "hostname": self._host_name(event.src_host),
@@ -721,13 +739,16 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": before.principal,
             "image_path": after.image,
             "command_line": after.command_line,
-            "operation": "exec",
+            "operation": event.event_type.removeprefix("process_"),
             "execution_id": after.execution_id,
             "previous_execution_id": before.execution_id,
             "previous_image_path": before.image,
             "previous_command_line": before.command_line,
             "_host_fqdn": self._host_fqdn(event.src_host),
         }
+        if event.event_type != "process_exec":
+            event_data["process_principal"] = after.principal
+            event_data["previous_process_principal"] = before.principal
         self._apply_session_properties(event_data, event)
         for prefix, identity in (("previous_", before), ("", after)):
             credentials = identity.credentials
@@ -1425,6 +1446,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "operation",
         "execution_id",
         "previous_execution_id",
+        "process_principal",
+        "previous_process_principal",
         "previous_image_path",
         "previous_command_line",
         "command_line",

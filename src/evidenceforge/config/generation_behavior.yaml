@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 177
+current_revision: 178
 history_start_revision: 1
-behavior_surface_sha256: cf410acda147520a2750cf224b2aae106228f6d1c8f1101ca4e11cf5fd4327d4
+behavior_surface_sha256: ccc0bfedccc8d9bec5c2bfb89b86e26ed2545313f7e4aa5c9bb1c36870a7e236
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1759,3 +1759,13 @@ changes:
     formats:
       - ecar
     summary: Publishes authenticated POSIX exec as an eCAR process modification without creating another lifetime.
+  - revision: 178
+    id: macos-process-credential-projection
+    impact: localized
+    domains:
+      - process-credential-identity
+      - source-projection
+      - checkpoint-recovery
+    formats:
+      - ecar
+    summary: Projects authenticated Mac audit adoption and child privilege drops as distinct eCAR modifications with unchanged execution identity.

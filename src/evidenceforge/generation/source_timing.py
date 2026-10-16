@@ -288,6 +288,12 @@ PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES: tuple[SourceTimingIndexFamilySpec, ...]
         "lifecycle+48h",
     ),
     SourceTimingIndexFamilySpec(
+        "runtime_process_credentials",
+        "family/source_instance/execution_id/principal/credentials",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
         "runtime_cross_source_sysmon_create",
         "hostname/process_object_id",
         "native/render datetime pair",
@@ -1223,6 +1229,9 @@ class SourceTimingPlanner:
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_process_execution_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_process_credential_times = _SourceTimingCache(
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_cross_source_sysmon_create_times = _SourceTimingCache(
@@ -2255,6 +2264,7 @@ class SourceTimingPlanner:
             ("ecar_process_create", self._ecar_process_create_times),
             ("runtime_process_create", self._runtime_process_create_times),
             ("runtime_process_execution", self._runtime_process_execution_times),
+            ("runtime_process_credentials", self._runtime_process_credential_times),
             (
                 "runtime_cross_source_sysmon_create",
                 self._runtime_cross_source_sysmon_create_times,
@@ -2350,6 +2360,23 @@ class SourceTimingPlanner:
             )
         if family == "runtime_process_execution":
             return (("ecar", source_instance, f"{object_id}:exec:1"), timestamp, lifecycle_deadline)
+        if family == "runtime_process_credentials":
+            return (
+                (
+                    "ecar",
+                    source_instance,
+                    f"{object_id}:exec:0",
+                    "casey",
+                    501,
+                    501,
+                    20,
+                    20,
+                    501,
+                    100_000,
+                ),
+                timestamp,
+                lifecycle_deadline,
+            )
         if family == "runtime_cross_source_sysmon_create":
             rendered = timestamp + timedelta(microseconds=ordinal % 997 + 1)
             return (host, object_id), (timestamp, rendered), lifecycle_deadline
@@ -4358,6 +4385,32 @@ class SourceTimingPlanner:
                     timestamp=render_time,
                 )
 
+    @staticmethod
+    def _process_credential_observation_key(
+        family: str,
+        source_instance: str,
+        identity: ProcessIdentity,
+    ) -> tuple[object, ...]:
+        credentials = identity.credentials
+        return (
+            family,
+            source_instance,
+            identity.execution_id,
+            identity.principal,
+            *(
+                (
+                    credentials.real_uid,
+                    credentials.effective_uid,
+                    credentials.real_gid,
+                    credentials.effective_gid,
+                    credentials.audit_uid,
+                    credentials.audit_session_id,
+                )
+                if credentials is not None
+                else (None,) * 6
+            ),
+        )
+
     def _apply_process_execution_constraints(
         self,
         event: TimingOccurrence,
@@ -4372,7 +4425,7 @@ class SourceTimingPlanner:
         if family != "ecar" or event.identity_plan is None:
             return preferred
         plan = event.identity_plan
-        if event.event_type == "process_exec":
+        if event.event_type in {"process_exec", "process_audit_bind", "process_privilege_drop"}:
             identity = plan.subject
             floor = (
                 self._process_dependent_create_times.get(
@@ -4398,6 +4451,12 @@ class SourceTimingPlanner:
                 if identity is not None and identity.execution_ordinal > 0
                 else None
             )
+        if isinstance(identity, ProcessIdentity):
+            credential_floor = self._runtime_process_credential_times.get(
+                self._process_credential_observation_key(family, source_instance, identity)
+            )
+            if credential_floor is not None:
+                floor = max(floor, credential_floor) if floor is not None else credential_floor
         if floor is None or preferred > floor:
             return preferred
         self.timing_runtime.audit.record_repair("ecar.process.execution_order")
@@ -4568,6 +4627,15 @@ class SourceTimingPlanner:
             if isinstance(identity, ProcessIdentity):
                 self._runtime_process_execution_times[
                     (family, source_instance, identity.execution_id)
+                ] = timestamp
+        if family == "ecar" and event.event_type in {
+            "process_audit_bind",
+            "process_privilege_drop",
+        }:
+            identity = event.identity_plan.subject if event.identity_plan is not None else None
+            if isinstance(identity, ProcessIdentity):
+                self._runtime_process_credential_times[
+                    self._process_credential_observation_key(family, source_instance, identity)
                 ] = timestamp
         key = (family, source_instance, process_object_id)
         previous = self._process_dependent_create_times.get(key)
@@ -4813,6 +4881,8 @@ class SourceTimingPlanner:
             "image_load",
             "process_access",
             "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {
