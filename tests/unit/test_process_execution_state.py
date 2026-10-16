@@ -314,6 +314,11 @@ def test_exec_retains_registered_lifetime_and_advances_dependent_frontier(platfo
     assert current.membership == initial.membership
     assert current.token == initial.token
     assert current.latest_dependent_at == after.execution_started_at
+    assert current.current_view.execution_ordinal == after.execution_ordinal
+    assert current.current_view.image == after.image
+    assert current.current_view.changed_at == after.execution_started_at
+    assert current.current_view.token == initial.token
+    assert transition.process_change.after == current.current_view
     assert shadow.ensure_process(after, session=None) == initial.identity
     # A later close still binds the original lifetime while carrying the new image.
     close = manager.begin_action_cohort_materialization()

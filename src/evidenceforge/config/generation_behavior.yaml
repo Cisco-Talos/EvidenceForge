@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 174
+current_revision: 175
 history_start_revision: 1
-behavior_surface_sha256: 0fef978421e0166d3552597f21f4781d4e4aca762aa5be440eb074a8b388ecc9
+behavior_surface_sha256: 91db0961e6ec2f42f2dd96861f12fdc2cad028b936286c42d8285d0da176612d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1732,3 +1732,12 @@ changes:
       - native-clock-projection
     formats: []
     summary: Adds allocation-free Mac uptime projection from registered boot state and an explicit Mach timebase. Reuses existing service boot identities and preserves all generated source behavior; native sources remain unregistered.
+  - revision: 175
+    id: process-current-execution-lifecycle-view
+    impact: none
+    domains:
+      - process-execution-identity
+      - lifecycle-resource-ownership
+      - checkpoint-recovery
+    formats: []
+    summary: Retains immutable process lifetime identity while exact exec and credential transitions advance current lifecycle facts. Adds checkpoint recovery and lease admission gates; native sources and Mac receivers remain unavailable.

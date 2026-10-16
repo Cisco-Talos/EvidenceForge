@@ -47,6 +47,8 @@ from evidenceforge.events.lifecycle import (
     LogicalServiceIdentity,
     ProcessLifecycleIdentity,
     ProcessLifecycleSnapshot,
+    ProcessRuntimeChange,
+    ProcessRuntimeView,
     ProcessTokenIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceInstanceLifecycleSnapshot,
@@ -332,6 +334,8 @@ def _transition_digest_value(transition: LifecycleTransition) -> int:
             transition.reason,
         )
     )
+    if transition.process_change is not None:
+        payload += "\x1fprocess-runtime:" + repr(transition.process_change)
     return int.from_bytes(sha256(payload.encode("utf-8")).digest())
 
 
@@ -792,6 +796,7 @@ class _LifecycleState:
     commits: dict[tuple[str, int], str] | None = None
     commit_deletions: int = 0
     durable_transition_ids: str | tuple[str, ...] | None = None
+    runtime_view: ProcessRuntimeView | None = None
 
 
 class _StartedLifecycleState:
@@ -810,6 +815,7 @@ class _StartedLifecycleState:
     latest_hold_until = None
     commits = None
     commit_deletions = 0
+    runtime_view = None
 
     def __init__(self, transition: LifecycleTransition, transition_digest: int) -> None:
         self.transitions = transition
@@ -1094,6 +1100,11 @@ class _ProcessEntry:
     token: ProcessTokenIdentity
     membership: LifecycleMembership
     state: _LifecycleStateRecord = field(compare=False, repr=False)
+
+    @property
+    def current_view(self) -> ProcessRuntimeView:
+        """Return the latest execution facts while preserving lifetime identity."""
+        return self.state.runtime_view or ProcessRuntimeView.initial(self.identity, self.token)
 
     @property
     def transitions(self) -> tuple[LifecycleTransition, ...]:
@@ -5477,7 +5488,10 @@ class _LifecyclePartition:
             )
         if process.identity.hostname.casefold() != hostname.casefold():
             raise StateError("Lifecycle resource lease cannot use a cross-host process")
-        if process.token.principal.casefold() != principal.casefold():
+        current_view = process.current_view
+        if canonical_time < current_view.changed_at:
+            raise StateError("Lifecycle resource lease precedes the current process execution")
+        if current_view.token.principal.casefold() != principal.casefold():
             raise StateError("Lifecycle resource lease principal disagrees with its process token")
         if process.membership.session_object_id != session_object_id:
             raise StateError("Lifecycle resource lease process is not a member of its session")
@@ -5491,10 +5505,10 @@ class _LifecyclePartition:
                 f"Lifecycle resource lease extends past process close barrier "
                 f"{process.close_barrier.barrier_id}"
             )
-        if require_shell and process.identity.role != "shell":
+        if require_shell and current_view.role != "shell":
             raise StateError("Lifecycle foreground lease holder must be a shell process")
         if canonical_image and self._canonical_lease_image(
-            process.identity.image
+            current_view.image
         ) != self._canonical_lease_image(canonical_image):
             raise StateError("Lifecycle singleton lease image disagrees with its process")
         return process
@@ -6241,6 +6255,8 @@ class _LifecyclePartition:
             if not claim_validated:
                 self._validate_transition_claim(transition)
             self._record_transition_commit(entry, transition)
+            if transition.process_change is not None:
+                entry.state.runtime_view = transition.process_change.after
             self._insert_transition_detail(entry, transition)
             entry.state.transition_count += 1
             entry.state.transition_digest ^= self._transition_digest(transition)
@@ -6511,6 +6527,7 @@ class _LifecyclePartition:
             hold_ledger_digest=f"{entry.state.hold_digest:064x}",
             latest_dependent_at=entry.state.latest_dependent_at,
             latest_hold_until=entry.state.latest_hold_until,
+            runtime_view=entry.state.runtime_view,
         )
 
     def _session_snapshot(self, entry: _SessionEntry) -> SessionLifecycleSnapshotView:
@@ -8546,6 +8563,7 @@ class _ActionCohortSubjectState:
     parent_object_id: str = ""
     session_object_id: str = ""
     process_role: str = ""
+    runtime_view: ProcessRuntimeView | None = None
     close_barrier: LifecycleCloseBarrier | None = None
     closure_ticket: LifecycleClosureTicket | None = None
     closed_at: datetime | None = None
@@ -9601,6 +9619,39 @@ class LifecycleRegistry:
         )
 
     @classmethod
+    def _normalize_action_cohort_runtime_view(cls, value: object) -> ProcessRuntimeView:
+        if type(value) is not ProcessRuntimeView:
+            raise TypeError("Lifecycle process runtime view must be exact")
+        return ProcessRuntimeView(
+            revision=cls._action_cohort_exact_int(value.revision, field_name="view revision"),
+            execution_ordinal=cls._action_cohort_exact_int(
+                value.execution_ordinal, field_name="execution ordinal"
+            ),
+            changed_at=cls._action_cohort_exact_datetime(value.changed_at, field_name="view time"),
+            image=cls._action_cohort_exact_text(
+                value.image, field_name="view image", allow_empty=False
+            ),
+            role=cls._action_cohort_exact_text(
+                value.role, field_name="view role", allow_empty=False
+            ),
+            token=cls._normalize_action_cohort_process_token(value.token),
+        )
+
+    @classmethod
+    def _normalize_action_cohort_process_change(cls, value: object) -> ProcessRuntimeChange | None:
+        if value is None:
+            return None
+        if type(value) is not ProcessRuntimeChange:
+            raise TypeError("Lifecycle process runtime change must be exact")
+        return ProcessRuntimeChange(
+            before=cls._normalize_action_cohort_runtime_view(value.before),
+            after=cls._normalize_action_cohort_runtime_view(value.after),
+            kind=cls._action_cohort_exact_text(
+                value.kind, field_name="runtime change kind", allow_empty=False
+            ),
+        )
+
+    @classmethod
     def _normalize_action_cohort_transition(cls, value: object) -> LifecycleTransition:
         if type(value) is not LifecycleTransition:
             raise TypeError("Lifecycle action cohort transition must be exact")
@@ -9636,6 +9687,7 @@ class LifecycleRegistry:
                 field_name="transition reason",
             ),
             transition_ordinal=ordinal,
+            process_change=cls._normalize_action_cohort_process_change(value.process_change),
         )
 
     @classmethod
@@ -9945,6 +9997,8 @@ class LifecycleRegistry:
                     )
             elif type(operation) is LifecycleTransition:
                 keys.append(("transition", operation.transition_id))
+                if operation.process_change is not None:
+                    keys.append(self._resource_lease_subject_key(subject))
             elif type(operation) is LifecycleHold:
                 keys.extend(
                     (
@@ -10397,7 +10451,7 @@ class LifecycleRegistry:
                 raise StateError("Lifecycle action cohort resolved an incompatible process")
             parent_object_id = entry.identity.parent_object_id
             session_object_id = entry.membership.session_object_id
-            process_role = entry.identity.role
+            process_role = entry.current_view.role
         elif subject.kind == "session":
             if not isinstance(entry, _SessionEntry):
                 raise StateError("Lifecycle action cohort resolved an incompatible session")
@@ -10413,6 +10467,7 @@ class LifecycleRegistry:
             parent_object_id=parent_object_id,
             session_object_id=session_object_id,
             process_role=process_role,
+            runtime_view=entry.current_view if isinstance(entry, _ProcessEntry) else None,
             close_barrier=entry.close_barrier,
             closure_ticket=entry.closure_ticket,
             closed_at=entry.closed_at,
@@ -10669,6 +10724,7 @@ class LifecycleRegistry:
                         parent_object_id=identity.parent_object_id,
                         session_object_id=operation.membership.session_object_id,
                         process_role=identity.role,
+                        runtime_view=ProcessRuntimeView.initial(identity, operation.token),
                     )
                     if identity.parent_object_id:
                         parent = state_for(LifecycleEntityRef("process", identity.parent_object_id))
@@ -10741,6 +10797,26 @@ class LifecycleRegistry:
                     ):
                         raise StateError("Lifecycle dependent cannot occur after its close barrier")
                     partition._validate_transition_claim(operation)
+                    change = operation.process_change
+                    if change is not None:
+                        if state.runtime_view != change.before:
+                            raise StateError("Process runtime change lost its exact current view")
+                        if (
+                            state.latest_dependent_at is not None
+                            and operation.canonical_time < state.latest_dependent_at
+                        ):
+                            raise StateError("Process runtime change precedes dependent activity")
+                        # Runtime changes do not silently rekey or retire live resource leases.
+                        for leases in (partition._foreground_leases, partition._singleton_leases):
+                            if (
+                                next(leases.find_iter("process", operation.subject.object_id), None)
+                                is not None
+                            ):
+                                raise StateError(
+                                    "Process runtime change requires resource lease release first"
+                                )
+                        state.runtime_view = change.after
+                        state.process_role = change.after.role
                     if (
                         state.latest_dependent_at is None
                         or operation.canonical_time > state.latest_dependent_at
@@ -11498,6 +11574,9 @@ class LifecycleRegistry:
             ),
             latest_dependent_at=latest_dependent_at,
             latest_hold_until=latest_hold_until,
+            runtime_view=None
+            if value.runtime_view is None
+            else cls._normalize_action_cohort_runtime_view(value.runtime_view),
         )
 
     @classmethod
@@ -11675,6 +11754,10 @@ class LifecycleRegistry:
             latest_dependent_at is None or transition.canonical_time > latest_dependent_at
         ):
             latest_dependent_at = transition.canonical_time
+        if transition.process_change is not None:
+            if type(snapshot) is not ProcessLifecycleSnapshot:
+                raise StateError("Runtime change requires a process snapshot")
+            snapshot = replace(snapshot, runtime_view=transition.process_change.after)
         return replace(
             snapshot,
             transitions=visible,

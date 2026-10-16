@@ -29,6 +29,8 @@ from evidenceforge.events.lifecycle import (
     LogicalServiceIdentity,
     ProcessLifecycleIdentity,
     ProcessLifecycleSnapshot,
+    ProcessRuntimeChange,
+    ProcessRuntimeView,
     ProcessTokenIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceInstanceLifecycleSnapshot,
@@ -62,7 +64,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "4"
+_SCHEMA_VERSION = "5"
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,7 @@ def _decode_ref(value: object) -> LifecycleEntityRef:
 
 
 def _transition(value: LifecycleTransition) -> list[object]:
-    return [
+    row: list[object] = [
         value.transition_id,
         _ref(value.subject),
         value.kind,
@@ -129,13 +131,25 @@ def _transition(value: LifecycleTransition) -> list[object]:
         value.reason,
         value.transition_ordinal,
     ]
+    if value.process_change is not None:
+        change = value.process_change
+        row.append([change.kind, _runtime_view(change.before), _runtime_view(change.after)])
+    return row
 
 
 def _decode_transition(value: object) -> LifecycleTransition:
-    transition_id, subject, kind, canonical_time, action_id, reason, ordinal = _record(
-        value, 7, "transition"
-    )
+    if type(value) is not list or len(value) not in {7, 8}:
+        raise CheckpointCorruptionError("lifecycle checkpoint transition record is invalid")
+    transition_id, subject, kind, canonical_time, action_id, reason, ordinal = value[:7]
     try:
+        change = None
+        if len(value) == 8:
+            change_kind, before, after = _record(value[7], 3, "process runtime change")
+            change = ProcessRuntimeChange(
+                before=_decode_runtime_view(before),
+                after=_decode_runtime_view(after),
+                kind=change_kind,
+            )
         return LifecycleTransition(
             transition_id=transition_id,  # type: ignore[arg-type]
             subject=_decode_ref(subject),
@@ -144,6 +158,7 @@ def _decode_transition(value: object) -> LifecycleTransition:
             action_id=action_id,  # type: ignore[arg-type]
             reason=reason,  # type: ignore[arg-type]
             transition_ordinal=ordinal,  # type: ignore[arg-type]
+            process_change=change,
         )
     except (TypeError, ValueError) as error:
         raise CheckpointCorruptionError("lifecycle checkpoint transition is invalid") from error
@@ -251,6 +266,24 @@ def _state(value: object, authority: object) -> list[object]:
             for (action_id, ordinal), transition_id in sorted(commits.items())
         ]
     )
+    # Public snapshot detail can age out while the private start remains authoritative.
+    # Retain its exact commit for replay without inventing an action or re-exposing detail.
+    raw_transitions = authority.transitions
+    retained = (
+        ()
+        if raw_transitions is None
+        else (raw_transitions,)
+        if isinstance(raw_transitions, LifecycleTransition)
+        else raw_transitions
+    )
+    for transition in retained:
+        if transition.kind == "started" and not any(
+            row[2] == transition.transition_id for row in commit_rows
+        ):
+            commit_rows.append(
+                [transition.action_id, transition.transition_ordinal, transition.transition_id]
+            )
+    commit_rows.sort()
     durable_ids = authority.durable_transition_ids
     durable_rows = (
         []
@@ -285,7 +318,7 @@ class _DecodedState:
     durable_transition_ids: tuple[str, ...]
 
 
-def _decode_state(value: object) -> _DecodedState:
+def _decode_state(value: object, *, process_changes: bool = False) -> _DecodedState:
     (
         transitions,
         holds,
@@ -325,6 +358,10 @@ def _decode_state(value: object) -> _DecodedState:
     if any(type(item) is not str for item in durable_transition_ids):
         raise CheckpointCorruptionError("lifecycle checkpoint durable transition ID is invalid")
     decoded_transitions = tuple(_decode_transition(item) for item in transitions)
+    if not process_changes and any(item.process_change is not None for item in decoded_transitions):
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint process change has a non-process owner"
+        )
     decoded_holds = tuple(_decode_hold(item) for item in holds)
     if transition_count < len(decoded_transitions) or hold_count < len(decoded_holds):
         raise CheckpointCorruptionError(
@@ -411,6 +448,78 @@ def _decode_token(value: object) -> ProcessTokenIdentity:
         )
     except (TypeError, ValueError) as error:
         raise CheckpointCorruptionError("lifecycle checkpoint process token is invalid") from error
+
+
+def _runtime_view(value: ProcessRuntimeView) -> list[object]:
+    return [
+        value.revision,
+        value.execution_ordinal,
+        _time(value.changed_at),
+        value.image,
+        value.role,
+        _token(value.token),
+    ]
+
+
+def _decode_runtime_view(value: object) -> ProcessRuntimeView:
+    revision, ordinal, changed_at, image, role, token = _record(value, 6, "process runtime view")
+    try:
+        return ProcessRuntimeView(
+            revision=revision,
+            execution_ordinal=ordinal,
+            changed_at=_decode_time(changed_at),
+            image=image,
+            role=role,
+            token=_decode_token(token),
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint process runtime view is invalid"
+        ) from error
+
+
+def _validate_runtime_view(snapshot: ProcessLifecycleSnapshot) -> None:
+    """Validate a retained current view independently of compacted transition details."""
+    view = snapshot.runtime_view
+    initial = ProcessRuntimeView.initial(snapshot.identity, snapshot.token)
+    changes = [
+        item.process_change for item in snapshot.transitions if item.process_change is not None
+    ]
+    if view is None:
+        if changes:
+            raise CheckpointCorruptionError("lifecycle checkpoint lost its process runtime view")
+        return
+    if (
+        not 1 <= view.revision < snapshot.transition_count
+        or view.execution_ordinal > view.revision
+        or view.changed_at < initial.changed_at
+        or snapshot.latest_dependent_at is None
+        or view.changed_at > snapshot.latest_dependent_at
+        or (snapshot.closed_at is not None and view.changed_at > snapshot.closed_at)
+        or (view.token.logon_id, view.token.session_id, view.token.logon_type)
+        != (initial.token.logon_id, initial.token.session_id, initial.token.logon_type)
+    ):
+        raise CheckpointCorruptionError("lifecycle checkpoint process runtime frontier is invalid")
+    previous = None
+    for transition in snapshot.transitions:
+        change = transition.process_change
+        if change is None:
+            continue
+        if (
+            transition.subject != snapshot.identity.ref
+            or change.after.revision > view.revision
+            or change.after.changed_at > view.changed_at
+            or (change.before.revision == 0 and change.before != initial)
+            or (previous is not None and change.before != previous)
+        ):
+            raise CheckpointCorruptionError(
+                "lifecycle checkpoint process runtime history is invalid"
+            )
+        previous = change.after
+    if previous is not None and previous != view:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint process runtime history lost its frontier"
+        )
 
 
 def _membership(value: LifecycleMembership) -> list[object]:
@@ -929,6 +1038,11 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                         _membership(item.membership),
                         _state(partition._process_snapshot(item), item.state),
                     ]
+                    + (
+                        []
+                        if item.state.runtime_view is None
+                        else [_runtime_view(item.state.runtime_view)]
+                    )
                     for item in partition._processes.iter_entries()
                 ]
                 sessions = [
@@ -1049,14 +1163,18 @@ def _decode_snapshot_rows(
         if not all(type(rows) is list for rows in partition):
             raise CheckpointCorruptionError("lifecycle checkpoint entity table is invalid")
         for row in process_rows:  # type: ignore[union-attr]
-            identity, token, membership, state = _record(row, 4, "process")
-            decoded = _decode_state(state)
+            if type(row) is not list or len(row) not in {4, 5}:
+                raise CheckpointCorruptionError("lifecycle checkpoint process record is invalid")
+            identity, token, membership, state = row[:4]
+            decoded = _decode_state(state, process_changes=True)
             snapshot = ProcessLifecycleSnapshot(
                 identity=_decode_process_identity(identity),
                 token=_decode_token(token),
                 membership=_decode_membership(membership),
+                runtime_view=None if len(row) == 4 else _decode_runtime_view(row[4]),
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            _validate_runtime_view(snapshot)
             processes.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         for row in session_rows:  # type: ignore[union-attr]
@@ -1438,6 +1556,9 @@ def _install_authority_states(
                 }
             ),
             durable_transition_ids=durable_ids,
+            runtime_view=snapshot.runtime_view
+            if isinstance(snapshot, ProcessLifecycleSnapshot)
+            else None,
         )
         partition_id = registry._partition_id(snapshot.identity.hostname)
         partition = registry._partitions[partition_id]
@@ -1477,7 +1598,7 @@ def _install_resource_lease_entry(
         route_kind = "foreground_lease"
         store_name = "_foreground_leases"
     else:
-        if lease.process_object_id:
+        if lease.process_object_id and entry.commit_time > lease.acquired_at:
             registry.acquire_singleton_lease(replace(lease, process_object_id=""))
             registry.bind_singleton_lease(
                 lease.lease_id,
@@ -1632,6 +1753,11 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
                 action_id=binding.close_action_id,
                 transition_ordinal=binding.close_transition_ordinal,
             )
+    for snapshot in processes:
+        if snapshot.runtime_view is not None:
+            partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+            process = partition._entry(snapshot.identity.ref)
+            partition._ensure_full_state(process).runtime_view = snapshot.runtime_view
     for lease in sorted(retention_leases, key=lambda item: item.lease_id):
         fresh.add_retention_lease(lease)
     for entry in sorted(

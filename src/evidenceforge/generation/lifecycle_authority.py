@@ -36,6 +36,8 @@ from evidenceforge.events.lifecycle import (
     LifecycleSingletonLease,
     LifecycleTransition,
     ProcessLifecycleIdentity,
+    ProcessRuntimeChange,
+    ProcessRuntimeView,
     ServiceProcessBindingIdentity,
     SessionLifecycleIdentity,
 )
@@ -3850,6 +3852,22 @@ class GeneratorLifecycleAuthority:
 
         for ordinal, execution in enumerate(plan.process_executions):
             identity = self._action_cohort_registered_process(execution.target)
+            snapshot = self._registry.get_process(identity.object_id)
+            assert snapshot is not None
+            before = snapshot.current_view
+            if (before.execution_ordinal, before.image) != (
+                identity.execution_ordinal,
+                identity.image,
+            ):
+                raise StateError("Process exec disagrees with the current lifecycle execution")
+            after = ProcessRuntimeView(
+                revision=before.revision + 1,
+                execution_ordinal=execution.after.execution_ordinal,
+                changed_at=execution.after.execution_started_at,
+                image=execution.after.image,
+                role=self._shadow._process_role(execution.after.image),
+                token=before.token,
+            )
             category = "process-execution"
             append(
                 execution.after.execution_started_at,
@@ -3865,6 +3883,7 @@ class GeneratorLifecycleAuthority:
                         plan, category, ordinal, identity.object_id, "action"
                     ),
                     reason="State process image replacement",
+                    process_change=ProcessRuntimeChange(before, after, "exec"),
                 ),
             )
 
@@ -8489,7 +8508,7 @@ class GeneratorLifecycleAuthority:
             )
         return ForegroundShellOwner(
             hostname=process.hostname,
-            principal=snapshot.token.principal,
+            principal=snapshot.current_view.token.principal,
             session_object_id=session_object_id,
             process_object_id=process.object_id,
         )
@@ -8526,7 +8545,7 @@ class GeneratorLifecycleAuthority:
             return None
         lease = self._registry.foreground_lease_for(
             identity.hostname,
-            snapshot.token.principal,
+            snapshot.current_view.token.principal,
             snapshot.membership.session_object_id,
             identity.object_id,
         )

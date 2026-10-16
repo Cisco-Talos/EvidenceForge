@@ -463,6 +463,7 @@ class LifecycleShadow:
     ) -> ProcessLifecycleIdentity:
         existing = self._registry.get_process(identity.object_id)
         if existing is not None:
+            current_token = existing.current_view.token
             candidate, token, membership = self._project_process(
                 identity,
                 session=session,
@@ -477,8 +478,8 @@ class LifecycleShadow:
                 token = ProcessTokenIdentity(
                     principal=token.principal,
                     logon_id=token.logon_id,
-                    session_id=existing.token.session_id,
-                    logon_type=existing.token.logon_type,
+                    session_id=current_token.session_id,
+                    logon_type=current_token.logon_type,
                     integrity_level=token.integrity_level,
                 )
             if not token.integrity_level or token.session_id is None or token.logon_type is None:
@@ -492,25 +493,25 @@ class LifecycleShadow:
                     session_id=(
                         token.session_id
                         if token.session_id is not None
-                        else existing.token.session_id
+                        else current_token.session_id
                     ),
                     logon_type=(
                         token.logon_type
                         if token.logon_type is not None
-                        else existing.token.logon_type
+                        else current_token.logon_type
                     ),
-                    integrity_level=token.integrity_level or existing.token.integrity_level,
+                    integrity_level=token.integrity_level or current_token.integrity_level,
                 )
             if (
                 existing.identity != candidate
-                or existing.token != token
+                or current_token != token
                 or existing.membership != membership
             ):
                 raise StateError(
                     "Lifecycle shadow process identity changed after publication: "
                     f"{identity.object_id}; "
                     f"identity={existing.identity!r} candidate_identity={candidate!r}; "
-                    f"token={existing.token!r} candidate_token={token!r}; "
+                    f"token={current_token!r} candidate_token={token!r}; "
                     f"membership={existing.membership!r} "
                     f"candidate_membership={membership!r}"
                 )

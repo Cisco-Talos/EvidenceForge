@@ -2,7 +2,7 @@
 
 Date: 2026-10-15
 Assessed source: `5ce84103fccd630a748cf59ab19808f9fa0699bc` (`2.2.0a4`)
-Status: assessment complete; implementation and support commitments remain undecided.
+Status: historical assessment; implementation is in progress on `codex/macos-workstation-support`. See the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) for current coverage, per-capability evidence gates and remaining work. The architectural findings below describe the assessed starting commit.
 
 [Recommendation](#recommendation) · [Architecture](#architecture-impact-map) · [Sources](#evidence-source-matrix) · [Authoring](#baseline-and-authoring-requirements) · [Phases](#delivery-choices-and-dependency-order) · [Acceptance](#acceptance-scenarios-and-gates) · [Public sample findings and local priorities](#public-sample-analysis-and-remaining-gaps) · [Open decisions](#decisions-and-evidence-still-needed)
 

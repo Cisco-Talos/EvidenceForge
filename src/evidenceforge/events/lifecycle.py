@@ -151,6 +151,84 @@ class ProcessLifecycleIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessRuntimeView:
+    """Current execution facts, separate from immutable lifetime ownership."""
+
+    revision: int
+    execution_ordinal: int
+    changed_at: datetime
+    image: str
+    role: str
+    token: ProcessTokenIdentity
+
+    def __post_init__(self) -> None:
+        """Require an exact bounded projection before lifecycle admission."""
+        if any(
+            type(value) is not int or value < 0 for value in (self.revision, self.execution_ordinal)
+        ):
+            raise ValueError("Process runtime view requires nonnegative integer ordinals")
+        if type(self.changed_at) is not datetime or self.changed_at.utcoffset() is None:
+            raise ValueError("Process runtime view requires an aware change time")
+        if any(type(value) is not str or not value for value in (self.image, self.role)):
+            raise ValueError("Process runtime view requires an image and role")
+        if type(self.token) is not ProcessTokenIdentity:
+            raise TypeError("Process runtime view requires an exact token")
+        object.__setattr__(self, "changed_at", ensure_utc(self.changed_at))
+
+    @classmethod
+    def initial(
+        cls, identity: ProcessLifecycleIdentity, token: ProcessTokenIdentity
+    ) -> ProcessRuntimeView:
+        """Project an unchanged process without adding mutable lifetime fields."""
+        return cls(0, 0, identity.started_at, identity.image, identity.role, token)
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRuntimeChange:
+    """One exact execution or credential transition within a process lifetime."""
+
+    before: ProcessRuntimeView
+    after: ProcessRuntimeView
+    kind: Literal["exec", "credentials"]
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous image, token and revision transitions."""
+        if (
+            type(self.before) is not ProcessRuntimeView
+            or type(self.after) is not ProcessRuntimeView
+        ):
+            raise TypeError("Process runtime change requires exact before/after views")
+        if (
+            self.after.revision != self.before.revision + 1
+            or self.after.changed_at < self.before.changed_at
+        ):
+            raise ValueError(
+                "Process runtime change must advance its revision and preserve time order"
+            )
+        previous, current = self.before.token, self.after.token
+        if (previous.logon_id, previous.session_id, previous.logon_type) != (
+            current.logon_id,
+            current.session_id,
+            current.logon_type,
+        ):
+            raise ValueError("Process runtime change cannot change authentication ownership")
+        if self.kind == "exec":
+            if self.after.execution_ordinal != self.before.execution_ordinal + 1:
+                raise ValueError("Process exec must advance exactly one execution ordinal")
+        elif self.kind == "credentials":
+            if (self.after.execution_ordinal, self.after.image, self.after.role) != (
+                self.before.execution_ordinal,
+                self.before.image,
+                self.before.role,
+            ):
+                raise ValueError("Credential changes must preserve execution image and role")
+            if current == previous:
+                raise ValueError("Credential changes require a different token")
+        else:
+            raise ValueError("Unsupported process runtime change kind")
+
+
+@dataclass(frozen=True, slots=True)
 class SessionLifecycleIdentity:
     """Immutable identity for one canonical authentication/session lifecycle."""
 
@@ -456,6 +534,7 @@ class LifecycleTransition:
     action_id: str
     reason: str = ""
     transition_ordinal: int = 0
+    process_change: ProcessRuntimeChange | None = None
 
     def __post_init__(self) -> None:
         """Normalize transition time and require stable action-relative identity."""
@@ -467,6 +546,13 @@ class LifecycleTransition:
         if self.transition_ordinal < 0:
             raise ValueError("Lifecycle transition_ordinal must be non-negative")
         object.__setattr__(self, "canonical_time", ensure_utc(self.canonical_time))
+        if self.process_change is not None:
+            if type(self.process_change) is not ProcessRuntimeChange:
+                raise TypeError("Lifecycle process change requires an exact transition")
+            if self.subject.kind != "process" or self.kind != "dependent":
+                raise ValueError("Runtime changes require a dependent process transition")
+            if self.process_change.after.changed_at != self.canonical_time:
+                raise ValueError("Runtime change time must match its lifecycle transition")
 
     @property
     def commit_identity(self) -> LifecycleActionCommit:
@@ -743,6 +829,12 @@ class ProcessLifecycleSnapshot:
     hold_ledger_digest: str = ""
     latest_dependent_at: datetime | None = None
     latest_hold_until: datetime | None = None
+    runtime_view: ProcessRuntimeView | None = None
+
+    @property
+    def current_view(self) -> ProcessRuntimeView:
+        """Return current execution facts without rewriting the lifetime start."""
+        return self.runtime_view or ProcessRuntimeView.initial(self.identity, self.token)
 
 
 @dataclass(frozen=True, slots=True)
