@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 181
+current_revision: 182
 history_start_revision: 1
-behavior_surface_sha256: 7e242c436d3d4f4c32b38924f15b244717c0408cc23edb3fb334a31a8c87b806
+behavior_surface_sha256: 83770392d5a07953e82691b6e547d0458615c4f9c69e3229eb6e42ac6ae9d21c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1796,3 +1796,12 @@ changes:
     formats:
       - ecar
     summary: Separates pre-authentication Mac service-child privilege drops from authenticated user changes, with exact eCAR publication and durable historical identity.
+  - revision: 182
+    id: posix-fork-source-provenance
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-projection
+    formats:
+      - ecar
+    summary: Publishes explicit POSIX forks as authenticated child creation with immutable parent execution attribution and exact recovery.

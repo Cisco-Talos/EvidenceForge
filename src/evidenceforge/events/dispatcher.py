@@ -4564,6 +4564,7 @@ class EventDispatcher:
         if (
             event.event_type
             in {
+                EventKind.PROCESS_FORK,
                 EventKind.PROCESS_EXEC,
                 EventKind.PROCESS_AUDIT_BIND,
                 EventKind.PROCESS_PRIVILEGE_DROP,
@@ -5916,7 +5917,8 @@ class EventDispatcher:
         from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 
         session_starts = {plan.identity.object_id: plan.identity for plan in state_plan.sessions}
-        process_starts = {plan.identity.object_id: plan.identity for plan in state_plan.processes}
+        process_start_plans = {plan.identity.object_id: plan for plan in state_plan.processes}
+        process_starts = {key: plan.identity for key, plan in process_start_plans.items()}
         process_closes = {item.identity.object_id: item for item in state_plan.process_terminations}
         session_closes = {
             item.identity.object_id: item for item in state_plan.session_terminalizations
@@ -5998,7 +6000,11 @@ class EventDispatcher:
                 if marker in observed_starts:
                     raise EventContractError("Action-cohort repeats a session-start projection")
                 observed_starts[marker] = position
-            elif event.event_type in {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE}:
+            elif event.event_type in {
+                EventKind.PROCESS_CREATE,
+                EventKind.SYSTEM_PROCESS_CREATE,
+                EventKind.PROCESS_FORK,
+            }:
                 if type(subject) is not ProcessIdentity:
                     raise EventContractError(
                         "Action-cohort process start requires an exact process subject"
@@ -6013,6 +6019,25 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort process-start projection disagrees with its State plan"
                     )
+                start = process_start_plans[subject.object_id]
+                if start.forked != (event.event_type is EventKind.PROCESS_FORK):
+                    raise EventContractError(
+                        "Process fork provenance disagrees with its State start"
+                    )
+                if start.forked:
+                    from evidenceforge.events.process import process_fork_identities
+
+                    parent, child = process_fork_identities(event)
+                    if (
+                        start.parent_identity != parent
+                        or child != start.identity
+                        or event.process.integrity_level != start.integrity_level
+                        or event.src_host.os_category
+                        != self.state_manager._pid_os.get(parent.hostname)
+                    ):
+                        raise EventContractError(
+                            "Process fork changed its exact State parent or token"
+                        )
                 if marker in observed_starts:
                     raise EventContractError("Action-cohort repeats a process-start projection")
                 observed_starts[marker] = position
@@ -6787,6 +6812,7 @@ class EventDispatcher:
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
             EventKind.PROCESS_SERVICE_DROP,
+            EventKind.PROCESS_FORK,
             EventKind.PROCESS_EXEC,
             EventKind.LOGON,
             EventKind.MACHINE_LOGON,
@@ -7665,6 +7691,8 @@ class EventDispatcher:
             EventKind.PROCESS_SERVICE_DROP,
         }:
             return self._require_process_credential_projection(record)
+        if projection.occurrence.event_type is EventKind.PROCESS_FORK:
+            return self._require_posix_fork_projection(record)
         if projection.occurrence.event_type is EventKind.PROCESS_EXEC:
             return self._require_posix_exec_projection(record)
         try:
@@ -7712,6 +7740,40 @@ class EventDispatcher:
                 "Exact process credential projection changed its singleton owner"
             )
         return "process_credentials"
+
+    @staticmethod
+    def _require_posix_fork_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one authenticated fork and no unrelated mutation or source member."""
+        from evidenceforge.events.process import process_fork_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX fork projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        parent, child = process_fork_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"process-fork:{child.object_id}"
+            or len(plan.processes) != 1
+            or not plan.processes[0].forked
+            or plan.processes[0].identity != child
+            or plan.processes[0].parent_identity != parent
+            or any(
+                (
+                    plan.sessions,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX fork projection changed its singleton owner")
+        return "posix_fork"
 
     @staticmethod
     def _require_posix_exec_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -8324,13 +8386,14 @@ class EventDispatcher:
         record.exact_projection_kind = exact_kind
         terminal_kind = exact_kind in {
             "posix_exec",
+            "posix_fork",
             "process_credentials",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "process_credentials"}
+                if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8355,9 +8418,11 @@ class EventDispatcher:
             self._ssh_terminal_exact_projection_participants(projection)
         elif exact_kind.startswith("rdp_"):
             self._rdp_terminal_exact_projection_participants(projection)
-        elif exact_kind in {"posix_exec", "process_credentials"} or exact_kind.startswith(
-            "linux_sudo_"
-        ):
+        elif exact_kind in {
+            "posix_exec",
+            "posix_fork",
+            "process_credentials",
+        } or exact_kind.startswith("linux_sudo_"):
             self._single_ecar_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
@@ -8379,13 +8444,14 @@ class EventDispatcher:
             raise EventContractError("Exact action-cohort projection kind changed before rendering")
         terminal_kind = exact_kind in {
             "posix_exec",
+            "posix_fork",
             "process_credentials",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "process_credentials"}
+                if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8402,7 +8468,7 @@ class EventDispatcher:
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
             else self._single_ecar_exact_projection_participants(projection)
-            if exact_kind in {"posix_exec", "process_credentials"}
+            if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
             or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
@@ -15323,6 +15389,7 @@ class EventDispatcher:
             "system_process_create",
             "process_terminate",
             "process_access",
+            "process_fork",
             "process_exec",
             "process_audit_bind",
             "process_privilege_drop",
@@ -15944,7 +16011,12 @@ class EventDispatcher:
                 observed_time = event.source_timing.finalized_times.get(key)
                 if observed_time is not None:
                     return observed_time
-        if event.event_type in {"process_create", "system_process_create", "process_terminate"}:
+        if event.event_type in {
+            "process_create",
+            "system_process_create",
+            "process_fork",
+            "process_terminate",
+        }:
             host = event.src_host or event.dst_host
             if host is not None and event.source_timing is not None:
                 lifecycle = "terminate" if event.event_type == "process_terminate" else "create"

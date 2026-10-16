@@ -431,8 +431,8 @@ def test_ordinary_dependent_record_cannot_hide_credential_mutation(kind: Kind) -
 def test_fork_after_credential_transition_keeps_child_create_and_dependents_ordered(
     kind: Kind,
 ) -> None:
-    from evidenceforge.events.contexts import ProcessContext
-    from evidenceforge.events.lifecycle import ActionLifecycleContext
+    from evidenceforge.generation.actions.posix_process import process_fork_occurrence
+    from tests.unit.test_process_fork_projection import _prepare as prepare_fork
 
     state, dispatcher, emitter, before = _environment(kind)
     plan, event, after = _plan(state, before, kind)
@@ -442,30 +442,16 @@ def test_fork_after_credential_transition_keeps_child_create_and_dependents_orde
     barrier = planner.admission_time(observed, "ecar")
     builder = state.begin_action_cohort_materialization()
     child = builder.fork_process(after, forked_at=event.timestamp + timedelta(microseconds=1))
-    state.materialize_action_cohort(builder.seal())
+    fork_plan = builder.seal()
     identity = child.identity
-    created = OccurrenceBuilder(
-        timestamp=identity.started_at,
-        event_type="process_create",
-        src_host=observed.src_host,
-        process=ProcessContext(
-            pid=identity.pid,
-            parent_pid=identity.parent_pid,
-            image=identity.image,
-            command_line=identity.command_line,
-            username=identity.principal,
-            logon_id=identity.logon_id,
-            start_time=identity.started_at,
-        ),
-        identity_plan=EventIdentityPlan(actor=after, subject=identity),
-        lifecycle=ActionLifecycleContext(
-            group_id=identity.lifecycle_group_id,
-            canonical_start=identity.started_at,
-            phase="start",
-            parent_group_id=after.lifecycle_group_id,
-        ),
+    created = process_fork_occurrence(
+        host=observed.src_host,
+        parent=after,
+        child=identity,
+        integrity_level=event.process.integrity_level,
     )
-    created = planner.plan_event(created, "ecar")
+    dispatcher.publish_prepared_action_cohort_batch(prepare_fork(dispatcher, fork_plan, created))
+    created = emitter.emit.call_args.args[0]
     child_time = planner.admission_time(created, "ecar")
     assert child_time > barrier
     for ordinal in range(8):

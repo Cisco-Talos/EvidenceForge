@@ -55,6 +55,7 @@ class EventKind(StrEnum):
     PASSWORD_RESET = "password_reset"
     PROCESS_ACCESS = "process_access"
     PROCESS_CREATE = "process_create"
+    PROCESS_FORK = "process_fork"
     PROCESS_EXEC = "process_exec"
     PROCESS_AUDIT_BIND = "process_audit_bind"
     PROCESS_PRIVILEGE_DROP = "process_privilege_drop"
@@ -953,6 +954,17 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_WINDOWS_ENDPOINT,
     ),
+    EventKind.PROCESS_FORK: _contract(
+        EventKind.PROCESS_FORK,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.START,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_EXEC: _contract(
         EventKind.PROCESS_EXEC,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
@@ -1172,6 +1184,7 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
         )
 
     if contract.kind in {
+        EventKind.PROCESS_FORK,
         EventKind.PROCESS_EXEC,
         EventKind.PROCESS_AUDIT_BIND,
         EventKind.PROCESS_PRIVILEGE_DROP,
@@ -1180,10 +1193,13 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
         from evidenceforge.events.process import (
             process_credential_identities,
             process_exec_identities,
+            process_fork_identities,
         )
 
         try:
-            if contract.kind is EventKind.PROCESS_EXEC:
+            if contract.kind is EventKind.PROCESS_FORK:
+                process_fork_identities(event)
+            elif contract.kind is EventKind.PROCESS_EXEC:
                 process_exec_identities(event)
             else:
                 process_credential_identities(event)

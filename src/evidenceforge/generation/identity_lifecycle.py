@@ -59,6 +59,7 @@ class IdentityLifecyclePlanner:
         """
 
         if event.event_type in {
+            "process_fork",
             "process_exec",
             "process_audit_bind",
             "process_privilege_drop",

@@ -217,6 +217,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "logoff",
         "failed_logon",
         "process_create",
+        "process_fork",
         "process_exec",
         "process_audit_bind",
         "process_privilege_drop",
@@ -271,6 +272,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
+            "process_fork": self._render_process_create,
             "process_exec": self._render_process_transition,
             "process_audit_bind": self._render_process_transition,
             "process_privilege_drop": self._render_process_transition,
@@ -345,6 +347,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     "process_create",
                     "system_process_create",
                     "process_terminate",
+                    "process_fork",
                     "process_exec",
                     "process_audit_bind",
                     "process_privilege_drop",
@@ -714,6 +717,13 @@ class EcarEmitter(HostMultiplexEmitter):
             "command_line": proc.command_line,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if event.event_type == "process_fork":
+            from evidenceforge.events.process import process_fork_identities
+
+            parent, child = process_fork_identities(event)
+            event_data["operation"] = "fork"
+            event_data["execution_id"] = child.execution_id
+            event_data["parent_execution_id"] = parent.execution_id
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
         self._apply_session_properties(event_data, event)
@@ -1448,6 +1458,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "previous_pid_version",
         "operation",
         "execution_id",
+        "parent_execution_id",
         "previous_execution_id",
         "process_principal",
         "previous_process_principal",

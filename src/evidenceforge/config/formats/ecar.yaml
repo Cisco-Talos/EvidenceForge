@@ -242,7 +242,7 @@ fields:
     required: false
     description: "Windows sub-status hex (e.g., 0xC0000064) on USER_SESSION/LOGIN failures"
 
-  # EvidenceForge PROCESS/MODIFY exec extension (not an upstream CAR action).
+  # EvidenceForge process operation extensions (not upstream CAR operations).
   - name: effective_uid
     type: string
     required: false
@@ -256,7 +256,7 @@ fields:
   - name: operation
     type: string
     required: false
-    description: "EvidenceForge process transition operation: exec, audit_bind or privilege_drop"
+    description: "EvidenceForge process operation: fork, exec, audit_bind, privilege_drop or service_drop"
 
   - name: execution_id
     type: string
@@ -272,6 +272,11 @@ fields:
     type: string
     required: false
     description: "Process principal before a credential transition"
+
+  - name: parent_execution_id
+    type: string
+    required: false
+    description: "Exact parent execution inherited by a fork"
 
   - name: previous_execution_id
     type: string

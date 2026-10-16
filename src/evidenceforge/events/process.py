@@ -72,7 +72,11 @@ def process_exec_identities(
 
 
 def _validate_process_context(
-    event: _ProcessTransitionOccurrence, after: ProcessIdentity, *, platforms: set[str]
+    event: _ProcessTransitionOccurrence,
+    after: ProcessIdentity,
+    *,
+    platforms: set[str],
+    phase: str = "dependent",
 ) -> None:
     plan = event.identity_plan
     host, process, lifecycle = event.src_host, event.process, event.lifecycle
@@ -99,7 +103,7 @@ def _validate_process_context(
     if (
         getattr(lifecycle, "group_id", None) != after.lifecycle_group_id
         or getattr(lifecycle, "canonical_start", None) != after.started_at
-        or getattr(lifecycle, "phase", None) != "dependent"
+        or getattr(lifecycle, "phase", None) != phase
         or getattr(lifecycle, "parent_group_id", None) != (after.parent_lifecycle_group_id or None)
     ):
         raise ValueError("Process transition must retain its dependent process lifecycle")
@@ -183,3 +187,50 @@ def process_credential_identities(
         raise ValueError("Unsupported process credential transition")
     _validate_process_context(event, after, platforms={"macos"})
     return before, after
+
+
+def process_fork_identities(
+    event: _ProcessTransitionOccurrence,
+) -> tuple[ProcessIdentity, ProcessIdentity]:
+    """Require a new lifetime inheriting its exact POSIX parent execution.
+
+    Only the State-owned fork plan authorizes this observation. A generic create
+    with matching image text cannot substitute for an explicit fork.
+    """
+    _validate_transition_time(event)
+    plan = event.identity_plan
+    if (
+        type(plan) is not EventIdentityPlan
+        or type(plan.actor) is not ProcessIdentity
+        or type(plan.subject) is not ProcessIdentity
+        or plan.target is not None
+    ):
+        raise ValueError("Process fork requires exact parent/child process identities")
+    parent, child = plan.actor, plan.subject
+    if (
+        child.hostname != parent.hostname
+        or child.parent_pid != parent.pid
+        or child.pid == parent.pid
+        or child.object_id == parent.object_id
+        or child.lifecycle_group_id == parent.lifecycle_group_id
+        or child.execution_ordinal != 0
+        or child.executed_at is not None
+        or child.started_at != event.timestamp
+        or child.started_at < parent.execution_started_at
+        or child.image != parent.image
+        or child.command_line != parent.command_line
+        or child.principal != parent.principal
+        or child.credentials != parent.credentials
+        or child.logon_id != parent.logon_id
+        or child.primary_thread is None
+        or child.primary_thread == parent.primary_thread
+        or child.primary_thread.process_object_id != child.object_id
+        or child.primary_thread.pid != child.pid
+        or child.primary_thread.hostname != child.hostname
+        or child.primary_thread.started_at != child.started_at
+    ):
+        raise ValueError("Process fork must inherit its parent execution in a new lifetime")
+    _validate_process_context(event, child, platforms={"linux", "macos"}, phase="start")
+    if getattr(event.process, "parent_image", None) != parent.image:
+        raise ValueError("Process fork context changed its parent image")
+    return parent, child

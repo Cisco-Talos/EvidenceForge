@@ -13418,6 +13418,106 @@
       "static_references": [],
       "storyline_dispatch": null,
       "test_files": []
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "'process_fork'",
+          "event_type_literals": [
+            "process_fork"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 114,
+          "scope": "process_fork_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_fork",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "An internal fork observation binds to an explicitly forked State start and its immutable parent execution. Generic launches cannot substitute; authored producers and Mac receivers remain gated.",
+        "classification": "single_canonical_path",
+        "owner": "State fork cohort, POSIX occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 4565,
+          "scope": "EventDispatcher.prepare_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 6003,
+          "scope": "EventDispatcher._validate_action_cohort_dispatch_coverage"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 6023,
+          "scope": "EventDispatcher._validate_action_cohort_dispatch_coverage"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 7694,
+          "scope": "EventDispatcher._exact_action_cohort_projection_kind"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 16014,
+          "scope": "EventDispatcher._projection_admission_time"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "kind": "call_keyword",
+          "line": 114,
+          "scope": "process_fork_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/ecar.py",
+          "kind": "comparison",
+          "line": 345,
+          "scope": "EcarEmitter._apply_edr_context"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/ecar.py",
+          "kind": "comparison",
+          "line": 720,
+          "scope": "EcarEmitter._render_process_create"
+        },
+        {
+          "file": "src/evidenceforge/generation/identity_lifecycle.py",
+          "kind": "comparison",
+          "line": 61,
+          "scope": "IdentityLifecyclePlanner.plan"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_fork_projection.py"
+      ]
     }
   ],
   "formats": [

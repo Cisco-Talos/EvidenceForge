@@ -10,7 +10,11 @@ from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
-from evidenceforge.events.process import process_credential_identities, process_exec_identities
+from evidenceforge.events.process import (
+    process_credential_identities,
+    process_exec_identities,
+    process_fork_identities,
+)
 
 
 def process_exec_occurrence(
@@ -95,4 +99,40 @@ def _process_transition_occurrence(
             parent_group_id=after.parent_lifecycle_group_id or None,
         ),
     )
+    return event
+
+
+def process_fork_occurrence(
+    *,
+    host: HostContext,
+    parent: ProcessIdentity,
+    child: ProcessIdentity,
+    integrity_level: str,
+    session: SessionIdentity | None = None,
+) -> OccurrenceBuilder:
+    """Project a State-planned fork with its immutable parent execution actor."""
+    event = OccurrenceBuilder(
+        timestamp=child.started_at,
+        event_type="process_fork",
+        src_host=host,
+        process=ProcessContext(
+            pid=child.pid,
+            parent_pid=parent.pid,
+            parent_image=parent.image,
+            image=child.image,
+            command_line=child.command_line,
+            username=child.principal,
+            integrity_level=integrity_level,
+            logon_id=child.logon_id,
+            start_time=child.started_at,
+        ),
+        identity_plan=EventIdentityPlan(subject=child, actor=parent, session=session),
+        lifecycle=ActionLifecycleContext(
+            group_id=child.lifecycle_group_id,
+            canonical_start=child.started_at,
+            phase="start",
+            parent_group_id=child.parent_lifecycle_group_id or None,
+        ),
+    )
+    process_fork_identities(event)
     return event

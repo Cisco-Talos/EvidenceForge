@@ -60,7 +60,7 @@ _PROCESS_CREATE_SOURCE_KEYS = {
     "source.sysmon_process_create",
     "source.ecar_process_create",
 }
-_PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create"}
+_PROCESS_START_EVENT_TYPES = {"process_create", "system_process_create", "process_fork"}
 _PROCESS_END_EVENT_TYPES = {"process_terminate"}
 _SESSION_CLOSURE_SOURCE_KEYS = {
     "ecar": "source.ecar_session_logout",
@@ -4978,6 +4978,7 @@ class SourceTimingPlanner:
         return {
             "process_create": 1,
             "system_process_create": 1,
+            "process_fork": 1,
             "process_terminate": 5,
             "create_remote_thread": 8,
             "process_access": 10,

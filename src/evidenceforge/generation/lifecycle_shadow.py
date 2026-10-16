@@ -33,7 +33,9 @@ from evidenceforge.models.state import RunningProcess
 from evidenceforge.utils.rng import stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
-_PROCESS_START_TYPES = frozenset({EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE})
+_PROCESS_START_TYPES = frozenset(
+    {EventKind.PROCESS_CREATE, EventKind.SYSTEM_PROCESS_CREATE, EventKind.PROCESS_FORK}
+)
 _PROCESS_CLOSE_TYPES = frozenset({EventKind.PROCESS_TERMINATE})
 _SESSION_START_TYPES = frozenset({EventKind.LOGON, EventKind.MACHINE_LOGON, EventKind.SSH_SESSION})
 _SESSION_CLOSE_TYPES = frozenset({EventKind.LOGOFF})

@@ -656,6 +656,7 @@ class _ProcessMaterializationPayload:
     auth_session_id: int | None
     auth_logon_type: int | None
     require_session: bool
+    forked: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -685,6 +686,11 @@ class ProcessMaterializationPlan:
         """Return the authenticated token bound to downstream prepared work."""
 
         return self._integrity_token
+
+    @property
+    def forked(self) -> bool:
+        """Return whether this start was explicitly planned as a POSIX fork."""
+        return self._payload.forked
 
     @property
     def parent_identity(self) -> ProcessIdentity | None:
@@ -3255,12 +3261,12 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             platform = self._manager._pid_os.get(parent.hostname)
             if platform not in {"linux", "macos"}:
                 raise StateError("Process fork requires a POSIX PID namespace")
-            if type(forked_at) is not datetime:
-                raise StateError("Process fork requires an exact datetime")
+            if type(forked_at) is not datetime or forked_at.utcoffset() is None:
+                raise StateError("Process fork requires an aware datetime")
             timestamp = ensure_utc(forked_at)
             if timestamp < parent.execution_started_at:
                 raise StateError("Process fork precedes its parent execution")
-            return self.plan_process(
+            plan = self.plan_process(
                 system=parent.hostname,
                 parent_pid=parent.pid,
                 image=parent.image,
@@ -3276,6 +3282,22 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 auth_logon_type=process.auth_logon_type,
                 credentials=parent.credentials,
             )
+
+            payload = replace(plan._payload, forked=True)
+            fork = replace(
+                plan,
+                _payload=payload,
+                _integrity_token=_materialization_integrity_token(
+                    self._manager._materialization_secret,
+                    "process",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    plan._allocator_patch,
+                ),
+            )
+            self._processes[-1] = fork
+            return fork
 
     def execute_process(
         self,
@@ -5886,6 +5908,8 @@ class StateManager:
             raise StateError("Session materialization plan integrity validation failed")
 
     def _validate_process_materialization_plan(self, plan: ProcessMaterializationPlan) -> None:
+        if type(plan._payload.forked) is not bool:
+            raise StateError("Process creation provenance requires an exact boolean")
         expected = _materialization_integrity_token(
             self._materialization_secret,
             "process",
@@ -6111,6 +6135,8 @@ class StateManager:
         payload = plan._payload
         if type(payload) is not _ProcessMaterializationPayload:
             raise StateError("SMB connection root process payload has an invalid exact type")
+        if type(payload.forked) is not bool or payload.forked:
+            raise StateError("SMB connection root cannot substitute a POSIX fork")
         self._bounded_smb_connection_text(
             payload.integrity_level,
             label="root process integrity level",

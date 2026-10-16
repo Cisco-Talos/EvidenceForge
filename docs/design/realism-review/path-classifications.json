@@ -144,6 +144,12 @@
       "assessment": "Raw intentionally bypasses canonical cross-source consistency and is reviewed only for target routing, validation, and safety."
     },
     {
+      "names": ["process_fork"],
+      "classification": "single_canonical_path",
+      "owner": "State fork cohort, POSIX occurrence helper and EventDispatcher exact projection",
+      "assessment": "An internal fork observation binds to an explicitly forked State start and its immutable parent execution. Generic launches cannot substitute; authored producers and Mac receivers remain gated."
+    },
+    {
       "names": [
         "process_exec"
       ],
