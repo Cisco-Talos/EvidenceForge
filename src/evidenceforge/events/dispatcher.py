@@ -8809,6 +8809,10 @@ class EventDispatcher:
             raise EventContractError(
                 "Process audit-origin cohorts have no supported canonical source projection yet"
             )
+        if any(patch.privilege_drop is not None for patch in state_plan.process_activity_patches):
+            raise EventContractError(
+                "SSH privilege-drop cohorts have no supported canonical source projection yet"
+            )
         if type(dispatches) is not tuple or not dispatches:
             raise EventContractError("Action-cohort batch requires an ordered dispatch tuple")
         if len(dispatches) > _MAX_ACTION_COHORT_DISPATCHES:

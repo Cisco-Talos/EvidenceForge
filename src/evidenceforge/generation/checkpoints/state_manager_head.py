@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import chain
 
-from evidenceforge.events.identity import MacosProcessAuditBinding
+from evidenceforge.events.identity import MacosProcessAuditBinding, MacosProcessPrivilegeDrop
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -25,7 +25,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "4"
+_SCHEMA_VERSION = "5"
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -455,6 +455,22 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             or process.credentials.audit_session_id != binding.origin.audit_session_id
         ):
             raise CheckpointCorruptionError("StateManager process audit-origin binding is invalid")
+        drop = process.privilege_drop
+        if drop is not None and (
+            type(drop) is not MacosProcessPrivilegeDrop
+            or fresh._pid_os.get(process.system) != "macos"
+            or drop.origin.audit_session_id
+            > fresh._macos_audit_session_counters.get(process.system, 0)
+            or drop.dropped_at <= process.start_time
+            or drop.dropped_at > (process.last_activity_time or process.start_time)
+            or (process.end_time is not None and drop.dropped_at >= process.end_time)
+            or process.credentials is None
+            or process.credentials.origin != drop.after.origin
+            or process.username != drop.after_principal
+            or process.integrity_level != drop.after_integrity
+            or process.audit_binding is not None
+        ):
+            raise CheckpointCorruptionError("StateManager SSH privilege-drop history is invalid")
         versions = (
             process.audit_pid_version,
             *(identity.audit_pid_version for identity in process.prior_executions),

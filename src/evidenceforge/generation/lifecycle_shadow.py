@@ -554,6 +554,7 @@ class LifecycleShadow:
             identity,
             session=effective_session,
             parent_object_id=parent_object_id,
+            require_initial_token=True,
         )
         action_id = stable_uuid("lifecycle-shadow-start-action", "process", identity.object_id)
         self._registry.register_process(
@@ -575,8 +576,19 @@ class LifecycleShadow:
         *,
         session: SessionIdentity | None,
         parent_object_id: str,
+        require_initial_token: bool = False,
     ) -> tuple[ProcessLifecycleIdentity, ProcessTokenIdentity, LifecycleMembership]:
         running = self._state_manager.get_process(identity.hostname, identity.pid)
+        if (
+            require_initial_token
+            and running is not None
+            and running.ecar_object_id == identity.object_id
+            and running.privilege_drop is not None
+        ):
+            raise StateError(
+                "Cannot bootstrap a process after SSH privilege drop; publish its credential "
+                "transition through lifecycle authority before changing State"
+            )
         token = self._process_token(identity, running)
         membership_session = session
         if membership_session is not None and (

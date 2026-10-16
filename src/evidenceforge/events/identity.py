@@ -190,6 +190,56 @@ class MacosProcessAuditBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class MacosProcessPrivilegeDrop:
+    """One permanent authenticated SSH child credential transition, without exec."""
+
+    origin: MacosAuditSession
+    before: PosixProcessCredentials
+    after: PosixProcessCredentials
+    before_principal: str
+    after_principal: str
+    before_integrity: str
+    after_integrity: str
+    dropped_at: datetime
+
+    def __post_init__(self) -> None:
+        """Preserve audit origin while permanently adopting the authenticated user."""
+        if (
+            type(self.origin) is not MacosAuditSession
+            or type(self.before) is not PosixProcessCredentials
+            or type(self.after) is not PosixProcessCredentials
+        ):
+            raise ValueError("SSH privilege drop requires exact immutable credential facts")
+        if type(self.dropped_at) is not datetime or self.dropped_at.utcoffset() is None:
+            raise ValueError("SSH privilege drop requires an aware timestamp")
+        if self.dropped_at < self.origin.created_at:
+            raise ValueError("SSH privilege drop precedes authentication")
+        if any(
+            type(value) is not str or not value
+            for value in (
+                self.before_principal,
+                self.after_principal,
+                self.before_integrity,
+                self.after_integrity,
+            )
+        ):
+            raise ValueError("SSH privilege drop requires explicit principals and integrity")
+        if self.before.real_uid != 0 or self.before.effective_uid != 0:
+            raise ValueError("SSH privilege drop requires a privileged child")
+        if (
+            self.after.real_uid == 0
+            or self.after.real_uid != self.after.effective_uid
+            or self.after.real_uid != self.origin.audit_uid
+            or self.after.real_gid != self.after.effective_gid
+            or (self.before.audit_uid, self.before.audit_session_id)
+            != (self.origin.audit_uid, self.origin.audit_session_id)
+            or (self.after.audit_uid, self.after.audit_session_id)
+            != (self.origin.audit_uid, self.origin.audit_session_id)
+        ):
+            raise ValueError("SSH privilege drop must adopt the user and preserve audit origin")
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessIdentity:
     """Immutable identity of one host- and process-start-scoped process object."""
 

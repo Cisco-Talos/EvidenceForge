@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 175
+current_revision: 176
 history_start_revision: 1
-behavior_surface_sha256: 91db0961e6ec2f42f2dd96861f12fdc2cad028b936286c42d8285d0da176612d
+behavior_surface_sha256: 22a5be5e2ac1885a3496ce296ee74a59830cf0af5e09f8898741e7f821b99465
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1741,3 +1741,12 @@ changes:
       - checkpoint-recovery
     formats: []
     summary: Retains immutable process lifetime identity while exact exec and credential transitions advance current lifecycle facts. Adds checkpoint recovery and lease admission gates; native sources and Mac receivers remain unavailable.
+  - revision: 176
+    id: macos-authenticated-child-privilege-drop
+    impact: none
+    domains:
+      - process-credential-identity
+      - lifecycle-resource-ownership
+      - checkpoint-recovery
+    formats: []
+    summary: Adds an exact authenticated Mac SSH child privilege drop with username-index rollback, historical attribution and current lifecycle token projection. Native source publication and receiver admission remain unavailable.

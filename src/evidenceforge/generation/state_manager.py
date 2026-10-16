@@ -46,6 +46,7 @@ from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import (
     MacosAuditSession,
     MacosProcessAuditBinding,
+    MacosProcessPrivilegeDrop,
     PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
@@ -2174,6 +2175,7 @@ class ActionCohortProcessActivityPatch:
     activity_time: datetime
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
     audit_binding: MacosProcessAuditBinding | None = None
+    privilege_drop: MacosProcessPrivilegeDrop | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -3117,6 +3119,61 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         )
         return replace(normalized, credentials=binding.after)
 
+    def drop_macos_ssh_child_privileges(
+        self, target: ProcessIdentity, *, dropped_at: datetime
+    ) -> ProcessIdentity:
+        """Stage a permanent authenticated child privilege drop without replacing its image."""
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(dropped_at) is not datetime:
+            raise StateError("SSH privilege drop requires exact process identity and time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        process = self._manager._validate_action_live_process_identity(normalized)
+        session = self._manager.get_session(normalized.logon_id)
+        if (
+            session is None
+            or session.audit_origin is None
+            or normalized.credentials is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+        ):
+            raise StateError(
+                "SSH privilege drop requires authenticated session UID/GID and audit facts"
+            )
+        drop = MacosProcessPrivilegeDrop(
+            origin=session.audit_origin,
+            before=normalized.credentials,
+            after=PosixProcessCredentials(
+                session.effective_uid,
+                session.effective_uid,
+                session.effective_gid,
+                session.effective_gid,
+                session.audit_origin.audit_uid,
+                session.audit_origin.audit_session_id,
+            ),
+            before_principal=normalized.principal,
+            after_principal=session.username,
+            before_integrity=process.integrity_level,
+            after_integrity="Medium",
+            dropped_at=ensure_utc(dropped_at),
+        )
+        self._manager._validate_macos_process_privilege_drop(normalized, drop)
+        if any(
+            self._manager._action_process_target_key(patch.target)
+            == self._manager._action_process_target_key(normalized)
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=drop.dropped_at,
+                privilege_drop=drop,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(normalized, principal=drop.after_principal, credentials=drop.after)
+
     def fork_process(
         self, parent: ProcessIdentity, *, forked_at: datetime
     ) -> ProcessMaterializationPlan:
@@ -3672,6 +3729,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         PosixProcessCredentials,
         MacosAuditSession,
         MacosProcessAuditBinding,
+        MacosProcessPrivilegeDrop,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -3957,7 +4015,14 @@ def _action_cohort_semantic_preimage(
         ),
         tuple(
             (
-                (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+                (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-process-privilege-drop-v1",
+                    patch.privilege_drop,
+                )
+                if patch.privilege_drop is not None
+                else (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
                 if patch.audit_binding is None
                 else (
                     _action_cohort_process_target_semantic(patch.target),
@@ -11165,12 +11230,23 @@ class StateManager:
                     effective_end_plans=effective_end_plans,
                     label="Action cohort process activity",
                 )
+                if patch.audit_binding is not None and patch.privilege_drop is not None:
+                    raise StateError(
+                        "Audit adoption and privilege drop require distinct transitions"
+                    )
+                if patch.privilege_drop is not None:
+                    if type(patch.target) is not ProcessIdentity:
+                        raise StateError("SSH privilege drop requires an existing child")
+                    self._validate_macos_process_privilege_drop(patch.target, patch.privilege_drop)
+                    if patch.activity_time != patch.privilege_drop.dropped_at:
+                        raise StateError("SSH privilege-drop time differs from its activity")
                 if patch.audit_binding is not None:
                     if type(patch.target) is not ProcessIdentity:
                         raise StateError("Audit-origin adoption requires an existing receiver")
                     self._validate_macos_process_audit_binding(patch.target, patch.audit_binding)
                     if patch.activity_time != patch.audit_binding.bound_at:
                         raise StateError("Audit-origin adoption time differs from its activity")
+                if patch.audit_binding is not None or patch.privilege_drop is not None:
                     if (
                         any(
                             item.target.object_id == identity.object_id
@@ -11191,7 +11267,7 @@ class StateManager:
                         )
                     ):
                         raise StateError(
-                            "Audit-origin adoption requires a separate cohort from receiver dependencies"
+                            "Process credential transitions require a separate cohort from receiver dependencies"
                         )
                 process_activity[identity.object_id] = patch
 
@@ -12094,6 +12170,8 @@ class StateManager:
                 or self._processes_by_object_id[identity.object_id]
             )
             capture_object(process)
+            if patch.privilege_drop is not None:
+                capture_indexed(self._running_processes, (identity.hostname, identity.pid))
         for patch in plan._session_activity:
             identity = self._action_session_identity(patch.target)
             session = (
@@ -13778,6 +13856,13 @@ class StateManager:
             if patch.audit_binding is not None:
                 process.credentials = patch.audit_binding.after
                 process.audit_binding = patch.audit_binding
+            if patch.privilege_drop is not None:
+                drop = patch.privilege_drop
+                process.credentials = drop.after
+                process.username = drop.after_principal
+                process.integrity_level = drop.after_integrity
+                process.privilege_drop = drop
+                self._running_processes.refresh((identity.hostname, identity.pid))
             if (
                 process.last_activity_time is None
                 or process.last_activity_time < patch.activity_time
@@ -14953,6 +15038,61 @@ class StateManager:
                 return self._process_execution_active_at(process, ensure_utc(event_time))
             return self._process_identity(process)
 
+    def _validate_macos_process_privilege_drop(
+        self, target: ProcessIdentity, drop: MacosProcessPrivilegeDrop
+    ) -> None:
+        """Bind one permanent drop to its authenticated post-fork receiver child."""
+        if type(target) is not ProcessIdentity or type(drop) is not MacosProcessPrivilegeDrop:
+            raise StateError("SSH privilege drop requires exact immutable facts")
+        drop.__post_init__()
+        process = self._validate_action_live_process_identity(target)
+        session = self.get_session(target.logon_id)
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session is None
+            or session.system != target.hostname
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.audit_origin != drop.origin
+            or session.transport_pid != target.parent_pid
+            or session.transport_pid == target.pid
+            or session.effective_uid != drop.after.real_uid
+            or session.effective_gid != drop.after.real_gid
+            or session.username != drop.after_principal
+            or process.username != drop.before_principal
+            or process.integrity_level != drop.before_integrity
+            or drop.after_integrity != "Medium"
+            or process.credentials != drop.before
+            or process.privilege_drop is not None
+            or target.execution_ordinal != 0
+            or process.audit_binding is not None
+        ):
+            raise StateError("SSH privilege drop lost its authenticated Mac child authority")
+        parent = self.get_process(target.hostname, target.parent_pid)
+        parent_at_fork = self.get_process_identity_at(
+            target.hostname, target.parent_pid, target.started_at
+        )
+        if (
+            parent is None
+            or parent_at_fork is None
+            or parent.ecar_object_id != parent_at_fork.object_id
+            or parent.logon_id != target.logon_id
+            or parent.audit_binding is None
+            or parent.audit_binding.origin != drop.origin
+            or parent.audit_binding.bound_at > target.started_at
+            or parent_at_fork.credentials != drop.before
+        ):
+            raise StateError("SSH privilege drop requires the exact authenticated parent at fork")
+        if (
+            drop.dropped_at <= target.started_at
+            or drop.dropped_at < (process.last_activity_time or process.start_time)
+            or (
+                session.network_close_time is not None
+                and drop.dropped_at >= session.network_close_time
+            )
+        ):
+            raise StateError("SSH privilege drop is outside its live child interval")
+
     def _validate_macos_process_audit_binding(
         self, target: ProcessIdentity, binding: MacosProcessAuditBinding
     ) -> None:
@@ -15004,6 +15144,9 @@ class StateManager:
                 None,
             )
         )
+        drop = process.privilege_drop
+        if selected is not None and drop is not None and event_time < drop.dropped_at:
+            selected = replace(selected, principal=drop.before_principal, credentials=drop.before)
         binding = process.audit_binding
         if selected is not None and binding is not None and event_time < binding.bound_at:
             if selected.credentials is not None:

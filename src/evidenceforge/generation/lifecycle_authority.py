@@ -18,7 +18,7 @@ import secrets
 import struct
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from threading import Condition, Lock, RLock, Thread, current_thread
@@ -3892,6 +3892,30 @@ class GeneratorLifecycleAuthority:
             identity = target.identity if type(target) is ProcessMaterializationPlan else target
             if type(target) is not ProcessMaterializationPlan:
                 self._action_cohort_registered_process(identity)
+            process_change = None
+            if patch.privilege_drop is not None:
+                snapshot = self._registry.get_process(identity.object_id)
+                assert snapshot is not None
+                before = snapshot.current_view
+                drop = patch.privilege_drop
+                if (before.token.principal, before.token.integrity_level) != (
+                    drop.before_principal,
+                    drop.before_integrity,
+                ):
+                    raise StateError(
+                        "SSH privilege drop disagrees with the current lifecycle token"
+                    )
+                after = replace(
+                    before,
+                    revision=before.revision + 1,
+                    changed_at=drop.dropped_at,
+                    token=replace(
+                        before.token,
+                        principal=drop.after_principal,
+                        integrity_level=drop.after_integrity,
+                    ),
+                )
+                process_change = ProcessRuntimeChange(before, after, "credentials")
             category = "process-activity"
             append(
                 patch.activity_time,
@@ -3916,7 +3940,10 @@ class GeneratorLifecycleAuthority:
                     ),
                     reason="State process audit-origin adoption"
                     if patch.audit_binding is not None
+                    else "State SSH child privilege drop"
+                    if patch.privilege_drop is not None
                     else "State process activity transition",
+                    process_change=process_change,
                 ),
             )
 
