@@ -493,6 +493,7 @@ macos:
       - AdobeAcrobat
       - Webex
       - GlobalProtect
+      - Tableau
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
     lifetime: long
@@ -758,5 +759,10 @@ macos:
   GlobalProtect:
     command_templates:
     - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+    lifetime: long
+    children: []
+  Tableau:
+    command_templates:
+    - '"/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau"'
     lifetime: long
     children: []

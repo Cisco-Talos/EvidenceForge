@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 182
+current_revision: 183
 history_start_revision: 1
-behavior_surface_sha256: 83770392d5a07953e82691b6e547d0458615c4f9c69e3229eb6e42ac6ae9d21c
+behavior_surface_sha256: 26d3dc934e0ea6295e637e0476df006fdf04ce6903fee9eea3597c04e140f9a1
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1805,3 +1805,11 @@ changes:
     formats:
       - ecar
     summary: Publishes explicit POSIX forks as authenticated child creation with immutable parent execution attribution and exact recovery.
+  - revision: 183
+    id: macos-tableau-launch-catalog
+    impact: localized
+    domains:
+      - application-catalog
+    formats:
+      - ecar
+    summary: Adds the publicly verified native arm64 Tableau Desktop 2026.1 launch under its existing application ID without inferring helper or network behavior.

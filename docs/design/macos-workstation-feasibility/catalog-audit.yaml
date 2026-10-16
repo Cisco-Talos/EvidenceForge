@@ -241,8 +241,8 @@ applications:
 - id: cisco_secure_client
   availability: unresolved
   variant: unavailable
-  reference: https://www.cisco.com/c/en/us/support/security/secure-client/series.html
-  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+  reference: https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/release/notes/release-notes-cisco-secure-client-5-1.html
+  boundary: Vendor release notes establish macOS 26 support from 5.1.12.146. Exact native arm64 GUI executable and module-specific build/helper contracts remain unresolved; no Mac variant is admitted.
 - id: globalprotect
   availability: supported
   variant: prefilled
@@ -263,9 +263,12 @@ applications:
   boundary: Windows desktop product; browser service is a separate workflow.
 - id: tableau_desktop
   availability: supported
-  variant: unavailable
-  reference: https://formulae.brew.sh/cask/tableau
-  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+  variant: prefilled
+  reference: https://help.tableau.com/current/desktopdeploy/en-us/desktop_deploy_intro.htm
+  executable_reference: https://help.tableau.com/current/desktopdeploy/en-us/desktop_deploy_automate.htm
+  compatibility_reference: https://www.tableau.com/products/techspecs
+  release_reference: https://www.tableau.com/support/releases/desktop/2026.1
+  boundary: Native arm64 GUI launch of the vendor-listed Tahoe-compatible 2026.1 release, build 20261.26.0226.1626. This is a bounded modeled release, not a current-version recommendation. Licensing, connectors, helpers, updates and cloud/database traffic are not inferred.
 - id: postman
   availability: supported
   variant: prefilled

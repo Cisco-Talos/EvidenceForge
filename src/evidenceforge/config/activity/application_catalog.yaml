@@ -2007,6 +2007,18 @@ applications:
   - id: tableau_desktop
     display_name: "Tableau Desktop"
     platforms:
+      macos:
+        image_path: '/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau'
+        available_from: '2026-10-16'
+        deployment:
+          kind: managed
+          product_id: tableau_desktop
+          version: '2026.1'
+          build: '20261.26.0226.1626'
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau"'
       windows:
         image_path: 'C:\Program Files\Tableau\Tableau 2024.1\bin\tableau.exe'
         deployment:
