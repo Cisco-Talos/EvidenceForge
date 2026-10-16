@@ -492,6 +492,7 @@ macos:
       - Google Drive
       - AdobeAcrobat
       - Webex
+      - GlobalProtect
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
     lifetime: long
@@ -751,5 +752,11 @@ macos:
   Webex:
     command_templates:
     - /Applications/Webex.app/Contents/MacOS/Webex
+    lifetime: long
+    children: []
+
+  GlobalProtect:
+    command_templates:
+    - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
     lifetime: long
     children: []

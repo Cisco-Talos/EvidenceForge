@@ -244,10 +244,13 @@ applications:
   reference: https://www.cisco.com/c/en/us/support/security/secure-client/series.html
   boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
 - id: globalprotect
-  availability: unresolved
-  variant: unavailable
-  reference: https://docs.paloaltonetworks.com/globalprotect
-  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+  availability: supported
+  variant: prefilled
+  reference: https://knowledgebase.paloaltonetworks.com/KCSArticleDetail?id=kA14u000000HChXCAW
+  executable_reference: https://knowledgebase.paloaltonetworks.com/KCSArticleDetail?id=kA10g000000PNPbCAO
+  compatibility_reference: https://origin-docs.paloaltonetworks.com/compatibility-matrix/reference/globalprotect/where-can-i-install-the-globalprotect-app
+  release_reference: https://docs.paloaltonetworks.com/globalprotect/release-notes/6-3/known-issues-related-to-gp-app/globalprotect-6-3-3-h3-windows-and-macos-known-issues
+  boundary: Native arm64 GUI launch only, using vendor-documented 6.3.3-h3 (6.3.3-c711), a macOS 26-compatible historical release. The model availability date is the 2026-10-16 review date, not its original release date or a claim that it is the latest recommended version. PanGPS, HIP helpers, extensions, authentication and VPN routing remain unmodeled; executable presence does not imply an active tunnel.
 - id: zscaler_client_connector
   availability: unresolved
   variant: unavailable

@@ -74,6 +74,7 @@ from evidenceforge.events.content_identity import (
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
     MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     RuntimeServiceDeploymentIdentity,
@@ -4715,22 +4716,40 @@ def _pack_binary_release(value: BinaryReleaseIdentity) -> bytes:
         value.digests.sha256,
         value.digests.imphash,
     )
-    if value.code_signature is not None:
+    if value.code_signature is not None or value.mach_o_image is not None:
         signature = value.code_signature
-        values = (*values, (signature.signing_id, signature.team_id, signature.cdhash))
+        values = (
+            *values,
+            (signature.signing_id, signature.team_id, signature.cdhash)
+            if signature is not None
+            else None,
+        )
+    if value.mach_o_image is not None:
+        values = (*values, (value.mach_o_image.build_uuid, value.mach_o_image.architecture))
     return _json_row(values)
 
 
 def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     values = cast(list[object], json.loads(row))
-    if len(values) not in {14, 15}:
+    if len(values) not in {14, 15, 16}:
         raise StateError("binary release row width is invalid")
     signature = None
-    if len(values) == 15:
+    image = None
+    if len(values) >= 15 and (len(values) == 15 or values[14] is not None):
         signature_values = values[14]
         if type(signature_values) is not list or len(signature_values) != 3:
             raise StateError("binary release code signature row is invalid")
         signature = MachOCodeSignature(*signature_values)
+    if len(values) == 16:
+        image_values = values[15]
+        if type(image_values) is not list or len(image_values) != 2:
+            raise StateError("binary release Mach-O image row is invalid")
+        try:
+            image = MachOImageIdentity(*image_values)
+        except (TypeError, ValueError) as exc:
+            raise StateError("binary release Mach-O image row is invalid") from exc
+        if values[4] != "macos" or values[3] != image.architecture:
+            raise StateError("binary release Mach-O image architecture is invalid")
     pe_values = cast(list[str] | None, values[7])
     key = object.__new__(BinaryReleaseKey)
     for field_name, value in zip(
@@ -4759,6 +4778,7 @@ def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     object.__setattr__(identity, "key", key)
     object.__setattr__(identity, "pe_version_info", pe)
     object.__setattr__(identity, "code_signature", signature)
+    object.__setattr__(identity, "mach_o_image", image)
     object.__setattr__(identity, "release_id", values[8])
     object.__setattr__(identity, "content_id", values[9])
     object.__setattr__(identity, "digests", digests)

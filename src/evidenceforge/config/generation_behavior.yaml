@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 171
+current_revision: 172
 history_start_revision: 1
-behavior_surface_sha256: 58b708da6c3bb1211fa692331664a91060d5fd6d837edbb774745c63908d36e2
+behavior_surface_sha256: 1da6e153bb1bd3f353be5a112d46479d04ae65cf7f05722c843a6e7e0170a3c0
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1706,3 +1706,12 @@ changes:
       - checkpoint-state
     formats: []
     summary: Adds atomic audit-origin adoption on the privileged Mac SSH receiver, retaining historical credentials, fork inheritance and durable recovery. PID, execution and POSIX IDs remain unchanged; source projection stays unavailable.
+  - revision: 172
+    id: macos-native-image-metadata-and-globalprotect-launch
+    impact: localized
+    domains:
+      - binary-content-identity
+      - application-catalog
+      - checkpoint-state
+    formats: [ecar]
+    summary: Adds explicit arm64 Mach-O build UUID metadata with durable deployment and request identity, preserving absent metadata and legacy rows. Adds a vendor-referenced Mac GlobalProtect GUI launch without inferring VPN or helper behavior.

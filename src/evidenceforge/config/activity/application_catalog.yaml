@@ -1888,6 +1888,18 @@ applications:
     compatibility_option: globalprotect
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
+        available_from: '2026-10-16'
+        deployment:
+          kind: managed
+          product_id: globalprotect
+          version: 6.3.3
+          build: c711
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - /Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect
       windows:
         image_path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe'
         deployment:

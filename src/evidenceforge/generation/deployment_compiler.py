@@ -590,21 +590,23 @@ def _intern_release(
     if existing is None:
         releases[key] = release
         return release
-    for field_name in ("pe_version_info", "code_signature"):
+    for field_name in ("pe_version_info", "code_signature", "mach_o_image"):
         previous = getattr(existing, field_name)
         incoming = getattr(release, field_name)
         if previous is not None and incoming is not None and previous != incoming:
-            label = "PE" if field_name == "pe_version_info" else "code_signature"
+            label = "PE" if field_name == "pe_version_info" else field_name
             raise ValueError(
                 f"binary release {release.content_id!r} has contradictory {label} metadata"
             )
-    if (existing.pe_version_info is None and release.pe_version_info is not None) or (
-        existing.code_signature is None and release.code_signature is not None
+    if any(
+        getattr(existing, name) is None and getattr(release, name) is not None
+        for name in ("pe_version_info", "code_signature", "mach_o_image")
     ):
         enriched = replace(
             existing,
             pe_version_info=existing.pe_version_info or release.pe_version_info,
             code_signature=existing.code_signature or release.code_signature,
+            mach_o_image=existing.mach_o_image or release.mach_o_image,
         )
         releases[key] = enriched
         return enriched

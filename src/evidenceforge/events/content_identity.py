@@ -42,6 +42,7 @@ import posixpath
 import re
 from dataclasses import dataclass, field
 from typing import Literal, cast
+from uuid import UUID
 
 type Platform = Literal["windows", "linux", "macos"]
 type Architecture = Literal["x86", "x64", "arm64", "neutral"]
@@ -302,12 +303,58 @@ class MachOCodeSignature:
 
 
 @dataclass(frozen=True, slots=True)
+class MachOImageIdentity:
+    """Explicit native image metadata, separate from content and signing identity.
+
+    An LC_UUID names an architecture-specific build image. Merely having a Mac
+    path does not establish a Mach-O image; producers must supply this fact.
+    The initial generation profile supports native arm64 only.
+    """
+
+    build_uuid: str
+    architecture: Literal["arm64"] = "arm64"
+
+    def __post_init__(self) -> None:
+        """Reject unknown architectures, nil UUIDs and noncanonical UUID spelling."""
+        if self.architecture != "arm64":
+            raise ValueError("Mach-O image metadata requires the supported arm64 profile")
+        if (
+            type(self.build_uuid) is not str
+            or re.fullmatch(
+                r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", self.build_uuid
+            )
+            is None
+        ):
+            raise ValueError("Mach-O build UUID requires a canonical UUID string")
+        parsed = UUID(self.build_uuid)
+        if parsed.int == 0:
+            raise ValueError("Mach-O build UUID cannot be nil")
+        object.__setattr__(self, "build_uuid", str(parsed).upper())
+
+    @classmethod
+    def derive(cls, key: BinaryReleaseKey) -> MachOImageIdentity:
+        """Model one release-scoped image UUID without inspecting a host binary.
+
+        Like canonical content digests, the value is stable for the release,
+        independent of host, installation path and generation seed. It is a
+        synthetic UUID-shaped identity, not a measurement of publisher bytes.
+        """
+        if key.platform != "macos" or key.architecture != "arm64":
+            raise ValueError("Mach-O image derivation requires a native macOS arm64 release")
+        image_uuid = UUID(
+            hex=_semantic_sha256("mach-o-build-image", key.canonical_key)[:32], version=4
+        )
+        return cls(build_uuid=str(image_uuid))
+
+
+@dataclass(frozen=True, slots=True)
 class BinaryReleaseIdentity:
     """Canonical identity and deterministic hashes for one binary release artifact."""
 
     key: BinaryReleaseKey
     pe_version_info: PeVersionInfo | None = None
     code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
     release_id: str = field(init=False)
     content_id: str = field(init=False)
     digests: ContentDigests = field(init=False)
@@ -325,6 +372,12 @@ class BinaryReleaseIdentity:
             self.key.platform != "macos" or type(self.code_signature) is not MachOCodeSignature
         ):
             raise ValueError("Code signature metadata requires a macOS binary and exact snapshot")
+        if self.mach_o_image is not None and (
+            type(self.mach_o_image) is not MachOImageIdentity
+            or self.key.platform != "macos"
+            or self.key.architecture != self.mach_o_image.architecture
+        ):
+            raise ValueError("Mach-O image metadata must match its native binary architecture")
         object.__setattr__(
             self,
             "release_id",
@@ -1094,6 +1147,7 @@ __all__ = [
     "LocalArtifactObjectKey",
     "LocalArtifactVersionRecord",
     "MachOCodeSignature",
+    "MachOImageIdentity",
     "PeVersionInfo",
     "Platform",
     "ProcessBinaryIdentity",
