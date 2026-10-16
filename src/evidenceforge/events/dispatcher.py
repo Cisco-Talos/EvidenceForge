@@ -4561,6 +4561,11 @@ class EventDispatcher:
             raise EventContractError("Prepared dispatch requires a valid canonical contract seal")
         if not isinstance(state_intent, PreparedDispatchStateIntent):
             raise EventContractError("Prepared dispatch requires a typed state intent")
+        if (
+            event.event_type is EventKind.PROCESS_EXEC
+            and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+        ):
+            raise EventContractError("Process exec requires its exact State action cohort")
         if state_intent is not PreparedDispatchStateIntent.APPLY and lifecycle_ticket is None:
             raise EventContractError(
                 "Externally materialized dispatch requires an authority lifecycle ticket"
@@ -4758,6 +4763,7 @@ class EventDispatcher:
                 else target
             )
             allowed_object_ids.add(identity.object_id)
+        allowed_object_ids.update(item.target.object_id for item in plan.process_executions)
         for patch in plan.live_session_process_role_patches:
             allowed_object_ids.add(patch.target.object_id)
             for process in (
@@ -5917,6 +5923,8 @@ class EventDispatcher:
             *(("process", object_id) for object_id in process_closes),
             *(("session", object_id) for object_id in session_closes),
         }
+        executions = {item.target.object_id: item for item in state_plan.process_executions}
+        observed_executions: set[str] = set()
         observed_starts: dict[tuple[str, str], int] = {}
         observed_closes: dict[tuple[str, str], int] = {}
         process_or_session_ids: set[str] = set()
@@ -5994,6 +6002,30 @@ class EventDispatcher:
                 if marker in observed_starts:
                     raise EventContractError("Action-cohort repeats a process-start projection")
                 observed_starts[marker] = position
+            elif event.event_type is EventKind.PROCESS_EXEC:
+                from evidenceforge.events.process import process_exec_identities
+
+                before, after = process_exec_identities(event)
+                execution = executions.get(after.object_id)
+                if (
+                    execution is None
+                    or execution.target != before
+                    or execution.after != after
+                    or after.object_id in observed_executions
+                ):
+                    raise EventContractError(
+                        "Action-cohort exec projection disagrees with its exact State transition"
+                    )
+                live_process = self.state_manager.get_process(before.hostname, before.pid)
+                if (
+                    live_process is None
+                    or event.process.integrity_level != live_process.integrity_level
+                    or event.src_host.os_category != self.state_manager._pid_os.get(before.hostname)
+                ):
+                    raise EventContractError(
+                        "Process exec changed its State host or integrity facts"
+                    )
+                observed_executions.add(after.object_id)
             elif event.event_type is EventKind.PROCESS_TERMINATE:
                 if type(subject) is not ProcessIdentity:
                     raise EventContractError(
@@ -6051,6 +6083,9 @@ class EventDispatcher:
                     "Action-cohort projection closes a State member before its start"
                 )
 
+        if observed_executions != executions.keys():
+            raise EventContractError("Action-cohort exec transitions lack exact source members")
+
         process_by_host_pid = {
             (plan.identity.hostname, plan.identity.pid): plan.identity
             for plan in state_plan.processes
@@ -6101,6 +6136,7 @@ class EventDispatcher:
             *(identity.object_id for identity in session_starts.values()),
             *(identity.object_id for identity in process_starts.values()),
             *(item.identity.object_id for item in state_plan.process_terminations),
+            *(item.target.object_id for item in state_plan.process_executions),
             *(item.identity.object_id for item in state_plan.session_terminalizations),
             *(
                 self._action_cohort_target_identity(patch.target).object_id
@@ -6675,6 +6711,7 @@ class EventDispatcher:
         if len(owned_keys) != sum(plan.occurrence_count for plan in owned_effect_plans):
             raise EventContractError("Action-cohort owned effect plans repeat an exact ordinal")
         bootstrap_kinds = {
+            EventKind.PROCESS_EXEC,
             EventKind.LOGON,
             EventKind.MACHINE_LOGON,
             EventKind.SSH_SESSION,
@@ -7546,6 +7583,8 @@ class EventDispatcher:
         """Return the authenticated closed semantic kind for exact cohort projection."""
 
         projection = record.trusted_projections[0]
+        if projection.occurrence.event_type is EventKind.PROCESS_EXEC:
+            return self._require_posix_exec_projection(record)
         try:
             self._require_type_five_projection(projection)
         except EventContractError:
@@ -7557,6 +7596,40 @@ class EventDispatcher:
                 except EventContractError:
                     return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_posix_exec_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one exact image replacement without unrelated State mutations."""
+
+        from evidenceforge.events.process import process_exec_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX exec projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_exec_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"process-exec:{after.execution_id}"
+            or len(plan.process_executions) != 1
+            or plan.process_executions[0].target != before
+            or plan.process_executions[0].after != after
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches,
+                    plan.session_activity_patches,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX exec projection changed its singleton owner")
+        return "posix_exec"
 
     def _require_linux_sudo_terminal_projection(
         self,
@@ -8053,7 +8126,7 @@ class EventDispatcher:
             or self._projection_is_exact_observation_suppressed(projection)
         )
 
-    def _linux_sudo_terminal_exact_projection_participants(
+    def _single_ecar_exact_projection_participants(
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
@@ -8061,7 +8134,7 @@ class EventDispatcher:
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
 
-        if self._linux_sudo_terminal_projection_is_exact_omission(projection):
+        if self._ecar_projection_is_exact_omission(projection):
             return ()
         participants = self._exact_projection_participants(projection)
         targets = self._exact_projection_targets(projection)
@@ -8072,16 +8145,14 @@ class EventDispatcher:
             or len(participants) != 1
             or participants[0] is not targets[0][1]
         ):
-            raise EventContractError(
-                "Exact Linux sudo terminal projection requires one built-in eCAR target"
-            )
+            raise EventContractError("Exact eCAR projection requires one built-in eCAR target")
         return participants
 
-    def _linux_sudo_terminal_projection_is_exact_omission(
+    def _ecar_projection_is_exact_omission(
         self,
         projection: _PreparedProjection,
     ) -> bool:
-        """Authenticate a sudo terminal omitted by warm-up, filtering, or no eCAR sink."""
+        """Authenticate an eCAR occurrence omitted by warm-up, filtering, or no sink."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
 
@@ -8135,12 +8206,14 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         exact_kind = self._exact_action_cohort_projection_kind(record)
         record.exact_projection_kind = exact_kind
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
+        terminal_kind = exact_kind == "posix_exec" or exact_kind.startswith(
+            ("ssh_", "rdp_", "linux_sudo_")
+        )
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
-                self._linux_sudo_terminal_projection_is_exact_omission(projection)
-                if exact_kind.startswith("linux_sudo_")
+                self._ecar_projection_is_exact_omission(projection)
+                if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
@@ -8164,8 +8237,8 @@ class EventDispatcher:
             self._ssh_terminal_exact_projection_participants(projection)
         elif exact_kind.startswith("rdp_"):
             self._rdp_terminal_exact_projection_participants(projection)
-        elif exact_kind.startswith("linux_sudo_"):
-            self._linux_sudo_terminal_exact_projection_participants(projection)
+        elif exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_"):
+            self._single_ecar_exact_projection_participants(projection)
         else:
             self._exact_projection_participants(projection)
         cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
@@ -8184,12 +8257,14 @@ class EventDispatcher:
         exact_kind = self._exact_action_cohort_projection_kind(record)
         if exact_kind != record.exact_projection_kind:
             raise EventContractError("Exact action-cohort projection kind changed before rendering")
-        terminal_kind = exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
+        terminal_kind = exact_kind == "posix_exec" or exact_kind.startswith(
+            ("ssh_", "rdp_", "linux_sudo_")
+        )
         exact_all_suppressed = bool(
             terminal_kind
             and (
-                self._linux_sudo_terminal_projection_is_exact_omission(projection)
-                if exact_kind.startswith("linux_sudo_")
+                self._ecar_projection_is_exact_omission(projection)
+                if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
                 else self._rdp_terminal_projection_is_exact_omission(projection)
@@ -8204,8 +8279,8 @@ class EventDispatcher:
             if exact_kind.startswith("ssh_")
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
-            else self._linux_sudo_terminal_exact_projection_participants(projection)
-            if exact_kind.startswith("linux_sudo_")
+            else self._single_ecar_exact_projection_participants(projection)
+            if exact_kind == "posix_exec" or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
         batch.reserve_participants(cast(tuple[object, ...], participants))
@@ -8801,10 +8876,6 @@ class EventDispatcher:
             raise EventContractError("Action-cohort batch requires a non-empty root action ID")
         if type(state_plan) is not ActionCohortMaterializationPlan:
             raise EventContractError("Action-cohort batch requires an exact State plan")
-        if state_plan.process_executions:
-            raise EventContractError(
-                "Process execution cohorts have no supported canonical source projection yet"
-            )
         if any(patch.audit_binding is not None for patch in state_plan.process_activity_patches):
             raise EventContractError(
                 "Process audit-origin cohorts have no supported canonical source projection yet"
@@ -15137,6 +15208,7 @@ class EventDispatcher:
             "system_process_create",
             "process_terminate",
             "process_access",
+            "process_exec",
             "create_remote_thread",
             "bash_command",
             "zsh_command",

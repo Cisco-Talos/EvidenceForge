@@ -213,6 +213,7 @@ SOURCE_TIMING_PLANNER_CHECKPOINT_FIELDS = _fields(
         "_process_dependent_create_times",
         "_runtime_cross_source_sysmon_create_times",
         "_runtime_process_create_times",
+        "_runtime_process_execution_times",
         "_sysmon_process_render_create_times",
         "_watermark",
     ),

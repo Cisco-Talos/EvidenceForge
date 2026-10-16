@@ -20,7 +20,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 
 
 class _SourceTimingHead(BaseModel):

@@ -217,6 +217,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "logoff",
         "failed_logon",
         "process_create",
+        "process_exec",
         "process_terminate",
         "system_process_create",
         "ssh_session",
@@ -267,6 +268,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "logoff": self._render_logoff,
             "failed_logon": self._render_failed_logon,
             "process_create": self._render_process_create,
+            "process_exec": self._render_process_exec,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
@@ -333,7 +335,7 @@ class EcarEmitter(HostMultiplexEmitter):
             elif (
                 isinstance(plan.subject, ProcessIdentity)
                 and event.event_type
-                in {"process_create", "system_process_create", "process_terminate"}
+                in {"process_create", "system_process_create", "process_terminate", "process_exec"}
                 and plan.subject.primary_thread is not None
             ):
                 event_data["tid"] = plan.subject.primary_thread.tid
@@ -701,6 +703,47 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
         self._apply_session_properties(event_data, event)
+        self._apply_edr_context(event_data, event)
+        self._emit_canonical_event(event_data, event)
+
+    def _render_process_exec(self, event: CanonicalOccurrence) -> None:
+        """Render the EvidenceForge PROCESS/MODIFY exec extension."""
+        from evidenceforge.events.process import process_exec_identities
+
+        before, after = process_exec_identities(event)
+        event_data = {
+            "timestamp": self._after_process_create_timestamp(event, after),
+            "hostname": self._host_name(event.src_host),
+            "object": "PROCESS",
+            "action": "MODIFY",
+            "pid": after.pid,
+            "ppid": after.parent_pid,
+            "principal": before.principal,
+            "image_path": after.image,
+            "command_line": after.command_line,
+            "operation": "exec",
+            "execution_id": after.execution_id,
+            "previous_execution_id": before.execution_id,
+            "previous_image_path": before.image,
+            "previous_command_line": before.command_line,
+            "_host_fqdn": self._host_fqdn(event.src_host),
+        }
+        self._apply_session_properties(event_data, event)
+        for prefix, identity in (("previous_", before), ("", after)):
+            credentials = identity.credentials
+            if credentials is not None:
+                for field, value in (
+                    ("real_uid", credentials.real_uid),
+                    ("effective_uid", credentials.effective_uid),
+                    ("real_gid", credentials.real_gid),
+                    ("effective_gid", credentials.effective_gid),
+                    ("audit_uid", credentials.audit_uid),
+                    ("audit_session_id", credentials.audit_session_id),
+                ):
+                    if value is not None:
+                        event_data[prefix + field] = value
+            if identity.audit_pid_version is not None:
+                event_data[prefix + "pid_version"] = identity.audit_pid_version
         self._apply_edr_context(event_data, event)
         self._emit_canonical_event(event_data, event)
 
@@ -1367,6 +1410,23 @@ class EcarEmitter(HostMultiplexEmitter):
 
     # Property keys that belong in the eCAR properties map.
     _PROPERTY_KEYS = (
+        "real_uid",
+        "real_gid",
+        "audit_uid",
+        "audit_session_id",
+        "pid_version",
+        "previous_real_uid",
+        "previous_effective_uid",
+        "previous_real_gid",
+        "previous_effective_gid",
+        "previous_audit_uid",
+        "previous_audit_session_id",
+        "previous_pid_version",
+        "operation",
+        "execution_id",
+        "previous_execution_id",
+        "previous_image_path",
+        "previous_command_line",
         "command_line",
         "image_path",
         "parent_image_path",

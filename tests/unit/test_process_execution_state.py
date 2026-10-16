@@ -371,7 +371,7 @@ def test_execution_cannot_publish_without_a_canonical_source_projection() -> Non
     )
     dispatcher = EventDispatcher(manager, {})
     digest = manager.materialization_digest()
-    with pytest.raises(EventContractError, match="no supported canonical source projection"):
+    with pytest.raises(EventContractError, match="ordered dispatch tuple"):
         dispatcher.prepare_action_cohort_batch("exec-test", builder.seal(), (), (), (), ())
     assert manager.materialization_digest() == digest
 

@@ -126,7 +126,7 @@ class ProcessTargetSecurityContext:
 
 @dataclass(slots=True)
 class ProcessContext:
-    """Process creation/termination details."""
+    """Current process facts for lifecycle and dependent observations."""
 
     pid: int  # Allocated by StateManager.create_process()
     parent_pid: int

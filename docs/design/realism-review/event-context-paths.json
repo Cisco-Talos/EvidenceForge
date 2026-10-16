@@ -11134,6 +11134,88 @@
         {
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "'process_exec'",
+          "event_type_literals": [
+            "process_exec"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 26,
+          "scope": "process_exec_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_exec",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "review_status": "path_review_complete",
+      "static_references": [
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 4565,
+          "scope": "EventDispatcher.prepare_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/events/dispatcher.py",
+          "kind": "comparison",
+          "line": 6005,
+          "scope": "EventDispatcher._validate_action_cohort_dispatch_coverage"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "kind": "call_keyword",
+          "line": 26,
+          "scope": "process_exec_occurrence"
+        },
+        {
+          "file": "src/evidenceforge/generation/emitters/ecar.py",
+          "kind": "comparison",
+          "line": 337,
+          "scope": "EcarEmitter._apply_edr_context"
+        },
+        {
+          "file": "src/evidenceforge/generation/identity_lifecycle.py",
+          "kind": "comparison",
+          "line": 61,
+          "scope": "IdentityLifecyclePlanner.plan"
+        },
+        {
+          "file": "src/evidenceforge/generation/source_timing.py",
+          "kind": "comparison",
+          "line": 4727,
+          "scope": "SourceTimingPlanner._endpoint_event_source_key"
+        }
+      ],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_exec_projection.py"
+      ],
+      "path_review": {
+        "classification": "single_canonical_path",
+        "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection",
+        "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition."
+      }
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
             "auth",
             "process",
             "src_host"

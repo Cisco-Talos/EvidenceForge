@@ -282,6 +282,12 @@ PRODUCTION_SOURCE_TIMING_INDEX_FAMILIES: tuple[SourceTimingIndexFamilySpec, ...]
         "lifecycle+48h",
     ),
     SourceTimingIndexFamilySpec(
+        "runtime_process_execution",
+        "family/source_instance/execution_id",
+        "datetime",
+        "lifecycle+48h",
+    ),
+    SourceTimingIndexFamilySpec(
         "runtime_cross_source_sysmon_create",
         "hostname/process_object_id",
         "native/render datetime pair",
@@ -1214,6 +1220,9 @@ class SourceTimingPlanner:
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_process_create_times = _SourceTimingCache(
+            default_deadline=_lifecycle_retention_deadline
+        )
+        self._runtime_process_execution_times = _SourceTimingCache(
             default_deadline=_lifecycle_retention_deadline
         )
         self._runtime_cross_source_sysmon_create_times = _SourceTimingCache(
@@ -2245,6 +2254,7 @@ class SourceTimingPlanner:
         return (
             ("ecar_process_create", self._ecar_process_create_times),
             ("runtime_process_create", self._runtime_process_create_times),
+            ("runtime_process_execution", self._runtime_process_execution_times),
             (
                 "runtime_cross_source_sysmon_create",
                 self._runtime_cross_source_sysmon_create_times,
@@ -2338,6 +2348,8 @@ class SourceTimingPlanner:
                 timestamp,
                 lifecycle_deadline,
             )
+        if family == "runtime_process_execution":
+            return (("ecar", source_instance, f"{object_id}:exec:1"), timestamp, lifecycle_deadline)
         if family == "runtime_cross_source_sysmon_create":
             rendered = timestamp + timedelta(microseconds=ordinal % 997 + 1)
             return (host, object_id), (timestamp, rendered), lifecycle_deadline
@@ -4298,6 +4310,13 @@ class SourceTimingPlanner:
                         hostname=hostname,
                         preferred=native_time,
                     )
+                native_time = self._apply_process_execution_constraints(
+                    event,
+                    family=family,
+                    source_instance=instance,
+                    hostname=hostname,
+                    preferred=native_time,
+                )
                 phase_times[phase] = native_time
                 render_time = specialized[1] if specialized is not None else native_time
                 if specialized is not None and specialized_native is not None:
@@ -4338,6 +4357,61 @@ class SourceTimingPlanner:
                     phase=phase,
                     timestamp=render_time,
                 )
+
+    def _apply_process_execution_constraints(
+        self,
+        event: TimingOccurrence,
+        *,
+        family: str,
+        source_instance: str,
+        hostname: str,
+        preferred: datetime,
+    ) -> datetime:
+        """Keep visible image replacement and its dependent observations in order."""
+
+        if family != "ecar" or event.identity_plan is None:
+            return preferred
+        plan = event.identity_plan
+        if event.event_type == "process_exec":
+            identity = plan.subject
+            floor = (
+                self._process_dependent_create_times.get(
+                    (family, source_instance, identity.object_id)
+                )
+                if isinstance(identity, ProcessIdentity)
+                else None
+            )
+        else:
+            identity = next(
+                (
+                    candidate
+                    for candidate in (plan.actor, plan.subject, plan.target)
+                    if isinstance(candidate, ProcessIdentity)
+                    and candidate.hostname.casefold() == hostname.casefold()
+                ),
+                None,
+            )
+            floor = (
+                self._runtime_process_execution_times.get(
+                    (family, source_instance, identity.execution_id)
+                )
+                if identity is not None and identity.execution_ordinal > 0
+                else None
+            )
+        if floor is None or preferred > floor:
+            return preferred
+        self.timing_runtime.audit.record_repair("ecar.process.execution_order")
+        return self._sample_after_floor(
+            floor,
+            relationship_key="ecar.process.execution_order",
+            scope=TimingScope(
+                stable_id=self._endpoint_event_object_id(event, hostname, "base"),
+                host=hostname,
+                source=source_instance,
+                lifecycle_id=identity.lifecycle_group_id,
+            ),
+            maximum_us=4_000,
+        )
 
     def _runtime_endpoint_event_time(
         self,
@@ -4489,6 +4563,12 @@ class SourceTimingPlanner:
         if scope is None:
             return
         process_object_id, _lifecycle_id, _pid, _started_at = scope
+        if family == "ecar" and event.event_type == "process_exec":
+            identity = event.identity_plan.subject if event.identity_plan is not None else None
+            if isinstance(identity, ProcessIdentity):
+                self._runtime_process_execution_times[
+                    (family, source_instance, identity.execution_id)
+                ] = timestamp
         key = (family, source_instance, process_object_id)
         previous = self._process_dependent_create_times.get(key)
         if previous is None or timestamp > previous:
@@ -4732,6 +4812,7 @@ class SourceTimingPlanner:
             "registry_modify",
             "image_load",
             "process_access",
+            "process_exec",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {

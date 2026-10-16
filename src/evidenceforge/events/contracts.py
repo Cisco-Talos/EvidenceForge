@@ -55,6 +55,7 @@ class EventKind(StrEnum):
     PASSWORD_RESET = "password_reset"
     PROCESS_ACCESS = "process_access"
     PROCESS_CREATE = "process_create"
+    PROCESS_EXEC = "process_exec"
     PROCESS_TERMINATE = "process_terminate"
     RDP_DISCONNECT = "rdp_disconnect"
     RDP_RECONNECT = "rdp_reconnect"
@@ -502,6 +503,7 @@ class ContractViolationCode(StrEnum):
     MISSING_CONTEXT = "missing_context"
     FORBIDDEN_CONTEXT = "forbidden_context"
     MISSING_IDENTITY = "missing_identity"
+    INVALID_IDENTITY = "invalid_identity"
 
 
 @dataclass(frozen=True, slots=True)
@@ -563,6 +565,7 @@ def _contract(
     *,
     required: frozenset[ContextKind],
     optional: frozenset[ContextKind] = frozenset(),
+    forbidden: frozenset[ContextKind] = frozenset(),
     src: HostSemantic = HostSemantic.OPTIONAL,
     dst: HostSemantic = HostSemantic.OPTIONAL,
     identity: IdentityRequirement = IdentityRequirement.OPTIONAL,
@@ -574,7 +577,7 @@ def _contract(
         kind=kind,
         required_contexts=required,
         optional_contexts=optional,
-        forbidden_contexts=frozenset(),
+        forbidden_contexts=forbidden,
         source_host_role=src,
         destination_host_role=dst,
         identity_requirement=identity,
@@ -947,6 +950,20 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_WINDOWS_ENDPOINT,
     ),
+    EventKind.PROCESS_EXEC: _contract(
+        EventKind.PROCESS_EXEC,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        optional=_contexts(ContextKind.AUTH),
+        forbidden=frozenset(ContextKind)
+        - _contexts(
+            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_TERMINATE: _contract(
         EventKind.PROCESS_TERMINATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
@@ -1120,6 +1137,20 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                 message=f"{event.event_type} requires a canonical identity plan",
             )
         )
+
+    if contract.kind is EventKind.PROCESS_EXEC:
+        from evidenceforge.events.process import process_exec_identities
+
+        try:
+            process_exec_identities(event)
+        except ValueError as exc:
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message=str(exc),
+                )
+            )
 
     occurrence = CanonicalOccurrenceSnapshot(
         kind=contract.kind,

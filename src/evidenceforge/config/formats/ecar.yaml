@@ -242,6 +242,102 @@ fields:
     required: false
     description: "Windows sub-status hex (e.g., 0xC0000064) on USER_SESSION/LOGIN failures"
 
+  # EvidenceForge PROCESS/MODIFY exec extension (not an upstream CAR action).
+  - name: effective_uid
+    type: string
+    required: false
+    description: "Known effective POSIX user ID"
+
+  - name: effective_gid
+    type: string
+    required: false
+    description: "Known effective POSIX group ID"
+
+  - name: operation
+    type: string
+    required: false
+    description: "EvidenceForge process transition operation; exec for image replacement"
+
+  - name: execution_id
+    type: string
+    required: false
+    description: "Post-transition execution identity within the same process object"
+
+  - name: previous_execution_id
+    type: string
+    required: false
+    description: "Pre-transition execution identity"
+
+  - name: previous_image_path
+    type: string
+    required: false
+    description: "Executable path before image replacement"
+
+  - name: previous_command_line
+    type: string
+    required: false
+    description: "Command line before image replacement"
+
+  - name: real_uid
+    type: string
+    required: false
+    description: "Known real POSIX user ID after transition"
+
+  - name: real_gid
+    type: string
+    required: false
+    description: "Known real POSIX group ID after transition"
+
+  - name: audit_uid
+    type: string
+    required: false
+    description: "Known POSIX audit user ID after transition"
+
+  - name: audit_session_id
+    type: string
+    required: false
+    description: "Known POSIX audit session ID after transition"
+
+  - name: pid_version
+    type: string
+    required: false
+    description: "Known native audit PID version after transition"
+
+  - name: previous_real_uid
+    type: string
+    required: false
+    description: "Known real_uid before process transition"
+
+  - name: previous_effective_uid
+    type: string
+    required: false
+    description: "Known effective_uid before process transition"
+
+  - name: previous_real_gid
+    type: string
+    required: false
+    description: "Known real_gid before process transition"
+
+  - name: previous_effective_gid
+    type: string
+    required: false
+    description: "Known effective_gid before process transition"
+
+  - name: previous_audit_uid
+    type: string
+    required: false
+    description: "Known audit_uid before process transition"
+
+  - name: previous_audit_session_id
+    type: string
+    required: false
+    description: "Known audit_session_id before process transition"
+
+  - name: previous_pid_version
+    type: string
+    required: false
+    description: "Known pid_version before process transition"
+
   # Cross-process event properties (THREAD/REMOTE_CREATE, PROCESS/OPEN)
   - name: src_pid
     type: string

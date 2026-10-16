@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 176
+current_revision: 177
 history_start_revision: 1
-behavior_surface_sha256: 22a5be5e2ac1885a3496ce296ee74a59830cf0af5e09f8898741e7f821b99465
+behavior_surface_sha256: cf410acda147520a2750cf224b2aae106228f6d1c8f1101ca4e11cf5fd4327d4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1750,3 +1750,12 @@ changes:
       - checkpoint-recovery
     formats: []
     summary: Adds an exact authenticated Mac SSH child privilege drop with username-index rollback, historical attribution and current lifecycle token projection. Native source publication and receiver admission remain unavailable.
+  - revision: 177
+    id: posix-exec-source-projection
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-projection
+    formats:
+      - ecar
+    summary: Publishes authenticated POSIX exec as an eCAR process modification without creating another lifetime.

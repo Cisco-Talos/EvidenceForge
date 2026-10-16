@@ -417,3 +417,5 @@
 ## Experimental Mac extension
 
 Use a separate Mac-only and mixed-fleet extension for the macOS 26 arm64 branch. Keep the existing Windows/Linux coverage scenario unchanged for regression comparison. Exercise eCAR process/session correlation and eligible `zsh_history` submissions; verify that noninteractive commands create no history, Linux syslog never belongs to a Mac, and Windows server logs retain server ownership. Native ES/Unified Log, SSH completion, SMB client-native evidence, persistence and denied-action cases remain unavailable until their individual implementation gates pass. Do not fill missing evidence using raw fabricated native messages.
+
+Internal POSIX exec coverage is a separate engine contract gate: verify one lifetime, advancing execution IDs, unchanged PID, dependent timing, filtering and exact cohort cancellation/publication. It is not an additional authored storyline event. eCAR `PROCESS/MODIFY` with `operation=exec` is an EvidenceForge extension, not a new native ES claim.

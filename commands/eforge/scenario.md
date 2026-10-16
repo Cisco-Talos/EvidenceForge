@@ -162,4 +162,4 @@ generated output.
 If the user wants logs, hand off to `/eforge generate`. If they want a focused validation or repair
 explanation, hand off to `/eforge validate`. Do not silently generate logs as part of authoring.
 
-Read `/eforge:references:record-validation` for validation policy and compatibility.
+Read `/eforge:references:record-validation` for validation policy; `process_exec` is internal-only.
