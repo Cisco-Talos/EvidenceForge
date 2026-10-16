@@ -164,6 +164,21 @@ def process_credential_identities(
             or event.timestamp <= before.started_at
         ):
             raise ValueError("Process privilege drop must retain its authenticated audit origin")
+    elif event.event_type == "process_service_drop":
+        if (
+            old.real_uid != 0
+            or old.effective_uid != 0
+            or new.real_uid == 0
+            or new.real_uid != new.effective_uid
+            or new.real_gid != new.effective_gid
+            or old.audit_uid is not None
+            or old.audit_session_id is not None
+            or new.audit_uid is not None
+            or new.audit_session_id is not None
+            or after.principal != "_sshd"
+            or event.timestamp <= before.execution_started_at
+        ):
+            raise ValueError("Service privilege drop must preserve unauthenticated audit identity")
     else:
         raise ValueError("Unsupported process credential transition")
     _validate_process_context(event, after, platforms={"macos"})

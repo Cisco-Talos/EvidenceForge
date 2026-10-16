@@ -45,7 +45,7 @@ def process_credential_occurrence(
     before: ProcessIdentity,
     after: ProcessIdentity,
     timestamp: datetime,
-    kind: Literal["process_audit_bind", "process_privilege_drop"],
+    kind: Literal["process_audit_bind", "process_privilege_drop", "process_service_drop"],
     integrity_level: str,
     session: SessionIdentity | None = None,
 ) -> OccurrenceBuilder:

@@ -10972,7 +10972,8 @@
           "event_type_literals": [
             "process_exec",
             "process_audit_bind",
-            "process_privilege_drop"
+            "process_privilege_drop",
+            "process_service_drop"
           ],
           "file": "src/evidenceforge/generation/actions/posix_process.py",
           "line": 76,
@@ -11189,7 +11190,8 @@
           "event_type_literals": [
             "process_exec",
             "process_audit_bind",
-            "process_privilege_drop"
+            "process_privilege_drop",
+            "process_service_drop"
           ],
           "file": "src/evidenceforge/generation/actions/posix_process.py",
           "line": 76,
@@ -11235,7 +11237,8 @@
           "event_type_literals": [
             "process_exec",
             "process_audit_bind",
-            "process_privilege_drop"
+            "process_privilege_drop",
+            "process_service_drop"
           ],
           "file": "src/evidenceforge/generation/actions/posix_process.py",
           "line": 76,
@@ -11252,6 +11255,53 @@
         "ecar"
       ],
       "event_type": "process_privilege_drop",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_process_credential_projection.py"
+      ],
+      "path_review": {
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
+      }
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 76,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_service_drop",
       "kind": "internal_occurrence",
       "path_classification": "single_canonical_path",
       "review_status": "path_review_complete",

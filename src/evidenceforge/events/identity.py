@@ -240,6 +240,62 @@ class MacosProcessPrivilegeDrop:
 
 
 @dataclass(frozen=True, slots=True)
+class MacosProcessServiceDrop:
+    """One pre-authentication service-child drop, independent of a login origin."""
+
+    parent_object_id: str
+    parent_execution_id: str
+    execution_ordinal: int
+    before: PosixProcessCredentials
+    after: PosixProcessCredentials
+    before_principal: str
+    after_principal: str
+    before_integrity: str
+    after_integrity: str
+    dropped_at: datetime
+
+    def __post_init__(self) -> None:
+        """Require a permanent root-to-service transition with no authenticated audit origin."""
+        if (
+            type(self.before) is not PosixProcessCredentials
+            or type(self.after) is not PosixProcessCredentials
+        ):
+            raise ValueError("Service privilege drop requires exact credential facts")
+        if type(self.execution_ordinal) is not int or self.execution_ordinal < 0:
+            raise ValueError("Service privilege drop requires its exact execution ordinal")
+        if type(self.dropped_at) is not datetime or self.dropped_at.utcoffset() is None:
+            raise ValueError("Service privilege drop requires an aware timestamp")
+        if any(
+            type(value) is not str or not value
+            for value in (
+                self.parent_object_id,
+                self.parent_execution_id,
+                self.before_principal,
+                self.after_principal,
+                self.before_integrity,
+                self.after_integrity,
+            )
+        ):
+            raise ValueError(
+                "Service privilege drop requires parent, principal and integrity identities"
+            )
+        if (
+            self.before.real_uid != 0
+            or self.before.effective_uid != 0
+            or self.after.real_uid == 0
+            or self.after.real_uid != self.after.effective_uid
+            or self.after.real_gid != self.after.effective_gid
+            or self.before.audit_uid is not None
+            or self.before.audit_session_id is not None
+            or self.after.audit_uid is not None
+            or self.after.audit_session_id is not None
+        ):
+            raise ValueError(
+                "Service privilege drop must adopt a nonroot service without authenticated origin"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessIdentity:
     """Immutable identity of one host- and process-start-scoped process object."""
 

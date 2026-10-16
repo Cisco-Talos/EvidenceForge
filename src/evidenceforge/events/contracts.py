@@ -58,6 +58,7 @@ class EventKind(StrEnum):
     PROCESS_EXEC = "process_exec"
     PROCESS_AUDIT_BIND = "process_audit_bind"
     PROCESS_PRIVILEGE_DROP = "process_privilege_drop"
+    PROCESS_SERVICE_DROP = "process_service_drop"
     PROCESS_TERMINATE = "process_terminate"
     RDP_DISCONNECT = "rdp_disconnect"
     RDP_RECONNECT = "rdp_reconnect"
@@ -985,6 +986,17 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_formats(FormatKind.ECAR),
     ),
+    EventKind.PROCESS_SERVICE_DROP: _contract(
+        EventKind.PROCESS_SERVICE_DROP,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_TERMINATE: _contract(
         EventKind.PROCESS_TERMINATE,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST),
@@ -1163,6 +1175,7 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
         EventKind.PROCESS_EXEC,
         EventKind.PROCESS_AUDIT_BIND,
         EventKind.PROCESS_PRIVILEGE_DROP,
+        EventKind.PROCESS_SERVICE_DROP,
     }:
         from evidenceforge.events.process import (
             process_credential_identities,

@@ -4567,6 +4567,7 @@ class EventDispatcher:
                 EventKind.PROCESS_EXEC,
                 EventKind.PROCESS_AUDIT_BIND,
                 EventKind.PROCESS_PRIVILEGE_DROP,
+                EventKind.PROCESS_SERVICE_DROP,
             }
             and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
         ):
@@ -5932,7 +5933,9 @@ class EventDispatcher:
         credential_patches = {
             patch.target.object_id: patch
             for patch in state_plan.process_activity_patches
-            if patch.audit_binding is not None or patch.privilege_drop is not None
+            if patch.audit_binding is not None
+            or patch.privilege_drop is not None
+            or patch.service_drop is not None
         }
         observed_credentials: set[str] = set()
         observed_executions: set[str] = set()
@@ -6040,6 +6043,7 @@ class EventDispatcher:
             elif event.event_type in {
                 EventKind.PROCESS_AUDIT_BIND,
                 EventKind.PROCESS_PRIVILEGE_DROP,
+                EventKind.PROCESS_SERVICE_DROP,
             }:
                 from evidenceforge.events.process import process_credential_identities
 
@@ -6050,6 +6054,8 @@ class EventDispatcher:
                         patch.audit_binding
                         if event.event_type is EventKind.PROCESS_AUDIT_BIND
                         else patch.privilege_drop
+                        if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP
+                        else patch.service_drop
                     )
                     if patch is not None
                     else None
@@ -6057,14 +6063,18 @@ class EventDispatcher:
                 live = self.state_manager.get_process(before.hostname, before.pid)
                 expected_integrity = (
                     change.after_integrity
-                    if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP and change is not None
+                    if event.event_type
+                    in {EventKind.PROCESS_PRIVILEGE_DROP, EventKind.PROCESS_SERVICE_DROP}
+                    and change is not None
                     else live.integrity_level
                     if live is not None
                     else None
                 )
                 expected_principal = (
                     change.after_principal
-                    if event.event_type is EventKind.PROCESS_PRIVILEGE_DROP and change is not None
+                    if event.event_type
+                    in {EventKind.PROCESS_PRIVILEGE_DROP, EventKind.PROCESS_SERVICE_DROP}
+                    and change is not None
                     else before.principal
                 )
                 if (
@@ -6776,6 +6786,7 @@ class EventDispatcher:
         bootstrap_kinds = {
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
+            EventKind.PROCESS_SERVICE_DROP,
             EventKind.PROCESS_EXEC,
             EventKind.LOGON,
             EventKind.MACHINE_LOGON,
@@ -7651,6 +7662,7 @@ class EventDispatcher:
         if projection.occurrence.event_type in {
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
+            EventKind.PROCESS_SERVICE_DROP,
         }:
             return self._require_process_credential_projection(record)
         if projection.occurrence.event_type is EventKind.PROCESS_EXEC:
@@ -15314,6 +15326,7 @@ class EventDispatcher:
             "process_exec",
             "process_audit_bind",
             "process_privilege_drop",
+            "process_service_drop",
             "create_remote_thread",
             "bash_command",
             "zsh_command",

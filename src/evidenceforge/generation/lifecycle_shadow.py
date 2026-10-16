@@ -579,11 +579,23 @@ class LifecycleShadow:
         require_initial_token: bool = False,
     ) -> tuple[ProcessLifecycleIdentity, ProcessTokenIdentity, LifecycleMembership]:
         running = self._state_manager.get_process(identity.hostname, identity.pid)
+        if require_initial_token and (
+            identity.execution_ordinal != 0
+            or (
+                running is not None
+                and running.ecar_object_id == identity.object_id
+                and running.execution_ordinal != 0
+            )
+        ):
+            raise StateError(
+                "Cannot bootstrap a process after exec; publish its execution transition "
+                "through lifecycle authority before changing State"
+            )
         if (
             require_initial_token
             and running is not None
             and running.ecar_object_id == identity.object_id
-            and running.privilege_drop is not None
+            and (running.privilege_drop is not None or running.service_drop is not None)
         ):
             raise StateError(
                 "Cannot bootstrap a process after SSH privilege drop; publish its credential "

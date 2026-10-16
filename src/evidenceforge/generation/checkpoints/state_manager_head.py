@@ -10,7 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import chain
 
-from evidenceforge.events.identity import MacosProcessAuditBinding, MacosProcessPrivilegeDrop
+from evidenceforge.events.identity import (
+    MacosProcessAuditBinding,
+    MacosProcessPrivilegeDrop,
+    MacosProcessServiceDrop,
+)
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -25,7 +29,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "5"
+_SCHEMA_VERSION = "6"
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -471,6 +475,24 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             or process.audit_binding is not None
         ):
             raise CheckpointCorruptionError("StateManager SSH privilege-drop history is invalid")
+        service_drop = process.service_drop
+        if service_drop is not None and (
+            type(service_drop) is not MacosProcessServiceDrop
+            or fresh._pid_os.get(process.system) != "macos"
+            or service_drop.execution_ordinal > process.execution_ordinal
+            or service_drop.dropped_at <= process.start_time
+            or service_drop.dropped_at > (process.last_activity_time or process.start_time)
+            or (process.end_time is not None and service_drop.dropped_at >= process.end_time)
+            or process.credentials is None
+            or process.credentials.origin != service_drop.after.origin
+            or process.username != service_drop.after_principal
+            or process.integrity_level != service_drop.after_integrity
+            or process.audit_binding is not None
+            or process.privilege_drop is not None
+        ):
+            raise CheckpointCorruptionError(
+                "StateManager service privilege-drop history is invalid"
+            )
         versions = (
             process.audit_pid_version,
             *(identity.audit_pid_version for identity in process.prior_executions),

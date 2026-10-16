@@ -154,7 +154,8 @@
     {
       "names": [
         "process_audit_bind",
-        "process_privilege_drop"
+        "process_privilege_drop",
+        "process_service_drop"
       ],
       "classification": "single_canonical_path",
       "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",

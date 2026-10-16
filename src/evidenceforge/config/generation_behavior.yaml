@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 180
+current_revision: 181
 history_start_revision: 1
-behavior_surface_sha256: 6ade307199ec3e2d5c7787d8b91d27c6b568fecb5f66ffcf6f6315b65a75f1af
+behavior_surface_sha256: 7e242c436d3d4f4c32b38924f15b244717c0408cc23edb3fb334a31a8c87b806
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1786,3 +1786,13 @@ changes:
     formats:
       - ecar
     summary: Resolves host-local Mac SSH service aliases to their published noninteractive account without consuming human account IDs.
+  - revision: 181
+    id: macos-preauthentication-service-credentials
+    impact: localized
+    domains:
+      - process-credential-identity
+      - source-projection
+      - checkpoint-recovery
+    formats:
+      - ecar
+    summary: Separates pre-authentication Mac service-child privilege drops from authenticated user changes, with exact eCAR publication and durable historical identity.

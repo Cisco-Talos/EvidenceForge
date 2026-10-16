@@ -223,7 +223,7 @@ def test_legacy_process_record_decodes_with_absent_audit_binding() -> None:
     manager, before = _receiver()
     row = manager.get_process("MAC-A", before.pid)
     encoded = encode_state_value(row)
-    assert encoded[1] == "running-process-v6"
+    assert encoded[1] == "running-process-v7"
     encoded[1] = "running-process-v4"
     encoded[2] = encoded[2][:27]
     assert decode_state_value(encoded) == row

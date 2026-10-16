@@ -220,6 +220,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "process_exec",
         "process_audit_bind",
         "process_privilege_drop",
+        "process_service_drop",
         "process_terminate",
         "system_process_create",
         "ssh_session",
@@ -273,6 +274,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "process_exec": self._render_process_transition,
             "process_audit_bind": self._render_process_transition,
             "process_privilege_drop": self._render_process_transition,
+            "process_service_drop": self._render_process_transition,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
@@ -346,6 +348,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     "process_exec",
                     "process_audit_bind",
                     "process_privilege_drop",
+                    "process_service_drop",
                 }
                 and plan.subject.primary_thread is not None
             ):

@@ -1952,4 +1952,4 @@ The initial `zsh_history` format records only modeled interactive zsh submission
 
 The internal `process_exec` canonical occurrence is not an authored event type. Existing `process` authoring remains unchanged; bundles must own any image replacement, and native-source support must not be inferred from the eCAR exec extension.
 
-The engine-only `process_audit_bind` and `process_privilege_drop` observations are likewise unavailable in authored `events`. Existing UID/GID, identity and session semantics supply their facts; they introduce no Mac configuration block. Their eCAR extensions do not enable Mac SSH receivers or native Endpoint Security output.
+The engine-only `process_audit_bind`, `process_privilege_drop` and `process_service_drop` observations are likewise unavailable in authored `events`. Existing UID/GID, identity and session semantics supply their facts; they introduce no Mac configuration block. Their eCAR extensions do not enable Mac SSH receivers or native Endpoint Security output.

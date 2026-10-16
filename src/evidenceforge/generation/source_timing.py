@@ -4425,7 +4425,12 @@ class SourceTimingPlanner:
         if family != "ecar" or event.identity_plan is None:
             return preferred
         plan = event.identity_plan
-        if event.event_type in {"process_exec", "process_audit_bind", "process_privilege_drop"}:
+        if event.event_type in {
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+        }:
             identity = plan.subject
             floor = (
                 self._process_dependent_create_times.get(
@@ -4631,6 +4636,7 @@ class SourceTimingPlanner:
         if family == "ecar" and event.event_type in {
             "process_audit_bind",
             "process_privilege_drop",
+            "process_service_drop",
         }:
             identity = event.identity_plan.subject if event.identity_plan is not None else None
             if isinstance(identity, ProcessIdentity):
@@ -4883,6 +4889,7 @@ class SourceTimingPlanner:
             "process_exec",
             "process_audit_bind",
             "process_privilege_drop",
+            "process_service_drop",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {

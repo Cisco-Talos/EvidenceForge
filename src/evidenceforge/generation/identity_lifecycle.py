@@ -58,7 +58,12 @@ class IdentityLifecyclePlanner:
         or thread state remains missing; this layer never invents attribution.
         """
 
-        if event.event_type in {"process_exec", "process_audit_bind", "process_privilege_drop"}:
+        if event.event_type in {
+            "process_exec",
+            "process_audit_bind",
+            "process_privilege_drop",
+            "process_service_drop",
+        }:
             # Both snapshots belong to the State transition plan, including the prior actor.
             # Inferring from live state would overwrite the immutable role boundary.
             return

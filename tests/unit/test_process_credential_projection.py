@@ -36,12 +36,17 @@ from tests.unit.test_macos_audit_sessions import _START
 from tests.unit.test_macos_privilege_drop import _child
 from tests.unit.test_macos_process_audit_binding import _receiver
 
-Kind = Literal["process_audit_bind", "process_privilege_drop"]
-KINDS: tuple[Kind, ...] = ("process_audit_bind", "process_privilege_drop")
+Kind = Literal["process_audit_bind", "process_privilege_drop", "process_service_drop"]
+KINDS: tuple[Kind, ...] = ("process_audit_bind", "process_privilege_drop", "process_service_drop")
 
 
 def _environment(kind: Kind) -> tuple[StateManager, EventDispatcher, MagicMock, ProcessIdentity]:
-    state, before = _receiver() if kind == "process_audit_bind" else _child()
+    if kind == "process_service_drop":
+        from tests.unit.test_macos_service_drop import _child as service_child
+
+        state, before = service_child(execute=False)
+    else:
+        state, before = _receiver() if kind == "process_audit_bind" else _child()
     registry = LifecycleRegistry(shard_count=4)
     shadow = LifecycleShadow(state, registry)
     authority = GeneratorLifecycleAuthority(state, shadow, shard_count=4)
@@ -66,6 +71,16 @@ def _plan(
         timestamp = _START + timedelta(seconds=1)
         after = builder.bind_macos_process_audit_origin(before, bound_at=timestamp)
         integrity = "System"
+    elif kind == "process_service_drop":
+        from tests.unit.test_macos_service_drop import _account
+
+        timestamp = _START + timedelta(seconds=3)
+        after = builder.drop_macos_service_child_privileges(
+            before,
+            service_account=_account(),
+            dropped_at=timestamp,
+        )
+        integrity = "Medium"
     else:
         timestamp = _START + timedelta(seconds=3)
         after = builder.drop_macos_ssh_child_privileges(before, dropped_at=timestamp)
@@ -252,10 +267,21 @@ def test_exact_ecar_credential_output_preserves_old_and_new_ids(
     assert props["previous_process_principal"] == before.principal
     assert props["previous_effective_uid"] == "0"
     assert props["effective_uid"] == str(after.credentials.effective_uid)
-    assert props["audit_uid"] == "501"
+    if kind == "process_service_drop":
+        assert all(
+            name not in props
+            for name in (
+                "audit_uid",
+                "audit_session_id",
+                "previous_audit_uid",
+                "previous_audit_session_id",
+            )
+        )
+    else:
+        assert props["audit_uid"] == "501"
     if kind == "process_audit_bind":
         assert "previous_audit_uid" not in props
-    else:
+    elif kind == "process_privilege_drop":
         assert props["previous_audit_uid"] == "501"
 
 

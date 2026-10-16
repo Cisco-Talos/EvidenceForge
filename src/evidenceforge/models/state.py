@@ -37,6 +37,7 @@ from evidenceforge.events.identity import (
     MacosAuditSession,
     MacosProcessAuditBinding,
     MacosProcessPrivilegeDrop,
+    MacosProcessServiceDrop,
     PosixIdentifier,
     PosixProcessCredentials,
     ProcessIdentity,
@@ -153,6 +154,7 @@ class RunningProcess:
     audit_pid_version: PosixIdentifier | None = None
     audit_binding: MacosProcessAuditBinding | None = None
     privilege_drop: MacosProcessPrivilegeDrop | None = None
+    service_drop: MacosProcessServiceDrop | None = None
 
 
 @dataclass

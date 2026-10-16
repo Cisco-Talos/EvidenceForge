@@ -839,7 +839,7 @@ def _extract_event_type(record: ParsedRecord) -> str:
         if (
             obj == "PROCESS"
             and act == "MODIFY"
-            and f.get("operation") in {"audit_bind", "privilege_drop"}
+            and f.get("operation") in {"audit_bind", "privilege_drop", "service_drop"}
         ):
             return f"ecar_PROCESS_{f['operation'].upper()}"
         if obj == "PROCESS" and act == "TERMINATE":
