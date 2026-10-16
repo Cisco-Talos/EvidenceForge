@@ -4773,6 +4773,8 @@ class EventDispatcher:
         allowed_object_ids.update(item.target.object_id for item in plan.process_executions)
         for patch in plan.live_session_process_role_patches:
             allowed_object_ids.add(patch.target.object_id)
+            if patch.macos_shell is not None:
+                allowed_object_ids.add(patch.macos_shell.object_id)
             for process in (
                 patch.winlogon_plan,
                 patch.explorer_plan,
@@ -6379,6 +6381,12 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort live-session role patch has no exact identity member"
                 )
+            if patch.macos_shell is not None and not any(
+                execution.after == patch.macos_shell for execution in state_plan.process_executions
+            ):
+                raise EventContractError(
+                    "Action-cohort Mac shell role has no exact execution member"
+                )
             staged_role_ids = {
                 process.identity.object_id
                 for process in (
@@ -7846,6 +7854,16 @@ class EventDispatcher:
         event = record.trusted_projections[0].occurrence
         before, after = process_exec_identities(event)
         plan = record.state_plan
+        roles = plan.live_session_process_role_patches
+        if roles and (
+            len(roles) != 1
+            or roles[0].macos_shell != after
+            or roles[0].target != event.identity_plan.session
+            or roles[0].winlogon_plan is not None
+            or roles[0].explorer_plan is not None
+            or roles[0].process_tree_root_plan is not None
+        ):
+            raise EventContractError("Exact POSIX exec changed its Mac SSH shell role owner")
         if (
             record.root_action_id != f"process-exec:{after.execution_id}"
             or len(plan.process_executions) != 1
@@ -7855,7 +7873,6 @@ class EventDispatcher:
                 (
                     plan.sessions,
                     plan.processes,
-                    plan.live_session_process_role_patches,
                     plan.session_metadata_patches,
                     plan.process_activity_patches,
                     plan.session_activity_patches,

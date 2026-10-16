@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 186
+current_revision: 187
 history_start_revision: 1
-behavior_surface_sha256: b6656873377b2bbfd9412998797abf722d28f03070c88d4a7e5ba9c7e96a8364
+behavior_surface_sha256: 9c77523da7de4f9d28951aa8d1867d8f2a33a54bc4dfd8f3df5316b7ea7cdb4e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1840,3 +1840,12 @@ changes:
     formats:
       - ecar
     summary: Separates authenticated staged Mac receiver startup activity from its transport lifetime hold while retaining exact lifecycle and SSH deadline agreement.
+  - revision: 187
+    id: macos-ssh-shell-exec-role-binding
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+    formats:
+      - ecar
+    summary: Atomically binds the authenticated Mac login-shell execution to its existing session role with exact publication recovery and checkpoint preservation.

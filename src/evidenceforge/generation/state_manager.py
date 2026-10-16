@@ -2192,15 +2192,16 @@ class ActionCohortSessionMetadataPatch:
 
 @dataclass(frozen=True, slots=True)
 class ActionCohortLiveSessionProcessRolesPatch:
-    """Exact live-session shell-role transition backed by staged processes."""
+    """Exact live-session role transition backed by staged creation or execution."""
 
     target: SessionIdentity
     before: ActionCohortLiveSessionProcessRolesState
     after: ActionCohortLiveSessionProcessRolesState
     winlogon_plan: ProcessMaterializationPlan | None
-    explorer_plan: ProcessMaterializationPlan
+    explorer_plan: ProcessMaterializationPlan | None
     process_tree_root_plan: ProcessMaterializationPlan | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    macos_shell: ProcessIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3043,6 +3044,25 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         target_key = self._manager._action_session_target_key(patch.target)
         if any(
             self._manager._action_session_target_key(candidate.target) == target_key
+            for candidate in self._live_session_process_roles_patches
+        ):
+            raise StateError("Action cohort repeats a live-session process-role patch")
+        self._live_session_process_roles_patches.append(patch)
+
+    def bind_macos_ssh_session_shell(
+        self, target: SessionIdentity, *, shell: ProcessIdentity
+    ) -> None:
+        """Bind this cohort's login-shell exec to its exact live Mac SSH session."""
+        self._require_open()
+        if len(self._live_session_process_roles_patches) >= (
+            _MAX_ACTION_COHORT_LIVE_SESSION_PROCESS_ROLE_PATCHES
+        ):
+            raise StateError("Action cohort live-session role patch limit exceeded")
+        patch = self._manager._prepare_action_cohort_macos_ssh_shell_patch(
+            self, target=target, shell=shell
+        )
+        if any(
+            candidate.target == patch.target
             for candidate in self._live_session_process_roles_patches
         ):
             raise StateError("Action cohort repeats a live-session process-role patch")
@@ -4111,12 +4131,21 @@ def _action_cohort_semantic_preimage(
                     if patch.winlogon_plan is not None
                     else None
                 ),
-                _action_cohort_process_target_semantic(patch.explorer_plan),
+                (
+                    _action_cohort_process_target_semantic(patch.explorer_plan)
+                    if patch.explorer_plan is not None
+                    else None
+                ),
                 (
                     _action_cohort_process_target_semantic(patch.process_tree_root_plan)
                     if patch.process_tree_root_plan is not None
                     else None
                 ),
+            )
+            + (
+                (("macos-ssh-shell-v1", patch.macos_shell),)
+                if patch.macos_shell is not None
+                else ()
             )
             for patch in live_session_process_roles
         ),
@@ -6859,7 +6888,14 @@ class StateManager:
                 type(patch.target) is not SessionIdentity
                 or type(patch.before) is not ActionCohortLiveSessionProcessRolesState
                 or type(patch.after) is not ActionCohortLiveSessionProcessRolesState
-                or type(patch.explorer_plan) is not ProcessMaterializationPlan
+                or (
+                    patch.explorer_plan is not None
+                    and type(patch.explorer_plan) is not ProcessMaterializationPlan
+                )
+                or (
+                    patch.macos_shell is not None and type(patch.macos_shell) is not ProcessIdentity
+                )
+                or ((patch.explorer_plan is None) == (patch.macos_shell is None))
                 or (
                     patch.winlogon_plan is not None
                     and type(patch.winlogon_plan) is not ProcessMaterializationPlan
@@ -7480,6 +7516,114 @@ class StateManager:
                 process_pid_namespaces=process_pid_namespaces,
             )
             return patch
+
+    def _prepare_action_cohort_macos_ssh_shell_patch(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        *,
+        target: SessionIdentity,
+        shell: ProcessIdentity,
+    ) -> ActionCohortLiveSessionProcessRolesPatch:
+        """Prepare the shell role alongside its exact same-cohort image replacement."""
+        with self._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.bind_macos_ssh_session_shell"
+        ):
+            if type(target) is not SessionIdentity or type(shell) is not ProcessIdentity:
+                raise TypeError("Mac SSH shell binding requires exact session/process identities")
+            normalized = self._normalize_action_cohort_session_target(builder, target)
+            assert type(normalized) is SessionIdentity
+            before = self._action_cohort_live_session_process_roles(normalized)
+            patch = ActionCohortLiveSessionProcessRolesPatch(
+                target=normalized,
+                before=before,
+                after=replace(before, session_shell_pid=shell.pid),
+                winlogon_plan=None,
+                explorer_plan=None,
+                process_tree_root_plan=None,
+                macos_shell=shell,
+                _capability=_ActionCohortCapability(),
+            )
+            self._validate_action_cohort_macos_ssh_shell_transition(
+                patch, executions=tuple(builder._process_execution_drafts)
+            )
+            return patch
+
+    def _validate_action_cohort_macos_ssh_shell_transition(
+        self,
+        patch: ActionCohortLiveSessionProcessRolesPatch,
+        *,
+        executions: tuple[ActionCohortProcessExecution, ...],
+    ) -> SessionIdentity:
+        """Require an authenticated user child, receiver ancestry and initial shell exec."""
+        target = patch.target
+        session = self._validate_action_live_session_identity(target)
+        shell = patch.macos_shell
+        if (
+            type(shell) is not ProcessIdentity
+            or sum(execution.after == shell for execution in executions) != 1
+        ):
+            raise StateError("Mac SSH shell role requires its exact same-cohort execution")
+        if any(
+            role is not None
+            for role in (patch.winlogon_plan, patch.explorer_plan, patch.process_tree_root_plan)
+        ):
+            raise StateError("Mac SSH shell role cannot contain Windows desktop plans")
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or session.effective_uid is None
+            or session.effective_gid is None
+            or session.source_ready_time is None
+            or session.network_close_time is None
+            or patch.before != self._action_cohort_live_session_process_roles(target)
+            or patch.before.session_shell_pid is not None
+            or patch.after != replace(patch.before, session_shell_pid=shell.pid)
+        ):
+            raise StateError("Mac SSH shell role lost its initial session owner")
+        origin = session.audit_origin
+        expected_credentials = PosixProcessCredentials(
+            session.effective_uid,
+            session.effective_uid,
+            session.effective_gid,
+            session.effective_gid,
+            origin.audit_uid,
+            origin.audit_session_id,
+        )
+        parent = self.get_process_identity(shell.hostname, shell.parent_pid)
+        receiver = (
+            self.get_process_identity(target.hostname, session.transport_pid)
+            if session.transport_pid is not None
+            else None
+        )
+        if (
+            shell.hostname != target.hostname
+            or shell.logon_id != target.logon_id
+            or shell.principal != target.principal
+            or shell.credentials != expected_credentials
+            or shell.audit_pid_version is None
+            or shell.execution_ordinal != 1
+            or not shell.image.startswith("/")
+            or shell.command_line != "-" + shell.image.rsplit("/", 1)[-1]
+            or not origin.created_at < shell.started_at < shell.execution_started_at
+            or not shell.execution_started_at
+            <= session.source_ready_time
+            < session.network_close_time
+            or parent is None
+            or parent.logon_id != target.logon_id
+            or parent.principal != target.principal
+            or parent.credentials != expected_credentials
+            or parent.execution_started_at >= shell.started_at
+            or receiver is None
+            or receiver.pid != parent.parent_pid
+            or receiver.logon_id != target.logon_id
+            or receiver.principal != "root"
+            or receiver.credentials
+            != PosixProcessCredentials(0, 0, 0, 0, origin.audit_uid, origin.audit_session_id)
+        ):
+            raise StateError("Mac SSH shell role changed its user, execution or receiver ancestry")
+        return target
 
     def _action_cohort_process_parent_target(
         self,
@@ -11283,13 +11427,18 @@ class StateManager:
                     patch.target.logon_id,
                     "cohort-process-roles",
                 )
-                identity = self._validate_action_cohort_live_session_process_roles_transition(
-                    patch,
-                    processes=processes,
-                    processes_by_pid=processes_by_pid,
-                    process_indexes=process_indexes,
-                    process_pid_namespaces=process_pid_namespaces,
-                )
+                if patch.macos_shell is not None:
+                    identity = self._validate_action_cohort_macos_ssh_shell_transition(
+                        patch, executions=plan._process_executions
+                    )
+                else:
+                    identity = self._validate_action_cohort_live_session_process_roles_transition(
+                        patch,
+                        processes=processes,
+                        processes_by_pid=processes_by_pid,
+                        process_indexes=process_indexes,
+                        process_pid_namespaces=process_pid_namespaces,
+                    )
                 if identity.object_id in live_role_by_session:
                     raise StateError("Action cohort repeats a live-session process-role target")
                 live_role_by_session[identity.object_id] = patch

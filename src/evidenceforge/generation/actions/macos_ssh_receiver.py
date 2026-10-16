@@ -251,11 +251,18 @@ class MacosSshReceiverStartup:
                 ),
                 executed_at=timestamp,
             )
+            session_identity = None
+            if phase == 10:
+                session_identity = self._state.get_session_identity(after.logon_id)
+                if session_identity is None:
+                    raise StateError("Mac receiver shell lost its live session")
+                builder.bind_macos_ssh_session_shell(session_identity, shell=after)
             event = process_exec_occurrence(
                 host=self._host,
                 before=before,
                 after=after,
                 integrity_level=integrity,
+                session=session_identity,
             )
             root = f"process-exec:{after.execution_id}"
         elif phase in {2, 7, 9}:
