@@ -6173,6 +6173,23 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort session-close projection disagrees with its State plan"
                     )
+                if root_action_id.startswith("ssh-close:") and event.dst_host is not None:
+                    if event.dst_host.os_category != self.state_manager._pid_os.get(
+                        subject.hostname
+                    ):
+                        raise EventContractError(
+                            "SSH logout disagrees with its modeled platform owner"
+                        )
+                    live_session = self.state_manager.get_session(subject.logon_id)
+                    if event.dst_host.os_category == "macos" and (
+                        live_session is None
+                        or live_session.auth_protocol != "ssh"
+                        or live_session.audit_origin is None
+                        or event.syslog is not None
+                    ):
+                        raise EventContractError(
+                            "Mac SSH logout disagrees with its live platform/session owner"
+                        )
                 if marker in observed_closes:
                     raise EventContractError("Action-cohort repeats a session-close projection")
                 observed_closes[marker] = position
@@ -7674,10 +7691,13 @@ class EventDispatcher:
                 or identity_plan.session != identity_plan.subject
                 or event.src_host is not None
                 or type(event.dst_host) is not HostContext
-                or event.dst_host.os_category != "linux"
+                or event.dst_host.os_category not in {"linux", "macos"}
                 or type(event.auth) is not AuthContext
-                or event.syslog is None
-                or event.syslog.app_name != "sshd"
+                or (
+                    event.dst_host.os_category == "linux"
+                    and (event.syslog is None or event.syslog.app_name != "sshd")
+                )
+                or (event.dst_host.os_category == "macos" and event.syslog is not None)
             ):
                 raise EventContractError("Exact SSH logout changed its singleton State/event shape")
             identity = identity_plan.subject

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 188
+current_revision: 189
 history_start_revision: 1
-behavior_surface_sha256: 380cadabff4306db899bf67e84c2c005d9daab65857db5ef31b93eda141a67a3
+behavior_surface_sha256: 226820bc5a818299af27e9bacbe51b1cc760a9ecb678c325b83a5bbd19b0a54a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1858,3 +1858,13 @@ changes:
     formats:
       - ecar
     summary: Validates SSH descendant teardown against current executable and token facts while preserving immutable lifetime ownership and rejecting unpublished execution drift.
+  - revision: 189
+    id: canonical-macos-ssh-logout
+    impact: localized
+    domains:
+      - session-lifecycle
+      - source-projection
+    formats:
+      - ecar
+      - syslog
+    summary: Separates exact canonical SSH logout from Linux PAM observations and admits bounded Mac eCAR logout only with authenticated platform/session ownership and recoverable terminal publication.

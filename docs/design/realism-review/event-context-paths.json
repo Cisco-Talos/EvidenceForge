@@ -10121,8 +10121,25 @@
             "logoff"
           ],
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
-          "line": 1362,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "line": 5747,
+          "scope": "SshSessionActionBundle._dispatch_linux_session_logout"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
+            "dst_host",
+            "identity_plan",
+            "lifecycle",
+            "syslog"
+          ],
+          "event_type_expression": "'logoff'",
+          "event_type_literals": [
+            "logoff"
+          ],
+          "file": "src/evidenceforge/generation/actions/ssh_session_events.py",
+          "line": 60,
+          "scope": "ssh_logout_occurrence"
         },
         {
           "call": "OccurrenceBuilder",
@@ -10173,6 +10190,7 @@
       "contexts_attached_at_literal_constructors": [
         "auth",
         "dst_host",
+        "identity_plan",
         "lifecycle",
         "syslog"
       ],
@@ -10194,8 +10212,15 @@
           "call": "OccurrenceBuilder",
           "file": "src/evidenceforge/generation/actions/ssh_session.py",
           "kind": "call_keyword",
-          "line": 1362,
-          "scope": "SshSessionActionBundle._dispatch_linux_session_close_lifecycle"
+          "line": 5747,
+          "scope": "SshSessionActionBundle._dispatch_linux_session_logout"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "file": "src/evidenceforge/generation/actions/ssh_session_events.py",
+          "kind": "call_keyword",
+          "line": 60,
+          "scope": "ssh_logout_occurrence"
         },
         {
           "call": "OccurrenceBuilder",
@@ -10276,9 +10301,11 @@
         "tests/unit/test_eval_signal_integrity.py",
         "tests/unit/test_identity_lifecycle.py",
         "tests/unit/test_logonid_scoping.py",
+        "tests/unit/test_macos_ssh_logout.py",
         "tests/unit/test_phase5_logoff.py",
         "tests/unit/test_phase5_sid.py",
         "tests/unit/test_source_timing.py",
+        "tests/unit/test_ssh_deferred_production.py",
         "tests/unit/test_storyline_command_networks.py",
         "tests/unit/test_validation.py",
         "tests/unit/test_world_model.py",
@@ -10992,17 +11019,17 @@
       "event_type": "process_audit_bind",
       "kind": "internal_occurrence",
       "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
       "review_status": "path_review_complete",
       "static_references": [],
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_process_credential_projection.py"
-      ],
-      "path_review": {
-        "classification": "single_canonical_path",
-        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
-        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
-      }
+      ]
     },
     {
       "authored_spec": null,
@@ -11210,17 +11237,17 @@
       "event_type": "process_exec",
       "kind": "internal_occurrence",
       "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection"
+      },
       "review_status": "path_review_complete",
       "static_references": [],
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_process_exec_projection.py"
-      ],
-      "path_review": {
-        "classification": "single_canonical_path",
-        "owner": "State exec cohort, POSIX occurrence helper and EventDispatcher exact projection",
-        "assessment": "One internal before/after exec occurrence binds to the exact State transition. Compatibility dispatch is rejected; current authored producers and Mac receivers do not yet request this transition."
-      }
+      ]
     },
     {
       "authored_spec": null,
@@ -11257,17 +11284,17 @@
       "event_type": "process_privilege_drop",
       "kind": "internal_occurrence",
       "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
       "review_status": "path_review_complete",
       "static_references": [],
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_process_credential_projection.py"
-      ],
-      "path_review": {
-        "classification": "single_canonical_path",
-        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
-        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
-      }
+      ]
     },
     {
       "authored_spec": null,
@@ -11304,17 +11331,17 @@
       "event_type": "process_service_drop",
       "kind": "internal_occurrence",
       "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition.",
+        "classification": "single_canonical_path",
+        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection"
+      },
       "review_status": "path_review_complete",
       "static_references": [],
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_process_credential_projection.py"
-      ],
-      "path_review": {
-        "classification": "single_canonical_path",
-        "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
-        "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
-      }
+      ]
     },
     {
       "authored_spec": null,

@@ -5739,69 +5739,52 @@ class SshSessionActionBundle:
     ) -> None:
         """Publish the immutable target LOGOUT occurrence."""
 
+        from evidenceforge.generation.actions.ssh_session_events import ssh_logout_occurrence
+
         request = self.request
-        logout_event = OccurrenceBuilder(
-            timestamp=close_time,
-            event_type="logoff",
-            dst_host=(
-                continuation.plan.target_host.materialize()
-                if continuation is not None
-                else event.dst_host
-            ),
-            auth=AuthContext(
-                username=(
-                    continuation.plan.username
-                    if continuation is not None
-                    else request.user.username
-                ),
-                source_ip=(
-                    continuation.plan.source_ip if continuation is not None else request.source_ip
-                ),
-                source_port=(
-                    continuation.plan.source_port if continuation is not None else state.source_port
-                ),
-                logon_id=(
-                    continuation.plan.logon_id if continuation is not None else state.logon_id
-                ),
-                session_id=(
-                    continuation.plan.session_id
-                    if continuation is not None
-                    else auth_state.logind_session_id
-                ),
-                logon_type=10,
-            ),
-            syslog=SyslogContext(
-                app_name="sshd",
-                pid=(
-                    continuation.plan.auth_state.sshd_pid
-                    if continuation is not None
-                    else auth_state.sshd_pid
-                ),
-                facility=10,
-                severity=6,
-                message=(
-                    "pam_unix(sshd:session): session closed for user "
-                    f"{continuation.plan.username if continuation is not None else request.user.username}"
-                ),
-            ),
-        )
         if continuation is None:
-            self.executor.dispatcher.dispatch_builder(logout_event)
+            self.executor.dispatcher.dispatch_builder(
+                OccurrenceBuilder(
+                    timestamp=close_time,
+                    event_type="logoff",
+                    dst_host=event.dst_host,
+                    auth=AuthContext(
+                        username=request.user.username,
+                        source_ip=request.source_ip,
+                        source_port=state.source_port,
+                        logon_id=state.logon_id,
+                        session_id=auth_state.logind_session_id,
+                        logon_type=10,
+                    ),
+                    syslog=SyslogContext(
+                        app_name="sshd",
+                        pid=auth_state.sshd_pid,
+                        facility=10,
+                        severity=6,
+                        message=(
+                            "pam_unix(sshd:session): session closed for user "
+                            f"{request.user.username}"
+                        ),
+                    ),
+                )
+            )
             return
-        identity = continuation.plan.session_identity()
+        plan = continuation.plan
+        identity = plan.session_identity()
         retained_identity = self.executor.state_manager.get_session_identity(identity.logon_id)
         if retained_identity != identity:
             raise StateError("Exact SSH logout changed its canonical session identity")
+        logout_event = ssh_logout_occurrence(
+            host=plan.target_host.materialize(),
+            session=identity,
+            timestamp=close_time,
+            source_ip=plan.source_ip,
+            source_port=plan.source_port,
+            linux_receiver_pid=plan.auth_state.receiver.responder_pid,
+        )
         state_builder = self.executor.state_manager.begin_action_cohort_materialization()
         state_builder.terminalize_session(identity, end_time=close_time)
         state_plan = state_builder.seal()
-        logout_event.identity_plan = EventIdentityPlan(subject=identity, session=identity)
-        logout_event.lifecycle = ActionLifecycleContext(
-            group_id=identity.lifecycle_group_id,
-            canonical_start=identity.started_at,
-            phase="closure",
-            parent_group_id=identity.parent_lifecycle_group_id or None,
-        )
         self._publish_exact_ssh_terminal_cohort(
             continuation=continuation,
             phase="logout",
