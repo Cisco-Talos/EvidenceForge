@@ -212,13 +212,13 @@ def test_legacy_checkpoint_values_upgrade_without_inventing_an_exec(kind: str) -
     )
     encoded = encode_state_value(original)
     assert isinstance(encoded, list)
-    old_tag, extra_count = ("process-identity", 4) if kind == "identity" else ("running-process", 5)
+    old_tag, extra_count = ("process-identity", 5) if kind == "identity" else ("running-process", 6)
     encoded[1] = old_tag
     encoded[2] = encoded[2][:-extra_count]
     restored = decode_state_value(encoded)
     assert isinstance(restored, (RunningProcess, ProcessIdentity))
     assert restored.execution_ordinal == 0 and restored.executed_at is None
-    assert restored == original
+    assert restored == replace(original, audit_pid_version=None)
 
 
 @pytest.mark.parametrize("platform", ["macos", "linux"])

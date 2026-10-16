@@ -33,7 +33,7 @@ runtime state tracking.
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.identity import PosixIdentifier, PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
 
@@ -142,6 +142,7 @@ class RunningProcess:
     prior_executions: tuple[ProcessIdentity, ...] = ()
     lifetime_image: str = ""
     credentials: PosixProcessCredentials | None = None
+    audit_pid_version: PosixIdentifier | None = None
 
 
 @dataclass

@@ -23,7 +23,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -401,6 +401,25 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         setattr(fresh, name, indexes)
 
     _restore_process_indexes(fresh, document["process_indexes"])
+    for host, version in fresh._macos_audit_pid_versions.items():
+        if (
+            type(host) is not str
+            or fresh._pid_os.get(host) != "macos"
+            or type(version) is not int
+            or not 0 < version < 2**32
+        ):
+            raise CheckpointCorruptionError("StateManager macOS audit PID counter is invalid")
+    for process in fresh._processes_by_object_id.values():
+        versions = (
+            process.audit_pid_version,
+            *(identity.audit_pid_version for identity in process.prior_executions),
+        )
+        for version in versions:
+            if version is not None and (
+                type(version) is not int
+                or not 0 < version <= fresh._macos_audit_pid_versions.get(process.system, 0)
+            ):
+                raise CheckpointCorruptionError("StateManager process audit PID version is invalid")
     fresh.state.active_sessions = fresh._active_sessions
     fresh.state.running_processes = fresh._running_processes
     fresh.state.running_threads = fresh._running_threads

@@ -761,4 +761,5 @@ class TestParserDiscovery:
         from evidenceforge.evaluation.parsers import _PARSER_CLASSES
 
         # Original parsers + Sysmon + 13 Zeek parsers + cisco_asa + proxy_access + email artifacts + zsh history
-        assert len(_PARSER_CLASSES) == 27
+        # Two bounded macOS native export ingestion profiles are separate from emitters.
+        assert len(_PARSER_CLASSES) == 29

@@ -14,6 +14,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from evidenceforge.events.identity import ProcessIdentity
+
 type UInt32 = Annotated[int, Field(ge=0, le=(1 << 32) - 1)]
 type UInt64 = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
 type Int32 = Annotated[int, Field(ge=-(1 << 31), le=(1 << 31) - 1)]
@@ -59,6 +61,45 @@ class ESAuditToken(_Record):
     pid: UInt32 = Field(description="Host-local process ID")
     asid: UInt32 = Field(description="Audit session ID")
     pidversion: UInt32 = Field(description="Native audit PID version, distinct from PID/lifetime")
+
+    @classmethod
+    def from_process_identity(cls, identity: ProcessIdentity) -> Self:
+        """Project a complete canonical snapshot; never substitute inferred audit IDs."""
+
+        credentials = identity.credentials
+        if (
+            credentials is None
+            or credentials.audit_uid is None
+            or credentials.audit_session_id is None
+            or identity.audit_pid_version is None
+        ):
+            raise ValueError(
+                "ES audit-token projection requires explicit credentials and PID version"
+            )
+        return cls(
+            auid=credentials.audit_uid,
+            euid=credentials.effective_uid,
+            egid=credentials.effective_gid,
+            ruid=credentials.real_uid,
+            rgid=credentials.real_gid,
+            pid=identity.pid,
+            asid=credentials.audit_session_id,
+            pidversion=identity.audit_pid_version,
+        )
+
+    def as_native_array(self) -> AuditTokenArray:
+        """Project the native eight-word ordering used by the version-10 profile."""
+
+        return (
+            self.auid,
+            self.euid,
+            self.egid,
+            self.ruid,
+            self.rgid,
+            self.pid,
+            self.asid,
+            self.pidversion,
+        )
 
 
 class ESFileStat(_Record):

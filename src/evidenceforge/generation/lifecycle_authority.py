@@ -336,6 +336,8 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
                 credentials.audit_session_id,
             ),
         )
+    if identity.audit_pid_version is not None:
+        payload = (*payload, ("macos-audit-pid-version-v1", identity.audit_pid_version))
     return payload
 
 

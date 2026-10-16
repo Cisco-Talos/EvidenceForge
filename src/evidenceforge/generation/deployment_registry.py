@@ -73,6 +73,7 @@ from evidenceforge.events.content_identity import (
     LocalArtifactCanonicalKey,
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
+    MachOCodeSignature,
     PeVersionInfo,
     Platform,
     RuntimeServiceDeploymentIdentity,
@@ -4690,36 +4691,46 @@ def _json_row(values: tuple[object, ...]) -> bytes:
 
 def _pack_binary_release(value: BinaryReleaseIdentity) -> bytes:
     pe = value.pe_version_info
-    return _json_row(
-        (
-            value.key.product_id,
-            value.key.version,
-            value.key.build,
-            value.key.architecture,
-            value.key.platform,
-            value.key.artifact_name,
-            value.key.variant,
-            None
-            if pe is None
-            else (
-                pe.file_version,
-                pe.description,
-                pe.product,
-                pe.company,
-                pe.original_filename,
-            ),
-            value.release_id,
-            value.content_id,
-            value.digests.md5,
-            value.digests.sha1,
-            value.digests.sha256,
-            value.digests.imphash,
-        )
+    values: tuple[object, ...] = (
+        value.key.product_id,
+        value.key.version,
+        value.key.build,
+        value.key.architecture,
+        value.key.platform,
+        value.key.artifact_name,
+        value.key.variant,
+        None
+        if pe is None
+        else (
+            pe.file_version,
+            pe.description,
+            pe.product,
+            pe.company,
+            pe.original_filename,
+        ),
+        value.release_id,
+        value.content_id,
+        value.digests.md5,
+        value.digests.sha1,
+        value.digests.sha256,
+        value.digests.imphash,
     )
+    if value.code_signature is not None:
+        signature = value.code_signature
+        values = (*values, (signature.signing_id, signature.team_id, signature.cdhash))
+    return _json_row(values)
 
 
 def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     values = cast(list[object], json.loads(row))
+    if len(values) not in {14, 15}:
+        raise StateError("binary release row width is invalid")
+    signature = None
+    if len(values) == 15:
+        signature_values = values[14]
+        if type(signature_values) is not list or len(signature_values) != 3:
+            raise StateError("binary release code signature row is invalid")
+        signature = MachOCodeSignature(*signature_values)
     pe_values = cast(list[str] | None, values[7])
     key = object.__new__(BinaryReleaseKey)
     for field_name, value in zip(
@@ -4747,6 +4758,7 @@ def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     identity = object.__new__(BinaryReleaseIdentity)
     object.__setattr__(identity, "key", key)
     object.__setattr__(identity, "pe_version_info", pe)
+    object.__setattr__(identity, "code_signature", signature)
     object.__setattr__(identity, "release_id", values[8])
     object.__setattr__(identity, "content_id", values[9])
     object.__setattr__(identity, "digests", digests)

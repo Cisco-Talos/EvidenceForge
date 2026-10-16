@@ -119,3 +119,10 @@ applications:
   behavior: catalog_only
   reference: https://github.com/mandiant/macos-UnifiedLogs
   boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+
+code_signatures:
+- id: macos-terminal
+  signing_id: com.apple.Terminal
+  team_id: null
+  reference: https://themittenmac.com/tools
+  boundary: Static signing identity corroborated by the previously downloaded historical public SpriteTree eslogger export; not current-build validation. No captured CDHash or event records are copied. The compiler derives its own synthetic CodeDirectory hash for the modeled release/architecture; helper signatures and runtime trust flags remain unavailable.

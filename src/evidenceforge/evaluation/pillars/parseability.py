@@ -41,6 +41,7 @@ from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.validation_routes import (
     ARTIFACT_VALIDATORS,
+    NATIVE_CODEC_VALIDATORS,
     get_validation_route,
     require_evaluated,
 )
@@ -133,6 +134,8 @@ class ParseabilityScorer(DimensionScorer):
                         )
                         for message in record.parse_errors
                     ]
+                elif route.kind == "native_codec":
+                    selected["schema"] = NATIVE_CODEC_VALIDATORS[route.validator](record)
                 elif route.kind == "artifact":
                     selected["schema"] = ARTIFACT_VALIDATORS[route.validator](record)
                 else:

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 166
+current_revision: 167
 history_start_revision: 1
-behavior_surface_sha256: 2edd715a1dfec085f14a9354b1daba3de449768e61c943d08a652f69e314f34a
+behavior_surface_sha256: b1a31984c498fd56ea723afe54b524583cb876a85294fde76b44ae2bbec23472
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1659,3 +1659,13 @@ changes:
       - interactive-shell-history
     formats: [ecar, bash_history, zsh_history]
     summary: Adds modeled macOS workstation classification, local identities, process allocation, boot ancestry, catalog variants, endpoint timing and explicitly owned interactive Bash/zsh history. Other native evidence families remain separately gated.
+  - revision: 167
+    id: macos-native-process-and-signing-identity
+    impact: localized
+    domains:
+      - process-identity
+      - checkpoint-state
+      - application-catalog
+    formats:
+      - ecar
+    summary: Adds native audit PID versions with rollback/checkpoint state, optional signer metadata and synthetic CodeDirectory hashes, plus the native arm64 Acrobat launch. Existing Windows/Linux evidence remains unchanged.

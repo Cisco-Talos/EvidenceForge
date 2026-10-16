@@ -71,6 +71,10 @@ Application entry fields:
   `compatibility_option`, and `singleton_per_session`.
 - Each new platform requires `image_path` plus a typed `deployment`, and may define `pe_metadata`,
   `command_templates`, scoped `command_parameter_pools`, `children`, and `loaded_modules`.
+- Mac main executables may additionally define `code_signature: {signing_id: test.example.editor,
+  team_id: EXAMPLE123}`. `signing_id` is required nonblank text; `team_id` is optional/null. Omit
+  the whole field when signing facts are unknown. Helpers do not inherit its signer. Deployment
+  architecture remains in the existing `architectures` field.
 - A loaded module declares a `release_policy` and may define signer/PE identity, `load_phase`
   (`startup` or `runtime`), and `startup_probability` from 0 to 1. Known third-party modules require
   native signer and complete PE metadata.
@@ -104,6 +108,12 @@ Binary release identity excludes hostname, username, and installation path. Inst
 application profile, local artifact version, file content, and source observation identity remain
 separate. Fix cross-source hash or version mismatches at deployment/content compilation; do not
 rewrite an emitter-facing catalog pool to hide them.
+
+Mac signing IDs are separate from publisher names and application bundle IDs. The compiler derives
+one synthetic CodeDirectory hash per configured signed release/architecture, separately from
+whole-file hashes. These are modeled identifiers, not hashes measured from vendor binaries.
+Signing metadata establishes neither trust, notarization, nor successful execution; policy outcomes
+and runtime signing flags remain separate. Old catalog entries need no changes.
 
 ## Process relationships
 

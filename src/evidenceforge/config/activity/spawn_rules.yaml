@@ -490,6 +490,7 @@ macos:
       - thunderbird
       - Dropbox
       - Google Drive
+      - AdobeAcrobat
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
     lifetime: long
@@ -737,5 +738,11 @@ macos:
   Citrix Workspace:
     command_templates:
     - '"/Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace"'
+    lifetime: long
+    children: []
+
+  AdobeAcrobat:
+    command_templates:
+    - '"/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat"'
     lifetime: long
     children: []

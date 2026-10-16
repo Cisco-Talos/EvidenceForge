@@ -263,11 +263,51 @@ class BinaryReleaseKey:
 
 
 @dataclass(frozen=True, slots=True)
+class MachOCodeSignature:
+    """Explicit signing identity and a separately modeled CodeDirectory digest.
+
+    A signing identifier is not an application bundle identifier. Missing signer
+    metadata is not evidence that a binary is unsigned or trusted.
+    """
+
+    signing_id: str | None
+    team_id: str | None
+    cdhash: str
+
+    def __post_init__(self) -> None:
+        """Reject malformed signing metadata without filling unknown fields."""
+
+        for name in ("signing_id", "team_id"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not str or not value.strip() or "\0" in value):
+                raise ValueError(f"{name} must be nonempty text or explicit absence")
+        object.__setattr__(self, "cdhash", _validate_digest(self.cdhash, "sha1"))
+
+    @classmethod
+    def derive(
+        cls, key: BinaryReleaseKey, *, signing_id: str | None, team_id: str | None
+    ) -> MachOCodeSignature:
+        """Derive synthetic digest-shaped metadata once from the signed release.
+
+        The separate namespace represents a CodeDirectory, not whole-file SHA-1.
+        These values are synthetic identities, not publisher binary measurements.
+        """
+
+        if key.platform != "macos":
+            raise ValueError("Mach-O code signatures require a macOS binary release")
+        digest = _semantic_sha256(
+            "mach-o-code-directory", (*key.canonical_key, signing_id, team_id)
+        )[:40]
+        return cls(signing_id=signing_id, team_id=team_id, cdhash=digest)
+
+
+@dataclass(frozen=True, slots=True)
 class BinaryReleaseIdentity:
     """Canonical identity and deterministic hashes for one binary release artifact."""
 
     key: BinaryReleaseKey
     pe_version_info: PeVersionInfo | None = None
+    code_signature: MachOCodeSignature | None = None
     release_id: str = field(init=False)
     content_id: str = field(init=False)
     digests: ContentDigests = field(init=False)
@@ -281,6 +321,10 @@ class BinaryReleaseIdentity:
     def __post_init__(self) -> None:
         """Derive immutable release and content identifiers exactly once."""
 
+        if self.code_signature is not None and (
+            self.key.platform != "macos" or type(self.code_signature) is not MachOCodeSignature
+        ):
+            raise ValueError("Code signature metadata requires a macOS binary and exact snapshot")
         object.__setattr__(
             self,
             "release_id",
@@ -1049,6 +1093,7 @@ __all__ = [
     "LocalArtifactIdentity",
     "LocalArtifactObjectKey",
     "LocalArtifactVersionRecord",
+    "MachOCodeSignature",
     "PeVersionInfo",
     "Platform",
     "ProcessBinaryIdentity",

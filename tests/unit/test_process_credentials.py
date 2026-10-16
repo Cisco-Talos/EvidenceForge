@@ -180,9 +180,9 @@ def test_v2_checkpoint_upgrade_preserves_exec_without_inventing_credentials(kind
     original = after if kind == "identity" else manager.get_process(before.hostname, before.pid)
     encoded = encode_state_value(original)
     encoded[1] = "process-identity-v2" if kind == "identity" else "running-process-v2"
-    encoded[2] = encoded[2][:-1]
+    encoded[2] = encoded[2][:-2]
     restored = decode_state_value(encoded)
-    assert restored == original
+    assert restored == replace(original, audit_pid_version=None)
     assert restored.credentials is None and restored.execution_ordinal == 1
 
 

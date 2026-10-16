@@ -202,6 +202,11 @@ _IDENTITY_TRUSTED_DATACLASS_LABELS = (
         "ContentDigests",
     ),
     (
+        _content_identity.MachOCodeSignature,
+        "evidenceforge.events.content_identity",
+        "MachOCodeSignature",
+    ),
+    (
         _content_identity.LocalArtifactBinaryIdentity,
         "evidenceforge.events.content_identity",
         "LocalArtifactBinaryIdentity",
@@ -1519,6 +1524,16 @@ class _CanonicalIdentityEncoder:
         semantic_fields = tuple(
             field_name for field_name, compare in data_fields if compare is True
         )
+        if type(value) is _content_identity.BinaryReleaseIdentity:
+            signature = _identity_dataclass_field_value(
+                self._types, value, value_mro, "code_signature", None, (*path, "code_signature")
+            )
+            if signature is None:
+                # Preserve the pre-extension encoding of existing releases.
+                # Present metadata remains equality-bearing and authenticated.
+                semantic_fields = tuple(
+                    name for name in semantic_fields if name != "code_signature"
+                )
         self._ensure_members(len(semantic_fields), path)
         self._ensure_child_nodes(len(semantic_fields), path)
         self._ensure_encoded(len(semantic_fields) * _IDENTITY_DIGEST_ATOM_BYTES, path)

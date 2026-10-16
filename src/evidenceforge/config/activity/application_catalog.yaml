@@ -467,6 +467,16 @@ applications:
   - id: acrobat
     display_name: "Adobe Acrobat"
     platforms:
+      macos:
+        image_path: '/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat'
+        available_from: '2026-10-15'
+        deployment:
+          kind: catalog
+          release_policy: unspecified
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat"'
       windows:
         image_path: 'C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe'
         deployment:
@@ -2662,6 +2672,9 @@ applications:
     platforms:
       macos:
         image_path: /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+        code_signature:
+          signing_id: com.apple.Terminal
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build

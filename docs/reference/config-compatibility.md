@@ -13,6 +13,8 @@ legacy document in a process.
 
 ## Supported migrations
 
+Mac application platforms optionally accept `code_signature` with required `signing_id` and optional/null `team_id`. Existing catalogs and overlays remain valid without it. This is separate main-executable signing metadata, not a replacement for deployment architecture, publisher, application bundle identity or content hashes. Helpers do not inherit it. The compiler derives a synthetic CodeDirectory hash for the configured release/architecture; it does not read installed binaries or establish notarization/trust. See the [application overlay reference](../../commands/eforge/references/config-apps-processes.md).
+
 | Family | Supported legacy input | Current replacement | Compatibility semantics |
 |---|---|---|---|
 | Sensor timing | `clock_skew_us` | `clock_offset_us` | The `{min, max}` range is renamed unchanged. |

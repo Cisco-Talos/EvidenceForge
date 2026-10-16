@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from evidenceforge.evaluation.native_codecs import NATIVE_CODEC_VALIDATORS
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.formats.loader import load_format
 from evidenceforge.formats.rules import Finding
@@ -15,7 +16,7 @@ class ValidationRoute(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     source: str
-    kind: Literal["native", "artifact"]
+    kind: Literal["native", "native_codec", "artifact"]
     validator: str
 
 
@@ -47,9 +48,14 @@ _NATIVE_SOURCES = (
     "zeek_weird",
     "zeek_x509",
 )
-VALIDATION_ROUTES = tuple(
-    ValidationRoute(source=name, kind="native", validator=name) for name in _NATIVE_SOURCES
-) + (ValidationRoute(source="email_artifacts", kind="artifact", validator="email_manifest"),)
+VALIDATION_ROUTES = (
+    tuple(ValidationRoute(source=name, kind="native", validator=name) for name in _NATIVE_SOURCES)
+    + tuple(
+        ValidationRoute(source=name, kind="native_codec", validator=name)
+        for name in ("macos_endpoint_security", "macos_unified_log")
+    )
+    + (ValidationRoute(source="email_artifacts", kind="artifact", validator="email_manifest"),)
+)
 
 
 class EmailArtifact(BaseModel):
@@ -113,6 +119,9 @@ def validate_route_inventory() -> None:
         route = get_validation_route(source)
         if route.kind == "native":
             load_format(route.validator)
+        elif route.kind == "native_codec":
+            if route.validator not in NATIVE_CODEC_VALIDATORS:
+                raise ConfigurationError(f"Unknown native codec validator: {route.validator}")
         elif route.validator not in ARTIFACT_VALIDATORS:
             raise ConfigurationError(f"Unknown artifact validator: {route.validator}")
 

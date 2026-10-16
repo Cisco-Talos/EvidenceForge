@@ -38,6 +38,7 @@ from evidenceforge.events.content_identity import (
     BinaryReleaseKey,
     FileContentIdentity,
     InstalledSoftwareReleaseIdentity,
+    MachOCodeSignature,
     PeVersionInfo,
     Platform,
     SoftwareInstallationIdentity,
@@ -359,17 +360,29 @@ def _release_for_application_artifact(
         and deployment.release_policy == "host_build"
         else _pe_version_info(metadata)
     )
+    key = BinaryReleaseKey(
+        product_id=product_id,
+        version=version,
+        build=build,
+        architecture=architecture,
+        platform=platform,
+        artifact_name=_artifact_name(artifact_path, platform),
+        variant=variant,
+    )
+    signature = platform_config.code_signature
+    is_main_executable = canonical_native_path(artifact_path, platform) == canonical_native_path(
+        platform_config.image_path, platform
+    )
     return BinaryReleaseIdentity(
-        key=BinaryReleaseKey(
-            product_id=product_id,
-            version=version,
-            build=build,
-            architecture=architecture,
-            platform=platform,
-            artifact_name=_artifact_name(artifact_path, platform),
-            variant=variant,
-        ),
+        key=key,
         pe_version_info=pe_version_info,
+        code_signature=(
+            MachOCodeSignature.derive(
+                key, signing_id=signature.signing_id, team_id=signature.team_id
+            )
+            if signature is not None and is_main_executable
+            else None
+        ),
     )
 
 
@@ -577,15 +590,24 @@ def _intern_release(
     if existing is None:
         releases[key] = release
         return release
-    if (
-        existing.pe_version_info is not None
-        and release.pe_version_info is not None
-        and existing.pe_version_info != release.pe_version_info
+    for field_name in ("pe_version_info", "code_signature"):
+        previous = getattr(existing, field_name)
+        incoming = getattr(release, field_name)
+        if previous is not None and incoming is not None and previous != incoming:
+            label = "PE" if field_name == "pe_version_info" else "code_signature"
+            raise ValueError(
+                f"binary release {release.content_id!r} has contradictory {label} metadata"
+            )
+    if (existing.pe_version_info is None and release.pe_version_info is not None) or (
+        existing.code_signature is None and release.code_signature is not None
     ):
-        raise ValueError(f"binary release {release.content_id!r} has contradictory PE metadata")
-    if existing.pe_version_info is None and release.pe_version_info is not None:
-        releases[key] = release
-        return release
+        enriched = replace(
+            existing,
+            pe_version_info=existing.pe_version_info or release.pe_version_info,
+            code_signature=existing.code_signature or release.code_signature,
+        )
+        releases[key] = enriched
+        return enriched
     return existing
 
 

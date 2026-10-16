@@ -50,9 +50,11 @@ applications:
   executable_reference: https://learn.microsoft.com/en-us/sharepoint/files-on-demand-mac
 - id: acrobat
   availability: supported
-  variant: unavailable
-  reference: https://formulae.brew.sh/cask/adobe-acrobat-reader
-  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+  variant: prefilled
+  reference: https://helpx.adobe.com/acrobat/desktop/troubleshoot/compatibility-warning-macos.html
+  executable_reference: https://community.adobe.com/questions-9/latest-adobe-acrobat-quit-unexpectedly-on-macos-sequoia-1300876
+  compatibility_reference: https://www.adobe.com/products/acrobatstd/systemreqs/
+  boundary: Native arm64 Acrobat DC launch only; current publisher documentation supports macOS 26 and the public report corroborates the executable path. Existing unspecified-release semantics avoid claiming a current build from a historical report. Reader is a separate product; Rosetta, installers, plugins, helpers and cloud/network workflows are not inferred.
 - id: 7zip
   availability: supported
   variant: prefilled

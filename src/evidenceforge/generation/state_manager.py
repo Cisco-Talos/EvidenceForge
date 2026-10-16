@@ -1129,6 +1129,7 @@ class MaterializationBatchBuilder:
         self._boot_times: dict[str, datetime] = {}
         self._session_process_plans: dict[str, ProcessMaterializationPlan] = {}
         self._sealed = False
+        self._macos_audit_pid_versions: dict[str, int] = {}
         self._pid_counters: dict[str, int] = {}
         self._pid_rng_states: dict[str, object] = {}
         self._pid_os: dict[str, str] = {}
@@ -3106,8 +3107,14 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             normalized.credentials is None or credentials.origin != normalized.credentials.origin
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
+        audit_pid_version = self._manager._preview_macos_audit_pid_version(
+            normalized.hostname,
+            self._manager._pid_os.get(normalized.hostname, "unknown"),
+            previous=self._macos_audit_pid_versions.get(normalized.hostname),
+        )
         after = replace(
             normalized,
+            audit_pid_version=audit_pid_version,
             image=image,
             credentials=credentials if credentials is not None else normalized.credentials,
             command_line=command_line,
@@ -3115,6 +3122,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             lifetime_image=normalized.initial_image,
             executed_at=timestamp,
         )
+        if audit_pid_version is not None:
+            self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
         self._process_execution_drafts.append(
             ActionCohortProcessExecution(
                 target=normalized,
@@ -4321,6 +4330,7 @@ class StateManager:
         self._logon_id_aliases_by_target: dict[str, set[str]] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
+        self._macos_audit_pid_versions: dict[str, int] = {}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
@@ -9414,6 +9424,18 @@ class StateManager:
         next_counter = candidate + (4 * rng.randint(1, 17))
         return candidate, (system, next_counter), (system, rng.getstate())
 
+    def _preview_macos_audit_pid_version(
+        self, system: str, os_category: str, *, previous: int | None = None
+    ) -> int | None:
+        """Reserve no state while selecting the next modeled native process version."""
+
+        if os_category != "macos":
+            return None
+        current = self._macos_audit_pid_versions.get(system, 0) if previous is None else previous
+        if type(current) is not int or not 0 <= current < 2**32 - 1:
+            raise StateError("macOS audit PID version namespace is exhausted or invalid")
+        return current + 1
+
     @staticmethod
     def _validate_process_credentials(
         credentials: PosixProcessCredentials | None, os_category: str
@@ -9587,6 +9609,7 @@ class StateManager:
                 command_line=command_line,
                 principal=username,
                 credentials=credentials,
+                audit_pid_version=self._preview_macos_audit_pid_version(system, os_category),
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -10050,6 +10073,9 @@ class StateManager:
                 command_line=command_line,
                 principal=username,
                 credentials=credentials,
+                audit_pid_version=self._preview_macos_audit_pid_version(
+                    system, os_category, previous=builder._macos_audit_pid_versions.get(system)
+                ),
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -10108,6 +10134,8 @@ class StateManager:
                     allocator_patch,
                 ),
             )
+            if identity.audit_pid_version is not None:
+                builder._macos_audit_pid_versions[system] = identity.audit_pid_version
             builder._pid_counters[system] = counter
             builder._pid_rng_states[system] = pid_rng.getstate()
             if allocator_patch.pid_os is not None:
@@ -10894,11 +10922,21 @@ class StateManager:
                     or after.credentials.origin != before.credentials.origin
                 ):
                     raise StateError("Process execution changed real or audit credentials")
+                if self._pid_os.get(before.hostname) == "macos":
+                    if (
+                        after.audit_pid_version is None
+                        or after.audit_pid_version
+                        <= self._macos_audit_pid_versions.get(before.hostname, 0)
+                    ):
+                        raise StateError("Process execution requires a new macOS audit PID version")
+                elif after.audit_pid_version is not None:
+                    raise StateError("Audit PID versions require a macOS process")
                 expected = replace(
                     before,
                     image=after.image,
                     command_line=after.command_line,
                     credentials=after.credentials,
+                    audit_pid_version=after.audit_pid_version,
                     execution_ordinal=before.execution_ordinal + 1,
                     lifetime_image=before.initial_image,
                     executed_at=after.executed_at,
@@ -11248,6 +11286,7 @@ class StateManager:
             concurrency_group_id=payload.concurrency_group_id,
             pid_logical_position=payload.pid_logical_position,
             credentials=identity.credentials,
+            audit_pid_version=identity.audit_pid_version,
         )
         thread = RunningThread(
             hostname=primary_thread.hostname,
@@ -11561,6 +11600,7 @@ class StateManager:
             thread_key = (thread.hostname, thread.process_object_id, thread.tid)
             capture_indexed(self._running_processes, process_key)  # type: ignore[arg-type]
             capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+            capture_mapping(self._macos_audit_pid_versions, process.system)  # type: ignore[arg-type]
             capture_mapping(self._active_pid_reservation_counts, process.system)  # type: ignore[arg-type]
             capture_mapping(self._process_object_ids, process_key)  # type: ignore[arg-type]
             capture_mapping(self._processes_by_object_id, process.ecar_object_id)  # type: ignore[arg-type]
@@ -11687,6 +11727,7 @@ class StateManager:
                     adds_record=adds_record,
                 )
         for execution in plan._process_executions:
+            capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
             capture_object(self._processes_by_object_id[execution.target.object_id])
         for patch in plan._process_activity:
             identity = self._action_process_identity(patch.target)
@@ -13319,6 +13360,11 @@ class StateManager:
             process.image = execution.after.image
             process.command_line = execution.after.command_line
             process.credentials = execution.after.credentials
+            process.audit_pid_version = execution.after.audit_pid_version
+            if process.audit_pid_version is not None:
+                self._macos_audit_pid_versions[process.system] = max(
+                    self._macos_audit_pid_versions.get(process.system, 0), process.audit_pid_version
+                )
             process.execution_ordinal = execution.after.execution_ordinal
             process.lifetime_image = execution.after.lifetime_image
             process.executed_at = execution.after.executed_at
@@ -13711,6 +13757,10 @@ class StateManager:
         if update_state_time:
             self.state.current_time = payload.state_time
         identity = plan.identity
+        if identity.audit_pid_version is not None:
+            self._macos_audit_pid_versions[identity.hostname] = max(
+                self._macos_audit_pid_versions.get(identity.hostname, 0), identity.audit_pid_version
+            )
         if payload.parent_activity_time is not None and identity.parent_pid:
             parent = self.state.running_processes.get((identity.hostname, identity.parent_pid))
             if parent is not None and (
@@ -14538,6 +14588,7 @@ class StateManager:
             lifetime_image=process.lifetime_image,
             executed_at=process.executed_at,
             credentials=process.credentials,
+            audit_pid_version=process.audit_pid_version,
         )
 
     @staticmethod
@@ -14560,6 +14611,7 @@ class StateManager:
             identity.executed_at,
             identity.lifetime_image,
             identity.credentials,
+            identity.audit_pid_version,
         )
 
     def _process_identity_active_at_locked(

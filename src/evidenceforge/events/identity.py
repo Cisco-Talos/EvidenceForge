@@ -138,6 +138,7 @@ class ProcessIdentity:
     executed_at: datetime | None = None
     lifetime_image: str = ""
     credentials: PosixProcessCredentials | None = None
+    audit_pid_version: PosixIdentifier | None = None
 
     @property
     def initial_image(self) -> str:
@@ -164,6 +165,10 @@ class ProcessIdentity:
             raise ValueError("Process identity requires host, object, and lifecycle group")
         if self.pid < 0 or self.parent_pid < 0:
             raise ValueError("Process PIDs must be non-negative host-local identifiers")
+        if self.audit_pid_version is not None and (
+            type(self.audit_pid_version) is not int or not 0 < self.audit_pid_version < 2**32
+        ):
+            raise ValueError("Audit PID version requires a positive unsigned 32-bit integer")
         if self.credentials is not None and type(self.credentials) is not PosixProcessCredentials:
             raise ValueError("Process credentials require an exact immutable POSIX snapshot")
         if type(self.execution_ordinal) is not int or self.execution_ordinal < 0:

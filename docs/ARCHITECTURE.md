@@ -697,7 +697,9 @@ identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.
 
-Canonical POSIX fork/exec state separates the process lifetime from immutable image executions. Fork inherits the current parent snapshot; exec keeps its PID, lifetime and login principal while advancing the execution identity and retaining bounded history. Optional `PosixProcessCredentials` snapshots keep real/effective UID/GID and audit origin separate. An explicit exec outcome may change effective IDs but must preserve known real and audit identities; a `setuid`/`setgid` operation needs its own future transition. Mac process launches resolve known accounts through the modeled identity directory or inherit an exact same-principal parent snapshot. They never infer audit IDs from GUI session IDs, Windows LogonIDs or the generator host. Missing credentials remain absent. Checkpoint v3 process records retain these snapshots and explicitly upgrade v1/v2 records without inventing credentials. Native audit PID versions, saved IDs, supplementary groups, responsible-process ownership and worker-thread replacement remain open; the native exec event projection is still unavailable.
+Canonical POSIX fork/exec state separates the process lifetime from immutable image executions. Fork inherits the current parent snapshot; exec keeps its PID, lifetime and login principal while advancing the execution identity and retaining bounded history. Optional `PosixProcessCredentials` snapshots keep real/effective UID/GID and audit origin separate. An explicit exec outcome may change effective IDs but must preserve known real and audit identities; a `setuid`/`setgid` operation needs its own future transition. Mac process launches resolve known accounts through the modeled identity directory or inherit an exact same-principal parent snapshot. They never infer audit IDs from GUI session IDs, Windows LogonIDs or the generator host. Missing credentials remain absent. Checkpoint v4 process records retain these snapshots and explicitly upgrade v1/v2/v3 records without inventing absent facts. Mac process creation and exec reserve a distinct host-local audit PID version through the same transactional state owner; fork gets a new version, while parent and historical execution snapshots remain unchanged. Counter exhaustion fails explicitly rather than reusing a version. StateManager checkpoint schema 2 persists the counter and rejects incompatible older heads through existing diagnostics. Saved IDs, supplementary groups, responsible-process ownership and worker-thread replacement remain open; the native exec event projection is still unavailable.
+
+Optional Mac catalog `code_signature` metadata compiles to immutable `MachOCodeSignature` on the existing binary release identity. Signing ID and optional team ID are distinct from bundle identity, publisher and runtime signing flags. Its synthetic CodeDirectory hash uses a separate release/architecture namespace from whole-file content hashes. Only the main executable receives its configured signer; helpers and unknown signatures remain absent. Packed binary registry rows preserve this metadata; rows without it retain their previous representation. Neither signing identity nor a modeled digest asserts trust or notarization.
 
 Auth/session callers supply successful logon, failed logon, logoff, service
 logon, machine-account logon, anonymous logon, NTLM validation, or workstation
@@ -993,7 +995,7 @@ The evaluation system (`src/evidenceforge/evaluation/`) scores generated data ac
 
 ```
 EvaluationEngine
-├── Parsers (18 format parsers)
+├── Parsers (generated sources and explicit native export readers)
 │   ├── WindowsEventParser (XML)
 │   ├── ZeekBaseParser + 13 protocol-specific
 │   ├── EcarParser (NDJSON)
@@ -1023,6 +1025,8 @@ EvaluationEngine
     ├── flags: list[str]
     └── supplementary: dict  ← includes host_log_profile diagnostic
 ```
+
+Native Mac exports have explicit `native_codec` validation routes to the nested versioned wire models. Their bounded NDJSON readers preserve source-native fields and directory provenance; valid Unified Log completion markers do not become evidence records. These ingestion routes are independent of generator source admission. Unsupported native families fail structure checks; missing native correlation/diagnostic rules remain unavailable rather than being represented by a flat template schema.
 
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
 

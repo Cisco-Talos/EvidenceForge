@@ -839,6 +839,22 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
         return self
 
 
+class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
+    """Explicit signer facts for the cataloged main executable, not its helpers."""
+
+    signing_id: str = Field(min_length=1, max_length=512)
+    team_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("signing_id", "team_id")
+    @classmethod
+    def signature_text_is_exact(cls, value: str | None) -> str | None:
+        """Require explicit absence or exact nonblank, NUL-free metadata."""
+
+        if value is not None and (value != value.strip() or not value or "\0" in value):
+            raise ValueError("code signature identifiers must be nonblank, exact text or null")
+        return value
+
+
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
 
@@ -852,6 +868,7 @@ class PlatformConfig(BaseModel, extra="forbid"):
         | None
     ) = None
     pe_metadata: dict[str, str] | None = None
+    code_signature: MacCodeSignatureEntry | None = None
     command_templates: list[str] | None = None
     command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
@@ -928,6 +945,8 @@ class ApplicationEntry(BaseModel, extra="forbid"):
             "original_filename",
         }
         for platform_name, platform in self.platforms.items():
+            if platform.code_signature is not None and platform_name != "macos":
+                raise ValueError(f"{self.id}.{platform_name} code_signature requires macos")
             deployment = platform.deployment
             if isinstance(deployment, CatalogApplicationDeploymentEntry):
                 if deployment.scope == "machine" and "{username}" in platform.image_path:

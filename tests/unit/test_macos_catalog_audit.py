@@ -119,3 +119,26 @@ def test_citrix_mac_variant_retains_quoted_native_launch_and_existing_personas()
         item["id"] for item in get_apps_for_persona("analyst", "macos", "user_app", "workstation")
     }
     assert app["platforms"]["windows"]["image_path"].endswith("SelfService.exe")
+
+
+def test_acrobat_mac_launch_uses_existing_unspecified_release_semantics() -> None:
+    import shlex
+
+    from evidenceforge.config.schemas import ApplicationEntry
+    from evidenceforge.generation.activity.application_catalog import application_descriptor
+    from evidenceforge.generation.activity.spawn_rules import get_parent_config
+    from evidenceforge.generation.deployment_compiler import _release_for_application_artifact
+
+    descriptor = application_descriptor("acrobat")
+    app = ApplicationEntry.model_validate(descriptor)
+    platform = app.platforms["macos"]
+    assert shlex.split(platform.command_templates[0]) == [platform.image_path]
+    assert tuple(platform.deployment.architectures) == ("arm64",)
+    release = _release_for_application_artifact(
+        app, "macos", platform, platform.image_path, None, "arm64", "26.0"
+    )
+    assert release.key.product_id == "acrobat"
+    assert release.key.version == release.key.build == "unspecified"
+    assert release.code_signature is None
+    assert not get_parent_config("macos", "AdobeAcrobat")["children"]
+    assert app.platforms["windows"].image_path.endswith("Acrobat.exe")

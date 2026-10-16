@@ -114,6 +114,7 @@ _RUNNING_PROCESS_FIELDS = (
     "prior_executions",
     "lifetime_image",
     "credentials",
+    "audit_pid_version",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -298,6 +299,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "executed_at",
     "lifetime_image",
     "credentials",
+    "audit_pid_version",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -361,7 +363,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process-v3": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v4": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,
@@ -378,7 +380,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v3": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v4": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -515,6 +517,13 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         elif record_tag == "process-identity-v2" and len(encoded_fields) == 15:
             record_tag = "process-identity-v3"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        # Older snapshots have no native process version; never invent history.
+        if record_tag == "running-process-v3" and len(encoded_fields) == 26:
+            record_tag = "running-process-v4"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        elif record_tag == "process-identity-v3" and len(encoded_fields) == 16:
+            record_tag = "process-identity-v4"
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:
