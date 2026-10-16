@@ -1062,6 +1062,7 @@ def _restore_legacy_ssh_lifecycle(
     from evidenceforge.events.lifecycle import SessionEndPlan
     from evidenceforge.generation.actions.base import ActionAnchor
     from evidenceforge.generation.actions.ssh_session import (
+        SshReceiverAuthentication,
         SshSessionActionBundle,
         SshSessionRequest,
         _SshLinuxAuthState,
@@ -1235,17 +1236,24 @@ def _restore_legacy_ssh_lifecycle(
         or session_identity.object_id != state.session_obj_id
     ):
         raise CheckpointCorruptionError("SSH checkpoint legacy session lost State authority")
-    auth_state = _SshLinuxAuthState(
-        sshd_pid=auth_row[0],
-        logind_session_id=auth_row[1],
-        syslog_seed=auth_seed,
-        connection_time=auth_times[0],
-        accepted_time=auth_times[1],
-        pam_time=auth_times[2],
-        logind_time=auth_times[3],
-    )
+    try:
+        auth_state = _SshLinuxAuthState(
+            receiver=SshReceiverAuthentication(
+                responder_pid=auth_row[0],
+                session_id=auth_row[1],
+                connection_time=auth_times[0],
+                authenticated_at=auth_times[1],
+                session_open_time=auth_times[2],
+                ready_at=auth_times[3],
+            ),
+            syslog_seed=auth_seed,
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "SSH checkpoint authentication phases are invalid"
+        ) from error
     bundle = SshSessionActionBundle(request=request, executor=generator)
-    event = bundle._build_session_event(state, auth_state)
+    event = bundle._build_session_event(state, auth_state.receiver)
     return close_time, bundle, state, event, auth_state
 
 
@@ -1254,6 +1262,7 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
         NetworkConnectionIdentityCapture,
     )
     from evidenceforge.generation.actions.ssh_session import (
+        SshReceiverAuthentication,
         _PreparedSshCloseContinuation,
         _PreparedSshClosePlan,
         _SshLinuxAuthState,
@@ -1308,15 +1317,22 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             )
         ):
             raise CheckpointCorruptionError("SSH checkpoint journal row changed type")
-        auth_state = _SshLinuxAuthState(
-            sshd_pid=row[27][0],
-            logind_session_id=row[27][1],
-            syslog_seed=auth_seed,
-            connection_time=auth_times[0],
-            accepted_time=auth_times[1],
-            pam_time=auth_times[2],
-            logind_time=auth_times[3],
-        )
+        try:
+            auth_state = _SshLinuxAuthState(
+                receiver=SshReceiverAuthentication(
+                    responder_pid=row[27][0],
+                    session_id=row[27][1],
+                    connection_time=auth_times[0],
+                    authenticated_at=auth_times[1],
+                    session_open_time=auth_times[2],
+                    ready_at=auth_times[3],
+                ),
+                syslog_seed=auth_seed,
+            )
+        except (TypeError, ValueError) as error:
+            raise CheckpointCorruptionError(
+                "SSH checkpoint authentication phases are invalid"
+            ) from error
         plan = _PreparedSshClosePlan(
             continuation_id=row[0],
             username=row[1],

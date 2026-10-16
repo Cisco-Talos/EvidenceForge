@@ -3275,6 +3275,23 @@ class ScenarioValidator:
             for spec_idx, spec in enumerate(event.events):
                 event_type = spec.type
 
+                if os_cat == "macos" and (
+                    event_type == "ssh_session"
+                    or (event_type == "logon" and getattr(spec, "logon_type", None) == 10)
+                ):
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=f"storyline.{idx}.events.{spec_idx}",
+                            message=(
+                                f"[{event.id}] macOS remote interactive receivers are not "
+                                "implemented yet; configured SSH service availability does "
+                                "not enable the receiver lifecycle"
+                            ),
+                            suggestion="Use a Linux SSH receiver; macOS clients are supported.",
+                        )
+                    )
+
                 # Windows-only events on Linux
                 if os_cat == "linux" and event_type in _WINDOWS_EVENT_TYPES:
                     self.issues.append(

@@ -778,16 +778,73 @@ class _SshTransportState:
 
 
 @dataclass(frozen=True, slots=True)
-class _SshLinuxAuthState:
-    """Source-native Linux SSH authentication lifecycle timestamps."""
+class SshReceiverAuthentication:
+    """Receiver authentication and readiness facts independent of native logging."""
 
-    sshd_pid: int
-    logind_session_id: int
-    syslog_seed: tuple[Any, ...]
+    responder_pid: int
+    session_id: int
     connection_time: datetime
-    accepted_time: datetime
-    pam_time: datetime
-    logind_time: datetime
+    authenticated_at: datetime
+    session_open_time: datetime
+    ready_at: datetime
+
+    def __post_init__(self) -> None:
+        """Reject identity-free receivers and inverted authentication phases."""
+        if type(self.responder_pid) is not int or self.responder_pid <= 0:
+            raise ValueError("SSH authentication requires an explicit receiver process")
+        if type(self.session_id) is not int or self.session_id < 0:
+            raise ValueError("SSH authentication requires a non-negative session identity")
+        times = (self.connection_time, self.authenticated_at, self.session_open_time, self.ready_at)
+        if any(type(value) is not datetime or value.utcoffset() is None for value in times):
+            raise ValueError("SSH authentication phases require aware timestamps")
+        if (
+            not self.connection_time
+            <= self.authenticated_at
+            <= self.session_open_time
+            <= self.ready_at
+        ):
+            raise ValueError(
+                "SSH authentication phases must preserve connection/auth/open/readiness order"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _SshLinuxAuthState:
+    """Linux observation mapping around source-independent authentication facts."""
+
+    receiver: SshReceiverAuthentication
+    syslog_seed: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.receiver) is not SshReceiverAuthentication
+            or type(self.syslog_seed) is not tuple
+        ):
+            raise ValueError("Linux SSH observations require exact authentication facts and seed")
+
+    @property
+    def sshd_pid(self) -> int:
+        return self.receiver.responder_pid
+
+    @property
+    def logind_session_id(self) -> int:
+        return self.receiver.session_id
+
+    @property
+    def connection_time(self) -> datetime:
+        return self.receiver.connection_time
+
+    @property
+    def accepted_time(self) -> datetime:
+        return self.receiver.authenticated_at
+
+    @property
+    def pam_time(self) -> datetime:
+        return self.receiver.session_open_time
+
+    @property
+    def logind_time(self) -> datetime:
+        return self.receiver.ready_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -1106,9 +1163,9 @@ class _PreparedSshClosePlan:
         )
         if (
             session_started_at < open_time
-            or session_started_at > self.auth_state.logind_time
+            or session_started_at > self.auth_state.receiver.ready_at
             or close_time <= open_time
-            or self.auth_state.logind_time >= close_time
+            or self.auth_state.receiver.ready_at >= close_time
         ):
             raise ValueError("Exact SSH close plan does not contain its authenticated session")
         if self.target_host.ip != self.target_ip:
@@ -1206,7 +1263,7 @@ class _PreparedSshClosePlan:
             < self.session_close_time
             < self.logind_remove_time
             < canonical_window_end
-            or not self.auth_state.logind_time
+            or not self.auth_state.receiver.ready_at
             < self.receiver_terminate_time
             < self.session_close_time
             or (
@@ -1687,7 +1744,7 @@ class _SshApplicationRetirementBinding:
             or binding.session_object_id != plan.session_object_id
             or binding.lifecycle_group_id != plan.session_lifecycle_group_id
             or binding.principal != plan.username.casefold()
-            or binding.ready_at != plan.auth_state.logind_time
+            or binding.ready_at != plan.auth_state.receiver.ready_at
             or session.affinity.server_identity != plan.target_system.hostname.casefold()
             or session.affinity.server_session_object_id != plan.session_object_id
             or session.affinity.principal != plan.username.casefold()
@@ -2128,7 +2185,7 @@ class _PreparedSshCloseContinuation:
             plan.auth_state.connection_time,
             plan.auth_state.accepted_time,
             plan.auth_state.pam_time,
-            plan.auth_state.logind_time,
+            plan.auth_state.receiver.ready_at,
             plan.close_time,
             plan.receiver_terminate_time,
             plan.session_close_time,
@@ -2828,6 +2885,11 @@ class SshSessionActionBundle:
     def execute_with_identity(self) -> tuple[str, str]:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
+        if _get_os_category(self.request.target_system.os) == "macos":
+            raise StateError(
+                "macOS SSH receivers are not implemented yet. Use a Linux receiver; "
+                "macOS clients are supported."
+            )
         # Hard-deadline admission is read-only and must precede every RNG/state/
         # source-port/evidence side effect in exact and compatibility paths.
         self._hard_deadline_transport_close_limit()
@@ -2928,7 +2990,9 @@ class SshSessionActionBundle:
         )
         planning_event = self._build_session_event(state)
         auth_state = self._plan_linux_auth(state, planning_event, auth_plan)
-        event = self._build_session_event(state, auth_state)
+        event = self._build_session_event(
+            state, auth_state.receiver if auth_state is not None else None
+        )
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             if auth_plan is None:
@@ -2936,7 +3000,7 @@ class SshSessionActionBundle:
             self._mark_edr_login_readiness(
                 state,
                 event,
-                auth_state,
+                auth_state.receiver,
                 ecar_after_accept_gap=auth_plan.ecar_after_accept.value,
             )
         self.executor.dispatcher.dispatch_builder(event)
@@ -2978,7 +3042,7 @@ class SshSessionActionBundle:
             self.request.source_ip,
             state.source_port,
             state.dst_host.ip,
-            prepared.auth_state.logind_time,
+            prepared.auth_state.receiver.ready_at,
         )
 
     def _bind_deferred_close_continuation(
@@ -3575,7 +3639,7 @@ class SshSessionActionBundle:
         )
         # This is deliberately the only exact-path invocation. Any custom or
         # malformed event construction fails before State/lifecycle transfer.
-        event = self._build_session_event(planned_state, auth_state)
+        event = self._build_session_event(planned_state, auth_state.receiver)
         if (
             type(event) is not OccurrenceBuilder
             or event.event_type != "ssh_session"
@@ -3809,8 +3873,14 @@ class SshSessionActionBundle:
             source_session_identity.object_id if source_session_identity is not None else ""
         )
         auth_state = _SshLinuxAuthState(
-            sshd_pid=receiver_plan.identity.pid,
-            logind_session_id=session_plan.identity.session_id,
+            receiver=SshReceiverAuthentication(
+                responder_pid=receiver_plan.identity.pid,
+                session_id=session_plan.identity.session_id,
+                connection_time=connection_time,
+                authenticated_at=accepted_time,
+                session_open_time=pam_time,
+                ready_at=logind_time,
+            ),
             syslog_seed=(
                 request.target_system.hostname,
                 request.source_ip,
@@ -3818,10 +3888,6 @@ class SshSessionActionBundle:
                 receiver_plan.identity.pid,
                 request.time.isoformat(),
             ),
-            connection_time=connection_time,
-            accepted_time=accepted_time,
-            pam_time=pam_time,
-            logind_time=logind_time,
         )
         close_plan = self._prepare_deferred_close_plan(
             state,
@@ -4875,7 +4941,7 @@ class SshSessionActionBundle:
     def _build_session_event(
         self,
         state: _SshTransportState,
-        auth_state: _SshLinuxAuthState | None = None,
+        authentication: SshReceiverAuthentication | None = None,
     ) -> OccurrenceBuilder:
         """Build the canonical SSH session occurrence.
 
@@ -4886,7 +4952,9 @@ class SshSessionActionBundle:
 
         request = self.request
         return OccurrenceBuilder(
-            timestamp=auth_state.pam_time if auth_state is not None else request.time,
+            timestamp=authentication.session_open_time
+            if authentication is not None
+            else request.time,
             event_type="ssh_session",
             src_host=state.src_host,
             dst_host=state.dst_host,
@@ -4895,7 +4963,7 @@ class SshSessionActionBundle:
                 source_ip=request.source_ip,
                 source_port=state.source_port,
                 logon_id=state.logon_id,
-                session_id=auth_state.logind_session_id if auth_state is not None else 0,
+                session_id=authentication.session_id if authentication is not None else 0,
                 logon_type=10,
             ),
             process=state.source_process,
@@ -4968,13 +5036,15 @@ class SshSessionActionBundle:
                 session_id=logind_session_id,
             )
         return _SshLinuxAuthState(
-            sshd_pid=plan.sshd_pid,
-            logind_session_id=logind_session_id,
+            receiver=SshReceiverAuthentication(
+                responder_pid=plan.sshd_pid,
+                session_id=logind_session_id,
+                connection_time=resolved_times["connection"],
+                authenticated_at=resolved_times["accepted"],
+                session_open_time=resolved_times["pam"],
+                ready_at=resolved_times["logind"],
+            ),
             syslog_seed=plan.syslog_seed,
-            connection_time=resolved_times["connection"],
-            accepted_time=resolved_times["accepted"],
-            pam_time=resolved_times["pam"],
-            logind_time=resolved_times["logind"],
         )
 
     def _freeze_linux_ecar_readiness(self) -> _FrozenSshTimingDelta | None:
@@ -5381,7 +5451,7 @@ class SshSessionActionBundle:
         self,
         state: _SshTransportState,
         event: OccurrenceBuilder,
-        auth_state: _SshLinuxAuthState,
+        authentication: SshReceiverAuthentication,
         *,
         ecar_after_accept_gap: timedelta,
     ) -> None:
@@ -5405,9 +5475,9 @@ class SshSessionActionBundle:
             seed_parts=ecar_seed,
         )
         graph = TemporalConstraintGraph()
-        graph.add_node("pam", auth_state.pam_time)
+        graph.add_node("session_open", authentication.session_open_time)
         graph.add_node("ecar_login", preferred_ecar_login_time)
-        graph.constrain_after("ecar_login", "pam", min_gap=ecar_after_accept_gap)
+        graph.constrain_after("ecar_login", "session_open", min_gap=ecar_after_accept_gap)
         ecar_login_time = graph.resolved_time("ecar_login")
         self.executor._source_timing_planner.record_source_time(
             event,
@@ -5420,7 +5490,7 @@ class SshSessionActionBundle:
             f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
             f"{state.source_port}:{state.logon_id}:{request.time.isoformat()}"
         )
-        ready_time = max(ecar_login_time, auth_state.logind_time) + timedelta(
+        ready_time = max(ecar_login_time, authentication.ready_at) + timedelta(
             milliseconds=80 + (ready_seed % 160)
         )
         self.executor._remember_ssh_session_ready_time(

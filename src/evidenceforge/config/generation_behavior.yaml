@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 169
+current_revision: 170
 history_start_revision: 1
-behavior_surface_sha256: 29e60016fcb401d9caf6fad1a8dad3687e9ec8fac7402a08705cea07dcb95036
+behavior_surface_sha256: 853f802c246cd77f0a921b26ece6a2722a3ca354e295e7253e1d31f744dbafb6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1688,3 +1688,12 @@ changes:
       - checkpoint-state
     formats: []
     summary: Adds allocation-free Mac SSH audit-origin metadata with atomic host-local allocation and durable recovery. Receiver integration remains unavailable; existing authored inputs and source output are unchanged.
+  - revision: 170
+    id: ssh-receiver-authentication-platform-boundary
+    impact: localized
+    domains:
+      - authentication-identity
+      - ssh-session-lifecycle
+      - scenario-validation
+    formats: [ecar, syslog]
+    summary: Separates canonical SSH authentication phases from Linux observation names and rejects unimplemented Mac receiver paths before mutation. Existing Linux phase values and checkpoint wire records are preserved.

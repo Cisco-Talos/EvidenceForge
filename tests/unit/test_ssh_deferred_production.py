@@ -37,11 +37,15 @@ from evidenceforge.generation.activity.generator import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import TimingWindow, get_timing_window
 from evidenceforge.generation.application_channels import ApplicationChannelRegistry
 from evidenceforge.generation.baseline_timing import BaselineTimingPlanner
-from evidenceforge.generation.checkpoints.activity_head import ActivityGeneratorStateParticipant
+from evidenceforge.generation.checkpoints.activity_head import (
+    ActivityGeneratorStateParticipant,
+    _restore_ssh_lifecycles,
+)
 from evidenceforge.generation.checkpoints.application_channel_head import (
     ApplicationChannelRegistryParticipant,
 )
 from evidenceforge.generation.checkpoints.emitter_spools import EmitterSpoolParticipant
+from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
 from evidenceforge.generation.checkpoints.lifecycle_head import LifecycleRegistryParticipant
 from evidenceforge.generation.checkpoints.network_runtime_head import (
     NetworkTransactionRuntimeParticipant,
@@ -485,6 +489,13 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(
     restored = fresh.generator._pending_ssh_session_closures[0]
     assert restored.prepared.ssh_manager_owner is fresh.generator._ssh_channel_manager
     assert restored.prepared.dispatcher_owner is fresh.generator.dispatcher
+
+    corrupted_rows = loads(activity_seal.head.payload)["ssh_lifecycles"]
+    corrupted_rows[0][27][4] = corrupted_rows[0][27][6]
+    pending_before = tuple(fresh.generator._pending_ssh_session_closures)
+    with pytest.raises(CheckpointCorruptionError, match="authentication phases"):
+        _restore_ssh_lifecycles(fresh.generator, corrupted_rows)
+    assert tuple(fresh.generator._pending_ssh_session_closures) == pending_before
 
     original.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=2))
     original.close_and_read()

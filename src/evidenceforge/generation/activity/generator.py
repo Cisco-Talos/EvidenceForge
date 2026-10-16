@@ -24511,6 +24511,8 @@ class ActivityGenerator:
         source_visible_by: datetime | None = None,
     ) -> int | None:
         """Create visible per-session sshd and login shell process state for SSH."""
+        if _get_os_category(target_system.os) == "macos":
+            raise StateError("Linux SSH shell bootstrap cannot own a macOS receiver session")
         session = self.state_manager.get_session(logon_id)
         if session is None or session.system != target_system.hostname:
             return None
