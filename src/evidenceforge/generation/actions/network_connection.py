@@ -881,6 +881,8 @@ class DeferredSshApplicationIntent:
         self,
         session_identity: SessionIdentity,
         transaction: NetworkTransactionPlan,
+        *,
+        state_batch: MaterializationBatchPlan | None = None,
     ) -> tuple[
         SshChannelAdmissionToken,
         tuple[ProcessActivityPatch, ...],
@@ -889,6 +891,15 @@ class DeferredSshApplicationIntent:
     ]:
         """Reserve the exact SSH/common admission without publishing either registry."""
 
+        if state_batch is not None and (
+            type(state_batch) is not MaterializationBatchPlan
+            or state_batch.session is None
+            or state_batch.session.identity != session_identity
+            or not any(
+                member.identity == self.receiver_identity for member in state_batch.processes
+            )
+        ):
+            raise StateError("Deferred SSH activity requires its exact State start batch")
         if transaction.closed_at is None:
             raise StateError("Deferred SSH application intent requires a closed transport")
         closes_at = transaction.closed_at
@@ -980,7 +991,13 @@ class DeferredSshApplicationIntent:
             responder_bytes=transaction.resp_bytes,
         )
         process_activity = tuple(
-            ProcessActivityPatch(identity, closes_at) for identity in process_identities
+            ProcessActivityPatch(
+                identity,
+                state_batch.process_hold_activity_time(identity, closes_at)
+                if state_batch is not None
+                else closes_at,
+            )
+            for identity in process_identities
         )
         session_activity = (
             SessionActivityPatch(self.receiver_state_session_identity, closes_at),
@@ -1843,10 +1860,17 @@ class DeferredSessionNetworkAuthority:
         )
         if session_identity is None:
             raise StateError("Deferred application authority has no exact State session")
-        token, process_activity, session_activity, process_holds = intent.prepare(
-            session_identity,
-            transaction,
-        )
+        if type(intent) is DeferredSshApplicationIntent:
+            token, process_activity, session_activity, process_holds = intent.prepare(
+                session_identity,
+                transaction,
+                state_batch=self.state_batch,
+            )
+        else:
+            token, process_activity, session_activity, process_holds = intent.prepare(
+                session_identity,
+                transaction,
+            )
         return replace(
             self,
             application_intent=None,

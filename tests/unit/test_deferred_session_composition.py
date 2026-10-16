@@ -40,7 +40,11 @@ from evidenceforge.events.dispatcher import (
     PreparedDispatch,
     PreparedDispatchStateIntent,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    PosixProcessCredentials,
+    ProcessIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext, LifecycleHold
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -415,12 +419,27 @@ def _fixture(
     include_holds: bool = True,
     process_start_offset_ms: int = 110,
     include_responder_process: bool = False,
+    macos_receiver: bool = False,
 ) -> _Fixture:
     """Build one complete uncommitted owner composition using only public planners."""
 
     expected_port = 22 if kind is DeferredSessionKind.SSH else 3389
     effective_port = expected_port if dst_port is None else dst_port
     state = StateManager()
+    if macos_receiver:
+        assert kind is DeferredSessionKind.SSH
+        bootstrap = state.plan_process_materialization(
+            system="DB-01",
+            parent_pid=0,
+            image="/sbin/launchd",
+            command_line="/sbin/launchd",
+            username="root",
+            integrity_level="System",
+            os_category="macos",
+            start_time=_START - timedelta(seconds=1),
+            credentials=PosixProcessCredentials(0, 0, 0, 0),
+        )
+        state.materialize_process(bootstrap)
     crypto = CryptographicMaterialRegistry()
     runtime = NetworkTransactionRuntime(
         state_manager=state,
@@ -447,18 +466,41 @@ def _fixture(
             _START + timedelta(milliseconds=120 if kind is DeferredSessionKind.SSH else 100)
         ),
         session_kind=kind.value,
+        auth_protocol="ssh" if macos_receiver else "",
+        network_close_time=_START + timedelta(seconds=30) if macos_receiver else None,
+        effective_uid=501 if macos_receiver else None,
+        effective_gid=20 if macos_receiver else None,
     )
+    if macos_receiver:
+        session_plan = batch_builder.enrich_macos_audit_session(
+            session_plan,
+            audit_uid=501,
+            authenticated_at=_START + timedelta(milliseconds=115),
+        )
     process_plan: ProcessMaterializationPlan | None = None
     if kind is DeferredSessionKind.SSH or include_responder_process:
         is_ssh = kind is DeferredSessionKind.SSH
         process_plan = batch_builder.plan_process(
             system="DB-01",
             parent_pid=0,
-            image=("/usr/sbin/sshd" if is_ssh else r"C:\Windows\System32\rdpclip.exe"),
-            command_line=("sshd: analyst@pts/0" if is_ssh else "rdpclip.exe"),
-            username="analyst",
-            integrity_level="Medium",
-            os_category=("linux" if is_ssh else "windows"),
+            image=(
+                "/usr/libexec/sshd-keygen-wrapper"
+                if macos_receiver
+                else "/usr/sbin/sshd"
+                if is_ssh
+                else r"C:\Windows\System32\rdpclip.exe"
+            ),
+            command_line=(
+                "/usr/libexec/sshd-keygen-wrapper"
+                if macos_receiver
+                else "sshd: analyst@pts/0"
+                if is_ssh
+                else "rdpclip.exe"
+            ),
+            username="root" if macos_receiver else "analyst",
+            integrity_level="System" if macos_receiver else "Medium",
+            os_category=("macos" if macos_receiver else "linux" if is_ssh else "windows"),
+            credentials=PosixProcessCredentials(0, 0, 0, 0) if macos_receiver else None,
             logon_id=session_plan.identity.logon_id,
             start_time=_START + timedelta(milliseconds=process_start_offset_ms),
             require_session=True,
@@ -482,7 +524,12 @@ def _fixture(
     process_activity = (
         ()
         if process_plan is None
-        else (ProcessActivityPatch(process_plan.identity, transaction.closed_at),)
+        else (
+            ProcessActivityPatch(
+                process_plan.identity,
+                batch.process_hold_activity_time(process_plan.identity, transaction.closed_at),
+            ),
+        )
     )
     session_activity = (
         ()

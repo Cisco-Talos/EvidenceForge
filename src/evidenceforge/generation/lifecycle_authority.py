@@ -4355,7 +4355,12 @@ class GeneratorLifecycleAuthority:
             if hold.subject.kind != "process":
                 raise StateError("Connection composite holds must target processes")
             process_patch = process_patches[hold.subject.object_id]
-            if process_patch.activity_time != hold.hold_until:
+            expected_activity = (
+                plan.batch.process_hold_activity_time(process_patch.identity, hold.hold_until)
+                if plan.batch is not None
+                else hold.hold_until
+            )
+            if process_patch.activity_time != expected_activity:
                 raise StateError("Connection process hold and State activity deadline disagree")
             logon_id = process_patch.identity.logon_id
             if not logon_id:

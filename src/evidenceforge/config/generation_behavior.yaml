@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 185
+current_revision: 186
 history_start_revision: 1
-behavior_surface_sha256: b990adae4da4f9e3ba3eaac5f7ef3f5d4fd418e59e92523aea8feadb4a5f0eee
+behavior_surface_sha256: b6656873377b2bbfd9412998797abf722d28f03070c88d4a7e5ba9c7e96a8364
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1831,3 +1831,12 @@ changes:
     formats:
       - ecar
     summary: Coordinates eleven ordered Mac receiver process transitions from compiled catalog facts with exact phase recovery; transport and receiver authoring remain gated.
+  - revision: 186
+    id: macos-ssh-startup-activity-retention
+    impact: localized
+    domains:
+      - process-lifecycle
+      - network-session-ownership
+    formats:
+      - ecar
+    summary: Separates authenticated staged Mac receiver startup activity from its transport lifetime hold while retaining exact lifecycle and SSH deadline agreement.

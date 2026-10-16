@@ -1128,6 +1128,34 @@ class MaterializationBatchPlan:
 
         return self._boot_times
 
+    def process_hold_activity_time(
+        self, identity: ProcessIdentity, hold_until: datetime
+    ) -> datetime:
+        """Separate a staged Mac receiver's bootstrap activity from future retention.
+
+        Only the authenticated Mac SSH session's privileged initial transport
+        process qualifies. Other processes retain the established close frontier.
+        The lifecycle hold still owns the complete transport interval.
+        """
+        session = self.session
+        if (
+            session is None
+            or session.identity.session_kind != "ssh"
+            or session._payload.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or not 0 <= self._session_process_links.transport < len(self.processes)
+            or self.processes[self._session_process_links.transport].identity != identity
+            or session.identity.hostname != identity.hostname
+            or session.identity.logon_id != identity.logon_id
+            or identity.audit_pid_version is None
+            or identity.execution_ordinal != 0
+            or identity.principal != "root"
+            or identity.credentials != PosixProcessCredentials(0, 0, 0, 0)
+            or identity.started_at > session.audit_origin.created_at
+        ):
+            return hold_until
+        return identity.started_at
+
     @property
     def publication_token(self) -> str:
         """Return the authenticated token bound to the complete batch."""
