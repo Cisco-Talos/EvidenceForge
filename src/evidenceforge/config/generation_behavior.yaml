@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 178
+current_revision: 179
 history_start_revision: 1
-behavior_surface_sha256: ccc0bfedccc8d9bec5c2bfb89b86e26ed2545313f7e4aa5c9bb1c36870a7e236
+behavior_surface_sha256: 319c0116c353ebb0af4625e2b5f573365a4d30217d8e29ecac842bdda6037e07
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1769,3 +1769,12 @@ changes:
     formats:
       - ecar
     summary: Projects authenticated Mac audit adoption and child privilege drops as distinct eCAR modifications with unchanged execution identity.
+  - revision: 179
+    id: macos-receiver-catalog-transition-boundaries
+    impact: localized
+    domains:
+      - application-catalog
+      - process-credential-identity
+    formats:
+      - ecar
+    summary: Catalogs four inactive Mac SSH receiver executables and rejects unrelated authentication contexts or invalid times on internal process transitions.

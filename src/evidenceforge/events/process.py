@@ -19,6 +19,11 @@ class _ProcessTransitionOccurrence(Protocol):
     lifecycle: object | None
 
 
+def _validate_transition_time(event: _ProcessTransitionOccurrence) -> None:
+    if type(event.timestamp) is not datetime or event.timestamp.utcoffset() is None:
+        raise ValueError("Process transition requires an aware canonical timestamp")
+
+
 def process_exec_identities(
     event: _ProcessTransitionOccurrence,
 ) -> tuple[ProcessIdentity, ProcessIdentity]:
@@ -27,6 +32,7 @@ def process_exec_identities(
     This structural check does not authorize mutation. The dispatcher must bind both
     snapshots to the exact authenticated State cohort before publication.
     """
+    _validate_transition_time(event)
     plan = event.identity_plan
     if (
         type(plan) is not EventIdentityPlan
@@ -111,6 +117,7 @@ def process_credential_identities(
     Exact authenticated State patches own authorization, session facts and integrity.
     This contract preserves lifetime, execution, threads and native PID version.
     """
+    _validate_transition_time(event)
     plan = event.identity_plan
     if (
         type(plan) is not EventIdentityPlan

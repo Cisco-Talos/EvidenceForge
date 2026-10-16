@@ -454,3 +454,24 @@ def test_ecar_exec_preserves_known_zero_ids_and_omits_unknown_audit_facts(tmp_pa
     assert "audit_uid" not in properties and "previous_audit_uid" not in properties
     assert "audit_session_id" not in properties and "previous_audit_session_id" not in properties
     emitter.close()
+
+
+@pytest.mark.parametrize("timestamp", [None, "2026-10-15", _START.replace(tzinfo=None)])
+def test_exec_invalid_time_is_a_contract_violation(timestamp: object) -> None:
+    state, dispatcher, _ = _environment()
+    _, _, event, batch = _prepare(state, dispatcher)
+    dispatcher.cancel_prepared_action_cohort_batch(batch)
+    event.timestamp = timestamp
+    seal = shadow_seal(event)
+    assert not seal.valid
+    assert any("aware canonical timestamp" in item.message for item in seal.violations)
+
+
+def test_exec_rejects_unowned_authentication_context() -> None:
+    from evidenceforge.events.contexts import AuthContext
+
+    state, dispatcher, _ = _environment()
+    _, _, event, batch = _prepare(state, dispatcher)
+    dispatcher.cancel_prepared_action_cohort_batch(batch)
+    event.auth = AuthContext(username="other", logon_id="unrelated")
+    assert not shadow_seal(event).valid

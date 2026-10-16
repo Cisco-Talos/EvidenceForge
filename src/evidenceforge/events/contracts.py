@@ -955,11 +955,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_EXEC: _contract(
         EventKind.PROCESS_EXEC,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
-        optional=_contexts(ContextKind.AUTH),
         forbidden=frozenset(ContextKind)
-        - _contexts(
-            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
-        ),
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -969,11 +966,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_AUDIT_BIND: _contract(
         EventKind.PROCESS_AUDIT_BIND,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
-        optional=_contexts(ContextKind.AUTH),
         forbidden=frozenset(ContextKind)
-        - _contexts(
-            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
-        ),
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,
@@ -983,11 +977,8 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
     EventKind.PROCESS_PRIVILEGE_DROP: _contract(
         EventKind.PROCESS_PRIVILEGE_DROP,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
-        optional=_contexts(ContextKind.AUTH),
         forbidden=frozenset(ContextKind)
-        - _contexts(
-            ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE, ContextKind.AUTH
-        ),
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
         src=HostSemantic.LOCAL_ACTOR,
         identity=IdentityRequirement.REQUIRED,
         lifecycle=LifecycleRole.DEPENDENT,

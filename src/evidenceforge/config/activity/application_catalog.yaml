@@ -2503,6 +2503,71 @@ applications:
     categories: [macos_transport]
     personas: []
     system_types: [workstation]
+  # Receiver vocabulary only; activation requires the owning SSH lifecycle.
+  - id: macos-sshd-keygen-wrapper
+    display_name: macOS SSH Startup Wrapper
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-keygen-wrapper
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/libexec/sshd-keygen-wrapper
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd
+    display_name: macOS OpenSSH Inetd Receiver
+    platforms:
+      macos:
+        image_path: /usr/sbin/sshd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/sbin/sshd -i
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd-session
+    display_name: macOS OpenSSH Session Process
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-session
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/libexec/sshd-session -i -R
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sshd-auth
+    display_name: macOS OpenSSH Authentication Helper
+    platforms:
+      macos:
+        image_path: /usr/libexec/sshd-auth
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/libexec/sshd-auth -i -R
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
   - id: macos-launchd
     display_name: launchd
     platforms:

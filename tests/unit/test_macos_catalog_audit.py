@@ -193,3 +193,50 @@ def test_globalprotect_mac_launch_preserves_stack_selection_and_excludes_unmodel
         app.platforms["windows"].image_path
         == r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe"
     )
+
+
+def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation() -> None:
+    import shlex
+
+    from evidenceforge.config.schemas import ApplicationEntry
+    from evidenceforge.generation.activity.application_catalog import application_descriptor
+    from evidenceforge.generation.deployment_compiler import _release_for_application_artifact
+
+    root = Path(__file__).resolve().parents[2]
+    audit = yaml.safe_load(
+        (root / "docs/design/macos-workstation-feasibility/native-catalog-audit.yaml").read_text()
+    )
+    entries = [row for row in audit["action_applications"] if row["id"] != "macos-ssh"]
+    assert {entry["id"] for entry in entries} == {
+        "macos-sshd-keygen-wrapper",
+        "macos-sshd",
+        "macos-sshd-session",
+        "macos-sshd-auth",
+    }
+    paths = set()
+    for entry in entries:
+        app = ApplicationEntry.model_validate(application_descriptor(entry["id"]))
+        assert set(app.platforms) == {"macos"}
+        assert not app.personas
+        assert app.categories == ["macos_transport"]
+        platform = app.platforms["macos"]
+        assert platform.image_path == entry["image_path"]
+        assert tuple(platform.deployment.architectures) == ("arm64",)
+        assert platform.deployment.release_policy == "host_build"
+        assert shlex.split(platform.command_templates[0])[0] == platform.image_path
+        release = _release_for_application_artifact(
+            app, "macos", platform, platform.image_path, None, "arm64", "26.0"
+        )
+        assert release.key.product_id == "apple-macos"
+        assert release.code_signature is None
+        assert entry["behavior"] == "catalog_only"
+        assert entry["references"] and all(
+            url.startswith("https://github.com/apple-oss-distributions/")
+            for url in entry["references"]
+        )
+        paths.add(platform.image_path)
+    assert len(paths) == 4
+    assert not get_apps_for_persona("default", "macos", category="macos_transport")
+    assert application_descriptor("macos-sshd")["platforms"]["macos"]["command_templates"] == [
+        "/usr/sbin/sshd -i"
+    ]

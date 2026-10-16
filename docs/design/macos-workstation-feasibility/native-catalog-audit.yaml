@@ -10,6 +10,50 @@ action_applications:
   - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/openssh.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/base.xcconfig
   boundary: Apple build definitions install the ssh target in /usr/bin. Host-build deployment follows the modeled OS; no exact OpenSSH version, signing identity or native collector fidelity is inferred. Only the shared SSH bundle activates this entry.
+- id: macos-sshd-keygen-wrapper
+  image_path: /usr/libexec/sshd-keygen-wrapper
+  availability: supported
+  behavior: catalog_only
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+- id: macos-sshd
+  image_path: /usr/sbin/sshd
+  availability: supported
+  behavior: catalog_only
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+- id: macos-sshd-session
+  image_path: /usr/libexec/sshd-session
+  availability: supported
+  behavior: catalog_only
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+- id: macos-sshd-auth
+  image_path: /usr/libexec/sshd-auth
+  availability: supported
+  behavior: catalog_only
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
 applications:
 - id: macos-dock
   image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock

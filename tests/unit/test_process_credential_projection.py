@@ -456,3 +456,24 @@ def test_fork_after_credential_transition_keeps_child_create_and_dependents_orde
             lifecycle=replace(created.lifecycle, phase="dependent"),
         )
         assert planner.admission_time(planner.plan_event(file, "ecar"), "ecar") > child_time
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("timestamp", [None, "2026-10-15", _START.replace(tzinfo=None)])
+def test_credential_invalid_time_is_a_contract_violation(kind: Kind, timestamp: object) -> None:
+    state, _, _, before = _environment(kind)
+    _, event, _ = _plan(state, before, kind)
+    event.timestamp = timestamp
+    seal = shadow_seal(event)
+    assert not seal.valid
+    assert any("aware canonical timestamp" in item.message for item in seal.violations)
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_credential_rejects_unowned_authentication_context(kind: Kind) -> None:
+    from evidenceforge.events.contexts import AuthContext
+
+    state, _, _, before = _environment(kind)
+    _, event, _ = _plan(state, before, kind)
+    event.auth = AuthContext(username="other", logon_id="unrelated")
+    assert not shadow_seal(event).valid
