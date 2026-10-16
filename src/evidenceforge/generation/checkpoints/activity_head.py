@@ -908,6 +908,12 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 "activity checkpoint _pending_ssh_session_closures contains a foreign continuation"
             )
         prepared = continuation.prepared
+        try:
+            prepared.require_startup_checkpoint_ready()
+        except StateError as error:
+            raise CheckpointError(
+                "SSH checkpoint barrier retains unfinished receiver startup"
+            ) from error
         progress = prepared._progress
         descendants = prepared._receiver_descendants
         retirement = prepared._application_retirement
@@ -927,6 +933,10 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
             raise CheckpointError(
                 "SSH checkpoint barrier retains a partially published lifecycle continuation"
             )
+        try:
+            prepared.verify_completed_receiver_startup(generator.state_manager)
+        except StateError as error:
+            raise CheckpointError("SSH checkpoint lost completed receiver startup") from error
         plan = continuation.plan
         rows.append(
             [
@@ -1421,6 +1431,7 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             application_registry_owner=generator._application_channel_registry,
         )
         try:
+            prepared.verify_completed_receiver_startup(generator.state_manager)
             continuation = prepared.bind(transaction)
         except (StateError, TypeError, ValueError) as error:
             raise CheckpointCorruptionError(

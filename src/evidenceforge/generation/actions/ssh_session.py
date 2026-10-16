@@ -128,6 +128,10 @@ from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 if TYPE_CHECKING:
+    from evidenceforge.generation.actions.macos_ssh_receiver import (
+        MacosSshReceiverStartup,
+        MacosSshReceiverStartupRequest,
+    )
     from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 
 logger = logging.getLogger(__name__)
@@ -1722,6 +1726,12 @@ class _SshCloseContinuationBinding:
                 raise StateError("Prepared exact SSH close changed its bound transaction")
             return self._continuation
 
+    def require_bound(self, transaction: NetworkTransactionPlan) -> None:
+        """Require an already-bound committed transport before receiver startup."""
+        with self._lock:
+            if self._transaction is not transaction or self._continuation is None:
+                raise StateError("Mac SSH startup requires its bound committed transport")
+
     def authenticates(self, continuation: _SshCloseContinuation) -> bool:
         """Return whether a carrier is the sole object produced by this binding."""
 
@@ -2133,6 +2143,163 @@ class _SshApplicationRetirementBinding:
             self._retired = False
 
 
+class _SshReceiverStartupBinding:
+    """Retain one Mac startup coordinator on its existing terminal owner."""
+
+    __slots__ = ("_lock", "_prepared", "_coordinator", "_restored_complete")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._prepared: _PreparedSshCloseContinuation | None = None
+        self._coordinator: MacosSshReceiverStartup | None = None
+        self._restored_complete = False
+
+    def claim(self, prepared: _PreparedSshCloseContinuation) -> None:
+        from evidenceforge.generation.actions.macos_ssh_receiver import (
+            MacosSshReceiverStartupRequest,
+        )
+
+        request = prepared.startup_request
+        if request is not None:
+            plan = prepared.plan
+            if (
+                type(request) is not MacosSshReceiverStartupRequest
+                or type(plan.auth_state) is not _SshMacAuthState
+                or request.receiver.hostname != plan.target_host.hostname
+                or request.receiver.pid != plan.auth_state.receiver.responder_pid
+                or request.receiver.logon_id != plan.logon_id
+                or request.receiver.started_at != plan.receiver_started_at
+                or request.receiver.image != plan.initial_receiver_image
+                or request.wrapper.image_path != plan.initial_receiver_image
+                or request.session_worker.image_path != plan.receiver_image
+                or request.phase_times[6] != plan.auth_state.receiver.authenticated_at
+                or request.phase_times[-1] > plan.auth_state.receiver.ready_at
+            ):
+                raise StateError("Mac SSH retained startup crossed its exact close facts")
+            request.__post_init__()
+        with self._lock:
+            if self._prepared is not None and self._prepared is not prepared:
+                raise StateError("Mac SSH retained startup copied its one-shot owner")
+            self._prepared = prepared
+
+    def drain(self, prepared: _PreparedSshCloseContinuation, executor: SshSessionExecutor) -> None:
+        from evidenceforge.generation.actions.macos_ssh_receiver import MacosSshReceiverStartup
+
+        prepared.require_projection_owner(executor)
+        with self._lock:
+            if self._prepared is not prepared:
+                raise StateError("Mac SSH startup crossed its retained owner")
+            request = prepared.startup_request
+            if request is None:
+                self._verify_completed_state(prepared, executor.state_manager)
+                return
+            prepared._binding.require_bound(prepared.identity_capture.require())
+            # Construction requires the committed live receiver. Keep the exact
+            # coordinator after failures, including committed source failures.
+            if self._coordinator is None:
+                self._coordinator = MacosSshReceiverStartup(
+                    request,
+                    state=executor.state_manager,
+                    dispatcher=executor.dispatcher,
+                    host=prepared.plan.target_host.materialize(),
+                )
+            while self._coordinator.result is None:
+                self._coordinator.advance()
+
+    def verify_completed_state(
+        self, prepared: _PreparedSshCloseContinuation, state: StateManager
+    ) -> None:
+        """Authenticate a restored Mac graph instead of inferring a startup marker."""
+        with self._lock:
+            self._verify_completed_state(prepared, state)
+
+    def _verify_completed_state(
+        self, prepared: _PreparedSshCloseContinuation, state: StateManager
+    ) -> None:
+        if self._prepared is not prepared:
+            raise StateError("Mac SSH startup completion crossed its owner")
+        if type(prepared.plan.auth_state) is not _SshMacAuthState or self._restored_complete:
+            return
+        if self._coordinator is not None and self._coordinator.result is not None:
+            return
+        plan = prepared.plan
+        session = state.get_session(plan.logon_id)
+        if (
+            session is None
+            or state.get_session_identity(plan.logon_id) != plan.session_identity()
+            or session.auth_protocol != "ssh"
+            or session.audit_origin is None
+            or session.transport_pid != plan.auth_state.receiver.responder_pid
+            or session.source_ready_time != plan.auth_state.receiver.ready_at
+            or session.network_close_time != plan.close_time
+            or not session.session_shell_pid
+            or state._pid_os.get(plan.target_system.hostname) != "macos"
+        ):
+            raise StateError("Restored Mac SSH startup lost its authenticated session roles")
+        root = state.get_process_identity(session.system, session.transport_pid)
+        shell = state.get_process_identity(session.system, session.session_shell_pid)
+        parent = (
+            state.get_process_identity(session.system, shell.parent_pid)
+            if shell is not None
+            else None
+        )
+        shell_state = state.get_process(session.system, session.session_shell_pid)
+        if (
+            root is None
+            or shell is None
+            or parent is None
+            or shell_state is None
+            or root.image != plan.receiver_image
+            or root.initial_image != plan.initial_receiver_image
+            or root.execution_ordinal != 2
+            or root.started_at != plan.receiver_started_at
+            or root.credentials is None
+            or root.credentials.effective_uid != 0
+            or root.principal != "root"
+            or parent.parent_pid != root.pid
+            or parent.image != plan.receiver_image
+            or shell.initial_image != plan.receiver_image
+        ):
+            raise StateError("Restored Mac SSH startup lost its receiver execution graph")
+        for identity in (root, parent, shell):
+            if (
+                identity.hostname != session.system
+                or identity.logon_id != plan.logon_id
+                or identity.credentials is None
+                or identity.credentials.audit_uid != session.audit_origin.audit_uid
+                or identity.credentials.audit_session_id != session.audit_origin.audit_session_id
+            ):
+                raise StateError("Restored Mac SSH startup lost its process audit ownership")
+        first_shell_exec = next(
+            (
+                identity
+                for identity in (*shell_state.prior_executions, shell)
+                if identity.execution_ordinal == 1
+            ),
+            None,
+        )
+        if (
+            first_shell_exec is None
+            or first_shell_exec.principal != plan.username
+            or first_shell_exec.credentials is None
+            or first_shell_exec.credentials.effective_uid != session.effective_uid
+            or first_shell_exec.credentials.effective_gid != session.effective_gid
+            or first_shell_exec.execution_started_at > plan.auth_state.receiver.ready_at
+            or first_shell_exec.execution_started_at < session.audit_origin.created_at
+        ):
+            raise StateError("Restored Mac SSH startup lacks its authenticated initial shell exec")
+        self._restored_complete = True
+
+    def require_checkpoint_ready(self, prepared: _PreparedSshCloseContinuation) -> None:
+        with self._lock:
+            if self._prepared is not prepared:
+                raise StateError("Mac SSH startup checkpoint crossed its owner")
+            if prepared.startup_request is not None and (
+                self._coordinator is None or self._coordinator.result is None
+            ):
+                raise StateError("Mac SSH startup must finish publication before checkpoint")
+
+
 @dataclass(frozen=True, slots=True)
 class _PreparedSshCloseContinuation:
     """Scalar-only close payload plus its exact precommit transaction capture."""
@@ -2144,6 +2311,16 @@ class _PreparedSshCloseContinuation:
     zeek_owner: object = field(compare=False, repr=False)
     ssh_manager_owner: SshApplicationChannelManager = field(compare=False, repr=False)
     application_registry_owner: ApplicationChannelRegistry = field(compare=False, repr=False)
+    startup_request: MacosSshReceiverStartupRequest | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
+    _startup: _SshReceiverStartupBinding = field(
+        default_factory=_SshReceiverStartupBinding,
+        compare=False,
+        repr=False,
+    )
     _binding: _SshCloseContinuationBinding = field(
         default_factory=_SshCloseContinuationBinding,
         compare=False,
@@ -2175,6 +2352,20 @@ class _PreparedSshCloseContinuation:
         self.require_projection_owner_shape()
         self._binding.claim(self)
         self._application_retirement.claim(self)
+        self._startup.claim(self)
+
+    def drain_receiver_startup(self, executor: SshSessionExecutor) -> None:
+        """Finish retained process startup before dependent work or terminal execution."""
+        if type(self.plan.auth_state) is _SshMacAuthState:
+            self._startup.drain(self, executor)
+
+    def require_startup_checkpoint_ready(self) -> None:
+        """Reject checkpoint serialization while live startup capabilities remain."""
+        self._startup.require_checkpoint_ready(self)
+
+    def verify_completed_receiver_startup(self, state: StateManager) -> None:
+        """Validate canonical Mac roles when no live startup coordinator is retained."""
+        self._startup.verify_completed_state(self, state)
 
     def require_application_owner_shape(self) -> None:
         """Require the exact built-in manager and its original shared registry."""
@@ -2199,11 +2390,14 @@ class _PreparedSshCloseContinuation:
             and type(self.ecar_owner) is EcarEmitter
             and getattr(self.ecar_owner, "supports_exact_projection_publication", None) is True
         )
-        no_ecar_warmup_is_exact = bool(
+        no_ecar_owner_is_exact = bool(
             type(emitters) is dict
             and "ecar" not in emitters
             and self.ecar_owner is None
-            and self._all_projection_times_are_warmup_suppressed()
+            and (
+                type(self.plan.auth_state) is _SshMacAuthState
+                or self._all_projection_times_are_warmup_suppressed()
+            )
         )
         zeek_owner_is_exact = bool(
             type(emitters) is dict
@@ -2217,7 +2411,7 @@ class _PreparedSshCloseContinuation:
         if (
             type(self.dispatcher_owner) is not EventDispatcher
             or type(emitters) is not dict
-            or not (ecar_owner_is_exact or no_ecar_warmup_is_exact)
+            or not (ecar_owner_is_exact or no_ecar_owner_is_exact)
             or not (zeek_owner_is_exact or no_zeek_is_exact)
         ):
             raise StateError("Exact SSH close requires its original eCAR/Zeek projection owners")
@@ -2979,6 +3173,7 @@ class SshSessionActionBundle:
                     # publication and source teardown are consequences of an
                     # already-durable terminal continuation.
                     self.executor._defer_ssh_session_close(continuation)
+                    continuation.prepared.drain_receiver_startup(self.executor)
                 self._remember_deferred_open_tuple(state, prepared)
                 if self.request.emit_session_close:
                     close_bundle = (

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 191
+current_revision: 192
 history_start_revision: 1
-behavior_surface_sha256: bf7e501d7b909661c738c430d992315dfcd3c1031b48861db02d13f6d87dc38d
+behavior_surface_sha256: fb35de22b33b9aaaef57e6a7a9278c8b0137d91f5d2e3824435594ffbfa10b55
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1889,3 +1889,14 @@ changes:
       - ecar
       - syslog
     summary: Executes Mac receiver child/root teardown and canonical logout through the retained SSH close owner, preserving current execution identity, application retirement, checkpoint barriers and source recovery without Linux observations.
+  - revision: 192
+    id: retained-macos-ssh-startup-owner
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - checkpoint-runtime
+      - source-projection
+    formats:
+      - ecar
+    summary: Retains Mac receiver startup on the exact SSH continuation through source failures, drains it before close or checkpoint, verifies restored canonical roles, and preserves canonical behavior with an originally absent endpoint sink.

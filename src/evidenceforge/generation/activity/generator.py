@@ -5568,6 +5568,7 @@ class ActivityGenerator:
         """Execute one authenticated terminal continuation outside owner locks."""
 
         continuation = self._installed_exact_ssh_close_continuation(continuation)
+        continuation.prepared.drain_receiver_startup(self)
         state = continuation.materialize_state()
         bundle = continuation.materialize_bundle(self)
         bundle._terminate_source_ssh_client_process(
@@ -5624,6 +5625,7 @@ class ActivityGenerator:
             )
         for item in pending:
             if type(item) is _SshCloseContinuation:
+                item.prepared.drain_receiver_startup(self)
                 if item.close_time > window_end:
                     continue
                 self._finalize_exact_ssh_close_continuation(item)

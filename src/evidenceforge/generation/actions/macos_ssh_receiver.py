@@ -117,7 +117,7 @@ class MacosSshReceiverStartup:
     """Publish ordered canonical phases, retaining the current exact sink recovery.
 
     The enclosing owner must retain this object until completion and cannot checkpoint
-    an unfinished startup. Durable startup-journal integration is a separate boundary.
+    an unfinished startup. The SSH continuation supplies retained ownership and rejects unfinished startup at its checkpoint barrier.
     Each call advances one phase; failed source publication must finish before another
     phase can create State or expose a ready shell.
     """
