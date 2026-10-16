@@ -94,6 +94,8 @@ def canonical_native_path(path: str, platform: Platform) -> str:
     """Return an exact platform-native lookup key for a path.
 
     Windows paths are slash- and case-insensitive. POSIX paths retain case.
+    Mac paths preserve literal backslashes; Linux retains its legacy separator
+    normalization for compatibility with existing authored inputs.
     This helper canonicalizes path spelling only; it never accesses the host
     filesystem and therefore cannot resolve symlinks or materialize content.
     """
@@ -101,6 +103,8 @@ def canonical_native_path(path: str, platform: Platform) -> str:
     normalized = _text(path, "path")
     if platform == "windows":
         return ntpath.normpath(normalized.replace("/", "\\")).casefold()
+    if platform == "macos":
+        return posixpath.normpath(normalized)
     return posixpath.normpath(normalized.replace("\\", "/"))
 
 
@@ -224,7 +228,7 @@ class BinaryReleaseKey:
             "artifact_name",
             casefold=platform == "windows",
         )
-        if "/" in artifact_name or "\\" in artifact_name:
+        if "/" in artifact_name or (platform != "macos" and "\\" in artifact_name):
             raise ValueError("artifact_name must not contain an installation path")
 
         object.__setattr__(self, "product_id", _text(self.product_id, "product_id", casefold=True))
@@ -985,7 +989,7 @@ class LocalArtifactBinaryIdentity:
             "artifact_name",
             casefold=platform == "windows",
         )
-        if "/" in artifact_name or "\\" in artifact_name:
+        if "/" in artifact_name or (platform != "macos" and "\\" in artifact_name):
             raise ValueError("artifact_name must not contain an installation path")
         object.__setattr__(
             self,

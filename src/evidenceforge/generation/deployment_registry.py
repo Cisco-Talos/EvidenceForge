@@ -297,10 +297,14 @@ def _artifact_name(path: str, platform: Platform) -> str:
     return posixpath.basename(path)
 
 
-def _has_posix_path_backslash(path: str, platform: Platform) -> bool:
-    """Return whether POSIX would treat a retained backslash as literal path data."""
+def _has_unsupported_path_backslash(path: str, platform: Platform) -> bool:
+    """Reject ambiguous paths under the legacy Linux separator contract.
 
-    return platform != "windows" and "\\" in path
+    Mac identity preserves literal backslashes end to end. Linux retains its
+    existing admission guard until its legacy normalization can be migrated.
+    """
+
+    return platform == "linux" and "\\" in path
 
 
 def _canonical_software_installation(
@@ -1784,7 +1788,7 @@ def _command_executable_matches(
 ) -> bool:
     """Return whether an actual command executable denotes the declared image."""
 
-    if platform != "windows" and "\\" in command_executable:
+    if _has_unsupported_path_backslash(command_executable, platform):
         return False
     command_drive, _command_tail = (
         ntpath.splitdrive(command_executable) if platform == "windows" else ("", "")
@@ -2015,7 +2019,7 @@ class CompiledApplicationDescriptor:
             casefold=True,
         )
         image_path = _normalize_name(self.image_path, "image_path")
-        if platform != "windows" and "\\" in image_path:
+        if _has_unsupported_path_backslash(image_path, platform):
             raise ValueError("compiled POSIX application image_path cannot contain backslashes")
         image_placeholders = {
             match.group(1) for match in _APPLICATION_COMMAND_PLACEHOLDER.finditer(image_path)
@@ -2850,7 +2854,7 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
     )
     if any(type(value) is not str for value in (*artifact_text, *content_text)):
         raise StateError("local artifact publication record contains malformed text")
-    if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+    if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
         raise StateError("POSIX local artifact native_path cannot contain backslashes")
     if (
         type(artifact.version) is not int
@@ -3682,7 +3686,9 @@ class _PackedArtifactStore:
     def _execution_path_key(self, handle: int) -> str:
         platform = _ARTIFACT_PLATFORMS[self._platforms[handle]]
         native_path = self._field(handle, self._FIELD_NATIVE_PATH)
-        if _has_posix_path_backslash(native_path, platform):  # pragma: no cover - admission guard
+        if _has_unsupported_path_backslash(
+            native_path, platform
+        ):  # pragma: no cover - admission guard
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         return "\0".join(
             (
@@ -3859,7 +3865,7 @@ class _PackedArtifactStore:
     ) -> None:
         """Publish one reserved handle with rollback-safe index installation."""
 
-        if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+        if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         artifact_digest = _semantic_artifact_digest(artifact.artifact_id, "artifact-")
         version_digest = _semantic_artifact_digest(
@@ -5528,8 +5534,9 @@ class DeploymentContentRegistry:
     ) -> None:
         for source in installations:
             installation = _canonical_software_installation(source)
-            if installation.platform != "windows" and any(
-                "\\" in image_path for image_path in installation.image_paths
+            if any(
+                _has_unsupported_path_backslash(image_path, installation.platform)
+                for image_path in installation.image_paths
             ):
                 raise ValueError(
                     "compiled POSIX application installation image_paths cannot contain backslashes"
@@ -6047,7 +6054,7 @@ class DeploymentContentRegistry:
                 artifact = _canonical_local_artifact_identity(source)
             except StateError as exc:
                 raise ValueError(str(exc)) from None
-            if _has_posix_path_backslash(artifact.native_path, artifact.platform):
+            if _has_unsupported_path_backslash(artifact.native_path, artifact.platform):
                 raise ValueError("POSIX local artifact native_path cannot contain backslashes")
             application_profile = self.application_profile_by_id(artifact.application_profile_id)
             user_profile = self.user_profile_by_id(artifact.user_profile_id)
@@ -6604,7 +6611,7 @@ class DeploymentContentRegistry:
         principal: str,
     ) -> tuple[int, int] | None:
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(image_path, normalized_platform):
+        if _has_unsupported_path_backslash(image_path, normalized_platform):
             return None
         host = _normalize_hostname(hostname)
         user = _normalize_principal(principal, normalized_platform)
@@ -7642,7 +7649,7 @@ class DeploymentContentRegistry:
         """Return one exact application/profile/path/version artifact binding."""
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         path_key = (
             normalized_platform,
@@ -9749,7 +9756,9 @@ class LocalArtifactVersionRegistry:
         """Publish or refresh one immutable artifact version and return its handle."""
 
         canonical_artifact = _canonical_local_artifact_identity(artifact)
-        if _has_posix_path_backslash(canonical_artifact.native_path, canonical_artifact.platform):
+        if _has_unsupported_path_backslash(
+            canonical_artifact.native_path, canonical_artifact.platform
+        ):
             raise StateError("POSIX local artifact native_path cannot contain backslashes")
         event_time = ensure_utc(observed_at)
         effective_retention = retention or self._retention
@@ -10111,7 +10120,7 @@ class LocalArtifactVersionRegistry:
         """Return one exact retained profile/path/version binding."""
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         normalized_path = canonical_native_path(native_path, normalized_platform)
         user_profile = user_profile_id.strip()
@@ -10148,7 +10157,7 @@ class LocalArtifactVersionRegistry:
         """
 
         normalized_platform = _normalize_platform(platform)
-        if _has_posix_path_backslash(native_path, normalized_platform):
+        if _has_unsupported_path_backslash(native_path, normalized_platform):
             return None
         key = "\0".join(
             (

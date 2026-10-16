@@ -385,6 +385,8 @@ def _artifact_name(path: str, platform: Platform) -> str:
 
     if platform == "windows":
         return ntpath.basename(path.replace("/", "\\"))
+    if platform == "macos":
+        return posixpath.basename(path)
     return posixpath.basename(path.replace("\\", "/"))
 
 

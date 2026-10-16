@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 172
+current_revision: 173
 history_start_revision: 1
-behavior_surface_sha256: 1da6e153bb1bd3f353be5a112d46479d04ae65cf7f05722c843a6e7e0170a3c0
+behavior_surface_sha256: 37a22f9f0475f3843933d644cba338a8c94f4c50d5b1e1c36f8625f538387b74
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1715,3 +1715,12 @@ changes:
       - checkpoint-state
     formats: [ecar]
     summary: Adds explicit arm64 Mach-O build UUID metadata with durable deployment and request identity, preserving absent metadata and legacy rows. Adds a vendor-referenced Mac GlobalProtect GUI launch without inferring VPN or helper behavior.
+  - revision: 173
+    id: macos-literal-path-content-identity
+    impact: localized
+    domains:
+      - binary-content-identity
+      - deployment-path-identity
+      - runtime-file-identity
+    formats: [ecar]
+    summary: Preserves literal backslashes in Mac content paths, executable names, compiled commands and durable artifact lookup. Retains Windows/Linux admission; does not infer APFS aliases or case policy.
