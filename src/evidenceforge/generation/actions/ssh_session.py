@@ -5955,9 +5955,9 @@ class SshSessionActionBundle:
             or receiver_snapshot.identity.pid != receiver_identity.pid
             or receiver_snapshot.identity.image != receiver_identity.image
             or receiver_snapshot.identity.started_at != receiver_identity.started_at
-            or receiver_snapshot.token.logon_id != plan.logon_id
-            or receiver_snapshot.token.session_id != plan.session_id
-            or receiver_snapshot.token.logon_type != 10
+            or receiver_snapshot.current_view.token.logon_id != plan.logon_id
+            or receiver_snapshot.current_view.token.session_id != plan.session_id
+            or receiver_snapshot.current_view.token.logon_type != 10
             or receiver_snapshot.membership.owner_kind != "session"
             or receiver_snapshot.membership.owner_object_id != plan.session_object_id
             or receiver_snapshot.membership.session_object_id != plan.session_object_id
@@ -6005,7 +6005,7 @@ class SshSessionActionBundle:
 
         for snapshot in snapshots.values():
             if (
-                snapshot.token.logon_id != plan.logon_id
+                snapshot.current_view.token.logon_id != plan.logon_id
                 or snapshot.membership.owner_kind != "session"
                 or snapshot.membership.owner_object_id != plan.session_object_id
                 or snapshot.membership.session_object_id != plan.session_object_id
@@ -6078,14 +6078,17 @@ class SshSessionActionBundle:
                 or identity.object_id != snapshot.identity.object_id
                 or identity.hostname != snapshot.identity.hostname
                 or identity.pid != snapshot.identity.pid
-                or identity.image != snapshot.identity.image
+                or identity.initial_image != snapshot.identity.image
+                or identity.image != snapshot.current_view.image
+                or identity.execution_ordinal != snapshot.current_view.execution_ordinal
+                or identity.execution_started_at > snapshot.current_view.changed_at
                 or identity.started_at != snapshot.identity.started_at
-                or identity.principal != snapshot.token.principal
+                or identity.principal != snapshot.current_view.token.principal
                 or identity.logon_id != plan.logon_id
                 or running.logon_id != plan.logon_id
-                or running.token_logon_id != snapshot.token.logon_id
-                or running.auth_session_id != snapshot.token.session_id
-                or running.auth_logon_type != snapshot.token.logon_type
+                or running.token_logon_id != snapshot.current_view.token.logon_id
+                or running.auth_session_id != snapshot.current_view.token.session_id
+                or running.auth_logon_type != snapshot.current_view.token.logon_type
             ):
                 raise StateError(
                     "Exact SSH lifecycle descendant disagrees with live State identity: "
@@ -6293,7 +6296,7 @@ class SshSessionActionBundle:
                 snapshot.identity.pid,
             )
             if (
-                snapshot.token.logon_id != state.logon_id
+                snapshot.current_view.token.logon_id != state.logon_id
                 or snapshot.membership.owner_kind != "session"
                 or snapshot.membership.owner_object_id != session_identity.object_id
                 or snapshot.membership.session_object_id != session_identity.object_id
@@ -6301,7 +6304,10 @@ class SshSessionActionBundle:
                 or identity.object_id != snapshot.identity.object_id
                 or identity.hostname != snapshot.identity.hostname
                 or identity.pid != snapshot.identity.pid
-                or identity.image != snapshot.identity.image
+                or identity.initial_image != snapshot.identity.image
+                or identity.image != snapshot.current_view.image
+                or identity.execution_ordinal != snapshot.current_view.execution_ordinal
+                or identity.execution_started_at > snapshot.current_view.changed_at
                 or identity.started_at != snapshot.identity.started_at
                 or identity.logon_id != state.logon_id
                 or running is None

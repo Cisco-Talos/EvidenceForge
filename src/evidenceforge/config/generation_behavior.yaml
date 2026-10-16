@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 187
+current_revision: 188
 history_start_revision: 1
-behavior_surface_sha256: 9c77523da7de4f9d28951aa8d1867d8f2a33a54bc4dfd8f3df5316b7ea7cdb4e
+behavior_surface_sha256: 380cadabff4306db899bf67e84c2c005d9daab65857db5ef31b93eda141a67a3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1849,3 +1849,12 @@ changes:
     formats:
       - ecar
     summary: Atomically binds the authenticated Mac login-shell execution to its existing session role with exact publication recovery and checkpoint preservation.
+  - revision: 188
+    id: ssh-descendant-current-execution-teardown
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+    formats:
+      - ecar
+    summary: Validates SSH descendant teardown against current executable and token facts while preserving immutable lifetime ownership and rejecting unpublished execution drift.
