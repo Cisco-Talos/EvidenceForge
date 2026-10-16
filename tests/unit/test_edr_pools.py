@@ -1422,3 +1422,47 @@ class TestOverlayValidation:
         sanitized = _sanitize_edr_pools(defaults, merged)
 
         assert sanitized["group_policy_extension_guids"] == defaults["group_policy_extension_guids"]
+
+
+@pytest.mark.parametrize(
+    "image,command",
+    [
+        ("/Applications/Firefox.app/Contents/MacOS/firefox", "firefox"),
+        ("/bin/bash", "/bin/bash -l"),
+        ("/bin/sh", "/bin/sh -c id"),
+        ("/usr/bin/python3", "python3 -V"),
+    ],
+)
+def test_mac_launch_does_not_inherit_linux_ambient_files(image: str, command: str) -> None:
+    rng = random.Random(7)
+    before = rng.getstate()
+    assert select_file_side_effect(image, command, "macos", rng, user="alex") is None
+    assert rng.getstate() == before
+    assert get_file_paths("macos") == []
+
+
+def test_mac_explicit_command_effect_stays_owned_by_its_operand() -> None:
+    assert select_file_side_effect(
+        "/usr/bin/gzip",
+        "gzip -9 /Users/alex/Documents/report.txt",
+        "macos",
+        random.Random(7),
+        user="alex",
+    ) == ("create", "/Users/alex/Documents/report.txt.gz")
+    assert select_file_side_effect(
+        "/usr/bin/tar",
+        "tar -cf /Users/alex/Documents/archive.tar /Users/alex/Documents/source",
+        "macos",
+        random.Random(7),
+        user="alex",
+    ) == ("create", "/Users/alex/Documents/archive.tar")
+
+
+def test_linux_firefox_retains_its_native_profile_after_mac_isolation() -> None:
+    effect = select_file_side_effect(
+        "/usr/bin/firefox", "firefox", "linux", random.Random(7), user="alex"
+    )
+    assert effect is not None
+    assert effect[1].startswith("/home/alex/.cache/mozilla/")
+    assert get_file_paths("linux")
+    assert get_file_paths("windows")

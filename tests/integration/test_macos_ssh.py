@@ -112,13 +112,17 @@ def test_mac_ssh_client_process_history_transport_and_close(
 
 
 @pytest.mark.slow
-def test_mac_ssh_fresh_process_and_endpoint_filtering(tmp_path: Path, scenarios_dir: Path) -> None:
+@pytest.mark.parametrize("external_source", [False, True])
+def test_mac_ssh_fresh_process_and_endpoint_filtering(
+    tmp_path: Path, scenarios_dir: Path, external_source: bool
+) -> None:
     import yaml
 
     scenario_path = tmp_path / "ssh.yaml"
-    scenario_path.write_text(
-        yaml.safe_dump(macos_ssh_scenario(scenarios_dir).model_dump(mode="json"))
-    )
+    data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json")
+    if external_source:
+        data["storyline"][1]["events"][0]["source_ip"] = "198.51.100.41"
+    scenario_path.write_text(yaml.safe_dump(data))
     snapshots: list[dict[str, bytes]] = []
     for label, hash_seed, formats in [
         ("first", "7", ""),
@@ -158,8 +162,9 @@ def test_mac_ssh_fresh_process_and_endpoint_filtering(tmp_path: Path, scenarios_
     assert {name: body for name, body in first.items() if name.endswith("/ecar.json")} == {
         name: body for name, body in filtered.items() if name.endswith("/ecar.json")
     }
-    assert any(
-        b"/usr/bin/ssh test_user@SSH-TEST" in body
-        for name, body in first.items()
-        if name.endswith(".zsh_history")
-    )
+    if not external_source:
+        assert any(
+            b"/usr/bin/ssh test_user@SSH-TEST" in body
+            for name, body in first.items()
+            if name.endswith(".zsh_history")
+        )

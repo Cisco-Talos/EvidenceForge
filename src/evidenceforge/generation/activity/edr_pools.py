@@ -314,6 +314,10 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
 
 def get_file_paths(os_category: str) -> list[str]:
     """Return file path pool for the given OS category."""
+    if os_category == "macos":
+        # The existing ambient pool describes Windows/Linux storage. Mac file
+        # effects currently come from canonical commands, downloads and SMB.
+        return []
     pools = load_edr_pools()
     key = "file_paths_windows" if os_category == "windows" else "file_paths_linux"
     return pools.get(key, [])
@@ -1076,6 +1080,10 @@ def select_file_side_effect(
     semantic_effect = _select_command_semantic_file_effect(exe, command_line)
     if semantic_effect is not None:
         return semantic_effect
+    if os_category == "macos":
+        # Matching an executable shared with Linux does not establish a native
+        # cache/history path or persistence policy on macOS.
+        return None
 
     profiles = load_edr_pools().get("file_side_effect_profiles", [])
     for profile in profiles:

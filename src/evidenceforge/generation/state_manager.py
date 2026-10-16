@@ -2160,6 +2160,8 @@ class ActionCohortProcessExecution:
 
     target: ProcessIdentity
     after: ProcessIdentity
+    retired_threads: tuple[ThreadIdentity, ...]
+    thread_counter: tuple[str, int] | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
 
 
@@ -2379,6 +2381,16 @@ class _PreparedActionCohortProcessStart:
 
 
 @dataclass(frozen=True, slots=True)
+class _PreparedActionCohortExecThreads:
+    """Mac exec thread rows and retention deadline prepared before mutation."""
+
+    execution: ActionCohortProcessExecution
+    retired: tuple[RunningThread, ...]
+    replacement: RunningThread
+    deadline: float
+
+
+@dataclass(frozen=True, slots=True)
 class _PreparedActionCohortProcessTermination:
     """Exact primitive process-close projection built before claim publication."""
 
@@ -2550,6 +2562,7 @@ class _PreparedActionCohortCommitPlan:
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     process_activity: tuple[ActionCohortProcessActivityPatch, ...]
     process_executions: tuple[ActionCohortProcessExecution, ...]
+    exec_threads: tuple[_PreparedActionCohortExecThreads, ...]
     session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     expected_started_sessions: tuple[SessionIdentity, ...]
     expected_started_processes: tuple[ProcessIdentity, ...]
@@ -3112,8 +3125,49 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             self._manager._pid_os.get(normalized.hostname, "unknown"),
             previous=self._macos_audit_pid_versions.get(normalized.hostname),
         )
+        retired_threads: tuple[ThreadIdentity, ...] = ()
+        thread_counter: tuple[str, int] | None = None
+        primary_thread = normalized.primary_thread
+        if self._manager._pid_os.get(normalized.hostname) == "macos":
+            retired_threads = tuple(
+                sorted(
+                    (
+                        self._manager._thread_identity(thread)
+                        for thread in self._manager._running_threads.find(
+                            "process_object_id", normalized.object_id
+                        )
+                    ),
+                    key=lambda thread: thread.tid,
+                )
+            )
+            tid, thread_counter, _ = self._manager._preview_primary_thread(
+                system=normalized.hostname,
+                os_category="macos",
+                object_id=normalized.object_id,
+                pid=normalized.pid,
+                counter_override=self._thread_counters.get(normalized.hostname),
+                extra_used_tids=self._planned_tids.get(normalized.hostname),
+            )
+            primary_thread = ThreadIdentity(
+                hostname=normalized.hostname,
+                process_object_id=normalized.object_id,
+                pid=normalized.pid,
+                tid=tid,
+                object_id=stable_uuid(
+                    "thread",
+                    normalized.hostname,
+                    normalized.object_id,
+                    normalized.pid,
+                    tid,
+                    timestamp.isoformat(),
+                    "primary",
+                ),
+                started_at=timestamp,
+                kind="primary",
+            )
         after = replace(
             normalized,
+            primary_thread=primary_thread,
             audit_pid_version=audit_pid_version,
             image=image,
             credentials=credentials if credentials is not None else normalized.credentials,
@@ -3124,10 +3178,16 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         )
         if audit_pid_version is not None:
             self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
+        if thread_counter is not None:
+            self._thread_counters[normalized.hostname] = thread_counter[1]
+            assert primary_thread is not None
+            self._planned_tids.setdefault(normalized.hostname, set()).add(primary_thread.tid)
         self._process_execution_drafts.append(
             ActionCohortProcessExecution(
                 target=normalized,
                 after=after,
+                retired_threads=retired_threads,
+                thread_counter=thread_counter,
                 _capability=_ActionCohortCapability(),
             )
         )
@@ -3843,8 +3903,11 @@ def _action_cohort_semantic_preimage(
     return (
         *legacy,
         (
-            "process-executions-v1",
-            tuple((patch.target, patch.after) for patch in process_executions),
+            "process-executions-v2",
+            tuple(
+                (patch.target, patch.after, patch.retired_threads, patch.thread_counter)
+                for patch in process_executions
+            ),
         ),
     )
 
@@ -6473,6 +6536,17 @@ class StateManager:
             if (
                 type(execution.target) is not ProcessIdentity
                 or type(execution.after) is not ProcessIdentity
+                or type(execution.retired_threads) is not tuple
+                or any(type(thread) is not ThreadIdentity for thread in execution.retired_threads)
+                or (
+                    execution.thread_counter is not None
+                    and (
+                        type(execution.thread_counter) is not tuple
+                        or len(execution.thread_counter) != 2
+                        or type(execution.thread_counter[0]) is not str
+                        or type(execution.thread_counter[1]) is not int
+                    )
+                )
             ):
                 raise StateError("Action cohort process execution requires exact identities")
             if execution.target.object_id in execution_targets:
@@ -10906,13 +10980,68 @@ class StateManager:
                 )
                 process_activity[identity.object_id] = patch
 
+            execution_thread_ids: set[tuple[str, int]] = {
+                (item.identity.hostname, item.identity.primary_thread.tid)
+                for item in plan._processes
+                if item.identity.primary_thread is not None
+            }
             for execution in plan._process_executions:
                 before, after = execution.target, execution.after
                 process = self._validate_action_live_process_identity(before)
                 if self._pid_os.get(before.hostname) not in {"linux", "macos"}:
                     raise StateError("Process image replacement requires a POSIX PID namespace")
                 threads = self._running_threads.find("process_object_id", before.object_id)
-                if any(thread.tid != process.primary_tid for thread in threads):
+                is_macos = self._pid_os.get(before.hostname) == "macos"
+                if is_macos:
+                    actual_threads = tuple(
+                        sorted(
+                            (self._thread_identity(row) for row in threads),
+                            key=lambda thread: thread.tid,
+                        )
+                    )
+                    replacement = after.primary_thread
+                    if (
+                        not actual_threads
+                        or execution.retired_threads != actual_threads
+                        or before.primary_thread not in actual_threads
+                        or any(
+                            row.started_at > after.execution_started_at for row in actual_threads
+                        )
+                    ):
+                        raise StateError(
+                            "Process execution thread preimage is stale or out of order"
+                        )
+                    if (
+                        type(replacement) is not ThreadIdentity
+                        or replacement.hostname != before.hostname
+                        or replacement.process_object_id != before.object_id
+                        or replacement.pid != before.pid
+                        or replacement.kind != "primary"
+                        or replacement.started_at != after.execution_started_at
+                        or replacement.tid <= 0
+                        or replacement.tid < self._thread_id_counters.get(before.hostname, 0)
+                        or replacement.object_id
+                        != stable_uuid(
+                            "thread",
+                            before.hostname,
+                            before.object_id,
+                            before.pid,
+                            replacement.tid,
+                            after.execution_started_at.isoformat(),
+                            "primary",
+                        )
+                        or execution.thread_counter != (before.hostname, replacement.tid + 1)
+                        or (before.hostname, replacement.tid) in execution_thread_ids
+                        or any(
+                            row.tid == replacement.tid
+                            for row in self._running_threads.find("system", before.hostname)
+                        )
+                    ):
+                        raise StateError("Process execution requires a fresh native primary thread")
+                    execution_thread_ids.add((before.hostname, replacement.tid))
+                elif execution.retired_threads or execution.thread_counter is not None:
+                    raise StateError("Native exec thread replacement requires macOS")
+                elif any(thread.tid != process.primary_tid for thread in threads):
                     raise StateError(
                         "Process execution with worker threads requires explicit thread replacement"
                     )
@@ -10933,6 +11062,7 @@ class StateManager:
                     raise StateError("Audit PID versions require a macOS process")
                 expected = replace(
                     before,
+                    primary_thread=after.primary_thread if is_macos else before.primary_thread,
                     image=after.image,
                     command_line=after.command_line,
                     credentials=after.credentials,
@@ -11372,6 +11502,7 @@ class StateManager:
         processes: tuple[_PreparedActionCohortProcessStart, ...],
         process_terminations: tuple[_PreparedActionCohortProcessTermination, ...],
         session_terminalizations: tuple[_PreparedActionCohortSessionTerminalization, ...],
+        exec_threads: tuple[_PreparedActionCohortExecThreads, ...] = (),
         boot_times: tuple[tuple[str, datetime], ...] = (),
         smb_connection_finalization: _SmbConnectionFinalizationPreparation | None = None,
         smb_file_mutation_terminalization: (_SmbFileMutationTerminalPreparation | None) = None,
@@ -11729,6 +11860,13 @@ class StateManager:
         for execution in plan._process_executions:
             capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
             capture_object(self._processes_by_object_id[execution.target.object_id])
+        for replacement in exec_threads:
+            capture_mapping(self._thread_id_counters, replacement.replacement.hostname)  # type: ignore[arg-type]
+            for thread in (*replacement.retired, replacement.replacement):
+                thread_key = (thread.hostname, thread.process_object_id, thread.tid)
+                capture_object(thread)
+                capture_indexed(self._running_threads, thread_key)  # type: ignore[arg-type]
+                ended_thread_keys.add(thread_key)
         for patch in plan._process_activity:
             identity = self._action_process_identity(patch.target)
             process = (
@@ -12751,6 +12889,35 @@ class StateManager:
         processes = tuple(
             self._prepare_action_cohort_process_start(item) for item in plan.processes
         )
+        exec_threads: list[_PreparedActionCohortExecThreads] = []
+        for execution in plan.process_executions:
+            if not execution.retired_threads:
+                continue
+            primary = execution.after.primary_thread
+            assert primary is not None
+            exec_threads.append(
+                _PreparedActionCohortExecThreads(
+                    execution=execution,
+                    retired=tuple(
+                        self._running_threads[
+                            (thread.hostname, thread.process_object_id, thread.tid)
+                        ]
+                        for thread in execution.retired_threads
+                    ),
+                    replacement=RunningThread(
+                        hostname=primary.hostname,
+                        process_object_id=primary.process_object_id,
+                        pid=primary.pid,
+                        tid=primary.tid,
+                        object_id=primary.object_id,
+                        start_time=primary.started_at,
+                        kind=primary.kind,
+                    ),
+                    deadline=(
+                        execution.after.execution_started_at + _ENDED_IDENTITY_RETENTION
+                    ).timestamp(),
+                )
+            )
         sessions_by_object_id = {item.plan.identity.object_id: item.session for item in sessions}
         terminalizations: list[_PreparedActionCohortSessionTerminalization] = []
         for terminalization in plan.session_terminalizations:
@@ -12795,6 +12962,7 @@ class StateManager:
             processes=processes,
             process_terminations=process_terminations,
             session_terminalizations=session_terminalizations,
+            exec_threads=tuple(exec_threads),
             smb_connection_finalization=smb_connection_finalization,
             smb_file_mutation_terminalization=smb_file_mutation_terminalization,
         )
@@ -12811,6 +12979,7 @@ class StateManager:
             session_metadata=tuple(item for item in plan._session_metadata),
             process_activity=tuple(item for item in plan._process_activity),
             process_executions=tuple(item for item in plan._process_executions),
+            exec_threads=tuple(exec_threads),
             session_activity=tuple(item for item in plan._session_activity),
             expected_started_sessions=tuple(item.identity for item in plan._sessions),
             expected_started_processes=tuple(item.identity for item in plan._processes),
@@ -13352,6 +13521,20 @@ class StateManager:
             self._commit_action_cohort_live_session_process_roles(patch)
         for patch in prepared.session_metadata:
             self._commit_action_cohort_session_metadata(patch)
+        for replacement in prepared.exec_threads:
+            for thread in replacement.retired:
+                key = (thread.hostname, thread.process_object_id, thread.tid)
+                self._running_threads.pop(key)
+                thread.end_time = replacement.execution.after.execution_started_at
+                self._ended_threads.set(key, thread, replacement.deadline)
+            thread = replacement.replacement
+            key = (thread.hostname, thread.process_object_id, thread.tid)
+            self._running_threads[key] = thread
+            self._ended_threads.pop(key, None)
+            self._thread_id_counters[thread.hostname] = max(
+                self._thread_id_counters.get(thread.hostname, 0), thread.tid + 1
+            )
+            self._processes_by_object_id[thread.process_object_id].primary_tid = thread.tid
         for execution in prepared.process_executions:
             process = self._processes_by_object_id[execution.target.object_id]
             process.prior_executions = (*process.prior_executions, execution.target)[

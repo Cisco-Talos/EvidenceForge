@@ -491,6 +491,7 @@ macos:
       - Dropbox
       - Google Drive
       - AdobeAcrobat
+      - Webex
   Terminal:
     command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
     lifetime: long
@@ -744,5 +745,11 @@ macos:
   AdobeAcrobat:
     command_templates:
     - '"/Applications/Adobe Acrobat DC/Adobe Acrobat.app/Contents/MacOS/AdobeAcrobat"'
+    lifetime: long
+    children: []
+
+  Webex:
+    command_templates:
+    - /Applications/Webex.app/Contents/MacOS/Webex
     lifetime: long
     children: []

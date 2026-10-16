@@ -215,9 +215,10 @@ applications:
   executable_reference: https://github.com/microsoft/shell-intune-samples/blob/a4f5eeaefe395fb36c70ea41823dabac94fa4db2/macOS/Apps/Zoom/installZoom.sh
 - id: webex
   availability: supported
-  variant: unavailable
-  reference: https://formulae.brew.sh/cask/webex
-  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+  variant: prefilled
+  reference: https://help.webex.com/default/article/nw5p67g/Webex-App-%7C-Installation-and-automatic-upgrade
+  executable_reference: https://binaries.webex.com/webex-macos-apple-silicon/Webex.pkg
+  boundary: Launch-only arm64 variant. Public Apple Silicon package metadata retrieved 2026-10-16 identifies version 46.10.0.36042, build 36042, /Applications installation and the Webex executable. The package was not installed or executed; helpers, signing identity, updater and call/media behavior remain unvalidated.
 - id: dropbox
   availability: supported
   variant: prefilled

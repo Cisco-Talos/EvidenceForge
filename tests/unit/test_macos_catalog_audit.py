@@ -142,3 +142,25 @@ def test_acrobat_mac_launch_uses_existing_unspecified_release_semantics() -> Non
     assert release.code_signature is None
     assert not get_parent_config("macos", "AdobeAcrobat")["children"]
     assert app.platforms["windows"].image_path.endswith("Acrobat.exe")
+
+
+def test_webex_mac_launch_uses_public_package_release_and_existing_personas() -> None:
+    import shlex
+
+    from evidenceforge.config.schemas import ApplicationEntry
+    from evidenceforge.generation.activity.application_catalog import application_descriptor
+    from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+    app = ApplicationEntry.model_validate(application_descriptor("webex"))
+    platform = app.platforms["macos"]
+    assert platform.image_path == "/Applications/Webex.app/Contents/MacOS/Webex"
+    assert shlex.split(platform.command_templates[0]) == [platform.image_path]
+    assert platform.deployment.version == "46.10.0.36042"
+    assert platform.deployment.build == "36042"
+    assert tuple(platform.deployment.architectures) == ("arm64",)
+    assert platform.code_signature is None
+    assert not get_parent_config("macos", "Webex")["children"]
+    assert "webex" in {
+        item["id"] for item in get_apps_for_persona("analyst", "macos", "user_app", "workstation")
+    }
+    assert app.platforms["windows"].image_path == r"C:\Program Files\Cisco Spark\Webex.exe"

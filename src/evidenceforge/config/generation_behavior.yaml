@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 167
+current_revision: 168
 history_start_revision: 1
-behavior_surface_sha256: b1a31984c498fd56ea723afe54b524583cb876a85294fde76b44ae2bbec23472
+behavior_surface_sha256: b197fe1cc4af340250045e7d3c481a5771e4af583bc9a692876418a54fbbd511
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1669,3 +1669,14 @@ changes:
     formats:
       - ecar
     summary: Adds native audit PID versions with rollback/checkpoint state, optional signer metadata and synthetic CodeDirectory hashes, plus the native arm64 Acrobat launch. Existing Windows/Linux evidence remains unchanged.
+  - revision: 168
+    id: macos-exec-threads-ssh-filtering-and-catalog
+    impact: localized
+    domains:
+      - process-identity
+      - checkpoint-state
+      - ssh-session-lifecycle
+      - application-catalog
+      - process-file-effects
+    formats: [ecar]
+    summary: Mac exec replaces task threads atomically, Linux-only implicit file effects are excluded on Mac, and Webex gains a native launch. SSH preserves exact receiver publication when Zeek is filtered out.

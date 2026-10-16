@@ -236,9 +236,9 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
-- [ ] **P2** Preserve SSH receiver evidence when filtering an external-source SSH scenario
-  from eCAR/Zeek/syslog to eCAR alone. The discrepancy reproduces on isolated `dev`; inspect
-  exact versus compatibility session publication before changing ownership or source routing.
+- [x] **P2** Preserve SSH receiver evidence when filtering an external-source SSH scenario
+  from eCAR/Zeek/syslog to eCAR alone. Exact publication now supports an absent Zeek owner;
+  direct/deferred, threaded, checkpoint and fresh-process filtering regressions pass.
   See the [Mac implementation worklog](docs/worklog/2026-10-15-macos-workstation-implementation.md).
 
 - [ ] **P2** Design and implement general authored entity availability/participation controls

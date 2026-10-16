@@ -2096,13 +2096,20 @@ class _PreparedSshCloseContinuation:
             and self.ecar_owner is None
             and self._all_projection_times_are_warmup_suppressed()
         )
+        zeek_owner_is_exact = bool(
+            type(emitters) is dict
+            and dict.get(emitters, "zeek_conn") is self.zeek_owner
+            and type(self.zeek_owner) is ZeekEmitter
+            and getattr(self.zeek_owner, "supports_exact_projection_publication", None) is True
+        )
+        no_zeek_is_exact = bool(
+            type(emitters) is dict and "zeek_conn" not in emitters and self.zeek_owner is None
+        )
         if (
             type(self.dispatcher_owner) is not EventDispatcher
             or type(emitters) is not dict
             or not (ecar_owner_is_exact or no_ecar_warmup_is_exact)
-            or dict.get(emitters, "zeek_conn") is not self.zeek_owner
-            or type(self.zeek_owner) is not ZeekEmitter
-            or getattr(self.zeek_owner, "supports_exact_projection_publication", None) is not True
+            or not (zeek_owner_is_exact or no_zeek_is_exact)
         ):
             raise StateError("Exact SSH close requires its original eCAR/Zeek projection owners")
         self.require_application_owner_shape()
@@ -3060,7 +3067,7 @@ class SshSessionActionBundle:
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
-        if type(dict.get(emitters, "zeek_conn")) is not ZeekEmitter:
+        if "zeek_conn" in emitters and type(dict.get(emitters, "zeek_conn")) is not ZeekEmitter:
             return False
         if type(dict.get(emitters, "ecar")) is EcarEmitter:
             return True

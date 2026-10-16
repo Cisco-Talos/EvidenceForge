@@ -69,7 +69,13 @@ def test_exec_preserves_lifetime_and_historical_observations(platform: str) -> N
     assert after.pid == before.pid
     assert after.started_at == before.started_at
     assert after.lifecycle_group_id == before.lifecycle_group_id
-    assert after.primary_thread == before.primary_thread
+    if platform == "macos":
+        assert after.primary_thread != before.primary_thread
+        assert after.primary_thread is not None
+        assert after.primary_thread.started_at == after.execution_started_at
+        assert manager.get_primary_thread(before.hostname, before.pid) == after.primary_thread
+    else:
+        assert after.primary_thread == before.primary_thread
     assert after.execution_id != before.execution_id
     assert after.execution_ordinal == 1
     assert before.image == "/bin/zsh"
@@ -81,7 +87,9 @@ def test_exec_preserves_lifetime_and_historical_observations(platform: str) -> N
         manager.get_process_identity_at(before.hostname, before.pid, after.execution_started_at)
         == after
     )
-    assert (manager._pid_counters, manager._thread_id_counters) == counters
+    assert manager._pid_counters == counters[0]
+    if platform == "linux":
+        assert manager._thread_id_counters == counters[1]
     assert len(manager.state.running_processes) == 1
 
 
@@ -261,8 +269,8 @@ def test_child_parent_snapshot_resolves_execution_at_child_start() -> None:
     assert manager.get_process_identity(before.hostname, child.identity.pid) == child.identity
 
 
-def test_exec_with_worker_threads_requires_explicit_replacement_semantics() -> None:
-    manager, before = _process()
+def test_linux_exec_with_worker_threads_still_requires_platform_replacement_semantics() -> None:
+    manager, before = _process("linux")
     worker = manager.create_thread(before.hostname, before.object_id, start_time=_START)
     digest = manager.materialization_digest()
     with pytest.raises(StateError, match="worker threads"):

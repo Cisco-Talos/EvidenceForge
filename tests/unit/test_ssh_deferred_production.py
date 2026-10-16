@@ -423,10 +423,15 @@ def test_ssh_transport_fits_before_action_bundle_source_session_end(tmp_path: Pa
     assert observed_close < source_session_end
 
 
-def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_zeek", [True, False])
+def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(
+    tmp_path: Path, with_zeek: bool
+) -> None:
     """Hydration reconstructs untouched SSH close work against fresh runtime owners."""
 
     original = _fixture(tmp_path / "original")
+    if not with_zeek:
+        del original.generator.dispatcher.emitters["zeek_conn"]
     request = replace(
         original.request(),
         emit_session_close=True,
@@ -451,6 +456,8 @@ def test_ssh_checkpoint_rebinds_future_close_to_fresh_authorities(tmp_path: Path
     activity_seal = ActivityGeneratorStateParticipant(original.generator).prepare_checkpoint(0)
 
     fresh = _fixture(tmp_path / "fresh")
+    if not with_zeek:
+        del fresh.generator.dispatcher.emitters["zeek_conn"]
     fresh.generator._scenario_environment = SimpleNamespace(
         systems=[fresh.source, fresh.target],
         users=[fresh.user],
@@ -5486,3 +5493,61 @@ def test_exact_close_rejects_foreign_session_receiver_descendant_before_target_m
         for row in ecar_rows
     )
     assert len(zeek_rows) == 1
+
+
+@pytest.mark.parametrize("threaded", [False, True])
+@pytest.mark.parametrize("deferred", [False, True])
+def test_external_ssh_ecar_filter_preserves_exact_receiver_lifecycle(
+    tmp_path: Path, threaded: bool, deferred: bool
+) -> None:
+    snapshots: list[tuple[dict[str, object], ...]] = []
+    for name, with_zeek in (("full", True), ("filtered", False)):
+        reset_thread_rng(42)
+        fixture = _fixture(tmp_path / name, threaded=threaded, production_timing_runtime=True)
+        if not with_zeek:
+            del fixture.generator.dispatcher.emitters["zeek_conn"]
+        request = replace(
+            fixture.request(),
+            source_system=None,
+            source_ip="198.51.100.41",
+            emit_session_close=True,
+            defer_session_close=deferred,
+        )
+        bundle = SshSessionActionBundle(request, fixture.generator)
+        assert bundle._uses_exact_deferred_publication()
+        bundle.execute()
+        fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=1))
+        assert fixture.generator.ssh_close_journal_census().total_pending == 0
+        _assert_no_dispatcher_residue(fixture.generator.dispatcher)
+        rows, zeek = fixture.close_and_read()
+        assert bool(zeek) is with_zeek
+        assert any(row["object"] == "USER_SESSION" and row["action"] == "LOGIN" for row in rows)
+        assert any(row["object"] == "USER_SESSION" and row["action"] == "LOGOUT" for row in rows)
+        snapshots.append(tuple(rows))
+    assert snapshots[0] == snapshots[1]
+
+
+@pytest.mark.parametrize("inserted_owner", ["real", "null", "foreign"])
+def test_filtered_ssh_close_rejects_new_projection_owner_until_original_absence_restored(
+    tmp_path: Path, inserted_owner: str
+) -> None:
+    reset_thread_rng(42)
+    fixture = _fixture(tmp_path)
+    emitters = fixture.generator.dispatcher.emitters
+    del emitters["zeek_conn"]
+    request = replace(fixture.request(), emit_session_close=True, defer_session_close=True)
+    SshSessionActionBundle(request, fixture.generator).execute()
+    continuation = fixture.generator._pending_ssh_session_closures[0].prepared
+    continuation.require_projection_owner_shape()
+    emitters["zeek_conn"] = (
+        fixture.zeek if inserted_owner == "real" else None if inserted_owner == "null" else Mock()
+    )
+    digest = fixture.state.materialization_digest()
+    with pytest.raises(StateError, match="original eCAR/Zeek"):
+        continuation.require_projection_owner_shape()
+    assert fixture.state.materialization_digest() == digest
+    del emitters["zeek_conn"]
+    continuation.require_projection_owner_shape()
+    fixture.generator.finalize_ssh_session_lifecycles(_START + timedelta(hours=1))
+    assert fixture.generator.ssh_close_journal_census().total_pending == 0
+    fixture.close_and_read()
