@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 179
+current_revision: 180
 history_start_revision: 1
-behavior_surface_sha256: 319c0116c353ebb0af4625e2b5f573365a4d30217d8e29ecac842bdda6037e07
+behavior_surface_sha256: 6ade307199ec3e2d5c7787d8b91d27c6b568fecb5f66ffcf6f6315b65a75f1af
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1778,3 +1778,11 @@ changes:
     formats:
       - ecar
     summary: Catalogs four inactive Mac SSH receiver executables and rejects unrelated authentication contexts or invalid times on internal process transitions.
+  - revision: 180
+    id: macos-ssh-service-account-identity
+    impact: localized
+    domains:
+      - process-credential-identity
+    formats:
+      - ecar
+    summary: Resolves host-local Mac SSH service aliases to their published noninteractive account without consuming human account IDs.

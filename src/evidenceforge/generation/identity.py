@@ -147,11 +147,18 @@ class IdentityDirectory:
             host = system.hostname
             root = MacAccount("root", "root", 0, 0, host, "/var/root", "/bin/sh", "well_known")
             self.macos_accounts[("root", _key(host))] = root
+            # Apple's DefaultLocalDB publishes both names for the same service account.
+            # These are platform identities, independent of authored human placement.
+            sshd = MacAccount(
+                "_sshd", "_sshd", 75, 75, host, "/var/empty", "/usr/bin/false", "well_known"
+            )
+            self.macos_accounts[("_sshd", _key(host))] = sshd
+            self.macos_accounts[("sshd", _key(host))] = sshd
             users = sorted(
                 (
                     user
                     for user in scenario.environment.users
-                    if user.username != "root"
+                    if (_key(user.username), _key(host)) not in self.macos_accounts
                     and (user.primary_system == host or system.assigned_user == user.username)
                 ),
                 key=lambda user: (user.username.casefold(), user.username),
