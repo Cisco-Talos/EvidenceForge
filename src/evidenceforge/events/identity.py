@@ -144,6 +144,52 @@ class PosixProcessCredentials:
 
 
 @dataclass(frozen=True, slots=True)
+class MacosProcessAuditBinding:
+    """One authenticated audit-origin adoption without changing task or POSIX IDs."""
+
+    origin: MacosAuditSession
+    before: PosixProcessCredentials
+    after: PosixProcessCredentials
+    bound_at: datetime
+
+    def __post_init__(self) -> None:
+        """Require a privileged receiver and preserve its non-audit credentials."""
+        if (
+            type(self.origin) is not MacosAuditSession
+            or type(self.before) is not PosixProcessCredentials
+            or type(self.after) is not PosixProcessCredentials
+        ):
+            raise ValueError("Process audit binding requires exact immutable identity facts")
+        if type(self.bound_at) is not datetime or self.bound_at.utcoffset() is None:
+            raise ValueError("Process audit binding requires an aware timestamp")
+        if self.bound_at < self.origin.created_at:
+            raise ValueError("Process audit binding precedes authentication")
+        if self.before.real_uid != 0 or self.before.effective_uid != 0:
+            raise ValueError("SSH audit-origin adoption requires a privileged receiver")
+        if self.before.audit_uid not in (None, 2**32 - 1):
+            raise ValueError("SSH audit-origin adoption cannot replace an authenticated origin")
+        if (
+            (
+                self.after.real_uid,
+                self.after.effective_uid,
+                self.after.real_gid,
+                self.after.effective_gid,
+            )
+            != (
+                self.before.real_uid,
+                self.before.effective_uid,
+                self.before.real_gid,
+                self.before.effective_gid,
+            )
+            or self.after.audit_uid != self.origin.audit_uid
+            or self.after.audit_session_id != self.origin.audit_session_id
+        ):
+            raise ValueError(
+                "Process audit binding must preserve POSIX IDs and use its exact origin"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessIdentity:
     """Immutable identity of one host- and process-start-scoped process object."""
 

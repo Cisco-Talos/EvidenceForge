@@ -35,6 +35,7 @@ from datetime import datetime
 
 from evidenceforge.events.identity import (
     MacosAuditSession,
+    MacosProcessAuditBinding,
     PosixIdentifier,
     PosixProcessCredentials,
     ProcessIdentity,
@@ -149,6 +150,7 @@ class RunningProcess:
     lifetime_image: str = ""
     credentials: PosixProcessCredentials | None = None
     audit_pid_version: PosixIdentifier | None = None
+    audit_binding: MacosProcessAuditBinding | None = None
 
 
 @dataclass

@@ -45,6 +45,7 @@ from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import (
     MacosAuditSession,
+    MacosProcessAuditBinding,
     PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
@@ -2170,6 +2171,7 @@ class ActionCohortProcessActivityPatch:
     target: ProcessMaterializationPlan | ProcessIdentity
     activity_time: datetime
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    audit_binding: MacosProcessAuditBinding | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -3070,6 +3072,49 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
         )
 
+    def bind_macos_process_audit_origin(
+        self, target: ProcessIdentity, *, bound_at: datetime
+    ) -> ProcessIdentity:
+        """Stage an authenticated SSH audit origin on its privileged live receiver.
+
+        This changes audit attribution only. Fork, exec, privilege changes and
+        source observations remain separately owned occurrences.
+        """
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(bound_at) is not datetime:
+            raise StateError("Process audit-origin adoption requires exact identity and time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        session = self._manager.get_session(normalized.logon_id)
+        if session is None or session.audit_origin is None or normalized.credentials is None:
+            raise StateError("Process audit-origin adoption requires authenticated session facts")
+        binding = MacosProcessAuditBinding(
+            origin=session.audit_origin,
+            before=normalized.credentials,
+            after=replace(
+                normalized.credentials,
+                audit_uid=session.audit_origin.audit_uid,
+                audit_session_id=session.audit_origin.audit_session_id,
+            ),
+            bound_at=ensure_utc(bound_at),
+        )
+        self._manager._validate_macos_process_audit_binding(normalized, binding)
+        if any(
+            self._manager._action_process_target_key(patch.target)
+            == self._manager._action_process_target_key(normalized)
+            for patch in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=binding.bound_at,
+                audit_binding=binding,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return replace(normalized, credentials=binding.after)
+
     def fork_process(
         self, parent: ProcessIdentity, *, forked_at: datetime
     ) -> ProcessMaterializationPlan:
@@ -3624,6 +3669,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
         PosixProcessCredentials,
         MacosAuditSession,
+        MacosProcessAuditBinding,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -3908,7 +3954,16 @@ def _action_cohort_semantic_preimage(
             for patch in session_metadata
         ),
         tuple(
-            (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+            (
+                (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
+                if patch.audit_binding is None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-process-audit-binding-v1",
+                    patch.audit_binding,
+                )
+            )
             for patch in process_activity
         ),
         tuple(
@@ -11108,6 +11163,34 @@ class StateManager:
                     effective_end_plans=effective_end_plans,
                     label="Action cohort process activity",
                 )
+                if patch.audit_binding is not None:
+                    if type(patch.target) is not ProcessIdentity:
+                        raise StateError("Audit-origin adoption requires an existing receiver")
+                    self._validate_macos_process_audit_binding(patch.target, patch.audit_binding)
+                    if patch.activity_time != patch.audit_binding.bound_at:
+                        raise StateError("Audit-origin adoption time differs from its activity")
+                    if (
+                        any(
+                            item.target.object_id == identity.object_id
+                            for item in plan._process_executions
+                        )
+                        or any(
+                            item.identity.object_id == identity.object_id
+                            for item in plan._process_terminations
+                        )
+                        or any(
+                            item.parent_identity is not None
+                            and item.parent_identity.object_id == identity.object_id
+                            for item in plan._processes
+                        )
+                        or any(
+                            item.identity.logon_id == identity.logon_id
+                            for item in plan._session_terminalizations
+                        )
+                    ):
+                        raise StateError(
+                            "Audit-origin adoption requires a separate cohort from receiver dependencies"
+                        )
                 process_activity[identity.object_id] = patch
 
             execution_thread_ids: set[tuple[str, int]] = {
@@ -13690,6 +13773,9 @@ class StateManager:
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
+            if patch.audit_binding is not None:
+                process.credentials = patch.audit_binding.after
+                process.audit_binding = patch.audit_binding
             if (
                 process.last_activity_time is None
                 or process.last_activity_time < patch.activity_time
@@ -14865,6 +14951,37 @@ class StateManager:
                 return self._process_execution_active_at(process, ensure_utc(event_time))
             return self._process_identity(process)
 
+    def _validate_macos_process_audit_binding(
+        self, target: ProcessIdentity, binding: MacosProcessAuditBinding
+    ) -> None:
+        """Validate one exact audit adoption against live process/session authority."""
+        if type(binding) is not MacosProcessAuditBinding or type(target) is not ProcessIdentity:
+            raise StateError("Process audit-origin adoption requires exact immutable facts")
+        process = self._validate_action_live_process_identity(target)
+        session = self.get_session(target.logon_id)
+        if (
+            self._pid_os.get(target.hostname) != "macos"
+            or session is None
+            or session.system != target.hostname
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.audit_origin != binding.origin
+            or session.transport_pid != target.pid
+            or process.audit_binding is not None
+            or process.credentials != binding.before
+        ):
+            raise StateError("Process audit-origin adoption lost its Mac SSH session authority")
+        binding.__post_init__()
+        if (
+            binding.bound_at < target.execution_started_at
+            or binding.bound_at < (process.last_activity_time or process.start_time)
+            or (
+                session.network_close_time is not None
+                and binding.bound_at >= session.network_close_time
+            )
+        ):
+            raise StateError("Process audit-origin adoption is outside its live receiver interval")
+
     def _process_execution_active_at(
         self, process: RunningProcess, event_time: datetime
     ) -> ProcessIdentity | None:
@@ -14873,12 +14990,30 @@ class StateManager:
         ):
             return None
         current = self._process_identity(process)
-        if event_time >= current.execution_started_at:
-            return current
-        for prior in reversed(process.prior_executions):
-            if prior.execution_started_at <= event_time:
-                return prior
-        return None
+        selected = (
+            current
+            if event_time >= current.execution_started_at
+            else next(
+                (
+                    prior
+                    for prior in reversed(process.prior_executions)
+                    if prior.execution_started_at <= event_time
+                ),
+                None,
+            )
+        )
+        binding = process.audit_binding
+        if selected is not None and binding is not None and event_time < binding.bound_at:
+            if selected.credentials is not None:
+                return replace(
+                    selected,
+                    credentials=replace(
+                        selected.credentials,
+                        audit_uid=binding.before.audit_uid,
+                        audit_session_id=binding.before.audit_session_id,
+                    ),
+                )
+        return selected
 
     def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
         """Project mutable runtime process state to an immutable identity snapshot."""

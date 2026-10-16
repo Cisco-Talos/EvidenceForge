@@ -3895,7 +3895,9 @@ class GeneratorLifecycleAuthority:
                         identity.object_id,
                         "action",
                     ),
-                    reason="State process activity transition",
+                    reason="State process audit-origin adoption"
+                    if patch.audit_binding is not None
+                    else "State process activity transition",
                 ),
             )
 

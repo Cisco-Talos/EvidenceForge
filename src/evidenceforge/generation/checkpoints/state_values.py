@@ -15,6 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
 from evidenceforge.events.identity import (
     MacosAuditSession,
+    MacosProcessAuditBinding,
     PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
@@ -117,6 +118,7 @@ _RUNNING_PROCESS_FIELDS = (
     "lifetime_image",
     "credentials",
     "audit_pid_version",
+    "audit_binding",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -345,6 +347,10 @@ _NETWORK_TRANSACTION_PLAN_FIELDS = (
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "active-session-v2": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "macos-process-audit-binding-v1": (
+        MacosProcessAuditBinding,
+        ("origin", "before", "after", "bound_at"),
+    ),
     "macos-audit-session-v1": (MacosAuditSession, ("audit_uid", "audit_session_id", "created_at")),
     "application-channel-budget": (
         ApplicationChannelBudget,
@@ -366,7 +372,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process-v4": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v5": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,
@@ -530,6 +536,9 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         elif record_tag == "process-identity-v3" and len(encoded_fields) == 16:
             record_tag = "process-identity-v4"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v4" and len(encoded_fields) == 27:
+            record_tag = "running-process-v5"
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

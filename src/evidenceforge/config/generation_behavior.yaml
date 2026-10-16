@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 170
+current_revision: 171
 history_start_revision: 1
-behavior_surface_sha256: 853f802c246cd77f0a921b26ece6a2722a3ca354e295e7253e1d31f744dbafb6
+behavior_surface_sha256: 58b708da6c3bb1211fa692331664a91060d5fd6d837edbb774745c63908d36e2
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1697,3 +1697,12 @@ changes:
       - scenario-validation
     formats: [ecar, syslog]
     summary: Separates canonical SSH authentication phases from Linux observation names and rejects unimplemented Mac receiver paths before mutation. Existing Linux phase values and checkpoint wire records are preserved.
+  - revision: 171
+    id: macos-receiver-process-audit-origin
+    impact: localized
+    domains:
+      - authentication-identity
+      - process-identity
+      - checkpoint-state
+    formats: []
+    summary: Adds atomic audit-origin adoption on the privileged Mac SSH receiver, retaining historical credentials, fork inheritance and durable recovery. PID, execution and POSIX IDs remain unchanged; source projection stays unavailable.

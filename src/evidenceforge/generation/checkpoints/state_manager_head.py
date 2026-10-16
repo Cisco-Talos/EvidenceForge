@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from itertools import chain
 
+from evidenceforge.events.identity import MacosProcessAuditBinding
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -24,7 +25,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -437,7 +438,23 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             or not 0 < version < 2**32
         ):
             raise CheckpointCorruptionError("StateManager macOS audit PID counter is invalid")
-    for process in fresh._processes_by_object_id.values():
+    for process in chain(
+        fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
+    ):
+        binding = process.audit_binding
+        if binding is not None and (
+            type(binding) is not MacosProcessAuditBinding
+            or fresh._pid_os.get(process.system) != "macos"
+            or binding.origin.audit_session_id
+            > fresh._macos_audit_session_counters.get(process.system, 0)
+            or binding.bound_at < process.start_time
+            or binding.bound_at > (process.last_activity_time or process.start_time)
+            or (process.end_time is not None and binding.bound_at >= process.end_time)
+            or process.credentials is None
+            or process.credentials.audit_uid != binding.origin.audit_uid
+            or process.credentials.audit_session_id != binding.origin.audit_session_id
+        ):
+            raise CheckpointCorruptionError("StateManager process audit-origin binding is invalid")
         versions = (
             process.audit_pid_version,
             *(identity.audit_pid_version for identity in process.prior_executions),
