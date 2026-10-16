@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 184
+current_revision: 185
 history_start_revision: 1
-behavior_surface_sha256: 06ad3182ecf7806fb87935507a87d288fa4764299d71faed40dd0b234bbd581d
+behavior_surface_sha256: b990adae4da4f9e3ba3eaac5f7ef3f5d4fd418e59e92523aea8feadb4a5f0eee
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1822,3 +1822,12 @@ changes:
     formats:
       - ecar
     summary: Publishes bounded POSIX helper exits through exact authenticated State closure with omission and recoverable sink delivery.
+  - revision: 185
+    id: macos-ssh-receiver-process-startup
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-projection
+    formats:
+      - ecar
+    summary: Coordinates eleven ordered Mac receiver process transitions from compiled catalog facts with exact phase recovery; transport and receiver authoring remain gated.

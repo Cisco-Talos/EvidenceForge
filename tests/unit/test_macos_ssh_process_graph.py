@@ -10,8 +10,10 @@ import pytest
 
 from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.formats.loader import load_format
+from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
 from evidenceforge.generation.actions.posix_process import (
     process_credential_occurrence,
     process_exec_occurrence,
@@ -35,14 +37,9 @@ def _catalog_image(application: str) -> tuple[str, str]:
     return platform["image_path"], platform["command_templates"][0]
 
 
-@pytest.mark.parametrize("collected", [False, True])
-def test_successful_receiver_process_graph_preserves_distinct_privilege_and_execution_owners(
-    tmp_path: Path, collected: bool
-) -> None:
-    from evidenceforge.evaluation.parsers.ecar import EcarParser
-    from evidenceforge.events.dispatcher import EventDispatcher
-    from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
-
+def _bootstrap(
+    tmp_path: Path, collected: bool = True
+) -> tuple[StateManager, EventDispatcher, EcarEmitter, HostContext, ProcessIdentity]:
     state = StateManager()
     state.set_current_time(_START)
     launchd = state.plan_process_materialization(
@@ -113,6 +110,16 @@ def test_successful_receiver_process_graph_preserves_distinct_privilege_and_exec
         os_category="macos",
         system_type="workstation",
     )
+    return state, dispatcher, emitter, host, receiver.identity
+
+
+@pytest.mark.parametrize("collected", [False, True])
+def test_successful_receiver_process_graph_preserves_distinct_privilege_and_execution_owners(
+    tmp_path: Path, collected: bool
+) -> None:
+    from evidenceforge.evaluation.parsers.ecar import EcarParser
+
+    state, dispatcher, emitter, host, receiver = _bootstrap(tmp_path, collected)
     observations: list[OccurrenceBuilder] = []
 
     def publish(plan: ActionCohortMaterializationPlan, event: OccurrenceBuilder) -> None:
@@ -164,7 +171,7 @@ def test_successful_receiver_process_graph_preserves_distinct_privilege_and_exec
         )
         return child.identity
 
-    privileged = execute(receiver.identity, "macos-sshd", 1)
+    privileged = execute(receiver, "macos-sshd", 1)
     privileged = execute(privileged, "macos-sshd-session", 2)
     preauth = fork(privileged, 3)
     preauth = execute(preauth, "macos-sshd-auth", 4)
@@ -244,7 +251,7 @@ def test_successful_receiver_process_graph_preserves_distinct_privilege_and_exec
         ),
     )
     emitter.close()
-    assert receiver.identity.object_id == adopted.object_id
+    assert receiver.object_id == adopted.object_id
     assert adopted.execution_ordinal == 2
     assert adopted.credentials == PosixProcessCredentials(0, 0, 0, 0, 501, 100_000)
     assert (
