@@ -234,3 +234,31 @@ def process_fork_identities(
     if getattr(event.process, "parent_image", None) != parent.image:
         raise ValueError("Process fork context changed its parent image")
     return parent, child
+
+
+def process_exit_identity(event: _ProcessTransitionOccurrence) -> ProcessIdentity:
+    """Require a POSIX exit observation of the exact closing execution.
+
+    State and lifecycle authority own permission to close. This structural
+    contract does not infer an exit status or a native Endpoint Security record.
+    """
+    from evidenceforge.events.contracts import ContextKind
+
+    _validate_transition_time(event)
+    plan = event.identity_plan
+    if (
+        event.event_type != "process_terminate"
+        or type(plan) is not EventIdentityPlan
+        or type(plan.subject) is not ProcessIdentity
+        or plan.actor is not None
+        or plan.target is not None
+    ):
+        raise ValueError("Process exit requires one exact process subject")
+    identity = plan.subject
+    if event.timestamp < identity.execution_started_at:
+        raise ValueError("Process exit cannot precede its current execution")
+    allowed = {ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE}
+    if any(getattr(event, kind.value, None) for kind in ContextKind if kind not in allowed):
+        raise ValueError("Process exit carries an unrelated semantic context")
+    _validate_process_context(event, identity, platforms={"linux", "macos"}, phase="closure")
+    return identity

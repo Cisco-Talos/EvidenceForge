@@ -5911,6 +5911,8 @@ class EventDispatcher:
         self,
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
+        *,
+        root_action_id: str,
     ) -> None:
         """Require all-and-only State starts/closes with causal projection ordering."""
 
@@ -6134,6 +6136,23 @@ class EventDispatcher:
                     raise EventContractError(
                         "Action-cohort process-close projection disagrees with its State plan"
                     )
+                if root_action_id.startswith("process-exit:"):
+                    from evidenceforge.events.process import process_exit_identity
+
+                    try:
+                        identity = process_exit_identity(event)
+                    except ValueError as exc:
+                        raise EventContractError(str(exc)) from exc
+                    live = self.state_manager.get_process(identity.hostname, identity.pid)
+                    if (
+                        live is None
+                        or event.process.integrity_level != live.integrity_level
+                        or event.src_host.os_category
+                        != self.state_manager._pid_os.get(identity.hostname)
+                    ):
+                        raise EventContractError(
+                            "POSIX exit projection disagrees with its live State process"
+                        )
                 if marker in observed_closes:
                     raise EventContractError("Action-cohort repeats a process-close projection")
                 observed_closes[marker] = position
@@ -7685,6 +7704,8 @@ class EventDispatcher:
         """Return the authenticated closed semantic kind for exact cohort projection."""
 
         projection = record.trusted_projections[0]
+        if record.root_action_id.startswith("process-exit:"):
+            return self._require_posix_exit_projection(record)
         if projection.occurrence.event_type in {
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
@@ -7774,6 +7795,45 @@ class EventDispatcher:
         ):
             raise EventContractError("Exact POSIX fork projection changed its singleton owner")
         return "posix_fork"
+
+    @staticmethod
+    def _require_posix_exit_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one existing process close with no unrelated State mutation."""
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact POSIX exit projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        try:
+            identity = process_exit_identity(event)
+        except ValueError as exc:
+            raise EventContractError(str(exc)) from exc
+        plan = record.state_plan
+        if (
+            record.root_action_id != f"process-exit:{identity.object_id}"
+            or len(plan.process_terminations) != 1
+            or type(plan.process_terminations[0].target)
+            is not ProcessTerminationMaterializationPlan
+            or plan.process_terminations[0].identity != identity
+            or plan.process_terminations[0].end_time != event.timestamp
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.process_activity_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact POSIX exit projection changed its singleton owner")
+        return "posix_exit"
 
     @staticmethod
     def _require_posix_exec_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -8387,13 +8447,14 @@ class EventDispatcher:
         terminal_kind = exact_kind in {
             "posix_exec",
             "posix_fork",
+            "posix_exit",
             "process_credentials",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
+                if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8421,6 +8482,7 @@ class EventDispatcher:
         elif exact_kind in {
             "posix_exec",
             "posix_fork",
+            "posix_exit",
             "process_credentials",
         } or exact_kind.startswith("linux_sudo_"):
             self._single_ecar_exact_projection_participants(projection)
@@ -8445,13 +8507,14 @@ class EventDispatcher:
         terminal_kind = exact_kind in {
             "posix_exec",
             "posix_fork",
+            "posix_exit",
             "process_credentials",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
+                if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8468,7 +8531,7 @@ class EventDispatcher:
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
             else self._single_ecar_exact_projection_participants(projection)
-            if exact_kind in {"posix_exec", "posix_fork", "process_credentials"}
+            if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
             or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
@@ -9248,7 +9311,9 @@ class EventDispatcher:
                 raise EventContractError(
                     "Action-cohort timing still owns unbound projection preflights"
                 )
-        self._validate_action_cohort_dispatch_coverage(state_plan, dispatches)
+        self._validate_action_cohort_dispatch_coverage(
+            state_plan, dispatches, root_action_id=root_action_id
+        )
 
         published_provenances: list[EffectOccurrenceProvenance] = []
         for prepared in dispatches:

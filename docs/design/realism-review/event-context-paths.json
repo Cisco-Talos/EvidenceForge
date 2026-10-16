@@ -11348,6 +11348,22 @@
           "file": "src/evidenceforge/generation/activity/generator.py",
           "line": 20252,
           "scope": "ActivityGenerator.generate_system_process_termination"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "'process_terminate'",
+          "event_type_literals": [
+            "process_terminate"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 151,
+          "scope": "process_exit_occurrence"
         }
       ],
       "contexts_attached_at_literal_constructors": [

@@ -13,6 +13,7 @@ from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.process import (
     process_credential_identities,
     process_exec_identities,
+    process_exit_identity,
     process_fork_identities,
 )
 
@@ -135,4 +136,39 @@ def process_fork_occurrence(
         ),
     )
     process_fork_identities(event)
+    return event
+
+
+def process_exit_occurrence(
+    *,
+    host: HostContext,
+    process: ProcessIdentity,
+    timestamp: datetime,
+    integrity_level: str,
+    session: SessionIdentity | None = None,
+) -> OccurrenceBuilder:
+    """Project a State-owned termination without inventing native exit details."""
+    event = OccurrenceBuilder(
+        timestamp=timestamp,
+        event_type="process_terminate",
+        src_host=host,
+        process=ProcessContext(
+            pid=process.pid,
+            parent_pid=process.parent_pid,
+            image=process.image,
+            command_line=process.command_line,
+            username=process.principal,
+            integrity_level=integrity_level,
+            logon_id=process.logon_id,
+            start_time=process.started_at,
+        ),
+        identity_plan=EventIdentityPlan(subject=process, session=session),
+        lifecycle=ActionLifecycleContext(
+            group_id=process.lifecycle_group_id,
+            canonical_start=process.started_at,
+            phase="closure",
+            parent_group_id=process.parent_lifecycle_group_id or None,
+        ),
+    )
+    process_exit_identity(event)
     return event

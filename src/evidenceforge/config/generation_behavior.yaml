@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 183
+current_revision: 184
 history_start_revision: 1
-behavior_surface_sha256: 26d3dc934e0ea6295e637e0476df006fdf04ce6903fee9eea3597c04e140f9a1
+behavior_surface_sha256: 06ad3182ecf7806fb87935507a87d288fa4764299d71faed40dd0b234bbd581d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1813,3 +1813,12 @@ changes:
     formats:
       - ecar
     summary: Adds the publicly verified native arm64 Tableau Desktop 2026.1 launch under its existing application ID without inferring helper or network behavior.
+  - revision: 184
+    id: posix-process-exit-exact-publication
+    impact: localized
+    domains:
+      - process-lifecycle
+      - source-projection
+    formats:
+      - ecar
+    summary: Publishes bounded POSIX helper exits through exact authenticated State closure with omission and recoverable sink delivery.
