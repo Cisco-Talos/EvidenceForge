@@ -1,0 +1,353 @@
+# Independently authored application assessment, not third-party sample records.
+reviewed_on: '2026-10-15'
+baseline_ref: 5ce84103fccd630a748cf59ab19808f9fa0699bc
+target: macOS 26 arm64
+applications:
+- id: chrome
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/google-chrome
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: firefox
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/firefox
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: outlook
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/microsoft-outlook
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://learn.microsoft.com/en-us/answers/questions/5419586/office-2024-install
+- id: word
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/microsoft-word
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://learn.microsoft.com/en-us/answers/questions/5733355/just-installed-microsoft-365-on-mac-ms-word-excel
+- id: excel
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/microsoft-excel
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://learn.microsoft.com/en-us/answers/questions/5812962/fix-system-crash-error-running-excel-application-o
+- id: edge
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/microsoft-edge
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: teams
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/microsoft-teams
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://learn.microsoft.com/en-us/answers/questions/5762739/microsoft-teams-fails-to-launch-on-macos-ventura-a
+- id: onedrive
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/onedrive
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://learn.microsoft.com/en-us/sharepoint/files-on-demand-mac
+- id: acrobat
+  availability: supported
+  variant: unavailable
+  reference: https://formulae.brew.sh/cask/adobe-acrobat-reader
+  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+- id: 7zip
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/sevenzip
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: vscode
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/visual-studio-code
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: notepadpp
+  availability: unavailable
+  variant: unavailable
+  reference: https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/SUPPORTED_SYSTEM.md
+  boundary: Official cataloged Win32 product; unofficial ports are different applications.
+- id: intellij
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/intellij-idea
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: sublimetext
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/sublime-text
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: msbuild
+  availability: unresolved
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-msbuild
+  boundary: dotnet msbuild is a managed subcommand, not the cataloged MSBuild.exe identity; adapter decision pending.
+- id: dotnet
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/dotnet
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: nodejs
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/node
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: thunderbird
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/thunderbird
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://wiki.mozilla.org/MailNews:Logging
+- id: git
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/git
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: docker
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/docker-desktop
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: kubectl
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/kubernetes-cli
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: ssh
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/openssh
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: curl
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/curl
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: pytest
+  availability: supported
+  variant: unavailable
+  reference: https://formulae.brew.sh/formula/pytest
+  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+- id: vim
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/vim
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: nano
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/nano
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: emacs
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/emacs
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: make
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/make
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: gcc
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/gcc
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: npm
+  availability: supported
+  variant: unavailable
+  reference: https://formulae.brew.sh/formula/node
+  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+- id: cargo
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/rust
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: pip
+  availability: unresolved
+  variant: unavailable
+  reference: https://pip.pypa.io/en/stable/installation/
+  boundary: Python package command; interpreter/venv ownership and launcher process identity must be modeled first.
+- id: sqlcmd
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/sqlcmd
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: wmic
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: powershell_query
+  availability: unresolved
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-macos
+  boundary: PowerShell exists on arm64, but this entry authors Windows CIM queries; no direct command-pool reuse.
+- id: mysql
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/mysql-client
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: psql
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/libpq
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: redis_cli
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/redis
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: slack
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/slack
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://github.com/microsoft/shell-intune-samples/blob/a4f5eeaefe395fb36c70ea41823dabac94fa4db2/macOS/Apps/Slack/installApp3.01-Slack.sh
+- id: zoom
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/zoom
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://github.com/microsoft/shell-intune-samples/blob/a4f5eeaefe395fb36c70ea41823dabac94fa4db2/macOS/Apps/Zoom/installZoom.sh
+- id: webex
+  availability: supported
+  variant: unavailable
+  reference: https://formulae.brew.sh/cask/webex
+  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+- id: dropbox
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/dropbox
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://community.dropbox.com/en/discussion/672754/cannot-start-dropbox-app-on-macbook/p1
+- id: google_drive_desktop
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/google-drive
+  executable_reference: https://knowledge.workspace.google.com/admin/drive/capture-google-drive-for-desktop-logs-for-support
+  boundary: Arm64 application launch; file-provider helpers and native sync lifecycle remain unvalidated.
+- id: citrix_workspace
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/citrix-workspace
+  executable_reference: https://docs.citrix.com/en-us/citrix-workspace-app-for-mac/install-uninstall.html
+  architecture_reference: https://www.citrix.com/blogs/2022/10/25/native-support-for-citrix-workspace-app-on-macs-with-apple-silicon-m1-series/
+  boundary: Native arm64 application launch and generic HTTPS relationship. Universal package snapshot supplies release identity. HDX sessions, helpers, authentication and updater lifecycle are not inferred from launch.
+- id: cisco_secure_client
+  availability: unresolved
+  variant: unavailable
+  reference: https://www.cisco.com/c/en/us/support/security/secure-client/series.html
+  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+- id: globalprotect
+  availability: unresolved
+  variant: unavailable
+  reference: https://docs.paloaltonetworks.com/globalprotect
+  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+- id: zscaler_client_connector
+  availability: unresolved
+  variant: unavailable
+  reference: https://help.zscaler.com/client-connector
+  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+- id: powerbi_desktop
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/power-bi/fundamentals/desktop-get-the-desktop
+  boundary: Windows desktop product; browser service is a separate workflow.
+- id: tableau_desktop
+  availability: supported
+  variant: unavailable
+  reference: https://formulae.brew.sh/cask/tableau
+  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+- id: postman
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/postman
+  boundary: Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated.
+  executable_reference: https://github.com/postmanlabs/postman-app-support/issues/8565
+- id: dbeaver
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/cask/dbeaver-community
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: windows-explorer
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: mstsc
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: dsquery
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: ldapsearch
+  availability: supported
+  variant: prefilled
+  reference: https://formulae.brew.sh/formula/openldap
+  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+- id: dcdiag
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: repadmin
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: ntdsutil
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: dnscmd
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: gpupdate
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: gpresult
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: certutil
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: server_manager
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: eventvwr
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: mmc
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: perfmon
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
+- id: wevtutil
+  availability: unavailable
+  variant: unavailable
+  reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
+  boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.

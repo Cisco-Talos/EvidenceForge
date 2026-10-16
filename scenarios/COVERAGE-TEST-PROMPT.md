@@ -413,3 +413,7 @@
   - technique fields on storyline events map to MITRE ATT&CK for IOC categorization
 
   Save to scenarios/apt-healthcare-breach/scenario.yaml with accompanying ENVIRONMENT.md.
+
+## Experimental Mac extension
+
+Use a separate Mac-only and mixed-fleet extension for the macOS 26 arm64 branch. Keep the existing Windows/Linux coverage scenario unchanged for regression comparison. Exercise eCAR process/session correlation and eligible `zsh_history` submissions; verify that noninteractive commands create no history, Linux syslog never belongs to a Mac, and Windows server logs retain server ownership. Native ES/Unified Log, SSH completion, SMB client-native evidence, persistence and denied-action cases remain unavailable until their individual implementation gates pass. Do not fill missing evidence using raw fabricated native messages.

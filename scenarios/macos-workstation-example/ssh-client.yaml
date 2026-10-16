@@ -1,0 +1,88 @@
+version: '1.0'
+generation_seed: 99
+name: macos-ssh-client-example
+description: Invented Mac workstation connecting to a Linux SSH receiver; experimental
+  client evidence.
+environment:
+  description: Minimal test environment
+  users:
+  - username: test_user
+    full_name: Test User
+    email: test.user@example.com
+    primary_system: TEST-01
+  systems:
+  - hostname: TEST-01
+    ip: 10.0.0.1
+    os: macOS 26
+    architecture: arm64
+    type: workstation
+    assigned_user: test_user
+    roles:
+    - workstation
+    os_build: 25A354
+  - hostname: SSH-TEST
+    ip: 10.0.0.20
+    os: Ubuntu 24.04
+    type: server
+    services:
+    - ssh
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      systems:
+      - TEST-01
+      - SSH-TEST
+      exposure: internal
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      placement: tap
+      log_formats:
+      - cisco_asa
+time_window:
+  start: '2026-10-15T10:00:00Z'
+  duration: 1h
+  warmup: 1h
+baseline_activity:
+  description: Minimal baseline activity
+  intensity: medium
+  variation: low
+storyline:
+- id: mac-login
+  time: +1m
+  actor: test_user
+  system: TEST-01
+  activity: Start the local interactive Mac session
+  events:
+  - type: logon
+    logon_type: 2
+- id: remote-session
+  time: +10m
+  actor: test_user
+  system: SSH-TEST
+  activity: Connect from the Mac workstation to the Linux receiver
+  events:
+  - type: ssh_session
+    source_ip: 10.0.0.1
+- id: remote-logoff
+  time: +30m
+  actor: test_user
+  system: SSH-TEST
+  activity: Close the authored SSH session within the collection window
+  events:
+  - type: logoff
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: syslog
+  - format: bash_history
+  - format: zsh_history
+  destination: ./output

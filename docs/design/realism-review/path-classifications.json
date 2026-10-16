@@ -40,6 +40,7 @@
         "account_created",
         "account_deleted",
         "bash_command",
+        "zsh_command",
         "create_remote_thread",
         "dhcp_lease",
         "explicit_credentials",
@@ -408,6 +409,7 @@
     {
       "names": [
         "bash_history",
+        "zsh_history",
         "cisco_asa",
         "ecar",
         "proxy_access",

@@ -105,6 +105,33 @@ class ProcessParentResolver:
             self.ensure_linux_visible_shell_parent,
         )
 
+    def _macos_existing_parent(
+        self,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int = 0,
+        *,
+        process_name: str = "",
+    ) -> int:
+        """Select a live Mac owner without synthesizing a Linux init or shell."""
+        if parent_pid not in {0, 4} and self.queries._is_pid_active_at(system, parent_pid, time):
+            parent = self.state_manager.get_process(system.hostname, parent_pid)
+            if parent is not None and (not parent.logon_id or parent.logon_id == logon_id):
+                return parent_pid
+        if logon_id and ".app/Contents/MacOS/" not in process_name:
+            for process in self.state_manager.get_processes_for_session(logon_id):
+                if (
+                    process.system == system.hostname
+                    and process.image in {"/bin/zsh", "/bin/bash"}
+                    and self.queries._is_pid_active_at(system, process.pid, time)
+                ):
+                    return process.pid
+        init = self.state_manager.get_process(system.hostname, 1)
+        if init is None or init.image != "/sbin/launchd" or init.start_time > time:
+            raise StateError("Mac process creation requires its modeled launchd boot identity")
+        return 1
+
     def _ensure_session_explorer_pid(
         self,
         system: System,
@@ -168,6 +195,10 @@ class ProcessParentResolver:
     ) -> int:
         """Resolve a live parent PID before process state allocation."""
         os_category = _get_os_category(system.os)
+        if os_category == "macos":
+            return self._macos_existing_parent(
+                system, time, logon_id, parent_pid, process_name=process_name
+            )
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         user_context = process_username not in _SYSTEM_ACCOUNTS and not process_username.endswith(
             "$"
@@ -444,6 +475,8 @@ class ProcessParentResolver:
         """Resolve an existing parent for a required bundle without materializing helpers."""
 
         os_category = _get_os_category(system.os)
+        if os_category == "macos":
+            return self._macos_existing_parent(system, time, logon_id, parent_pid)
         if parent_pid not in {0, 4}:
             if (
                 os_category == "windows"
@@ -543,6 +576,8 @@ class ProcessParentResolver:
 
         rng = _get_rng()
         os_cat = _get_os_category(system.os)
+        if os_cat == "macos":
+            return self._macos_existing_parent(system, time, logon_id, process_name=process_name)
         sys_pids = policy.system_process_roles(self._system_pids).get(system.hostname, {})
 
         # Extract basename for rule lookup
@@ -1042,6 +1077,13 @@ class ProcessParentResolver:
         rng = _get_rng()
         sys_pids = policy.system_process_roles(self._system_pids).get(system.hostname, {})
         os_cat = _get_os_category(system.os)
+        if os_cat == "macos":
+            effective_time = time or self.state_manager.state.current_time
+            if effective_time is None:
+                raise StateError("Mac parent selection requires a modeled time")
+            return self._macos_existing_parent(
+                system, effective_time, logon_id, process_name=process_name
+            )
         effective_time = time or self.state_manager.state.current_time or datetime.now(UTC)
         history = self.history._prune_user_process_history(
             system=system,

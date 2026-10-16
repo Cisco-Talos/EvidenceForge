@@ -12,7 +12,7 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 [email](#email-artifacts-and-zeek-smtp) · [Windows Security](#windows-security-events) ·
 [Sysmon](#windows-sysmon-events) · [Zeek](#zeek-network-logs) ·
 [eCAR](#ecar-format-simulated-edr-telemetry) · [Linux syslog](#linux-syslog) ·
-[bash](#bash-history) · [IDS](#snortsuricata-ids-alerts) ·
+[bash](#bash-history) · [zsh](#zsh-history-experimental) · [IDS](#snortsuricata-ids-alerts) ·
 [Cisco ASA](#cisco-asa-firewall-syslog) · [web](#web-access-log) ·
 [proxy](#http-proxy-log)
 
@@ -43,7 +43,8 @@ output/
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
       ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
       syslog.log                           # Linux syslog (default/splunk target; RFC5424)
-      bash_history/<username>.bash_history # Per-user bash history (Linux only)
+      bash_history/<username>.bash_history # Per-user explicit Bash history (Linux/Mac)
+      zsh_history/<username>.zsh_history   # Experimental Mac extended incremental history
       web_access.log                       # Web server access log on web_server hosts
       proxy_access.log                     # Forward proxy access log on forward_proxy hosts
       <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
@@ -634,3 +635,9 @@ companions appear according to normal visibility rules.
 
 See [the shared record contract](RECORD_VALIDATION.md) for typed predicates, Windows aliases,
 parser failure accounting, and exact schema/correctness acceptance gates.
+
+## Zsh history (experimental)
+
+`<host>/zsh_history/<username>.zsh_history` contains independently modeled interactive submissions in native `: epoch:0;command` form. The initial profile represents EXTENDED_HISTORY with incremental append, so zero elapsed time means persistence at submission. Canonical session/shell ownership is required; arbitrary or noninteractive process creation never implies history. Only single-line ASCII records are supported. Multiline/metafied records, history clearing, session-exit-only persistence and SIEM ingestion mappings remain unvalidated. The parser reports unsupported records explicitly. See [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History).
+
+Mac Bash uses the existing Bash format only for explicitly modeled interactive Bash sessions. Native zsh and Bash share the durable per-host/per-user journal, chronological export and checkpoint route mechanism. These evidence types are log-source exports; no native filesystem artifact or user history is copied.

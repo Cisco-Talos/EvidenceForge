@@ -74,6 +74,13 @@ scenarios/*
 !scenarios/branch-office-example/
 scenarios/branch-office-example/*
 !scenarios/branch-office-example/scenario.yaml
+!scenarios/macos-workstation-example/
+scenarios/macos-workstation-example/*
+!scenarios/macos-workstation-example/scenario.yaml
+!scenarios/macos-workstation-example/mixed-fleet.yaml
+!scenarios/macos-workstation-example/smb-client.yaml
+!scenarios/macos-workstation-example/ssh-client.yaml
+!scenarios/macos-workstation-example/README.md
 !scenarios/spillage-full-matrix-test/
 scenarios/spillage-full-matrix-test/*
 !scenarios/spillage-full-matrix-test/scenario.yaml

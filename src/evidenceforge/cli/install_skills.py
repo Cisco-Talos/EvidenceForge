@@ -45,6 +45,7 @@ CHATGPT_SKILL_NAMES = (
 
 _CHATGPT_REFERENCES_BY_SKILL = {
     "config": (
+        "references/evidence-endpoint-macos.md",
         "references/record-validation.md",
         "references/project-context.md",
         "references/config-apps-processes.md",
@@ -57,6 +58,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/config-validation.md",
     ),
     "evaluate": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/evidence-endpoint-linux.md",
@@ -66,6 +68,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "generate": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
@@ -77,6 +80,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/generation-bundle-targets.md",
     ),
     "industry-pack": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
@@ -89,6 +93,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-smb.md",
     ),
     "organization-pack": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
@@ -114,6 +119,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/record-validation.md",
     ),
     "scenario": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",
@@ -139,6 +145,7 @@ _CHATGPT_REFERENCES_BY_SKILL = {
         "references/scenario-storyline.md",
     ),
     "validate": (
+        "references/evidence-endpoint-macos.md",
         "references/artifact-lifecycle.md",
         "references/record-validation.md",
         "references/project-context.md",

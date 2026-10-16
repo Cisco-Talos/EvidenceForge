@@ -27,6 +27,19 @@ applications:
   - id: chrome
     display_name: "Google Chrome"
     platforms:
+      macos:
+        image_path: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: chrome
+          version: 155.0.8059.80
+          build: 155.0.8059.80
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --new-window {internal_url}'
       windows:
         image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
         deployment:
@@ -99,6 +112,19 @@ applications:
   - id: firefox
     display_name: "Mozilla Firefox"
     platforms:
+      macos:
+        image_path: /Applications/Firefox.app/Contents/MacOS/firefox
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: firefox
+          version: '158.0'
+          build: '158.0'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Firefox.app/Contents/MacOS/firefox" -new-window {internal_url}'
       windows:
         image_path: 'C:\Program Files\Mozilla Firefox\firefox.exe'
         deployment:
@@ -170,6 +196,19 @@ applications:
     display_name: "Microsoft Outlook"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: outlook
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE'
         deployment:
@@ -206,6 +245,19 @@ applications:
   - id: word
     display_name: "Microsoft Word"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: word
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
         deployment:
@@ -242,6 +294,19 @@ applications:
   - id: excel
     display_name: "Microsoft Excel"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: excel
+          version: 16.114.26101123
+          build: 16.114.26101123
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel"'
       windows:
         image_path: 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
         deployment:
@@ -275,6 +340,19 @@ applications:
   - id: edge
     display_name: "Microsoft Edge"
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: edge
+          version: 155.0.4283.45,6b10bfa6-9f61-4b45-8508-31f5cdc70657
+          build: 155.0.4283.45,6b10bfa6-9f61-4b45-8508-31f5cdc70657
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" --new-window {internal_url}'
       windows:
         image_path: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
         deployment:
@@ -313,6 +391,19 @@ applications:
     display_name: "Microsoft Teams"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: teams
+          version: 26261.303.5165.1465
+          build: 26261.303.5165.1465
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\Teams\current\Teams.exe'
         deployment:
@@ -339,6 +430,19 @@ applications:
     display_name: "Microsoft OneDrive"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/OneDrive.app/Contents/MacOS/OneDrive
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: onedrive
+          version: 26.173.0906.0008
+          build: 26.173.0906.0008
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/OneDrive.app/Contents/MacOS/OneDrive"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Microsoft\OneDrive\OneDrive.exe'
         deployment:
@@ -385,6 +489,19 @@ applications:
   - id: 7zip
     display_name: "7-Zip"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/7zz
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: 7zip
+          version: '26.04'
+          build: '26.04'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/7zz i
       windows:
         image_path: 'C:\Program Files\7-Zip\7zFM.exe'
         deployment:
@@ -408,6 +525,24 @@ applications:
   - id: vscode
     display_name: "Visual Studio Code"
     platforms:
+      macos:
+        image_path: /Applications/Visual Studio Code.app/Contents/MacOS/Code
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: vscode
+          version: 1.142.0
+          build: 1.142.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Visual Studio Code.app/Contents/MacOS/Code" /Users/{username}/Projects/{project}'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Microsoft VS Code\Code.exe'
         deployment:
@@ -461,6 +596,24 @@ applications:
   - id: intellij
     display_name: "IntelliJ IDEA"
     platforms:
+      macos:
+        image_path: /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: intellij
+          version: 2026.2.3,262.10968.63
+          build: 2026.2.3,262.10968.63
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/IntelliJ IDEA.app/Contents/MacOS/idea" /Users/{username}/Projects/{project}'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\JetBrains\IntelliJ IDEA\bin\idea64.exe'
         deployment:
@@ -482,6 +635,24 @@ applications:
   - id: sublimetext
     display_name: "Sublime Text"
     platforms:
+      macos:
+        image_path: /Applications/Sublime Text.app/Contents/MacOS/sublime_text
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: sublimetext
+          version: '4215'
+          build: '4215'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Sublime Text.app/Contents/MacOS/sublime_text" /Users/{username}/Projects/{project}/README.md'
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Sublime Text\sublime_text.exe'
         deployment:
@@ -525,6 +696,20 @@ applications:
   - id: dotnet
     display_name: ".NET CLI"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/dotnet/libexec/dotnet
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dotnet
+          version: 10.0.401
+          build: 10.0.401
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/dotnet/libexec/dotnet --info
+        - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
       windows:
         image_path: 'C:\Program Files\dotnet\dotnet.exe'
         deployment:
@@ -547,6 +732,25 @@ applications:
   - id: nodejs
     display_name: "Node.js"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/node
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: nodejs
+          version: 26.12.0
+          build: 26.12.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/node --version
+        - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\nodejs\node.exe'
         deployment:
@@ -570,6 +774,19 @@ applications:
   - id: thunderbird
     display_name: "Mozilla Thunderbird"
     platforms:
+      macos:
+        image_path: /Applications/Thunderbird.app/Contents/MacOS/thunderbird
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: thunderbird
+          version: '158.0'
+          build: '158.0'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Thunderbird.app/Contents/MacOS/thunderbird"'
       linux:
         image_path: "/usr/bin/thunderbird"
         deployment:
@@ -586,6 +803,25 @@ applications:
   - id: git
     display_name: "Git"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/git
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: git
+          version: 2.56.0
+          build: 2.56.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} status
+        - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} log --oneline -5
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Program Files\Git\cmd\git.exe'
         deployment:
@@ -621,6 +857,20 @@ applications:
   - id: docker
     display_name: "Docker"
     platforms:
+      macos:
+        image_path: /Applications/Docker.app/Contents/Resources/bin/docker
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: docker
+          version: 4.95.0,242831
+          build: 4.95.0,242831
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Docker.app/Contents/Resources/bin/docker" ps'
+        - '"/Applications/Docker.app/Contents/Resources/bin/docker" images'
       windows:
         image_path: 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
         deployment:
@@ -655,6 +905,20 @@ applications:
   - id: kubectl
     display_name: "Kubernetes CLI"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/kubectl
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: kubectl
+          version: 1.37.1
+          build: 1.37.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/kubectl get pods
+        - /opt/homebrew/bin/kubectl get deployments
       windows:
         image_path: 'C:\Program Files\kubectl\kubectl.exe'
         deployment:
@@ -690,6 +954,19 @@ applications:
   - id: ssh
     display_name: "OpenSSH Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/ssh
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: ssh
+          version: 10.6p1
+          build: 10.6p1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/ssh -V
       windows:
         image_path: 'C:\Windows\System32\OpenSSH\ssh.exe'
         deployment:
@@ -722,6 +999,19 @@ applications:
   - id: curl
     display_name: "curl"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/curl/bin/curl
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: curl
+          version: 8.23.0
+          build: 8.23.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/curl/bin/curl --head {internal_url}
       linux:
         image_path: "/usr/bin/curl"
         deployment:
@@ -759,6 +1049,24 @@ applications:
   - id: vim
     display_name: "Vim"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/vim
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: vim
+          version: 9.2.1150
+          build: 9.2.1150
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/vim /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/vim"
         deployment:
@@ -774,6 +1082,24 @@ applications:
   - id: nano
     display_name: "GNU nano"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/nano
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: nano
+          version: '9.2'
+          build: '9.2'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/nano /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/nano"
         deployment:
@@ -789,6 +1115,24 @@ applications:
   - id: emacs
     display_name: "GNU Emacs"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/emacs
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: emacs
+          version: '31.1'
+          build: '31.1'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/emacs -nw /Users/{username}/Projects/{project}/README.md
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/emacs"
         deployment:
@@ -805,6 +1149,24 @@ applications:
   - id: make
     display_name: "GNU Make"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/gmake
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: make
+          version: 4.4.1
+          build: 4.4.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/gmake -C /Users/{username}/Projects/{project} test
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       linux:
         image_path: "/usr/bin/make"
         deployment:
@@ -821,6 +1183,19 @@ applications:
   - id: gcc
     display_name: "GCC"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/gcc-16
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: gcc
+          version: 16.2.0
+          build: 16.2.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/gcc-16 --version
       linux:
         image_path: "/usr/bin/gcc"
         deployment:
@@ -868,6 +1243,24 @@ applications:
   - id: cargo
     display_name: "Rust Cargo"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/cargo
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: cargo
+          version: 1.99.0
+          build: 1.99.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/cargo check --manifest-path /Users/{username}/Projects/{project}/Cargo.toml
+        command_parameter_pools:
+          project:
+          - inventory-service
+          - reporting-tools
+          - workstation-config
       windows:
         image_path: 'C:\Users\{username}\.cargo\bin\cargo.exe'
         deployment:
@@ -920,6 +1313,22 @@ applications:
   - id: sqlcmd
     display_name: "SQL Server Command Line"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/sqlcmd
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: sqlcmd
+          version: 1.10.0
+          build: 1.10.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/sqlcmd -S {db_server} -Q "SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       windows:
         image_path: 'C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe'
         deployment:
@@ -988,6 +1397,22 @@ applications:
   - id: mysql
     display_name: "MySQL Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/mysql-client/bin/mysql
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: mysql
+          version: 26.7.0
+          build: 26.7.0
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/mysql-client/bin/mysql --host={db_server} --execute="SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       linux:
         image_path: "/usr/bin/mysql"
         deployment:
@@ -1003,6 +1428,22 @@ applications:
   - id: psql
     display_name: "PostgreSQL Client"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/libpq/bin/psql
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: psql
+          version: '18.6'
+          build: '18.6'
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/libpq/bin/psql -h {db_server} -c "SELECT 1"
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       windows:
         image_path: 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
         deployment:
@@ -1033,6 +1474,22 @@ applications:
   - id: redis_cli
     display_name: "Redis CLI"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/redis-cli
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: redis-cli
+          version: 8.10.2
+          build: 8.10.2
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/bin/redis-cli -h {db_server} PING
+        command_parameter_pools:
+          db_server:
+          - db01.example.test
       linux:
         image_path: "/usr/bin/redis-cli"
         deployment:
@@ -1057,6 +1514,19 @@ applications:
     display_name: "Slack"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Slack.app/Contents/MacOS/Slack
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: slack
+          version: 4.52.178
+          build: 4.52.178
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Slack.app/Contents/MacOS/Slack"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\slack\Slack.exe'
         deployment:
@@ -1102,6 +1572,19 @@ applications:
     display_name: "Zoom Meetings"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/zoom.us.app/Contents/MacOS/zoom.us
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: zoom
+          version: 7.2.2.88465
+          build: 7.2.2.88465
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/zoom.us.app/Contents/MacOS/zoom.us"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe'
         available_from: 2024-02-26
@@ -1190,6 +1673,19 @@ applications:
     display_name: "Dropbox"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Dropbox.app/Contents/MacOS/Dropbox
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dropbox
+          version: 274.4.4905
+          build: 274.4.4905
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Dropbox.app/Contents/MacOS/Dropbox"'
       windows:
         image_path: 'C:\Program Files (x86)\Dropbox\Client\Dropbox.exe'
         deployment:
@@ -1230,6 +1726,18 @@ applications:
     display_name: "Google Drive for Desktop"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Google Drive.app/Contents/MacOS/Google Drive
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: google_drive_desktop
+          version: 132.0.0
+          build: 132.0.0
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - '"/Applications/Google Drive.app/Contents/MacOS/Google Drive"'
       windows:
         image_path: 'C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe'
         deployment:
@@ -1268,6 +1776,18 @@ applications:
     display_name: "Citrix Workspace"
     singleton_per_session: true
     platforms:
+      macos:
+        image_path: /Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: citrix_workspace
+          version: 26.09.0.17
+          build: 26.09.0.17
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+        - '"/Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace"'
       windows:
         image_path: 'C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe'
         deployment:
@@ -1489,6 +2009,19 @@ applications:
   - id: postman
     display_name: "Postman"
     platforms:
+      macos:
+        image_path: /Applications/Postman.app/Contents/MacOS/Postman
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: postman
+          version: 12.32.3
+          build: 12.32.3
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/Postman.app/Contents/MacOS/Postman"'
       windows:
         image_path: 'C:\Users\{username}\AppData\Local\Postman\Postman.exe'
         available_from: 2024-03-01
@@ -1534,6 +2067,19 @@ applications:
   - id: dbeaver
     display_name: "DBeaver"
     platforms:
+      macos:
+        image_path: /Applications/DBeaver.app/Contents/MacOS/dbeaver
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: dbeaver
+          version: 26.2.2
+          build: 26.2.2
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - '"/Applications/DBeaver.app/Contents/MacOS/dbeaver"'
       windows:
         image_path: 'C:\Program Files\DBeaver\dbeaver.exe'
         deployment:
@@ -1646,6 +2192,24 @@ applications:
   - id: ldapsearch
     display_name: "LDAP Search"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/openldap/bin/ldapsearch
+        available_from: '2026-10-15'
+        deployment:
+          kind: managed
+          product_id: ldapsearch
+          version: 2.7.1
+          build: 2.7.1
+          scope: machine
+          architectures:
+          - arm64
+        command_templates:
+        - /opt/homebrew/opt/openldap/bin/ldapsearch -x -H ldap://{dc_server} -b "{base_dn}" "(objectClass=person)"
+        command_parameter_pools:
+          dc_server:
+          - directory.example.test
+          base_dn:
+          - dc=example,dc=test
       linux:
         image_path: "/usr/bin/ldapsearch"
         deployment:
@@ -1886,3 +2450,636 @@ applications:
     categories: [query]
     personas: [sysadmin, help_desk, security_analyst]
     system_types: [server, domain_controller, workstation]
+
+  # macOS system and workstation applications; deployment remains catalog-driven.
+  # Explicit SSH bundle actor; never selected as independent baseline noise.
+  - id: macos-ssh
+    display_name: macOS OpenSSH Client
+    platforms:
+      macos:
+        image_path: /usr/bin/ssh
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/bin/ssh {username}@{ssh_target}
+    categories: [macos_transport]
+    personas: []
+    system_types: [workstation]
+  - id: macos-launchd
+    display_name: launchd
+    platforms:
+      macos:
+        image_path: /sbin/launchd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /sbin/launchd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-loginwindow
+    display_name: loginwindow
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-logind
+    display_name: logind
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/logind
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/logind
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-syspolicyd
+    display_name: syspolicyd
+    platforms:
+      macos:
+        image_path: /usr/libexec/syspolicyd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/syspolicyd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-tccd
+    display_name: tccd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-smd
+    display_name: smd
+    platforms:
+      macos:
+        image_path: /usr/libexec/smd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/smd
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-mds
+    display_name: mds
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+    categories:
+    - macos_boot
+    personas:
+    - default
+    system_types:
+    - workstation
+  - id: macos-safari
+    display_name: safari
+    platforms:
+      macos:
+        image_path: /Applications/Safari.app/Contents/MacOS/Safari
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /Applications/Safari.app/Contents/MacOS/Safari
+    categories:
+    - browser
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-finder
+    display_name: finder
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder
+    categories:
+    - user_app
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-terminal
+    display_name: terminal
+    platforms:
+      macos:
+        image_path: /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+    categories:
+    - code
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+  - id: macos-zsh
+    display_name: zsh
+    platforms:
+      macos:
+        image_path: /bin/zsh
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - "/bin/zsh -c 'id; groups'"
+        - "/bin/zsh -c 'ls -la ~/Library/LaunchAgents'"
+    categories:
+    - code
+    - suspicious_cli
+    personas:
+    - developer
+    - sysadmin
+    - analyst
+    - security_analyst
+    - default
+    system_types:
+    - workstation
+
+  - id: macos-login
+    display_name: macOS terminal login
+    platforms:
+      macos:
+        image_path: /usr/bin/login
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: ["/usr/bin/login -fp {username}"]
+    categories: [macos_session]
+    personas: [developer, sysadmin, analyst, security_analyst, default]
+    system_types: [workstation]
+
+  - id: macos-bash
+    display_name: macOS Bash shell
+    platforms:
+      macos:
+        image_path: /bin/bash
+        deployment:
+          kind: catalog
+          product_id: apple-macos
+          release_policy: host_build
+          scope: machine
+          architectures: [arm64]
+        command_templates: ["/bin/bash -l"]
+    categories: [macos_session]
+    personas: [developer, sysadmin, analyst, security_analyst, default]
+    system_types: [workstation]
+
+  # Native service identities only; no automatic baseline or boot activation.
+  - id: macos-dock
+    display_name: Dock
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-windowserver
+    display_name: WindowServer
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-apsd
+    display_name: apsd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-cfprefsd
+    display_name: cfprefsd
+    platforms:
+      macos:
+        image_path: /usr/sbin/cfprefsd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/cfprefsd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-configd
+    display_name: configd
+    platforms:
+      macos:
+        image_path: /usr/libexec/configd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/configd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-coreaudiod
+    display_name: coreaudiod
+    platforms:
+      macos:
+        image_path: /usr/sbin/coreaudiod
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/coreaudiod
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-corespotlightd
+    display_name: corespotlightd
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-distnoted
+    display_name: distnoted
+    platforms:
+      macos:
+        image_path: /usr/sbin/distnoted
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/distnoted
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-installd
+    display_name: installd
+    platforms:
+      macos:
+        image_path: /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-launchservicesd
+    display_name: launchservicesd
+    platforms:
+      macos:
+        image_path: /System/Library/CoreServices/launchservicesd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/CoreServices/launchservicesd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-mdnsresponder
+    display_name: mDNSResponder
+    platforms:
+      macos:
+        image_path: /usr/sbin/mDNSResponder
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/mDNSResponder
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-mdworker_shared
+    display_name: mdworker_shared
+    platforms:
+      macos:
+        image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-nsurlsessiond
+    display_name: nsurlsessiond
+    platforms:
+      macos:
+        image_path: /usr/libexec/nsurlsessiond
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/nsurlsessiond
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-runningboardd
+    display_name: runningboardd
+    platforms:
+      macos:
+        image_path: /usr/libexec/runningboardd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/runningboardd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-securityd
+    display_name: securityd
+    platforms:
+      macos:
+        image_path: /usr/sbin/securityd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/securityd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-sharingd
+    display_name: sharingd
+    platforms:
+      macos:
+        image_path: /usr/libexec/sharingd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/sharingd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-trustd
+    display_name: trustd
+    platforms:
+      macos:
+        image_path: /usr/libexec/trustd
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/libexec/trustd
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation
+  - id: macos-usernoted
+    display_name: usernoted
+    platforms:
+      macos:
+        image_path: /usr/sbin/usernoted
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures:
+          - arm64
+        command_templates:
+        - /usr/sbin/usernoted
+    categories:
+    - macos_service
+    personas: []
+    system_types:
+    - workstation

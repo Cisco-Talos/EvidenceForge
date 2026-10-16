@@ -32,9 +32,13 @@ from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
 from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+    normalize_process_command,
+)
+from evidenceforge.generation.activity.process_helpers import (
     _windows_service_process_account as _windows_service_process_account,
 )
-from evidenceforge.generation.activity.process_helpers import normalize_process_command
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import StateManager
@@ -207,11 +211,14 @@ class ProcessActorResolver:
                     time=started_at,
                 )
         if (
-            _get_os_category(system.os) == "linux"
+            _get_os_category(system.os) in {"linux", "macos"}
             and request.source_visible_by is None
             and not request.from_storyline
-            and _linux_shell_process_reserves_foreground(process_name, command_line)
-            and _linux_foreground_lifetime(process_name, command_line) is not None
+            and _posix_shell_process_reserves_foreground(
+                _get_os_category(system.os), process_name, command_line
+            )
+            and _posix_foreground_lifetime(_get_os_category(system.os), process_name, command_line)
+            is not None
         ):
             started_at = self.foreground._reserve_foreground_shell_time(
                 system=system,

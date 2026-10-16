@@ -894,9 +894,9 @@ class SmbContext:
     advertised_filesystem: str = "NTFS"
     server_platform: Literal["windows", "linux"] = "windows"
     provider: Literal["windows", "samba"] = "windows"
-    client_access: Literal["windows_native", "cifs_mount", "smbclient", "external"] = (
-        "windows_native"
-    )
+    client_access: Literal[
+        "windows_native", "cifs_mount", "macos_mount", "smbclient", "external"
+    ] = "windows_native"
     encrypted: bool = False
     audit: Literal["minimal", "standard", "high"] = "standard"
 

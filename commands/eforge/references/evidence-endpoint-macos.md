@@ -1,0 +1,23 @@
+---
+description: "Experimental modeled macOS workstation coverage and evidence boundaries"
+---
+
+# macOS workstation evidence
+
+This branch is implementing macOS 26 arm64 workstation evidence. Running EvidenceForge or Studio on a Mac is a separate capability. The foundation and bounded history profile are experimental; complete Mac-native investigation coverage is not yet available.
+
+Use existing `environment.systems` values: `os: macOS 26`, explicit `os_build`, `architecture: arm64`, `type: workstation`, user placement, roles/services and software deployment. Use existing source deployment, collection, observation/timing and application overlay semantics. There is no parallel Mac configuration block. Preserve older scenarios and published packs; add new pack versions for changed defaults.
+
+Select eCAR for modeled endpoint process/session/flow evidence. Existing network, firewall, IDS, proxy, mail and server evidence can describe Mac interactions only when routing and sensor visibility permit it. Windows Security/Sysmon and Linux syslog remain local to their actual owners. Native Mac `logind` is not Linux `systemd-logind`.
+
+`zsh_history` writes `<host>/zsh_history/<username>.zsh_history` as `: epoch:0;command`. Its initial collection profile models EXTENDED_HISTORY with incremental append at interactive command submission; zero duration is not measured execution time. Only a live, explicitly interactive `/bin/zsh` shell in the owning session can submit history. Process creation alone does not imply history. Mac Bash uses the existing `bash_history` format only for an explicitly modeled interactive `/bin/bash` session. Noninteractive commands, multiline/metafied zsh records, history erasure and delayed session-exit history persistence remain outside this profile. [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History) describe the native semantics.
+
+Application availability and implemented variants are distinct. Unresolved Mac variants are unavailable rather than substituted with Linux/Windows paths. Initial managed variants have a conservative 2026-10-15 catalog-snapshot availability floor; host-bundled entries follow the modeled OS build. Paths and command pools come from catalog data, never the generator host or personal inventories.
+
+Mac-local file populations use existing `environment.storage.file_sets` with an absolute POSIX `root`, for example `/Users/alex/Documents`. This supplies synthetic file metadata and does not make the Mac an SMB server. APFS aliases/case policy remain pending. Experimental mounted SMB clients reuse `environment.storage.mappings`: select `client_access: auto` and `path_style: auto` or `mounted`, with an eligible mapping. Automatic Mac mount presentation is `/Volumes/<mapping-id>`; this is a synthetic allocation policy, not a claim about Finder naming. A mapping shared by Linux and Mac clients needs an explicit common `mount` or separate audience mappings. Native per-operation actors produce eCAR file evidence; the SMB transport has no invented user-process owner. Windows and Samba servers retain their own evidence. Native Mac SMB log messages remain unavailable.
+
+Mac clients can use the shared `ssh_session` bundle against a modeled Linux receiver. The existing `source_ip` identifies the Mac; the event's `system` remains the receiver. An already active local GUI session can own the catalog-backed `/usr/bin/ssh` client, its Terminal/login/zsh ancestry and interactive history. Client evidence must fit before transport and remain alive through its close. Missing session/readiness or an unsupported executable leaves transport unattributed; it does not invent a login or convert SCP into SSH. Mac receivers and native Mac SSH messages remain unfinished.
+
+Do not author native Endpoint Security or Unified Log output until those formats are registered and their individual capability gates are documented. SSH-native close, SMB-native client logs, ES exit and final Gatekeeper rejection remain evidence gaps. Do not interpret prompting as denial, registration as activation, or a file write as execution. Intel/Rosetta, sleep/wake, roaming, Mac SMB serving, binary log archives and filesystem artifact production are excluded from this implementation.
+
+The internal parser recognizes the bounded history profile. Selecting an output target does not establish SOF-ELK® or Splunk ingestion compatibility; no native Mac SIEM mapping is validated yet. Keep third-party records/derived exports ignored and author synthetic examples independently. Personal findings are not templates or fixtures.

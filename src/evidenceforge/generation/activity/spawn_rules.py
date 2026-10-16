@@ -87,7 +87,7 @@ def get_parent_config(os_type: str, parent_exe: str) -> dict[str, Any]:
     Returns empty dict if parent not in rules.
     """
     rules = load_spawn_rules()
-    os_key = "windows" if os_type == "windows" else "linux"
+    os_key = os_type if os_type in {"windows", "macos"} else "linux"
     os_rules = rules.get(os_key, {})
     # Case-insensitive lookup
     for name, config in os_rules.items():

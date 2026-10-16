@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.identity import PosixProcessCredentials
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions import NmapCommandProbeRequest
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
@@ -220,6 +221,14 @@ class GenerateSystemProcessCapability(Protocol):
         ...
 
 
+class ProcessCredentialsCapability(Protocol):
+    def __call__(
+        self, system: System, username: str, parent_pid: int, time: datetime
+    ) -> PosixProcessCredentials | None:
+        """Read explicit modeled process credentials without allocating identity."""
+        ...
+
+
 @dataclass(frozen=True)
 class ProcessIdentityCapabilities:
     """Bind shared host and user identity capabilities without exposing the generator interface."""
@@ -227,6 +236,7 @@ class ProcessIdentityCapabilities:
     user_for_username: UserModelForUsernameCapability
     host_context: BuildHostContextCapability
     user_sid: GetSidCapability
+    process_credentials: ProcessCredentialsCapability
 
 
 @dataclass(frozen=True)

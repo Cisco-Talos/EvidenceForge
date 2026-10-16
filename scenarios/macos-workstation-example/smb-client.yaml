@@ -1,0 +1,123 @@
+version: '1.0'
+generation_seed: 99
+name: macos-smb-client-example
+description: Experimental Mac mounted SMB client with Windows server-owned evidence
+environment:
+  description: Invented Mac workstation and Windows file server
+  users:
+  - username: test_user
+    full_name: Test User
+    email: test.user@example.com
+    enabled: true
+    primary_system: TEST-01
+  systems:
+  - hostname: TEST-01
+    ip: 10.0.0.1
+    os: macOS 26
+    type: workstation
+    assigned_user: test_user
+    services:
+    - smb-client
+    roles:
+    - workstation
+    architecture: arm64
+  - hostname: FS-TEST
+    ip: 10.0.0.20
+    os: Windows Server 2022
+    type: server
+    services:
+    - smb
+    roles: []
+  network:
+    segments:
+    - name: workstations
+      cidr: 10.0.0.0/24
+      systems:
+      - TEST-01
+      - FS-TEST
+      exposure: internal
+    sensors:
+    - type: network
+      name: core-zeek
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+    - type: firewall
+      name: edge-fw
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: tap
+      log_formats:
+      - cisco_asa
+  storage:
+    population: small
+    servers:
+    - system: FS-TEST
+      presets: []
+      volumes:
+      - id: data
+        mount: D:\
+        filesystem: ntfs
+      shares:
+      - id: team
+        name: Team
+        volume: data
+        root: Team
+        access:
+          modify:
+          - test_user
+        seed_files:
+        - ref: plan
+          path: Reports\plan.txt
+          size_bytes: 4096
+    mappings:
+    - id: team
+      share: FS-TEST.team
+      audience:
+        users:
+        - test_user
+        systems:
+        - TEST-01
+      lifecycle: persistent
+time_window:
+  start: '2026-10-15T10:00:00Z'
+  duration: 1h
+  warmup: 1h
+baseline_activity:
+  description: Minimal baseline activity
+  intensity: medium
+  variation: low
+storyline:
+- id: mac-local-login
+  time: +1m
+  actor: test_user
+  system: TEST-01
+  activity: Start a local Mac session for shared-file work
+  events:
+  - type: logon
+    logon_type: 2
+- id: mounted-read
+  time: +10m
+  actor: test_user
+  system: TEST-01
+  activity: Read a shared plan using a Mac workstation
+  events:
+  - type: smb_activity
+    operation: read
+    target:
+      type: share
+      share: FS-TEST.team
+      file_ref: plan
+    path_style: mounted
+    mapping: team
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: windows
+  destination: ./output
+  compression: false

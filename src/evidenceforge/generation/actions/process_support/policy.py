@@ -26,7 +26,10 @@ from evidenceforge.generation.actions.process_execution import (
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_common import _command_tokens as _command_tokens
-from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNT_LOGON_IDS
+from evidenceforge.generation.activity.process_helpers import (
+    _SYSTEM_ACCOUNT_LOGON_IDS,
+    _macos_foreground_lifetime,
+)
 from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS as _SYSTEM_ACCOUNTS
 from evidenceforge.generation.activity.process_helpers import (
     _linux_foreground_lifetime as _linux_foreground_lifetime,
@@ -595,6 +598,8 @@ def _foreground_process_lifetime_for_attribution(
     os_category = _get_os_category(system.os)
     if os_category == "windows":
         return _windows_foreground_lifetime(proc.image, proc.command_line)
+    if os_category == "macos":
+        return _macos_foreground_lifetime(proc.image, proc.command_line)
     if os_category == "linux":
         exe_name = proc.image.rsplit("/", 1)[-1].lower()
         if "/usr/lib/apt/methods/" in str(proc.image).lower():
@@ -653,19 +658,19 @@ def _process_provisional_termination_timing_request(
         )
         relationship_key = "activity.process.windows_foreground_lifetime"
         sample_key = f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}"
-    elif os_category == "linux":
+    elif os_category in {"linux", "macos"}:
         distribution = TruncatedLognormalDistribution(
             median=mode_seconds * 1_000_000,
             sigma=0.78,
             minimum=minimum_seconds * 1_000_000,
             maximum=maximum_seconds * 1_000_000,
         )
-        relationship_key = "activity.process.linux_foreground_lifetime"
+        relationship_key = f"activity.process.{os_category}_foreground_lifetime"
         sample_key = "provisional_close"
     else:
         raise ExecutionEffectPlanError(
             ExecutionEffectPlanErrorCode.INVALID_PLAN,
-            "provisional process termination timing requires Windows or Linux",
+            "provisional process termination timing requires Windows, Linux or macOS",
         )
     return (
         distribution,

@@ -1,0 +1,35 @@
+# Bounded EXTENDED_HISTORY + INC_APPEND_HISTORY profile. Zero elapsed time means
+# appended at command submission, not a measured zero-duration execution.
+name: zsh_history
+version: "1.0"
+description: "Experimental macOS zsh extended incremental history (single-line ASCII)"
+category: host
+fields:
+  - name: timestamp
+    type: timestamp
+    required: true
+    description: "Canonical interactive command submission time"
+  - name: username
+    type: string
+    required: true
+  - name: hostname
+    type: string
+    required: true
+  - name: command
+    type: string
+    required: true
+output:
+  format: text
+  file_extension: ".history"
+  encoding: utf-8
+  template: |
+    : {{ timestamp.timestamp() | int }}:0;{{ command }}
+validators:
+  - id: zsh_history.command
+    message: Command is non-empty
+    severity: error
+    when: []
+    checks:
+      - op: length
+        field: command
+        minimum: 1

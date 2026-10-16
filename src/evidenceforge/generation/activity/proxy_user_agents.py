@@ -165,8 +165,8 @@ def _generic_agent_pool_for_source(source_system: "System", data: dict[str, Any]
         server_pool = _pool(data, "server", "generic")
         if server_pool:
             return server_pool
-    if _get_os_category(source_system.os) == "linux":
-        return _pool(data, "workstation", "linux")
+    if _get_os_category(source_system.os) in {"linux", "macos"}:
+        return _pool(data, "workstation", _get_os_category(source_system.os))
     return _pool(data, "workstation", "windows")
 
 
@@ -251,6 +251,14 @@ def normalize_proxy_user_agent_for_os(
             return rng.choice(generic_pool) if generic_pool else user_agent
 
     os_category = _get_os_category(source_system.os)
+    # Edge is also a native Mac browser. Its product token alone says nothing
+    # about the operating system; retain the legacy classifier for other hosts.
+    mac_incompatible = any(
+        token in user_agent.lower() for token in ("windows nt", "win64", "wow64", "trident/")
+    ) or _ua_looks_linux(user_agent)
+    if os_category == "macos" and mac_incompatible:
+        native_pool = _pool(data, "workstation", "macos")
+        return rng.choice(native_pool) if native_pool else ""
     if os_category == "linux" and _ua_looks_windows(user_agent):
         linux_pool = _pool(data, "workstation", "linux")
         return (
@@ -281,12 +289,21 @@ def normalize_proxy_user_agent_for_os(
 def _browser_family_for_process(process_image: str) -> str:
     """Return the browser family implied by a process image, if any."""
     exe = process_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-    if exe in {"chrome.exe", "chrome", "google-chrome", "chromium", "chromium-browser"}:
+    if exe in {
+        "chrome.exe",
+        "chrome",
+        "google-chrome",
+        "google chrome",
+        "chromium",
+        "chromium-browser",
+    }:
         return "chrome"
-    if exe in {"msedge.exe", "microsoft-edge", "edge"}:
+    if exe in {"msedge.exe", "microsoft-edge", "edge", "microsoft edge"}:
         return "edge"
     if exe in {"firefox.exe", "firefox"}:
         return "firefox"
+    if exe == "safari":
+        return "safari"
     if exe in {"opera.exe", "opera"}:
         return "opera"
     return ""
@@ -301,6 +318,8 @@ def _user_agent_matches_browser_family(user_agent: str, family: str) -> bool:
         return "edg/" in ua or "edge/" in ua
     if family == "firefox":
         return "firefox/" in ua
+    if family == "safari":
+        return "safari/" in ua and "chrome/" not in ua and "version/" in ua
     if family == "opera":
         return "opr/" in ua or "opera/" in ua
     return False
@@ -321,7 +340,7 @@ def browser_user_agent_for_process(
 
     data = load_proxy_user_agents()
     os_category = _get_os_category(source_system.os) if source_system is not None else "windows"
-    pool_key = "linux" if os_category == "linux" else "windows"
+    pool_key = os_category if os_category in {"linux", "macos"} else "windows"
     candidates = [
         user_agent
         for user_agent in _pool(data, "workstation", pool_key)
@@ -414,6 +433,9 @@ def pick_proxy_user_agent(
     if _is_server_source(source_system, data):
         server_pool = _pool(data, "server", "generic")
         return rng.choice(server_pool)
+
+    if _get_os_category(source_system.os) == "macos":
+        return rng.choice(_pool(data, "workstation", "macos"))
 
     if _get_os_category(source_system.os) == "linux":
         linux_pool = _pool(data, "workstation", "linux")

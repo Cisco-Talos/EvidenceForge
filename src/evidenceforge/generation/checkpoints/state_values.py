@@ -13,7 +13,12 @@ from datetime import datetime, timedelta
 from pydantic import TypeAdapter, ValidationError
 
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -104,6 +109,11 @@ _RUNNING_PROCESS_FIELDS = (
     "concurrency_group_id",
     "pid_logical_position",
     "end_time",
+    "execution_ordinal",
+    "executed_at",
+    "prior_executions",
+    "lifetime_image",
+    "credentials",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -284,6 +294,10 @@ _PROCESS_IDENTITY_FIELDS = (
     "lifecycle_group_id",
     "parent_lifecycle_group_id",
     "primary_thread",
+    "execution_ordinal",
+    "executed_at",
+    "lifetime_image",
+    "credentials",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -347,7 +361,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v3": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,
@@ -364,7 +378,11 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v3": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "posix-process-credentials-v1": (
+        PosixProcessCredentials,
+        ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
+    ),
     "session-identity": (SessionIdentity, _SESSION_IDENTITY_FIELDS),
     "session-end-plan": (SessionEndPlan, _SESSION_END_PLAN_FIELDS),
     "smb-file-state": (SmbFileState, _SMB_FILE_STATE_FIELDS),
@@ -471,6 +489,33 @@ def decode_state_value(value: object) -> object:
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        # Explicit, lossless upgrade of pre-exec process records. Old readers reject
+        # the versioned tags; new readers retain legacy scenarios/checkpoint state.
+        if record_tag == "running-process" and len(encoded_fields) == 21:
+            record_tag = "running-process-v2"
+            encoded_fields = [
+                *encoded_fields,
+                encode_state_value(0),
+                encode_state_value(None),
+                encode_state_value(()),
+                encode_state_value(""),
+            ]
+        elif record_tag == "process-identity" and len(encoded_fields) == 12:
+            record_tag = "process-identity-v2"
+            encoded_fields = [
+                *encoded_fields,
+                encode_state_value(0),
+                encode_state_value(None),
+                encode_state_value(""),
+            ]
+        # v3 adds optional explicit credentials. Never infer them from a principal
+        # or a restored session: old records did not establish those facts.
+        if record_tag == "running-process-v2" and len(encoded_fields) == 25:
+            record_tag = "running-process-v3"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        elif record_tag == "process-identity-v2" and len(encoded_fields) == 15:
+            record_tag = "process-identity-v3"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:
             raise CheckpointCorruptionError("StateManager checkpoint record type is unsupported")

@@ -1,0 +1,84 @@
+{
+  "source_commit": "5ce84103fccd630a748cf59ab19808f9fa0699bc",
+  "assessment_date": "2026-10-15",
+  "scope": "In-memory model compilation, not generation or full scenario validation",
+  "platform_probes": [
+    {
+      "os": "Windows 11",
+      "activity_platform": "windows",
+      "validation_platform": "windows",
+      "source_platform": "windows",
+      "deployment_platform": "windows",
+      "default_architecture": "x64",
+      "world_capabilities": [
+        "rdp_client",
+        "smb_client"
+      ],
+      "ecar_applicable": true,
+      "ecar_source_instances": [
+        "ecar:ws-01"
+      ]
+    },
+    {
+      "os": "Ubuntu 24.04",
+      "activity_platform": "linux",
+      "validation_platform": "linux",
+      "source_platform": "linux",
+      "deployment_platform": "linux",
+      "default_architecture": "x64",
+      "world_capabilities": [
+        "ssh_receiver"
+      ],
+      "ecar_applicable": true,
+      "ecar_source_instances": [
+        "ecar:ws-01"
+      ]
+    },
+    {
+      "os": "macOS 15",
+      "activity_platform": "unknown",
+      "validation_platform": "unknown",
+      "source_platform": "macos",
+      "deployment_platform": "macos",
+      "default_architecture": "x64",
+      "world_capabilities": [],
+      "ecar_applicable": false,
+      "ecar_source_instances": []
+    },
+    {
+      "os": "macOS 26",
+      "activity_platform": "unknown",
+      "validation_platform": "unknown",
+      "source_platform": "macos",
+      "deployment_platform": "macos",
+      "default_architecture": "x64",
+      "world_capabilities": [],
+      "ecar_applicable": false,
+      "ecar_source_instances": []
+    },
+    {
+      "os": "Darwin",
+      "activity_platform": "unknown",
+      "validation_platform": "unknown",
+      "source_platform": "macos",
+      "deployment_platform": "macos",
+      "default_architecture": "x64",
+      "world_capabilities": [],
+      "ecar_applicable": false,
+      "ecar_source_instances": []
+    },
+    {
+      "os": "OS X",
+      "activity_platform": "unknown",
+      "validation_platform": "unknown",
+      "source_platform": "macos",
+      "deployment_platform": null,
+      "default_architecture": "x64",
+      "world_capabilities": [],
+      "ecar_applicable": false,
+      "ecar_source_instances": []
+    }
+  ],
+  "apfs_validation_error": "Input should be 'ntfs', 'refs', 'ext4' or 'xfs'",
+  "macos_case_variant_path_keys_equal": false
+}

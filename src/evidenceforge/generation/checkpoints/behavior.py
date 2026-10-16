@@ -95,6 +95,7 @@ def _surface_paths(package_root: Path) -> tuple[Path, ...]:
         package_root / "models" / "scenario.py",
         package_root / "output_targets.py",
         package_root / "utils" / "ids.py",
+        package_root / "utils" / "platforms.py",
         package_root / "utils" / "rng.py",
         package_root / "utils" / "time.py",
         package_root / "utils" / "timing.py",

@@ -295,7 +295,7 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
 
     if type(identity) is not ProcessIdentity:
         raise StateError("Materialization-batch process identity must have its exact type")
-    return (
+    legacy = (
         "process-identity-v1",
         identity.hostname,
         identity.object_id,
@@ -310,6 +310,33 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         identity.parent_lifecycle_group_id,
         _thread_identity_payload(identity.primary_thread),
     )
+
+    payload = legacy
+    if identity.execution_ordinal or identity.executed_at is not None or identity.lifetime_image:
+        payload = (
+            *payload,
+            (
+                "process-execution-v1",
+                identity.execution_ordinal,
+                identity.executed_at,
+                identity.lifetime_image,
+            ),
+        )
+    if identity.credentials is not None:
+        credentials = identity.credentials
+        payload = (
+            *payload,
+            (
+                "posix-credentials-v1",
+                credentials.real_uid,
+                credentials.effective_uid,
+                credentials.real_gid,
+                credentials.effective_gid,
+                credentials.audit_uid,
+                credentials.audit_session_id,
+            ),
+        )
+    return payload
 
 
 def _session_identity_payload(identity: SessionIdentity | None) -> tuple[object, ...] | None:
@@ -3816,6 +3843,26 @@ class GeneratorLifecycleAuthority:
                         "action",
                     ),
                     reason="State session metadata transition",
+                ),
+            )
+
+        for ordinal, execution in enumerate(plan.process_executions):
+            identity = self._action_cohort_registered_process(execution.target)
+            category = "process-execution"
+            append(
+                execution.after.execution_started_at,
+                2,
+                LifecycleTransition(
+                    transition_id=self._action_cohort_id(
+                        plan, category, ordinal, identity.object_id, "transition"
+                    ),
+                    subject=LifecycleEntityRef("process", identity.object_id),
+                    kind="dependent",
+                    canonical_time=execution.after.execution_started_at,
+                    action_id=self._action_cohort_id(
+                        plan, category, ordinal, identity.object_id, "action"
+                    ),
+                    reason="State process image replacement",
                 ),
             )
 

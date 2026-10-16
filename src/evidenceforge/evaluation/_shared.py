@@ -32,6 +32,7 @@ from evidenceforge.evaluation.parsers import ParsedRecord
 _USER_FIELD_MAP: dict[str, list[str]] = {
     "windows_event_security": ["TargetUserName", "SubjectUserName"],
     "bash_history": ["username"],
+    "zsh_history": ["username"],
     "ecar": ["principal"],
     "web_access": ["username"],
     "syslog": [],  # user extracted from message
@@ -41,6 +42,7 @@ _USER_FIELD_MAP: dict[str, list[str]] = {
 _HOST_FIELD_MAP: dict[str, str] = {
     "windows_event_security": "Computer",
     "bash_history": "hostname",
+    "zsh_history": "hostname",
     "ecar": "hostname",
     "syslog": "hostname",
 }

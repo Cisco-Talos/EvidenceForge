@@ -207,9 +207,9 @@ class LifecycleShadow:
             object_id=identity.object_id,
             pid=identity.pid,
             started_at=identity.started_at,
-            image=identity.image,
+            image=identity.initial_image,
             parent_object_id=parent_object_id,
-            role=self._process_role(identity.image),
+            role=self._process_role(identity.initial_image),
         )
         return candidate, token, membership
 
@@ -609,9 +609,9 @@ class LifecycleShadow:
                 object_id=identity.object_id,
                 pid=identity.pid,
                 started_at=identity.started_at,
-                image=identity.image,
+                image=identity.initial_image,
                 parent_object_id=parent_object_id,
-                role=self._process_role(identity.image),
+                role=self._process_role(identity.initial_image),
             ),
             token,
             membership,

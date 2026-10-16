@@ -28,6 +28,7 @@ from evidenceforge.models.scenario import (
     StorageShareConfig,
     System,
 )
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed, stable_hex_digest
 
 _MappingPresentation = tuple[frozenset[str], frozenset[str], str, str]
@@ -174,11 +175,13 @@ class StorageWorldModel:
         shares: Iterable[CompiledStorageShare],
         mappings: Iterable[CompiledStorageMapping],
         file_sets: Iterable[CompiledStorageFileSet] = (),
+        client_platforms: dict[str, str] | None = None,
     ) -> None:
         self.volumes = tuple(volumes)
         self.shares = tuple(shares)
         self.mappings = tuple(mappings)
         self.file_sets = tuple(file_sets)
+        self._client_platforms = dict(client_platforms or {})
         self.volumes_by_ref = {
             f"{volume.system}.{volume.id}".casefold(): volume for volume in self.volumes
         }
@@ -213,6 +216,10 @@ class StorageWorldModel:
             shares=compiler.shares,
             mappings=compiler.mappings,
             file_sets=compiler.file_sets,
+            client_platforms={
+                system.hostname.casefold(): platform_for_os(system.os)
+                for system in scenario.environment.systems
+            },
         )
 
     def share(self, ref: str) -> CompiledStorageShare:
@@ -391,7 +398,18 @@ class StorageWorldModel:
                     {"platform": "windows", "type": "drive", "root": mapping.drive}
                 )
             if mapping.mount is not None:
-                presentations.append({"platform": "linux", "type": "mount", "root": mapping.mount})
+                platforms = (
+                    {
+                        self._client_platforms.get(name.casefold(), "unknown")
+                        for name in (mapping.systems or self._client_platforms.keys())
+                    }
+                    if self._client_platforms
+                    else {"linux"}
+                )
+                presentations.extend(
+                    {"platform": platform, "type": "mount", "root": mapping.mount}
+                    for platform in sorted(platforms & {"linux", "macos"} or {"linux"})
+                )
             mapping_document = mapping.model_dump(mode="json")
             mapping_document.update(
                 {
@@ -435,20 +453,15 @@ class _StorageWorldCompiler:
 
     @staticmethod
     def _is_windows(system: System) -> bool:
-        return "windows" in system.os.casefold()
+        return platform_for_os(system.os) == "windows"
 
     @staticmethod
     def _is_linux(system: System) -> bool:
-        os_name = system.os.casefold()
-        return any(name in os_name for name in ("linux", "ubuntu", "debian", "rhel", "centos"))
+        return platform_for_os(system.os) == "linux"
 
-    @classmethod
-    def _platform(cls, system: System) -> str:
-        if cls._is_windows(system):
-            return "windows"
-        if cls._is_linux(system):
-            return "linux"
-        return "unknown"
+    @staticmethod
+    def _platform(system: System) -> str:
+        return platform_for_os(system.os)
 
     @staticmethod
     def _is_dc(system: System) -> bool:
@@ -475,7 +488,7 @@ class _StorageWorldCompiler:
         unsupported = sorted(
             server.system
             for server in self.config.servers
-            if self._platform(self.systems[server.system.casefold()]) == "unknown"
+            if self._platform(self.systems[server.system.casefold()]) not in {"windows", "linux"}
         )
         if unsupported:
             raise ValueError("storage servers must run Windows or Linux: " + ", ".join(unsupported))
@@ -511,10 +524,10 @@ class _StorageWorldCompiler:
             platform = self._platform(system)
             if platform == "unknown":
                 raise ValueError(
-                    f"storage file set {configured.id!r} requires a Windows or Linux system"
+                    f"storage file set {configured.id!r} requires a Windows, Linux or macOS system"
                 )
-            root_platform = "linux" if configured.root.startswith("/") else "windows"
-            if root_platform != platform:
+            root_is_posix = configured.root.startswith("/")
+            if root_is_posix != (platform in {"linux", "macos"}):
                 raise ValueError(
                     f"storage file-set root {configured.root!r} does not match {platform} "
                     f"system {system.hostname!r}"
@@ -1226,8 +1239,15 @@ class _StorageWorldCompiler:
                     used=used_drives,
                 )
             mount = mapping.mount
+            if mount is None and {"linux", "macos"}.issubset(platforms):
+                raise ValueError(
+                    "Mixed Linux/macOS mapping audiences require an explicit mount or "
+                    "separate platform audiences"
+                )
             if mount is None and "linux" in platforms:
                 mount = f"/mnt/{mapping.id}"
+            if mount is None and "macos" in platforms:
+                mount = f"/Volumes/{mapping.id}"
             if drive is not None:
                 existing = self._overlapping_presentation_owner(
                     users=user_scope,

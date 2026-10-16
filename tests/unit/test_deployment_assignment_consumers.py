@@ -513,6 +513,9 @@ def test_activity_bound_registry_uses_compiled_macos_platform(
         os_name="macOS 14",
     )
     _forbid_packaged_catalog(monkeypatch)
+    # This test isolates compiled application selection. Terminal bootstrap has
+    # its own frozen-descriptor contracts and requires real process state.
+    monkeypatch.setattr(generator, "ensure_macos_session_shell", lambda *_args: 200)
     monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(37))
     monkeypatch.setattr(network_planner_module, "_get_rng", lambda: random.Random(37))
 

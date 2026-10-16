@@ -193,6 +193,17 @@ relationships:
     position: after
     min_ms: 12
     max_ms: 520
+  # Modeled terminal readiness; not empirical native timing calibration.
+  macos.terminal_stage_ready:
+    class: human_workflow
+    position: after
+    min_ms: 1800
+    max_ms: 3000
+  macos.ssh_client_before_transport:
+    class: human_workflow
+    position: before
+    min_ms: 6500
+    max_ms: 18000
   source.ecar_process_create:
     class: source_latency
     position: after
@@ -365,6 +376,14 @@ endpoint_clock:
         host_drift_ppm:
           min: 0
           max: 0
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
+        host_offset_ms:
+          min: 0
+          max: 0
+        host_drift_ppm:
+          min: 0
+          max: 0
     enterprise_standard:
       windows:
         host_offset_ms:
@@ -380,6 +399,14 @@ endpoint_clock:
         host_drift_ppm:
           min: -8
           max: 8
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
+        host_offset_ms:
+          min: -900
+          max: 1500
+        host_drift_ppm:
+          min: -8
+          max: 8
     messy_collection:
       windows:
         host_offset_ms:
@@ -389,6 +416,14 @@ endpoint_clock:
           min: -35
           max: 35
       linux:
+        host_offset_ms:
+          min: -4200
+          max: 6200
+        host_drift_ppm:
+          min: -30
+          max: 30
+      # Modeled collection policy; not calibrated from personal captures.
+      macos:
         host_offset_ms:
           min: -4200
           max: 6200

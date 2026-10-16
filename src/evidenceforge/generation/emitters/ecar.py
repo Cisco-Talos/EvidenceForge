@@ -535,8 +535,8 @@ class EcarEmitter(HostMultiplexEmitter):
             not source_is_client
             and not destination_is_client
             and (not copy_or_move or smb.phase == "rename")
-            and smb.client_access == "cifs_mount"
-            and host.os_category == "linux"
+            and (smb.client_access, host.os_category)
+            in {("cifs_mount", "linux"), ("macos_mount", "macos")}
             and smb.client_path.startswith("/")
             and local_process is not None
             and local_process.pid > 0

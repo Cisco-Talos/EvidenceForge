@@ -212,11 +212,11 @@ class PersistentSmbClientProcessPreparation:
     logon_type: int
     started_at: datetime | None
     lifecycle_group_id: str
-    os_category: Literal["windows", "linux"]
+    os_category: Literal["windows", "linux", "macos"]
     integrity_level: str
     access_mode: str
     path_style: str
-    transport_attribution: Literal["kernel", "process"]
+    transport_attribution: Literal["kernel", "process", "none"]
     lifecycle: str
 
     def __post_init__(self) -> None:

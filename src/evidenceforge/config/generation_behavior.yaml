@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 165
+current_revision: 166
 history_start_revision: 1
-behavior_surface_sha256: e25cf1529ae25f2d99453e7ccf8ee8213e213116b6208cfedfa8ba77ea11da88
+behavior_surface_sha256: 2edd715a1dfec085f14a9354b1daba3de449768e61c943d08a652f69e314f34a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1649,3 +1649,13 @@ changes:
       - pack-resolution-diagnostics
     formats: []
     summary: Retains not-found diagnostics when neither project repository has a pack and rejects dangling publication links before legacy fallback. Equivalent resolved inputs and deterministic rendering are unchanged.
+  - revision: 166
+    id: macos-workstation-foundations
+    impact: localized
+    domains:
+      - platform-classification
+      - process-session-lifecycle
+      - application-deployment
+      - interactive-shell-history
+    formats: [ecar, bash_history, zsh_history]
+    summary: Adds modeled macOS workstation classification, local identities, process allocation, boot ancestry, catalog variants, endpoint timing and explicitly owned interactive Bash/zsh history. Other native evidence families remain separately gated.

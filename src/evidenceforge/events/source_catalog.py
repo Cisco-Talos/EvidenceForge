@@ -19,6 +19,7 @@ from types import MappingProxyType
 
 from evidenceforge.events.collection_policy import CollectionCapability
 from evidenceforge.models.exceptions import ConfigurationError
+from evidenceforge.utils.platforms import platform_for_os
 
 
 class SourceCatalogError(ConfigurationError):
@@ -47,20 +48,9 @@ def _marker(value: str) -> str:
     return _catalog_name(value.replace("_", "-"), "applicability marker")
 
 
-def source_platform_for_os(os_name: str) -> str:
-    """Return the canonical deployment platform for a scenario OS label."""
-
-    normalized = os_name.strip().casefold()
-    if "windows" in normalized:
-        return "windows"
-    if any(
-        marker in normalized
-        for marker in ("linux", "ubuntu", "centos", "debian", "rhel", "red hat")
-    ):
-        return "linux"
-    if any(marker in normalized for marker in ("macos", "mac os", "darwin", "os x")):
-        return "macos"
-    return "unknown"
+def source_platform_for_os(os_string: str) -> str:
+    """Return the canonical modeled platform for an OS label."""
+    return platform_for_os(os_string)
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,7 +356,7 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             | CollectionCapability.SMB
             | _ENDPOINT_ACTOR
             | CollectionCapability.DESTINATION_ENDPOINT,
-            _ENDPOINT_PLATFORMS,
+            frozenset({"windows", "linux", "macos"}),
         ),
         _host(
             "syslog",
@@ -386,7 +376,13 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             "bash_history",
             "bash_history",
             CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
-            _LINUX,
+            frozenset({"linux", "macos"}),
+        ),
+        _host(
+            "zsh_history",
+            "zsh_history",
+            CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
+            frozenset({"macos"}),
         ),
         _host(
             "proxy_access",

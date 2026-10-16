@@ -43,6 +43,7 @@ import yaml
 from evidenceforge.models import Scenario
 from evidenceforge.models.exceptions import PathSafetyError
 from evidenceforge.models.ids import policy_fingerprint
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -88,17 +89,21 @@ _WINDOWS_PATTERNS = ["windows"]
 _LINUX_PATTERNS = ["linux", "ubuntu", "centos", "debian", "rhel"]
 
 # Formats that are bound to a specific OS
-_OS_BOUND_FORMATS: dict[str, str] = {
-    "windows_event_security": "windows",
-    "windows_event_sysmon": "windows",
-    "syslog": "linux",
-    "bash_history": "linux",
+_OS_BOUND_FORMATS: dict[str, tuple[str, ...]] = {
+    "windows_event_security": ("windows",),
+    "windows_event_sysmon": ("windows",),
+    "syslog": ("linux",),
+    "bash_history": ("linux", "macos"),
+    "zsh_history": ("macos",),
 }
 
 # Reverse: OS → expected host-local formats
 _OS_EXPECTED_FORMATS: dict[str, set[str]] = {
     "windows": {"windows_event_security", "windows_event_sysmon"},
     "linux": {"syslog", "bash_history"},
+    # History depends on an explicitly modeled interactive shell and collection
+    # profile; Mac endpoint activity does not require both shell-history formats.
+    "macos": {"ecar"},
 }
 
 # Event types that are Windows-specific
@@ -125,20 +130,8 @@ _VOLUME_TARGETS: dict[str, int] = {"low": 500, "medium": 5000, "high": 10000}
 
 
 def _get_os_category(os_string: str) -> str:
-    """Detect OS category from OS string.
-
-    Args:
-        os_string: OS name/version string (e.g., "Windows 10", "Linux Ubuntu 20.04")
-
-    Returns:
-        "windows", "linux", or "unknown"
-    """
-    os_lower = os_string.lower()
-    if any(p in os_lower for p in _WINDOWS_PATTERNS):
-        return "windows"
-    if any(p in os_lower for p in _LINUX_PATTERNS):
-        return "linux"
-    return "unknown"
+    """Return the canonical modeled platform for an OS label."""
+    return platform_for_os(os_string)
 
 
 def _is_full_process_path(process_name: str) -> bool:
@@ -355,16 +348,16 @@ class ScenarioValidator:
                         severity="error",
                         field_path=f"{path}.system",
                         message=f"Unknown storage file-set system {file_set.system!r}",
-                        suggestion="Reference an existing Windows or Linux environment system.",
+                        suggestion="Reference an existing Windows, Linux or macOS environment system.",
                     )
                 )
-            elif _get_os_category(system.os) not in {"windows", "linux"}:
+            elif _get_os_category(system.os) not in {"windows", "linux", "macos"}:
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"{path}.system",
-                        message="Storage file sets require a recognized Windows or Linux system",
-                        suggestion="Use a modeled Windows or Linux host.",
+                        message="Storage file sets require a recognized Windows, Linux or macOS system",
+                        suggestion="Use a modeled Windows, Linux or macOS host.",
                     )
                 )
             if file_set.preset.casefold() not in known_presets:
@@ -635,13 +628,13 @@ class ScenarioValidator:
                         suggestion="Target a Windows system or use a POSIX mount for Linux clients.",
                     )
                 )
-            if mapping.mount is not None and "linux" not in platforms:
+            if mapping.mount is not None and not platforms.intersection({"linux", "macos"}):
                 self.issues.append(
                     ValidationIssue(
                         severity="error",
                         field_path=f"environment.storage.mappings.{index}.mount",
-                        message="Storage mapping mount has no applicable Linux client",
-                        suggestion="Target a Linux system or use a drive for Windows clients.",
+                        message="Storage mapping mount has no applicable Linux/macOS client",
+                        suggestion="Target a POSIX client or use a drive for Windows clients.",
                     )
                 )
 
@@ -768,12 +761,15 @@ class ScenarioValidator:
                                     suggestion="Use path_style: mounted or unc for a Linux client.",
                                 )
                             )
-                        if spec.path_style == "mounted" and client_platform != "linux":
+                        if spec.path_style == "mounted" and client_platform not in {
+                            "linux",
+                            "macos",
+                        }:
                             self.issues.append(
                                 ValidationIssue(
                                     severity="error",
                                     field_path=f"{path}.path_style",
-                                    message="Mounted SMB presentation is only valid on Linux clients",
+                                    message="Mounted SMB presentation requires a Linux/macOS client",
                                     suggestion="Use path_style: mapped or unc for a Windows client.",
                                 )
                             )
@@ -784,6 +780,18 @@ class ScenarioValidator:
                                     field_path=f"{path}.client_access",
                                     message="windows_native SMB access requires a Windows client",
                                     suggestion="Use cifs_mount, smbclient, or auto for a Linux client.",
+                                )
+                            )
+                        if client_platform == "macos" and (
+                            spec.client_access != "auto"
+                            or spec.path_style not in {"auto", "mounted"}
+                        ):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"{path}.client_access",
+                                    message="macOS SMB clients require automatic mounted access",
+                                    suggestion="Use client_access: auto with path_style: auto/mounted and a mount mapping.",
                                 )
                             )
                         if (
@@ -853,7 +861,7 @@ class ScenarioValidator:
                                         suggestion="Use an absolute Windows drive path.",
                                     )
                                 )
-                            if client_platform == "linux" and not location_is_posix:
+                            if client_platform in {"linux", "macos"} and not location_is_posix:
                                 self.issues.append(
                                     ValidationIssue(
                                         severity="error",
@@ -1001,6 +1009,10 @@ class ScenarioValidator:
     ) -> None:
         """Validate per-share mapping, credential, identity, and ACL feasibility."""
 
+        macos_client = spec.client is None and any(
+            host.hostname.casefold() == system.casefold() and _get_os_category(host.os) == "macos"
+            for host in self.scenario.environment.systems
+        )
         authored_mapping = None
         if spec.mapping is not None:
             mapping = world.mappings_by_id.get(spec.mapping.casefold())
@@ -1081,7 +1093,7 @@ class ScenarioValidator:
                 )
                 selection_error = True
 
-            if spec.client_access == "cifs_mount" and (
+            if (spec.client_access == "cifs_mount" or macos_client) and (
                 selected_mapping is None or selected_mapping.mount is None
             ):
                 mounted = [mapping for mapping in applicable if mapping.mount is not None]
@@ -1091,8 +1103,10 @@ class ScenarioValidator:
                             severity="error",
                             field_path=f"{path}.client_access",
                             message=(
-                                "cifs_mount SMB access must resolve exactly one active "
-                                f"Linux mount mapping for {share.ref}; found {len(mounted)}"
+                                f"{'macOS mounted' if macos_client else 'cifs_mount'} SMB access "
+                                "must resolve exactly one active "
+                                f"{'macOS' if macos_client else 'Linux'} mount mapping "
+                                f"for {share.ref}; found {len(mounted)}"
                             ),
                             suggestion="Set mapping to one mapping with mount, or use smbclient.",
                         )
@@ -1120,8 +1134,8 @@ class ScenarioValidator:
                     ValidationIssue(
                         severity="error",
                         field_path=f"{path}.mapping",
-                        message=f"Storage mapping {selected_mapping.id!r} has no Linux mount",
-                        suggestion="Configure mount or target a Linux audience for allocation.",
+                        message=f"Storage mapping {selected_mapping.id!r} has no POSIX mount",
+                        suggestion="Configure mount or target a Linux/macOS audience for allocation.",
                     )
                 )
 
@@ -2513,6 +2527,7 @@ class ScenarioValidator:
             "ecar",
             "syslog",
             "bash_history",
+            "zsh_history",
             "snort_alert",
             "cisco_asa",
             "web_access",
@@ -2821,6 +2836,7 @@ class ScenarioValidator:
             "ecar",
             "syslog",
             "bash_history",
+            "zsh_history",
             "snort_alert",
             "cisco_asa",
             "web_access",
@@ -2938,8 +2954,9 @@ class ScenarioValidator:
         os_present = set(os_categories.values())
 
         # Error: OS-bound format requested but no matching-OS systems
-        for fmt, required_os in _OS_BOUND_FORMATS.items():
-            if fmt in expanded_formats and required_os not in os_present:
+        for fmt, platforms in _OS_BOUND_FORMATS.items():
+            required_os = " or ".join(platforms)
+            if fmt in expanded_formats and not os_present.intersection(platforms):
                 self.issues.append(
                     ValidationIssue(
                         severity="error",

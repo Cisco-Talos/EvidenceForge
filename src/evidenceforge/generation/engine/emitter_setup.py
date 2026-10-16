@@ -79,6 +79,7 @@ from evidenceforge.generation.emitters import (
     ZeekSslEmitter,
     ZeekWeirdEmitter,
     ZeekX509Emitter,
+    ZshHistoryEmitter,
 )
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.lifecycle_authority import (
@@ -266,6 +267,7 @@ def _build_emitter_classes() -> dict:
         "ecar": EcarEmitter,
         "syslog": SyslogEmitter,
         "bash_history": BashHistoryEmitter,
+        "zsh_history": ZshHistoryEmitter,
         "snort_alert": SnortEmitter,
         "cisco_asa": CiscoAsaEmitter,
         "web_access": WebEmitter,
@@ -300,6 +302,7 @@ _HOST_FORMATS = {
     "ecar",
     "syslog",
     "bash_history",
+    "zsh_history",
     "web_access",
     "proxy_access",
 }
@@ -656,6 +659,8 @@ class EmitterSetupMixin:
                     ]
                     if system.type and system.type.lower() in ("server", "domain_controller"):
                         svcs.append("smb-server")
+                elif os_cat == "macos":
+                    svcs = ["dns-client", "ntp-client", "smb-client"]
                 else:
                     svcs = ["dns-client", "ntp-client", "syslog"]
                 defaults[system.hostname] = svcs
@@ -1111,6 +1116,70 @@ class EmitterSetupMixin:
             aliases=tuple(aliases),
         )
 
+    def _build_macos_boot_host_spec(
+        self, system: System, boot_time: datetime | None
+    ) -> _BootHostSpec:
+        """Build the Mac boot forest from the effective application catalog."""
+        from evidenceforge.generation.activity.application_catalog import load_catalog
+
+        rng = random.Random(_stable_seed(f"macos_boot_sequence:{system.hostname}"))
+        elapsed = 0.0
+        processes: list[_BootProcessSpec] = []
+        for app in load_catalog()["applications"]:
+            if "macos_boot" not in app["categories"] or "macos" not in app["platforms"]:
+                continue
+            platform = app["platforms"]["macos"]
+            alias = app["id"].removeprefix("macos-")
+            is_init = alias == "launchd"
+            if not is_init:
+                elapsed += rng.uniform(0.05, 1.9)
+            processes.append(
+                _BootProcessSpec(
+                    alias=alias,
+                    parent_alias=None if is_init else "launchd",
+                    fixed_pid=1 if is_init else None,
+                    image=platform["image_path"],
+                    command_line=platform["command_templates"][0],
+                    username="root",
+                    integrity_level="System",
+                    os_category="macos",
+                    logon_id="",
+                    start_time=boot_time + timedelta(seconds=elapsed) if boot_time else None,
+                )
+            )
+        if not processes or processes[0].alias != "launchd":
+            raise StateError("Mac boot catalog must begin with the macos-launchd application")
+        return _BootHostSpec(
+            hostname=system.hostname,
+            os_category="macos",
+            boot_time=boot_time,
+            machine_id="",
+            processes=tuple(processes),
+            aliases=(),
+        )
+
+    def _seed_macos_process_tree(self, system: System, pids: dict[str, int]) -> None:
+        """Materialize the same catalog boot forest for direct compatibility callers."""
+        state = self.state_manager
+        host = self._build_macos_boot_host_spec(system, state.state.current_time)
+        for member in host.processes:
+            if member.start_time is not None:
+                state.set_current_time(member.start_time)
+            plan = state.plan_process_materialization(
+                system=host.hostname,
+                parent_pid=pids[member.parent_alias] if member.parent_alias else 0,
+                fixed_pid=member.fixed_pid,
+                image=member.image,
+                command_line=member.command_line,
+                username=member.username,
+                integrity_level=member.integrity_level,
+                os_category=host.os_category,
+                logon_id=member.logon_id,
+            )
+            with state.materialization_guard(plan.expected_version):
+                process = state.materialize_process(plan)
+            pids[member.alias] = process.pid
+
     def _build_boot_fleet_spec(self, original_time: datetime | None) -> BootFleetSpec:
         """Resolve every boot input once into the exact symbolic fleet forest."""
 
@@ -1128,6 +1197,8 @@ class EmitterSetupMixin:
             )
             if _get_os_category(system.os) == "windows":
                 hosts.append(self._build_windows_boot_host_spec(system, boot_time))
+            elif _get_os_category(system.os) == "macos":
+                hosts.append(self._build_macos_boot_host_spec(system, boot_time))
             else:
                 hosts.append(self._build_linux_boot_host_spec(system, boot_time))
         return BootFleetSpec(
@@ -1630,6 +1701,8 @@ class EmitterSetupMixin:
                                 _batch_builder=None,
                                 _boot_base=boot_time,
                             )
+                        elif _get_os_category(system.os) == "macos":
+                            self._seed_macos_process_tree(system, pids)
                         else:
                             self._seed_linux_process_tree(
                                 system,

@@ -21,6 +21,7 @@ class ValidationRoute(BaseModel):
 
 _NATIVE_SOURCES = (
     "bash_history",
+    "zsh_history",
     "cisco_asa",
     "ecar",
     "proxy_access",

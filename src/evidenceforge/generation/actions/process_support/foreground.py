@@ -18,6 +18,10 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
+from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+)
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.state_manager import StateManager
@@ -151,7 +155,7 @@ class ProcessForegroundLifecycle:
         logon_id: str,
         parent_pid: int,
     ) -> tuple[str, str, str, int] | None:
-        """Return the interactive shell key that serializes foreground Linux children."""
+        """Return the interactive shell key that serializes foreground POSIX children."""
         proc = self.state_manager.get_process(system.hostname, parent_pid)
         if proc is None:
             return None
@@ -188,8 +192,9 @@ class ProcessForegroundLifecycle:
         running = self.state_manager.get_process(system.hostname, pid)
         if (
             running is not None
-            and _get_os_category(system.os) == "linux"
-            and _linux_shell_process_reserves_foreground(
+            and _get_os_category(system.os) in {"linux", "macos"}
+            and _posix_shell_process_reserves_foreground(
+                _get_os_category(system.os),
                 running.image,
                 running.command_line,
             )
@@ -350,8 +355,13 @@ class ProcessForegroundLifecycle:
                 or process.start_time > requested_time
                 or (process.end_time is not None and process.end_time <= requested_time)
                 or (concurrency_group_id and process.concurrency_group_id == concurrency_group_id)
-                or not _linux_shell_process_reserves_foreground(process.image, process.command_line)
-                or _linux_foreground_lifetime(process.image, process.command_line) is not None
+                or not _posix_shell_process_reserves_foreground(
+                    _get_os_category(system.os), process.image, process.command_line
+                )
+                or _posix_foreground_lifetime(
+                    _get_os_category(system.os), process.image, process.command_line
+                )
+                is not None
             ):
                 continue
             session = self.state_manager.get_session(process.logon_id)
@@ -396,7 +406,12 @@ class ProcessForegroundLifecycle:
         reserved = self._foreground_shell_next_time.get(key)
         session = self.state_manager.get_session(process.logon_id)
         deadlines = [self.foreground_process_termination_time(system.hostname, process.pid)]
-        if _linux_foreground_lifetime(process.image, process.command_line) is None:
+        if (
+            _posix_foreground_lifetime(
+                _get_os_category(system.os), process.image, process.command_line
+            )
+            is None
+        ):
             deadlines.extend(
                 (
                     self.state_manager.get_session_end_time(process.logon_id),
@@ -436,8 +451,8 @@ class ProcessForegroundLifecycle:
                 if (
                     sibling.pid == process.pid
                     or sibling.parent_pid != process.parent_pid
-                    or not _linux_shell_process_reserves_foreground(
-                        sibling.image, sibling.command_line
+                    or not _posix_shell_process_reserves_foreground(
+                        _get_os_category(system.os), sibling.image, sibling.command_line
                     )
                 ):
                     continue

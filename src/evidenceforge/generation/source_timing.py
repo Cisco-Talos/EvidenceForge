@@ -5846,7 +5846,7 @@ class SourceTimingPlanner:
     ) -> datetime:
         """Project canonical time through the engine-owned endpoint clock."""
 
-        if not hostname or os_category not in {"windows", "linux"}:
+        if not hostname or os_category not in {"windows", "linux", "macos"}:
             return ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
         spec = SourceClockSpec(
@@ -7779,7 +7779,7 @@ class SourceTimingPlanner:
     ) -> timedelta:
         """Return the active profile's deterministic clock adjustment for one host."""
 
-        if not hostname or os_category not in {"windows", "linux"}:
+        if not hostname or os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         projected = self._runtime_endpoint_clock_time(
             timestamp,
@@ -7800,7 +7800,7 @@ class SourceTimingPlanner:
         reference time, including timestamps that precede that reference.
         """
 
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         canonical_time = ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
@@ -7830,7 +7830,7 @@ class SourceTimingPlanner:
         later after both hosts project through independent endpoint clocks.
         """
 
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return timedelta(0)
         canonical_time = ensure_utc(canonical_time)
         timing = endpoint_clock_timing(self.clock_profile_name, os_category)
@@ -7867,8 +7867,8 @@ class SourceTimingPlanner:
         """
 
         canonical_time = ensure_utc(canonical_time)
-        if os_category not in {"windows", "linux"}:
-            raise ValueError("process-create source headroom requires windows or linux")
+        if os_category not in {"windows", "linux", "macos"}:
+            raise ValueError("process-create source headroom requires windows, linux, or macos")
         if type(format_names) is not tuple or any(type(name) is not str for name in format_names):
             raise TypeError("process-create source formats must be an exact tuple of strings")
         families = tuple(
@@ -7887,7 +7887,7 @@ class SourceTimingPlanner:
         if os_category != "windows" and any(
             family in {"sysmon", "windows_security"} for family in families
         ):
-            raise ValueError("Linux process-create admission cannot request Windows formats")
+            raise ValueError("Non-Windows process-create admission cannot request Windows formats")
         parent_floor = ensure_utc(parent_source_time) if parent_source_time is not None else None
         session_floor = ensure_utc(session_source_time) if session_source_time is not None else None
         clock_bound = canonical_time + self.endpoint_clock_positive_headroom(
@@ -7969,7 +7969,7 @@ class SourceTimingPlanner:
                 host = event.src_host or event.dst_host
             hostname = getattr(host, "hostname", "") or ""
             os_category = getattr(host, "os_category", "") or ""
-            if os_category not in {"windows", "linux"}:
+            if os_category not in {"windows", "linux", "macos"}:
                 return None
             return (hostname, os_category) if hostname else None
         if source_key.startswith(("source.syslog_", "source.bash_history_")):

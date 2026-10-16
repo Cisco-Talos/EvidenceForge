@@ -268,3 +268,4 @@ from evidenceforge.evaluation.parsers.zeek_smtp import ZeekSmtpParser  # noqa: E
 from evidenceforge.evaluation.parsers.zeek_ssl import ZeekSslParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_weird import ZeekWeirdParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_x509 import ZeekX509Parser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.zsh_history import ZshHistoryParser  # noqa: E402,F401

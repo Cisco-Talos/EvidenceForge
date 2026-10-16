@@ -7732,6 +7732,22 @@
           "call": "OccurrenceBuilder",
           "contexts_attached_at_construction": [
             "auth",
+            "identity_plan",
+            "lifecycle",
+            "shell",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 25493,
+          "resolved_dynamically": true,
+          "scope": "ActivityGenerator.emit_macos_shell_history"
+        },
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
             "shell",
             "src_host"
           ],
@@ -7740,12 +7756,14 @@
             "bash_command"
           ],
           "file": "src/evidenceforge/generation/activity/generator.py",
-          "line": 19499,
+          "line": 25530,
           "scope": "ActivityGenerator._emit_bash_command_event"
         }
       ],
       "contexts_attached_at_literal_constructors": [
         "auth",
+        "identity_plan",
+        "lifecycle",
         "shell",
         "src_host"
       ],
@@ -7766,7 +7784,7 @@
           "call": "OccurrenceBuilder",
           "file": "src/evidenceforge/generation/activity/generator.py",
           "kind": "call_keyword",
-          "line": 19499,
+          "line": 25530,
           "scope": "ActivityGenerator._emit_bash_command_event"
         }
       ],
@@ -11278,49 +11296,6 @@
       ]
     },
     {
-      "authored_spec": {
-        "event_type": "rdp_session",
-        "fields": [
-          "type",
-          "source_ip"
-        ],
-        "file": "src/evidenceforge/models/scenario.py",
-        "line": 1130,
-        "model": "RdpSessionEventSpec",
-        "validators": []
-      },
-      "constructors": [],
-      "contexts_attached_at_literal_constructors": [],
-      "emitter_consumers": [],
-      "event_type": "rdp_session",
-      "kind": "authored_intent",
-      "path_classification": "intentional_adapter",
-      "path_review": {
-        "assessment": "These are authored intent names, not canonical occurrence kinds. Their branches deliberately expand into lower-level occurrences.",
-        "classification": "intentional_adapter",
-        "owner": "typed storyline dispatcher and the delegated action/generator family"
-      },
-      "review_status": "path_review_complete",
-      "static_references": [],
-      "storyline_dispatch": {
-        "calls": [
-          {
-            "call": "self.activity_generator.generate_rdp_session",
-            "line": 4778,
-            "name": "generate_rdp_session"
-          }
-        ],
-        "file": "src/evidenceforge/generation/engine/storyline.py",
-        "line": 4743
-      },
-      "test_files": [
-        "tests/integration/test_ids_alert_generation.py",
-        "tests/unit/test_ground_truth.py",
-        "tests/unit/test_install_skills.py",
-        "tests/unit/test_storyline_command_networks.py"
-      ]
-    },
-    {
       "authored_spec": null,
       "constructors": [
         {
@@ -11471,6 +11446,49 @@
       "storyline_dispatch": null,
       "test_files": [
         "tests/unit/test_rdp_deferred_production.py"
+      ]
+    },
+    {
+      "authored_spec": {
+        "event_type": "rdp_session",
+        "fields": [
+          "type",
+          "source_ip"
+        ],
+        "file": "src/evidenceforge/models/scenario.py",
+        "line": 1130,
+        "model": "RdpSessionEventSpec",
+        "validators": []
+      },
+      "constructors": [],
+      "contexts_attached_at_literal_constructors": [],
+      "emitter_consumers": [],
+      "event_type": "rdp_session",
+      "kind": "authored_intent",
+      "path_classification": "intentional_adapter",
+      "path_review": {
+        "assessment": "These are authored intent names, not canonical occurrence kinds. Their branches deliberately expand into lower-level occurrences.",
+        "classification": "intentional_adapter",
+        "owner": "typed storyline dispatcher and the delegated action/generator family"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": {
+        "calls": [
+          {
+            "call": "self.activity_generator.generate_rdp_session",
+            "line": 4778,
+            "name": "generate_rdp_session"
+          }
+        ],
+        "file": "src/evidenceforge/generation/engine/storyline.py",
+        "line": 4743
+      },
+      "test_files": [
+        "tests/integration/test_ids_alert_generation.py",
+        "tests/unit/test_ground_truth.py",
+        "tests/unit/test_install_skills.py",
+        "tests/unit/test_storyline_command_networks.py"
       ]
     },
     {
@@ -13169,6 +13187,49 @@
         "tests/unit/test_emitters.py",
         "tests/unit/test_eval_record_fidelity.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "auth",
+            "identity_plan",
+            "lifecycle",
+            "shell",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 25493,
+          "resolved_dynamically": true,
+          "scope": "ActivityGenerator.emit_macos_shell_history"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "auth",
+        "identity_plan",
+        "lifecycle",
+        "shell",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "zsh_history"
+      ],
+      "event_type": "zsh_command",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "All discovered authored, baseline, causal, and internal entries converge on one occurrence-construction family. Several bundles are thin facades, which is tracked as an architectural risk rather than a second output path.",
+        "classification": "single_canonical_path",
+        "owner": "named action bundle or its current ActivityGenerator executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": []
     }
   ],
   "formats": [
@@ -13176,7 +13237,7 @@
       "definition": "src/evidenceforge/config/formats/bash_history.yaml",
       "emitter_class": "BashHistoryEmitter",
       "emitter_file": "src/evidenceforge/generation/emitters/bash_history.py",
-      "emitter_line": 140,
+      "emitter_line": 3254,
       "evaluator_files": [
         "src/evidenceforge/evaluation/_shared.py",
         "src/evidenceforge/evaluation/anomaly.py",
@@ -13186,6 +13247,7 @@
         "src/evidenceforge/evaluation/pillars/parseability.py",
         "src/evidenceforge/evaluation/pillars/plausibility.py",
         "src/evidenceforge/evaluation/pillars/timing.py",
+        "src/evidenceforge/evaluation/validation_routes.py",
         "src/evidenceforge/evaluation/visibility.py"
       ],
       "format": "bash_history",
@@ -13209,7 +13271,10 @@
       "test_files": [
         "tests/integration/test_format_definitions.py",
         "tests/integration/test_spillage_generation.py",
+        "tests/support/native_records.py",
         "tests/unit/test_activity.py",
+        "tests/unit/test_artifact_properties.py",
+        "tests/unit/test_bash_history_export_plan_identity.py",
         "tests/unit/test_bash_history_noise.py",
         "tests/unit/test_eval_cross_source.py",
         "tests/unit/test_eval_cross_source_pairs.py",
@@ -13218,11 +13283,18 @@
         "tests/unit/test_eval_signal_integrity.py",
         "tests/unit/test_eval_strict_parsers.py",
         "tests/unit/test_eval_temporal.py",
+        "tests/unit/test_exact_publication_bash_snort.py",
         "tests/unit/test_external_parser_runner.py",
         "tests/unit/test_ground_truth.py",
+        "tests/unit/test_incremental_checkpoints.py",
+        "tests/unit/test_macos_foundations.py",
+        "tests/unit/test_native_record_mutations.py",
+        "tests/unit/test_source_deployment_compiler.py",
         "tests/unit/test_spillage.py",
         "tests/unit/test_splunk_harness.py",
         "tests/unit/test_validation.py",
+        "tests/unit/test_validation_routes.py",
+        "tests/unit/test_windows_filesystem.py",
         "tests/unit/test_zeek_activity_contexts.py"
       ]
     },
@@ -14465,6 +14537,40 @@
         "tests/unit/test_zeek_eval_parsers.py",
         "tests/unit/test_zeek_multiplex.py",
         "tests/unit/test_zeek_ssl.py"
+      ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/zsh_history.yaml",
+      "emitter_class": "ZshHistoryEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/zsh_history.py",
+      "emitter_line": 10,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/_shared.py",
+        "src/evidenceforge/evaluation/parsers/__init__.py",
+        "src/evidenceforge/evaluation/parsers/zsh_history.py",
+        "src/evidenceforge/evaluation/pillars/parseability.py",
+        "src/evidenceforge/evaluation/pillars/timing.py",
+        "src/evidenceforge/evaluation/visibility.py"
+      ],
+      "format": "zsh_history",
+      "occurrence_builder_fields_consumed": [
+        "event_type",
+        "shell",
+        "src_host"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Static inspection found no sibling-generation trigger or shared-fact ownership in these emitters; detailed source-fidelity review remains separate.",
+        "classification": "single_canonical_path",
+        "owner": "source-native emitter projection"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [
+        "zsh_command"
+      ],
+      "test_files": [
+        "tests/integration/test_format_definitions.py",
+        "tests/unit/test_macos_foundations.py"
       ]
     }
   ],

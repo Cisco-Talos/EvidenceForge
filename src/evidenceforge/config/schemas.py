@@ -2561,7 +2561,7 @@ class SmbProcessProfile(BaseModel, extra="forbid", frozen=True):
 class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
     """Platform-native client presentation and process ownership profile."""
 
-    os_category: Literal["windows", "linux"]
+    os_category: Literal["windows", "linux", "macos"]
     access_mode: Literal["explorer", "desktop", "direct", "mounted"]
     path_style: Literal["unc", "mapped", "smb_uri", "mounted"]
     transport_attribution: Literal["process", "kernel", "none"]
@@ -2627,8 +2627,10 @@ class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
 
         if self.access_mode == "explorer" and self.os_category != "windows":
             raise ValueError("explorer access_mode requires os_category=windows")
-        if self.access_mode != "explorer" and self.os_category != "linux":
+        if self.access_mode != "explorer" and self.os_category not in {"linux", "macos"}:
             raise ValueError(f"{self.access_mode} access_mode requires os_category=linux")
+        if self.os_category == "macos" and self.access_mode != "mounted":
+            raise ValueError("macOS SMB clients currently require mounted access_mode")
         if self.os_category == "windows" and self.path_style not in {"unc", "mapped"}:
             raise ValueError("Windows SMB clients require unc or mapped path_style")
         if self.access_mode in {"desktop", "direct"} and self.path_style != "smb_uri":
@@ -2637,7 +2639,13 @@ class SmbClientProfile(BaseModel, extra="forbid", frozen=True):
             raise ValueError("mounted access_mode requires path_style=mounted")
         if self.access_mode == "direct" and self.transport_attribution != "process":
             raise ValueError("direct access_mode requires transport_attribution=process")
-        if self.access_mode == "mounted" and self.transport_attribution != "kernel":
+        if self.os_category == "macos" and self.transport_attribution != "none":
+            raise ValueError("macOS mounted SMB transport requires unattributed transport")
+        if (
+            self.access_mode == "mounted"
+            and self.os_category != "macos"
+            and self.transport_attribution != "kernel"
+        ):
             raise ValueError("mounted access_mode requires transport_attribution=kernel")
 
         missing_operations = sorted(_SMB_OPERATIONS - set(self.operation_processes))
@@ -2849,7 +2857,7 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     transfer_timing: SmbTransferTimingConfig
     file_evolution: SmbFileEvolutionConfig
     samba_audit: SmbSambaAuditConfig
-    client_defaults: dict[Literal["windows", "linux"], str]
+    client_defaults: dict[Literal["windows", "linux", "macos"], str]
     client_profiles: dict[str, SmbClientProfile]
     server_defaults: dict[Literal["windows", "linux"], str]
     server_profiles: dict[str, SmbServerProfile]
@@ -2895,7 +2903,7 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
     @staticmethod
     def _validate_default_references(
         *,
-        defaults: dict[Literal["windows", "linux"], str],
+        defaults: dict[str, str],
         profiles: dict[str, SmbClientProfile] | dict[str, SmbServerProfile],
         field_name: str,
     ) -> None:
@@ -2914,12 +2922,12 @@ class SmbProfilesConfig(BaseModel, extra="forbid", frozen=True):
 
     @staticmethod
     def _validate_native_images(
-        os_category: Literal["windows", "linux"],
+        os_category: Literal["windows", "linux", "macos"],
         processes: list[SmbProcessProfile],
     ) -> None:
         for process in processes:
-            if os_category == "linux" and not process.image.startswith("/"):
-                raise ValueError(f"Linux SMB process image must be absolute: {process.image!r}")
+            if os_category in {"linux", "macos"} and not process.image.startswith("/"):
+                raise ValueError(f"POSIX SMB process image must be absolute: {process.image!r}")
             if os_category == "windows" and not re.fullmatch(
                 r"[A-Za-z]:\\.+|\\\\.+",
                 process.image,

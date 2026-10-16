@@ -208,6 +208,62 @@ def _linux_shell_process_reserves_foreground(process_name: str, command_line: st
     return exe_name not in {"code", "codium", "gnome-terminal", "konsole", "xterm"}
 
 
+def _macos_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
+    """Bound only commands admitted by the Mac spawn profile's short templates.
+
+    These are modeled bounds, not calibrated workstation measurements. Unknown
+    commands retain explicit session/operation ownership rather than inheriting
+    a Linux fallback lifetime. Existing overlay templates control admission.
+    """
+    from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+    name = process_name.rsplit("/", 1)[-1]
+    profile = get_parent_config("macos", name)
+    if profile.get("lifetime") != "short":
+        return None
+    try:
+        command = shlex.split(command_line)
+    except ValueError:
+        return None
+    for template in profile.get("command_templates", []):
+        try:
+            expected = shlex.split(template)
+        except ValueError:
+            continue
+        if len(command) != len(expected):
+            continue
+        # Placeholder values stay within their original argv element; a new
+        # option or shell operator cannot turn an admitted query into a daemon.
+        if all(
+            re.fullmatch(re.sub(r"\\\{[a-zA-Z_]+\\\}", ".+", re.escape(pattern)), value)
+            for pattern, value in zip(expected, command, strict=True)
+        ):
+            return (0.05, 45.0)
+    return None
+
+
+def _posix_foreground_lifetime(
+    os_category: str, process_name: str, command_line: str
+) -> tuple[float, float] | None:
+    """Select platform policy while preserving existing Linux timing exactly."""
+    if os_category == "macos":
+        return _macos_foreground_lifetime(process_name, command_line)
+    return _linux_foreground_lifetime(process_name, command_line)
+
+
+def _posix_shell_process_reserves_foreground(
+    os_category: str, process_name: str, command_line: str
+) -> bool:
+    """Recognize shell occupancy without importing Linux daemon policy into Mac."""
+    if os_category != "macos":
+        return _linux_shell_process_reserves_foreground(process_name, command_line)
+    if ".app/Contents/MacOS/" in process_name or not command_line.strip():
+        return False
+    # Following output still occupies a Mac foreground shell. Only explicit
+    # background intent releases it; an unknown end is never a fabricated exit.
+    return not command_line.rstrip().endswith("&")
+
+
 def _is_bare_windows_explorer_launch(process_name: str, command_line: str) -> bool:
     """Return whether Explorer represents the durable desktop shell itself."""
 

@@ -257,6 +257,8 @@ def test_rule_witness_through_native_parser(tmp_path: Path, witness: dict, outco
             raw = f"<30>1 2024-01-15T10:00:00Z {fields.get('hostname', 'ws01')} sshd 1 - - {fields.get('message', 'accepted')}"
         elif definition.name == "snort_alert":
             raw = f"06/15-15:06:40.000000 [**] [1:1:1] test [**] [Classification: test] [Priority: {fields.get('priority', 1)}] {{TCP}} {fields.get('src_ip', '10.0.0.1') if witness['rule'].endswith('-1') else fields.get('src_ip', '')} -> {fields.get('dst_ip', '10.0.0.2')}"
+        elif definition.name == "zsh_history":
+            raw = ": 1750000000:0;" + fields.get("command", "ls")
         else:
             assert definition.name == "bash_history"
             if witness["rule"] == "bash_history.legacy-2" and outcome == "fail":

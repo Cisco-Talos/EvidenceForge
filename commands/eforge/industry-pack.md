@@ -24,6 +24,8 @@ section in `/eforge:references:artifact-lifecycle` for rules, title operations a
 If the user wants a suggestion, propose an editable title from known descriptions; apply it
 only after their choice. See the lifecycle reference for optional AI naming assistance.
 
+For modeled Mac workstations, read `/eforge:references:evidence-endpoint-macos` for current coverage, existing configuration semantics and unavailable evidence.
+
 ## Establish context
 
 1. Read `/eforge:references:project-context`. Use the current working directory and omit

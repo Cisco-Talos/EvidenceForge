@@ -1,0 +1,121 @@
+# Independently authored path vocabulary; no captured events or workload weights.
+reviewed_on: '2026-10-15'
+target: macOS 26 arm64
+action_applications:
+- id: macos-ssh
+  image_path: /usr/bin/ssh
+  availability: supported
+  behavior: ssh_client_bundle
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/openssh.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/base.xcconfig
+  boundary: Apple build definitions install the ssh target in /usr/bin. Host-build deployment follows the modeled OS; no exact OpenSSH version, signing identity or native collector fidelity is inferred. Only the shared SSH bundle activates this entry.
+applications:
+- id: macos-dock
+  image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-windowserver
+  image_path: /System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-apsd
+  image_path: /System/Library/PrivateFrameworks/ApplePushService.framework/apsd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-cfprefsd
+  image_path: /usr/sbin/cfprefsd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-configd
+  image_path: /usr/libexec/configd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-coreaudiod
+  image_path: /usr/sbin/coreaudiod
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-corespotlightd
+  image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/corespotlightd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-distnoted
+  image_path: /usr/sbin/distnoted
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-installd
+  image_path: /System/Library/PrivateFrameworks/PackageKit.framework/Versions/A/Resources/installd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-launchservicesd
+  image_path: /System/Library/CoreServices/launchservicesd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-mdnsresponder
+  image_path: /usr/sbin/mDNSResponder
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-mdworker_shared
+  image_path: /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-nsurlsessiond
+  image_path: /usr/libexec/nsurlsessiond
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-runningboardd
+  image_path: /usr/libexec/runningboardd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-securityd
+  image_path: /usr/sbin/securityd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-sharingd
+  image_path: /usr/libexec/sharingd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-trustd
+  image_path: /usr/libexec/trustd
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.
+- id: macos-usernoted
+  image_path: /usr/sbin/usernoted
+  availability: supported
+  behavior: catalog_only
+  reference: https://github.com/mandiant/macos-UnifiedLogs
+  boundary: Public Tahoe process-image vocabulary; native owner, trigger, arguments and lifecycle must be selected before baseline activation.

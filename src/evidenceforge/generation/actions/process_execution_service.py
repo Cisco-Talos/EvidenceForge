@@ -896,6 +896,9 @@ class ProcessExecutionService:
         # Phase 1: Freeze the exact PID/thread identity without consuming any allocator.
         process_session_id = self.queries._session_id_for_logon(launch.actor.logon_id)
         process_session_identity = self.state_manager.get_session_identity(launch.actor.logon_id)
+        credentials = self.identity.process_credentials(
+            request.system, launch.actor.username, launch.parent_pid, launch.time
+        )
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
             if admission.uses_action_cohort
@@ -919,6 +922,7 @@ class ProcessExecutionService:
                 ),
                 auth_session_id=process_session_id,
                 auth_logon_type=launch.logon_type,
+                credentials=credentials,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -949,6 +953,7 @@ class ProcessExecutionService:
                 os_category=_get_os_category(request.system.os),
                 start_time=ensure_utc(launch.time),
                 parent_activity_time=ensure_utc(launch.time),
+                credentials=credentials,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity

@@ -105,6 +105,7 @@ samba_audit:
 client_defaults:
   windows: windows_explorer
   linux: linux_gvfs
+  macos: macos_smb_mount
 
 client_profiles:
   windows_explorer:
@@ -268,6 +269,61 @@ client_profiles:
         key_template: "mounted_smb:{server}:{share}:{operation}"
         image: /usr/bin/rm
         command_line_template: 'rm -- "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+
+  macos_smb_mount:
+    os_category: macos
+    access_mode: mounted
+    path_style: mounted
+    # The operation actor owns file effects, not necessarily the kernel SMB socket.
+    transport_attribution: none
+    service_aliases: [smbfs]
+    weight: 1.0
+    system_types: [workstation]
+    operation_processes:
+      browse:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /bin/ls
+        command_line_template: 'ls -la "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      read:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /bin/cat
+        command_line_template: 'cat "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      create:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/tee
+        command_line_template: 'tee "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      update:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /usr/bin/tee
+        command_line_template: 'tee "{client_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+      copy:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /bin/cp
+        command_line_template: 'cp "{source_path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        operand_mode: transfer
+      move:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /bin/mv
+        command_line_template: 'mv "{source_path}" "{destination_path}"'
+        username_template: "{username}"
+        lifecycle: operation
+        operand_mode: transfer
+      delete:
+        key_template: "mounted_smb:{server}:{share}:{operation}"
+        image: /bin/rm
+        command_line_template: 'rm "{client_path}"'
         username_template: "{username}"
         lifecycle: operation
 

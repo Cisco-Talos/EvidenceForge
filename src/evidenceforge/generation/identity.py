@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from evidenceforge.models.scenario import Scenario, System, User
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 
 WindowsScope = Literal["domain", "local", "well_known", "machine", "service"]
@@ -51,6 +52,20 @@ class LinuxAccount:
     shell: str = "/bin/bash"
 
 
+@dataclass(frozen=True, slots=True)
+class MacAccount:
+    """A modeled local Mac account; IDs are scoped to its workstation."""
+
+    logical_name: str
+    account_name: str
+    uid: int
+    gid: int
+    host: str
+    home: str
+    shell: str = "/bin/zsh"
+    scope: Literal["local", "well_known"] = "local"
+
+
 @dataclass(slots=True)
 class IdentityDirectory:
     """Resolved logical-person and platform-account identity model."""
@@ -60,6 +75,7 @@ class IdentityDirectory:
     has_windows_domain: bool
     windows_accounts: dict[tuple[str, str], WindowsAccount] = field(default_factory=dict)
     linux_accounts: dict[tuple[str, str], LinuxAccount] = field(default_factory=dict)
+    macos_accounts: dict[tuple[str, str], MacAccount] = field(default_factory=dict)
     sid_registry: dict[str, str] = field(default_factory=dict)
     windows_account_control: dict[str, frozenset[str]] = field(default_factory=dict)
     _next_domain_rid: int = 1001
@@ -83,6 +99,7 @@ class IdentityDirectory:
         directory._add_well_known_windows_accounts()
         directory._add_well_known_linux_accounts()
         directory._add_scenario_users(scenario)
+        directory._add_macos_accounts(scenario)
         directory._add_machine_accounts(env.systems)
         directory._add_service_accounts(env.service_accounts)
         return directory
@@ -117,6 +134,37 @@ class IdentityDirectory:
         if account is not None:
             return account.uid
         return default_linux_uid_for_user(username, host=host)
+
+    def macos_account(self, username: str, host: str) -> MacAccount | None:
+        """Resolve a Mac principal without falling back to another platform's identity."""
+        return self.macos_accounts.get((_key(username), _key(host)))
+
+    def _add_macos_accounts(self, scenario: Scenario) -> None:
+        """Allocate deterministic local account inventories from authored placement."""
+        for system in scenario.environment.systems:
+            if platform_for_os(system.os) != "macos":
+                continue
+            host = system.hostname
+            root = MacAccount("root", "root", 0, 0, host, "/var/root", "/bin/sh", "well_known")
+            self.macos_accounts[("root", _key(host))] = root
+            users = sorted(
+                (
+                    user
+                    for user in scenario.environment.users
+                    if user.username != "root"
+                    and (user.primary_system == host or system.assigned_user == user.username)
+                ),
+                key=lambda user: (user.username.casefold(), user.username),
+            )
+            for ordinal, user in enumerate(users):
+                self.macos_accounts[(_key(user.username), _key(host))] = MacAccount(
+                    logical_name=user.username,
+                    account_name=user.username,
+                    uid=501 + ordinal,
+                    gid=20,
+                    host=host,
+                    home=f"/Users/{user.username}",
+                )
 
     def _add_well_known_windows_accounts(self) -> None:
         for account_name, sid in {

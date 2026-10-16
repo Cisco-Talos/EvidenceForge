@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.support.macos_smb import macos_smb_scenario
+from tests.support.macos_ssh import macos_ssh_scenario
 from tests.support.output_equivalence import deterministic_bundle_files
 
 
@@ -31,22 +33,58 @@ def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize(
-    "target,start",
+    "target,start,macos,smb_server,ssh_client",
     [
-        ("default", None),
-        ("sof-elk", None),
-        pytest.param("default", "2026-10-09T09:59:17.125Z", marks=pytest.mark.slow),
+        ("default", None, False, None, False),
+        ("sof-elk", None, False, None, False),
+        pytest.param(
+            "default", "2026-10-09T09:59:17.125Z", False, None, False, marks=pytest.mark.slow
+        ),
+        pytest.param("default", None, True, None, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "windows", False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "linux", False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, None, True, marks=pytest.mark.slow, id="mac-ssh"),
     ],
 )
 def test_short_generation_checkpoint_suspension_and_resume(
-    tmp_path: Path, target: str, start: str | None
+    tmp_path: Path,
+    scenarios_dir: Path,
+    target: str,
+    start: str | None,
+    macos: bool,
+    smb_server: str | None,
+    ssh_client: bool,
 ) -> None:
-    scenario_data = yaml.safe_load(
-        Path(
-            "tests/fixtures/scenarios"
-            / Path("checkpoint-all-formats.yaml" if target == "sof-elk" else "minimal.yaml")
-        ).read_text(encoding="utf-8")
+    scenario_path = (
+        Path("scenarios/macos-workstation-example/scenario.yaml")
+        if macos
+        else Path("tests/fixtures/scenarios")
+        / ("checkpoint-all-formats.yaml" if target == "sof-elk" else "minimal.yaml")
     )
+    scenario_data = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
+    if ssh_client:
+        scenario_data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json", exclude_none=True)
+        second_session = dict(scenario_data["storyline"][1])
+        second_session.update(id="ssh-after-resume", time="+1h30m")
+        scenario_data["storyline"].append(second_session)
+    if smb_server is not None:
+        scenario_data = macos_smb_scenario(scenarios_dir, server_platform=smb_server).model_dump(
+            mode="json", exclude_none=True
+        )
+        second_read = dict(scenario_data["storyline"][0])
+        second_read.update(id="read-after-resume", time="+1h30m")
+        scenario_data["storyline"].append(second_read)
+        scenario_data["storyline"].insert(
+            0,
+            {
+                "id": "mac-local-login",
+                "time": "+1m",
+                "actor": "test_user",
+                "system": "TEST-01",
+                "activity": "Start the Mac session owning shared-file activity",
+                "events": [{"type": "logon", "logon_type": 2}],
+            },
+        )
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
     if start is not None:
@@ -70,6 +108,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+    seed = "123" if macos else "42"
     output = tmp_path / "suspended"
     control = tmp_path / "control"
     sync = tmp_path / "sync"
@@ -99,7 +138,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "--output",
                 str(output),
                 "--seed",
-                "42",
+                seed,
                 "--target",
                 target,
                 "--checkpoint-hours",
@@ -147,7 +186,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         "--output",
         str(control),
         "--seed",
-        "42",
+        seed,
         "--checkpoint-hours",
         "0",
         "--target",
@@ -163,11 +202,45 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 for name, content in resumed_files.items()
                 if name.startswith("data/")
             )
-    assert any(
-        (b"MSWinEventLog" if target == "sof-elk" else b"<Event ") in content
-        for name, content in resumed_files.items()
-        if name.startswith("data/")
-    )
+    if ssh_client:
+        client_ecar = next(
+            content
+            for name, content in resumed_files.items()
+            if "/TEST-01." in name and name.endswith("/ecar.json")
+        )
+        rows = [json.loads(line) for line in client_ecar.splitlines()]
+        clients = [
+            row
+            for row in rows
+            if row["object"] == "PROCESS"
+            and row["action"] == "CREATE"
+            and row["properties"]["image_path"] == "/usr/bin/ssh"
+        ]
+        assert len(clients) >= 2
+        terminated = {row["objectID"] for row in rows if row["action"] == "TERMINATE"}
+        assert all(row["objectID"] in terminated for row in clients)
+    elif smb_server is not None:
+        client_ecar = next(
+            content
+            for name, content in resumed_files.items()
+            if "/TEST-01." in name and name.endswith("/ecar.json")
+        )
+        reads = [
+            json.loads(line)
+            for line in client_ecar.splitlines()
+            if json.loads(line).get("properties", {}).get("file_path")
+            == "/Volumes/team/Reports/plan.txt"
+        ]
+        assert len(reads) >= 2
+    elif macos:
+        assert any(name.endswith(".zsh_history") for name in resumed_files)
+        assert not any(name.endswith(".bash_history") for name in resumed_files)
+    else:
+        assert any(
+            (b"MSWinEventLog" if target == "sof-elk" else b"<Event ") in content
+            for name, content in resumed_files.items()
+            if name.startswith("data/")
+        )
     assert any(
         any(line and not line.startswith(b"#") for line in content.splitlines())
         for name, content in resumed_files.items()

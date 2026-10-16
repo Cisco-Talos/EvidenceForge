@@ -45,6 +45,11 @@ Fields: `type`, optional `source_ip`, `ids_alerts`, `technique`, and `descriptio
 bundle owns TCP/22, authentication, shell/session evidence, command ownership, and teardown; do
 not add an independent `logon` or port-22 `connection` for the same session.
 
+Experimental Mac clients require an existing local interactive session for native client process
+and history evidence. Set the event's system to the Linux receiver and `source_ip` to the modeled
+Mac address. Mac SSH receiver support and native Mac SSH log messages remain incomplete; see
+/eforge:references:evidence-endpoint-macos.
+
 ## `rdp_session`
 
 Fields: `type`, optional `source_ip`, `ids_alerts`, `technique`, and `description`. The RDP action

@@ -697,6 +697,8 @@ identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.
 
+Canonical POSIX fork/exec state separates the process lifetime from immutable image executions. Fork inherits the current parent snapshot; exec keeps its PID, lifetime and login principal while advancing the execution identity and retaining bounded history. Optional `PosixProcessCredentials` snapshots keep real/effective UID/GID and audit origin separate. An explicit exec outcome may change effective IDs but must preserve known real and audit identities; a `setuid`/`setgid` operation needs its own future transition. Mac process launches resolve known accounts through the modeled identity directory or inherit an exact same-principal parent snapshot. They never infer audit IDs from GUI session IDs, Windows LogonIDs or the generator host. Missing credentials remain absent. Checkpoint v3 process records retain these snapshots and explicitly upgrade v1/v2 records without inventing credentials. Native audit PID versions, saved IDs, supplementary groups, responsible-process ownership and worker-thread replacement remain open; the native exec event projection is still unavailable.
+
 Auth/session callers supply successful logon, failed logon, logoff, service
 logon, machine-account logon, anonymous logon, NTLM validation, or workstation
 lock/unlock intent. `LogonActionBundle`, `FailedLogonActionBundle`,
@@ -866,7 +868,8 @@ LogEmitter (ABC)
 │   └── ... (10 more Zeek types)
 ├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EventIdentityPlan)
 ├── SyslogEmitter                    # Linux syslog (default RFC5424 or sof-elk RFC3164/year)
-├── BashHistoryEmitter               # Per-user bash history
+├── BashHistoryEmitter               # Durable per-user Bash history
+│   └── ZshHistoryEmitter            # Bounded Mac extended incremental history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)
 ├── WebEmitter                       # Apache/Nginx access logs
@@ -1211,3 +1214,9 @@ source references.
 **Format groups:** The scenario declares `"zeek"` → the engine expands it to 13 individual emitters. Sensors reference format groups, not individual formats.
 
 **Windows EventRecordID ordering:** Events are buffered as raw dicts, sorted by timestamp on flush, then assigned sequential EventRecordIDs. This matches real Windows behavior where RecordID always increases monotonically with time.
+
+## Experimental modeled macOS foundation
+
+Modeled platform classification is centralized in `utils/platforms.py`; generation, validation, source admission, deployment and evaluation share it. Mac boot applications and terminal ancestry come from the application catalog. Local accounts, session reuse, PID/thread allocation and source timing remain owned by the existing world/state/process layers. The behavior manifest includes the classifier and declares changes independently of the product version.
+
+`zsh_command` is an internal canonical interactive-command occurrence with Auth, Shell and source Host contexts. The generator must establish a live shell in the correct session before dispatch. `ZshHistoryEmitter` reuses the durable history journal and projects the bounded extended incremental profile; it creates no process, session, timestamp or workload truth. Mac-native ES and Unified Log are not wired into this slice. Atomic fork/exec identity and credential state exists, but native source projection, remaining native metadata and remote/persistence/policy owners remain separate implementation gates.

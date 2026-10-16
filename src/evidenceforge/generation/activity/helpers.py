@@ -26,35 +26,15 @@ Provides OS detection and command parameterization. RNG is re-exported
 from evidenceforge.utils.rng for backward compatibility.
 """
 
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _get_rng, _thread_local  # noqa: F401
 
 from .command_parameter_pools import command_parameter_pools
 
 
 def _get_os_category(os_string: str) -> str:
-    """Detect OS category from OS string.
-
-    Phase 2.10: OS-aware activity generation helper.
-
-    Args:
-        os_string: OS name/version (e.g., "Windows 10", "Linux Ubuntu 20.04")
-
-    Returns:
-        OS category: "windows", "linux", or "unknown"
-    """
-    os_lower = os_string.lower()
-    if "windows" in os_lower:
-        return "windows"
-    elif (
-        "linux" in os_lower
-        or "ubuntu" in os_lower
-        or "centos" in os_lower
-        or "debian" in os_lower
-        or "rhel" in os_lower
-    ):
-        return "linux"
-    else:
-        return "unknown"
+    """Return the canonical modeled platform for an OS label."""
+    return platform_for_os(os_string)
 
 
 # General parameterization pools for command-line diversification.

@@ -35,6 +35,10 @@ import random
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from evidenceforge.generation.activity.application_catalog import (
+    get_apps_for_persona,
+    materialize_application_command,
+)
 from evidenceforge.generation.activity.host_activity_profiles import (
     generate_encoded_powershell_command,
 )
@@ -47,6 +51,7 @@ from evidenceforge.generation.timing import (
     WeightedDistribution,
 )
 from evidenceforge.models.scenario import Persona, System, User
+from evidenceforge.utils.platforms import platform_for_os
 
 from .suspicious_benign_config import pick_suspicious_dns_host, pick_unusual_connection
 
@@ -312,7 +317,19 @@ def generate_suspicious_cli(
     )
     event_time = current_hour + offset
 
-    if os_cat == "windows":
+    if os_cat == "macos":
+        candidates = get_apps_for_persona(
+            str(user.persona), os_cat, "suspicious_cli", str(system.type)
+        )
+        if not candidates:
+            return None
+        selected = materialize_application_command(
+            rng, rng.choice(candidates)["id"], os_cat, username=user.username
+        )
+        if selected is None:
+            return None
+        process, cmd = selected
+    elif os_cat == "windows":
         if rng.random() < 0.6:
             cmd = rng.choice(_BENIGN_POWERSHELL)
             cmd = cmd.replace("DC=corp,DC=local", _domain_to_dn(ad_domain))
@@ -568,13 +585,16 @@ def generate_temp_dir_execution(
         ]
         exe_path, cmd = rng.choice(temp_exes)
         exe_path = exe_path.replace("{user}", user.username)
-    else:
+    elif os_cat == "linux":
         temp_exes = [
             ("/usr/bin/python3", "python3 /tmp/pip-install-cache/setup.py install"),
             ("/tmp/go-build-cache/main", "/tmp/go-build-cache/main --test"),
             ("/bin/bash", "bash /tmp/npm-postinstall.sh"),
         ]
         exe_path, cmd = rng.choice(temp_exes)
+
+    else:
+        return None
 
     return {
         "pattern": "temp_dir_execution",
@@ -675,7 +695,4 @@ def generate_unusual_powershell(
 
 def _get_os_category(system: System) -> str:
     """Determine OS category from system OS string."""
-    os_lower = system.os.lower()
-    if "windows" in os_lower:
-        return "windows"
-    return "linux"
+    return platform_for_os(system.os)

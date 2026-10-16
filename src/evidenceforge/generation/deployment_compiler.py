@@ -87,12 +87,7 @@ def infer_system_platform(system: System) -> Platform | None:
     """Return the supported deployment platform without guessing an unknown OS."""
 
     os_category = _get_os_category(system.os)
-    if os_category in {"windows", "linux"}:
-        return os_category
-    os_name = system.os.casefold()
-    if "macos" in os_name or "mac os" in os_name or "darwin" in os_name:
-        return "macos"
-    return None
+    return os_category if os_category in {"windows", "linux", "macos"} else None
 
 
 def resolve_system_architecture(system: System) -> Architecture:

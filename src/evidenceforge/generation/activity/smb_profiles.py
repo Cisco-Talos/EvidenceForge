@@ -90,6 +90,8 @@ def advertised_filesystem_default(platform: str, backing_filesystem: str) -> str
     """Return the configured SMB wire label for one platform/backing pair."""
 
     normalized_platform = _normalize_os_category(platform)
+    if normalized_platform == "macos":
+        raise ValueError("macOS SMB serving is outside the supported workstation profile")
     normalized_backing = backing_filesystem.strip().casefold()
     defaults = load_smb_profiles().advertised_filesystem_defaults
     platform_defaults = defaults.windows if normalized_platform == "windows" else defaults.linux
@@ -220,7 +222,9 @@ def select_client_profile(
         )
 
     config = load_smb_profiles()
-    default_name = config.client_defaults[normalized_os]
+    default_name = config.client_defaults.get(normalized_os)
+    if default_name is None:
+        raise ValueError(f"No configured SMB client default for {normalized_os}")
     return config.client_profiles[default_name]
 
 
@@ -247,6 +251,8 @@ def select_server_profile(
     """Select a server profile by platform and service alias, then use its OS default."""
 
     normalized_os = _normalize_os_category(os_category)
+    if normalized_os == "macos":
+        raise ValueError("macOS SMB serving is outside the supported workstation profile")
     normalized_services = frozenset(
         str(service).strip().casefold() for service in services if str(service).strip()
     )
@@ -382,6 +388,6 @@ def _normalize_os_category(os_category: str) -> str:
     """Normalize and validate a supported SMB endpoint platform."""
 
     normalized = os_category.strip().casefold()
-    if normalized not in {"windows", "linux"}:
+    if normalized not in {"windows", "linux", "macos"}:
         raise ValueError(f"unsupported SMB os_category {os_category!r}")
     return normalized

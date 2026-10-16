@@ -8801,6 +8801,10 @@ class EventDispatcher:
             raise EventContractError("Action-cohort batch requires a non-empty root action ID")
         if type(state_plan) is not ActionCohortMaterializationPlan:
             raise EventContractError("Action-cohort batch requires an exact State plan")
+        if state_plan.process_executions:
+            raise EventContractError(
+                "Process execution cohorts have no supported canonical source projection yet"
+            )
         if type(dispatches) is not tuple or not dispatches:
             raise EventContractError("Action-cohort batch requires an ordered dispatch tuple")
         if len(dispatches) > _MAX_ACTION_COHORT_DISPATCHES:
@@ -15127,6 +15131,7 @@ class EventDispatcher:
             "process_access",
             "create_remote_thread",
             "bash_command",
+            "zsh_command",
         }:
             required |= CollectionCapability.PROCESS
         if event_type in {

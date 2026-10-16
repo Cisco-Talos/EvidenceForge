@@ -529,7 +529,7 @@ storage:
       lifecycle: persistent
 ```
 
-File sets require a unique `id`, modeled Windows or Linux `system`, platform-native absolute
+File sets require a unique `id`, modeled Windows, Linux or macOS `system`, platform-native absolute
 `root`, one exact built-in or pack-qualified storage preset, optional population, and optional
 seed files. They compile persistent bounded local file/content identities without granting an SMB
 listener, server role, or network exposure. Presets provide a realistic population; seed files add
@@ -549,10 +549,15 @@ the backing volume is ext4 or XFS, following Samba's version-sensitive
 at most 64 characters and cannot contain control characters or path separators. Access is
 effective access: deny wins, admin implies modify/read, and modify implies read.
 
-Mappings may carry a Windows `drive`, a Linux `mount`, both for a mixed audience, or neither for
+Mappings may carry a Windows `drive`, a POSIX `mount`, both for a mixed audience, or neither for
 platform-aware allocation. Explicit drives may use `D:` through `Z:`; `A:` and `B:` are reserved
 and `C:` remains the local system drive. Automatic Windows allocation uses `H:` through `Z:`;
-automatic Linux allocation uses `/mnt/<mapping-id>`. `credential_mode: per_user` is the default and
+automatic Linux allocation uses `/mnt/<mapping-id>` and Mac allocation uses `/Volumes/<mapping-id>`.
+A mixed Linux/Mac audience needs an explicit common `mount` or separate audience mappings.
+Mac workstation clients use the existing `client_access: auto` and `path_style: auto|mounted`
+with a compatible mapping. Native operation actors, eCAR and existing network/server evidence
+are experimental; native Mac SMB logs and Mac SMB serving remain unavailable.
+`credential_mode: per_user` is the default and
 uses the activity's resolved SMB principal. `credential_mode: fixed` requires `principal`; a
 per-user mapping forbids it. A fixed mapping principal is a credential identity, not proof that the
 initiating process runs as that account.
@@ -1866,7 +1871,7 @@ output:
 writes the bundle beside the scenario by default; pass `eforge generate --output <bundle-root>` to
 choose another location explicitly.
 
-Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `zsh_history` (experimental Mac history), `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Output formats here are canonical and target-neutral. Choose target-specific
 file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
@@ -1938,3 +1943,9 @@ validation. Studio's conversion review shows blocking findings before saving.
 The environment must retain at least one regular user. Queued generation inputs
 remain immutable; resolved scenarios contain the effective accounts and directory
 links rather than authoring history, so generation needs no transition-specific logic.
+
+## Experimental modeled macOS workstations
+
+Use existing system fields (`os: macOS 26`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
+
+The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and Linux receiver evidence. Mac receivers, native ES/Unified Log output, persistence and policy outcomes remain under implementation; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.

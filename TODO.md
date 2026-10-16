@@ -236,6 +236,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P2** Preserve SSH receiver evidence when filtering an external-source SSH scenario
+  from eCAR/Zeek/syslog to eCAR alone. The discrepancy reproduces on isolated `dev`; inspect
+  exact versus compatibility session publication before changing ownership or source routing.
+  See the [Mac implementation worklog](docs/worklog/2026-10-15-macos-workstation-implementation.md).
+
 - [ ] **P2** Design and implement general authored entity availability/participation controls
   across all evidence families. Support entities appearing during a scenario without generating
   earlier activity merely because they are declared in the environment; the motivating case is
@@ -530,6 +535,14 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - [ ] Separate student/instructor output packages.
 
 ### Medium-Term
+
+- [ ] Implement the approved macOS 26 arm64 **modeled workstation** scope for mixed-fleet
+  hunting and native log investigation, using existing configuration semantics and per-capability
+  evidence gates. Filesystem artifacts, native binary log containers, Intel/Rosetta, sleep/wake,
+  roaming and Mac SMB serving are excluded. Experimental coverage is not full native validation.
+  See the [assessment](docs/design/macos-workstation-feasibility.md),
+  [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md) and
+  [implementation handoff](docs/worklog/2026-10-15-macos-workstation-implementation.md).
 
 - [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
   suitable test host is available. User explicitly deferred account creation on

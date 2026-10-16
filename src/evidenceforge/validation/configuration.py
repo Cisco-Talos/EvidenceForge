@@ -2827,7 +2827,7 @@ def _validate_process_chains(
     # --- Checks 18-20: Process Chain ---
     # Collect all exe basenames from spawn rules
     spawn_children: set[str] = set()
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         for _parent, parent_data in os_rules.items():
             if isinstance(parent_data, dict):
                 for child in parent_data.get("children", []):
@@ -2835,12 +2835,15 @@ def _validate_process_chains(
 
     # Collect all exe basenames from app catalog
     catalog_exes: set[str] = set()
+    persona_exes: set[str] = set()
     for app in apps:
         for platform in app.get("platforms", {}).values():
             image_path = platform.get("image_path", "")
             if image_path:
                 basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                 catalog_exes.add(basename)
+                if app.get("personas"):
+                    persona_exes.add(basename)
 
     # sys_proc_data loaded above via overlay-aware loader
     system_exes: set[str] = set()
@@ -2880,14 +2883,16 @@ def _validate_process_chains(
 
     # Check 19: Missing spawn rules (apps not in any spawn rule, case-insensitive)
     spawn_all_entries: set[str] = set()
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         spawn_all_entries.update(os_rules.keys())
         for parent_data in os_rules.values():
             if isinstance(parent_data, dict):
                 spawn_all_entries.update(parent_data.get("children", []))
     spawn_all_entries_lower = {e.lower() for e in spawn_all_entries}
 
-    for exe in catalog_exes:
+    # Catalog-only service identities are available for reference validation,
+    # but empty persona eligibility does not promise baseline spawning.
+    for exe in sorted(persona_exes):
         if exe.lower() not in spawn_all_entries_lower:
             result.issues.append(
                 Issue(
@@ -3499,7 +3504,7 @@ def _validate_merged_schemas(
 
     # spawn_rules.yaml: spawn rule entries
     all_spawn_entries = []
-    for os_rules in [spawn_data.get("windows", {}), spawn_data.get("linux", {})]:
+    for os_rules in [spawn_data.get(platform, {}) for platform in ("windows", "linux", "macos")]:
         for _parent, parent_data in os_rules.items():
             if isinstance(parent_data, dict):
                 all_spawn_entries.append(parent_data)

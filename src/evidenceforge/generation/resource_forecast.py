@@ -432,8 +432,12 @@ class _DiskFormatCalibration(BaseModel):
             "all",
             "windows",
             "linux",
+            "macos",
+            "posix",
         } and not self.system_scope.startswith("role:"):
-            raise ValueError("disk format system_scope must be all, windows, linux, or role:<name>")
+            raise ValueError(
+                "disk format system_scope must be all, windows, linux, macos, posix, or role:<name>"
+            )
         if self.system_scope == "role:":
             raise ValueError("disk format role scope requires a role name")
         return self
@@ -661,17 +665,14 @@ def _pressure(
 
 def _system_count_for_scope(scenario: Scenario, scope: str) -> int:
     """Return systems eligible to emit one calibrated source format."""
+    from evidenceforge.utils.platforms import platform_for_os
+
     systems = scenario.environment.systems
     if scope == "all":
         return len(systems)
-    if scope == "windows":
-        return sum("windows" in str(system.os or "").lower() for system in systems)
-    if scope == "linux":
-        linux_tokens = ("linux", "ubuntu", "debian", "centos", "rhel")
-        return sum(
-            any(token in str(system.os or "").lower() for token in linux_tokens)
-            for system in systems
-        )
+    if scope in {"windows", "linux", "macos", "posix"}:
+        platforms = {"linux", "macos"} if scope == "posix" else {scope}
+        return sum(platform_for_os(system.os) in platforms for system in systems)
     role = scope.removeprefix("role:")
     return sum(role in system.roles for system in systems)
 

@@ -3296,7 +3296,7 @@ def endpoint_clock_timing(profile_name: str, os_category: str) -> EndpointClockT
     if not isinstance(profile, Mapping):
         profile = {}
 
-    os_key = "windows" if os_category == "windows" else "linux"
+    os_key = os_category if os_category in {"windows", "macos"} else "linux"
     os_profile = profile.get(os_key, {})
     if not isinstance(os_profile, Mapping):
         os_profile = {}

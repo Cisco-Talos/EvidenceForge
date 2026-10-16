@@ -426,5 +426,14 @@
       "protocol": "example",
       "status_code": 200
     }
+  },
+  {
+    "format": "zsh_history",
+    "fields": {
+      "timestamp": 1792425600,
+      "username": "alex",
+      "hostname": "MAC-TEST.example.test",
+      "command": "/opt/homebrew/bin/git status"
+    }
   }
 ]

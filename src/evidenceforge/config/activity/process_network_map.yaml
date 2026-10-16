@@ -183,3 +183,75 @@ mappings:
     service: ldap
     port: 389
     external: false
+
+  # Native Mac executable names. Existing platform indexes remain unchanged.
+  - exe: [Google Chrome, Safari, Microsoft Edge]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [web, saas, cdn, social]
+
+  - exe:
+    - Microsoft Outlook
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - outlook
+
+  - exe:
+    - MSTeams
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - teams
+
+  - exe:
+    - OneDrive
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - onedrive
+
+  - exe:
+    - Slack
+    - zoom.us
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - saas
+    - cdn
+
+  - exe:
+    - Dropbox
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - storage
+    - cdn
+    - background
+
+  - exe:
+    - Postman
+    service: ssl
+    port: 443
+    external: true
+    dns_tags:
+    - dev
+    - saas
+
+  - exe: [Google Drive]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn, background]
+
+  - exe: [Citrix Workspace]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, background]

@@ -337,7 +337,9 @@ def _ssh_action_deadline_runtime_headrooms(
     if (
         type(source_os_categories) is not tuple
         or not source_os_categories
-        or any(os_category not in {"linux", "windows"} for os_category in source_os_categories)
+        or any(
+            os_category not in {"linux", "windows", "macos"} for os_category in source_os_categories
+        )
     ):
         raise ValueError("SSH deadline source OS categories must be a non-empty exact tuple")
     headrooms = (
@@ -956,7 +958,11 @@ class _SshCloseHostFacts:
         )
         if any(type(value) is not str or len(value) > 4_096 for value in values):
             raise ValueError("Exact SSH close host contains malformed or oversized text")
-        if not host.hostname or not host.ip or host.os_category not in {"linux", "windows"}:
+        if (
+            not host.hostname
+            or not host.ip
+            or host.os_category not in {"linux", "windows", "macos"}
+        ):
             raise ValueError("Exact SSH close host has incomplete canonical identity")
         return cls(
             hostname=host.hostname,
@@ -3494,7 +3500,13 @@ class SshSessionActionBundle:
             "observation_policy": observation_policy,
             "source_ip": self.request.source_ip,
             "target_ip": self.request.target_system.ip,
-            "source_os_categories": (("linux",) if source_os == "linux" else ("linux", "windows")),
+            "source_os_categories": (
+                ("linux", "macos")
+                if source_os == "macos"
+                else ("linux",)
+                if source_os == "linux"
+                else ("linux", "windows")
+            ),
         }
 
     def _action_rendered_source_tail(self, deadline: datetime) -> timedelta:
@@ -4117,10 +4129,12 @@ class SshSessionActionBundle:
                 source_system=source_system,
                 target_system=request.target_system,
                 time=request.time,
-                process_image=source_process_image or "/usr/bin/ssh",
+                process_image=source_process_image,
                 source_port=state.source_port,
                 required_until=(
-                    state.close_time if _get_os_category(source_system.os) == "linux" else None
+                    state.close_time
+                    if _get_os_category(source_system.os) in {"linux", "macos"}
+                    else None
                 ),
             )
             if client is not None:

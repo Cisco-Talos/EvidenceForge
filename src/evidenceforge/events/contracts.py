@@ -25,6 +25,7 @@ class EventKind(StrEnum):
     ACCOUNT_CREATED = "account_created"
     ACCOUNT_DELETED = "account_deleted"
     BASH_COMMAND = "bash_command"
+    ZSH_COMMAND = "zsh_command"
     CONNECTION = "connection"
     CREATE_REMOTE_THREAD = "create_remote_thread"
     DHCP_LEASE = "dhcp_lease"
@@ -130,6 +131,7 @@ class FormatKind(StrEnum):
     """Closed set of concrete source projections at the reviewed baseline."""
 
     BASH_HISTORY = "bash_history"
+    ZSH_HISTORY = "zsh_history"
     CISCO_ASA = "cisco_asa"
     ECAR = "ecar"
     PROXY_ACCESS = "proxy_access"
@@ -626,6 +628,13 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         dst=HostSemantic.TARGET,
         state=StateEffect.WRITE,
         emitters=_WINDOWS_SECURITY,
+    ),
+    EventKind.ZSH_COMMAND: _contract(
+        EventKind.ZSH_COMMAND,
+        required=_contexts(ContextKind.AUTH, ContextKind.SHELL, ContextKind.SRC_HOST),
+        src=HostSemantic.LOCAL_ACTOR,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.ZSH_HISTORY),
     ),
     EventKind.BASH_COMMAND: _contract(
         EventKind.BASH_COMMAND,

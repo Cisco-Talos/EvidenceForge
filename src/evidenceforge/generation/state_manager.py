@@ -43,7 +43,12 @@ from threading import RLock, Thread, current_thread, get_ident
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -76,6 +81,9 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
+
+# Retain a bounded historical execution window per live/retained process.
+_MAX_RETAINED_EXECUTIONS_PER_PROCESS = 64
 
 
 def _authority_values_match(left: object, right: object) -> bool:
@@ -1203,6 +1211,7 @@ class MaterializationBatchBuilder:
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1228,6 +1237,7 @@ class MaterializationBatchBuilder:
             parent_activity_time=parent_activity_time,
             auth_session_id=auth_session_id,
             auth_logon_type=auth_logon_type,
+            credentials=credentials,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2144,6 +2154,15 @@ class ActionCohortProcessActivityPatch:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionCohortProcessExecution:
+    """One authenticated image replacement within an existing process lifetime."""
+
+    target: ProcessIdentity
+    after: ProcessIdentity
+    _capability: _ActionCohortCapability = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class ActionCohortSessionActivityPatch:
     """Exact activity frontier for one staged or live session."""
 
@@ -2228,6 +2247,7 @@ class ActionCohortMaterializationPlan:
     _live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...]
     _session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     _process_activity: tuple[ActionCohortProcessActivityPatch, ...]
+    _process_executions: tuple[ActionCohortProcessExecution, ...]
     _session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     _process_terminations: tuple[ActionCohortProcessTermination, ...]
     _session_terminalizations: tuple[ActionCohortSessionTerminalization, ...]
@@ -2282,6 +2302,12 @@ class ActionCohortMaterializationPlan:
         return self._process_activity
 
     @property
+    def process_executions(self) -> tuple[ActionCohortProcessExecution, ...]:
+        """Return exact before/after execution snapshots within existing lifetimes."""
+
+        return self._process_executions
+
+    @property
     def session_activity_patches(self) -> tuple[ActionCohortSessionActivityPatch, ...]:
         """Return exact staged/live session activity transitions."""
 
@@ -2325,6 +2351,7 @@ class ActionCohortMaterializationResult:
     terminalized_sessions: tuple[SessionIdentity, ...]
     smb_file_mutation: SmbFileMutationCommitResult | None
     smb_connection_finalization: SmbConnectionFinalizationResult | None
+    executed_processes: tuple[ProcessIdentity, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2502,6 +2529,7 @@ class _MaterializationBatchRollbackProjection:
     _live_session_process_roles: tuple[()] = ()
     _session_metadata: tuple[()] = ()
     _process_activity: tuple[()] = ()
+    _process_executions: tuple[()] = ()
     _session_activity: tuple[()] = ()
 
 
@@ -2520,9 +2548,11 @@ class _PreparedActionCohortCommitPlan:
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...]
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...]
     process_activity: tuple[ActionCohortProcessActivityPatch, ...]
+    process_executions: tuple[ActionCohortProcessExecution, ...]
     session_activity: tuple[ActionCohortSessionActivityPatch, ...]
     expected_started_sessions: tuple[SessionIdentity, ...]
     expected_started_processes: tuple[ProcessIdentity, ...]
+    expected_executed_processes: tuple[ProcessIdentity, ...]
     expected_terminated_processes: tuple[ProcessIdentity, ...]
     expected_terminalized_sessions: tuple[SessionIdentity, ...]
     committed_version: int
@@ -2702,6 +2732,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         ] = []
         self._session_metadata_patches: list[ActionCohortSessionMetadataPatch] = []
         self._process_activity_patches: list[ActionCohortProcessActivityPatch] = []
+        self._process_execution_drafts: list[ActionCohortProcessExecution] = []
         self._session_activity_patches: list[ActionCohortSessionActivityPatch] = []
         self._process_termination_drafts: list[ActionCohortProcessTermination] = []
         self._session_terminalization_drafts: list[ActionCohortSessionTerminalization] = []
@@ -2735,6 +2766,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._live_session_process_roles_patches.clear()
         self._session_metadata_patches.clear()
         self._process_activity_patches.clear()
+        self._process_execution_drafts.clear()
         self._session_activity_patches.clear()
         self._process_termination_drafts.clear()
         self._session_terminalization_drafts.clear()
@@ -2815,6 +2847,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -2861,6 +2894,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 parent_activity_time=parent_activity_time,
                 auth_session_id=auth_session_id,
                 auth_logon_type=auth_logon_type,
+                credentials=credentials,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -2996,6 +3030,99 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 _capability=_ActionCohortCapability(),
             )
         )
+
+    def fork_process(
+        self, parent: ProcessIdentity, *, forked_at: datetime
+    ) -> ProcessMaterializationPlan:
+        """Stage a POSIX child inheriting the exact current parent image and session."""
+
+        self._require_open()
+        with self._manager._capability_minting_guard(
+            "ActionCohortMaterializationBuilder.fork_process"
+        ):
+            if type(parent) is not ProcessIdentity:
+                raise StateError("Process fork requires an exact live parent identity")
+            normalized = self._manager._normalize_action_cohort_process_target(self, parent)
+            assert type(normalized) is ProcessIdentity
+            process = self._manager._validate_action_live_process_identity(normalized)
+            platform = self._manager._pid_os.get(parent.hostname)
+            if platform not in {"linux", "macos"}:
+                raise StateError("Process fork requires a POSIX PID namespace")
+            if type(forked_at) is not datetime:
+                raise StateError("Process fork requires an exact datetime")
+            timestamp = ensure_utc(forked_at)
+            if timestamp < parent.execution_started_at:
+                raise StateError("Process fork precedes its parent execution")
+            return self.plan_process(
+                system=parent.hostname,
+                parent_pid=parent.pid,
+                image=parent.image,
+                command_line=parent.command_line,
+                username=parent.principal,
+                integrity_level=process.integrity_level,
+                os_category=platform,
+                logon_id=parent.logon_id,
+                start_time=timestamp,
+                parent_activity_time=timestamp,
+                require_session=bool(parent.logon_id),
+                auth_session_id=process.auth_session_id,
+                auth_logon_type=process.auth_logon_type,
+                credentials=parent.credentials,
+            )
+
+    def execute_process(
+        self,
+        target: ProcessIdentity,
+        *,
+        image: str,
+        command_line: str,
+        executed_at: datetime,
+        credentials: PosixProcessCredentials | None = None,
+    ) -> ProcessIdentity:
+        """Stage one image replacement; return its immutable post-exec snapshot."""
+
+        self._require_open()
+        if type(target) is not ProcessIdentity:
+            raise StateError("Process execution requires an existing live process identity")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        if any(
+            patch.target.object_id == target.object_id for patch in self._process_execution_drafts
+        ):
+            raise StateError("Action cohort repeats a process execution")
+        if type(image) is not str or not image.startswith("/") or "\0" in image:
+            raise StateError("Process execution requires an absolute POSIX image path")
+        if type(command_line) is not str or not command_line or "\0" in command_line:
+            raise StateError("Process execution requires a non-empty command line")
+        if type(executed_at) is not datetime:
+            raise StateError("Process execution requires an exact datetime")
+        timestamp = ensure_utc(executed_at)
+        if timestamp <= normalized.execution_started_at:
+            raise StateError("Process execution must follow the current execution start")
+        self._manager._validate_process_credentials(
+            credentials, self._manager._pid_os.get(normalized.hostname, "unknown")
+        )
+        if credentials is not None and (
+            normalized.credentials is None or credentials.origin != normalized.credentials.origin
+        ):
+            raise StateError("Process execution must preserve known real and audit credentials")
+        after = replace(
+            normalized,
+            image=image,
+            credentials=credentials if credentials is not None else normalized.credentials,
+            command_line=command_line,
+            execution_ordinal=normalized.execution_ordinal + 1,
+            lifetime_image=normalized.initial_image,
+            executed_at=timestamp,
+        )
+        self._process_execution_drafts.append(
+            ActionCohortProcessExecution(
+                target=normalized,
+                after=after,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return after
 
     def patch_session_activity(
         self,
@@ -3376,6 +3503,7 @@ def _materialization_batch_integrity_token(
 
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
+        PosixProcessCredentials,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -3396,6 +3524,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ActionCohortLiveSessionProcessRolesState,
         ActionCohortLiveSessionProcessRolesPatch,
         ActionCohortProcessActivityPatch,
+        ActionCohortProcessExecution,
         ActionCohortSessionActivityPatch,
         ActionCohortProcessTermination,
         ActionCohortSessionTerminalization,
@@ -3614,6 +3743,7 @@ def _action_cohort_semantic_preimage(
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    process_executions: tuple[ActionCohortProcessExecution, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
@@ -3622,7 +3752,7 @@ def _action_cohort_semantic_preimage(
 ) -> tuple[object, ...]:
     """Return deterministic semantics without secrets or object addresses."""
 
-    return (
+    legacy = (
         "action-cohort-materialization-v2",
         expected_version,
         expected_state_time,
@@ -3699,6 +3829,16 @@ def _action_cohort_semantic_preimage(
         _action_cohort_smb_file_mutation_semantic(smb_file_mutation_terminalization),
     )
 
+    if not process_executions:
+        return legacy
+    return (
+        *legacy,
+        (
+            "process-executions-v1",
+            tuple((patch.target, patch.after) for patch in process_executions),
+        ),
+    )
+
 
 def _action_cohort_semantic_id(**kwargs: object) -> str:
     """Hash one safe, exact action-cohort semantic preimage."""
@@ -3738,6 +3878,7 @@ def _action_cohort_integrity_token(
     live_session_process_roles: tuple[ActionCohortLiveSessionProcessRolesPatch, ...],
     session_metadata: tuple[ActionCohortSessionMetadataPatch, ...],
     process_activity: tuple[ActionCohortProcessActivityPatch, ...],
+    process_executions: tuple[ActionCohortProcessExecution, ...],
     session_activity: tuple[ActionCohortSessionActivityPatch, ...],
     process_terminations: tuple[ActionCohortProcessTermination, ...],
     session_terminalizations: tuple[ActionCohortSessionTerminalization, ...],
@@ -3754,6 +3895,7 @@ def _action_cohort_integrity_token(
         live_session_process_roles,
         session_metadata,
         process_activity,
+        process_executions,
         session_activity,
         process_terminations,
         session_terminalizations,
@@ -4465,6 +4607,11 @@ class StateManager:
                 "started processes",
             ),
             (
+                result.executed_processes,
+                commit_plan.expected_executed_processes,
+                "executed processes",
+            ),
+            (
                 result.terminated_processes,
                 commit_plan.expected_terminated_processes,
                 "terminated processes",
@@ -4519,6 +4666,7 @@ class StateManager:
             result.committed_version,
             tuple(id(item) for item in result.started_sessions),
             tuple(id(item) for item in result.started_processes),
+            tuple(id(item) for item in result.executed_processes),
             tuple(id(item) for item in result.terminated_processes),
             tuple(id(item) for item in result.terminalized_sessions),
             id(result.smb_file_mutation) if result.smb_file_mutation is not None else 0,
@@ -6190,6 +6338,7 @@ class StateManager:
             plan._live_session_process_roles,
             plan._session_metadata,
             plan._process_activity,
+            plan._process_executions,
             plan._session_activity,
             plan._process_terminations,
             plan._session_terminalizations,
@@ -6210,6 +6359,7 @@ class StateManager:
             ),
             (plan._session_metadata, ActionCohortSessionMetadataPatch),
             (plan._process_activity, ActionCohortProcessActivityPatch),
+            (plan._process_executions, ActionCohortProcessExecution),
             (plan._session_activity, ActionCohortSessionActivityPatch),
             (plan._process_terminations, ActionCohortProcessTermination),
             (plan._session_terminalizations, ActionCohortSessionTerminalization),
@@ -6230,6 +6380,7 @@ class StateManager:
                         plan._live_session_process_roles,
                         plan._session_metadata,
                         plan._process_activity,
+                        plan._process_executions,
                         plan._session_activity,
                         plan._process_terminations,
                     )
@@ -6263,6 +6414,7 @@ class StateManager:
                 plan._live_session_process_roles,
                 plan._session_metadata,
                 plan._process_activity,
+                plan._process_executions,
                 plan._session_activity,
                 plan._process_terminations,
                 plan._session_terminalizations,
@@ -6306,6 +6458,16 @@ class StateManager:
                 for reference in termination.staged_session_references
             ):
                 raise StateError("Action cohort staged session references are malformed")
+        execution_targets: set[str] = set()
+        for execution in plan._process_executions:
+            if (
+                type(execution.target) is not ProcessIdentity
+                or type(execution.after) is not ProcessIdentity
+            ):
+                raise StateError("Action cohort process execution requires exact identities")
+            if execution.target.object_id in execution_targets:
+                raise StateError("Action cohort repeats a process execution target")
+            execution_targets.add(execution.target.object_id)
         for patch in plan._live_session_process_roles:
             if (
                 type(patch.target) is not SessionIdentity
@@ -6326,6 +6488,7 @@ class StateManager:
             *plan._live_session_process_roles,
             *plan._session_metadata,
             *plan._process_activity,
+            *plan._process_executions,
             *plan._session_activity,
         ):
             if type(patch._capability) is not _ActionCohortCapability:
@@ -6353,6 +6516,7 @@ class StateManager:
             "live_session_process_roles": plan._live_session_process_roles,
             "session_metadata": plan._session_metadata,
             "process_activity": plan._process_activity,
+            "process_executions": plan._process_executions,
             "session_activity": plan._session_activity,
             "process_terminations": plan._process_terminations,
             "session_terminalizations": plan._session_terminalizations,
@@ -6371,6 +6535,7 @@ class StateManager:
             live_session_process_roles=plan._live_session_process_roles,
             session_metadata=plan._session_metadata,
             process_activity=plan._process_activity,
+            process_executions=plan._process_executions,
             session_activity=plan._session_activity,
             process_terminations=plan._process_terminations,
             session_terminalizations=plan._session_terminalizations,
@@ -6821,14 +6986,14 @@ class StateManager:
             patch = process._allocator_patch.pid_os
             if patch is not None:
                 host, category = patch
-                if host != identity.hostname or category not in {"linux", "windows"}:
+                if host != identity.hostname or category not in {"linux", "windows", "macos"}:
                     raise StateError("Action cohort process PID namespace patch is malformed")
                 existing = namespaces.get(host)
                 if existing is not None and existing != category:
                     raise StateError("Action cohort process PID namespace changed within a cohort")
                 namespaces[host] = category
             category = namespaces.get(identity.hostname)
-            if category not in {"linux", "windows"}:
+            if category not in {"linux", "windows", "macos"}:
                 raise StateError("Action cohort process has no exact PID namespace")
             resolved[id(process)] = category
         return resolved
@@ -7104,6 +7269,7 @@ class StateManager:
             ),
             (builder._session_metadata_patches, list, "session metadata"),
             (builder._process_activity_patches, list, "process activity"),
+            (builder._process_execution_drafts, list, "process executions"),
             (builder._session_activity_patches, list, "session activity"),
             (builder._process_termination_drafts, list, "process terminations"),
             (builder._session_terminalization_drafts, list, "session terminalizations"),
@@ -7158,6 +7324,7 @@ class StateManager:
             ),
             (builder._session_metadata_patches, list, "session metadata"),
             (builder._process_activity_patches, list, "process activity"),
+            (builder._process_execution_drafts, list, "process executions"),
             (builder._session_activity_patches, list, "session activity"),
             (builder._process_termination_drafts, list, "process terminations"),
         )
@@ -7205,6 +7372,7 @@ class StateManager:
                     builder._live_session_process_roles_patches,
                     builder._session_metadata_patches,
                     builder._process_activity_patches,
+                    builder._process_execution_drafts,
                     builder._session_activity_patches,
                     builder._process_termination_drafts,
                     builder._session_terminalization_drafts,
@@ -7268,6 +7436,9 @@ class StateManager:
                     if value is not None:
                         times.append(value)
             times.extend(patch.activity_time for patch in builder._process_activity_patches)
+            times.extend(
+                patch.after.execution_started_at for patch in builder._process_execution_drafts
+            )
             times.extend(patch.activity_time for patch in builder._session_activity_patches)
             times.extend(termination.end_time for termination in process_terminations)
             times.extend(
@@ -7290,6 +7461,7 @@ class StateManager:
                 "live_session_process_roles": tuple(builder._live_session_process_roles_patches),
                 "session_metadata": tuple(builder._session_metadata_patches),
                 "process_activity": tuple(builder._process_activity_patches),
+                "process_executions": tuple(builder._process_execution_drafts),
                 "session_activity": tuple(builder._session_activity_patches),
                 "process_terminations": tuple(process_terminations),
                 "session_terminalizations": tuple(builder._session_terminalization_drafts),
@@ -7307,6 +7479,7 @@ class StateManager:
                 _live_session_process_roles=tuple(builder._live_session_process_roles_patches),
                 _session_metadata=tuple(builder._session_metadata_patches),
                 _process_activity=tuple(builder._process_activity_patches),
+                _process_executions=tuple(builder._process_execution_drafts),
                 _session_activity=tuple(builder._session_activity_patches),
                 _process_terminations=tuple(process_terminations),
                 _session_terminalizations=tuple(builder._session_terminalization_drafts),
@@ -7327,6 +7500,7 @@ class StateManager:
                     live_session_process_roles=plan._live_session_process_roles,
                     session_metadata=plan._session_metadata,
                     process_activity=plan._process_activity,
+                    process_executions=plan._process_executions,
                     session_activity=plan._session_activity,
                     process_terminations=plan._process_terminations,
                     session_terminalizations=plan._session_terminalizations,
@@ -9031,6 +9205,7 @@ class StateManager:
         bucket_ordinal: int | None = None,
         extra_allocations: tuple[tuple[datetime, int], ...] = (),
         extra_reserved_pids: set[int] | None = None,
+        os_category: str = "linux",
     ) -> tuple[int, int, tuple[tuple[str, datetime], int], int]:
         if (
             self._pid_allocation_watermark is not None
@@ -9151,7 +9326,11 @@ class StateManager:
         candidates = 0
         for _probe in range(probe_budget):
             candidates += 1
-            pid = self._normalize_linux_pid(logical_position)
+            pid = (
+                100 + ((logical_position - 100) % 99900)
+                if os_category == "macos"
+                else self._normalize_linux_pid(logical_position)
+            )
             if (
                 (allocations is None or not allocations.contains_value(logical_position))
                 and all(
@@ -9198,6 +9377,19 @@ class StateManager:
     ) -> tuple[int, tuple[str, int] | None, tuple[str, object] | None]:
         if os_category == "linux":
             return pid, None, None
+        if os_category == "macos":
+            counter = (
+                counter_override
+                if counter_override is not None
+                else self._thread_id_counters.get(
+                    system, 1000 + (_stable_seed(f"macos_thread_initial:{system}") % 100000)
+                )
+            )
+            used = {thread.tid for thread in self._running_threads.find("system", system)}
+            used.update(extra_used_tids or ())
+            while counter in used:
+                counter += 1
+            return counter, (system, counter + 1), None
         counter = (
             self._thread_id_counters.get(
                 system,
@@ -9222,6 +9414,18 @@ class StateManager:
         next_counter = candidate + (4 * rng.randint(1, 17))
         return candidate, (system, next_counter), (system, rng.getstate())
 
+    @staticmethod
+    def _validate_process_credentials(
+        credentials: PosixProcessCredentials | None, os_category: str
+    ) -> None:
+        """Admit explicit native credentials only in a modeled POSIX namespace."""
+
+        if credentials is not None and (
+            type(credentials) is not PosixProcessCredentials
+            or os_category not in {"linux", "macos"}
+        ):
+            raise StateError("Process credentials require a POSIX platform and immutable snapshot")
+
     def plan_process_materialization(
         self,
         *,
@@ -9242,10 +9446,12 @@ class StateManager:
         parent_activity_time: datetime | None = None,
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
+            self._validate_process_credentials(credentials, os_category)
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
@@ -9302,7 +9508,7 @@ class StateManager:
                 pid = fixed_pid
                 logical_position = fixed_pid
                 fixed_patch = (system, fixed_pid)
-                if os_category == "linux":
+                if os_category in {"linux", "macos"}:
                     linux_allocation = (system, effective_start, fixed_pid)
             elif os_category == "windows":
                 pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
@@ -9326,6 +9532,7 @@ class StateManager:
                 if parent is not None and parent.start_time <= effective_start and parent.pid > 1:
                     minimum_parent = parent.pid_logical_position
                 pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    os_category=os_category,
                     system=system,
                     counter=counter,
                     rng=pid_rng,
@@ -9379,6 +9586,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 principal=username,
+                credentials=credentials,
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -9577,6 +9785,7 @@ class StateManager:
         parent_activity_time: datetime | None,
         auth_session_id: int | None,
         auth_logon_type: int | None,
+        credentials: PosixProcessCredentials | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -9591,6 +9800,7 @@ class StateManager:
                 raise StateError("Materialization batch became stale during process planning")
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
+            self._validate_process_credentials(credentials, os_category)
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
@@ -9719,7 +9929,7 @@ class StateManager:
                 pid = fixed_pid
                 logical_position = fixed_pid
                 fixed_patch = (system, fixed_pid)
-                if os_category == "linux":
+                if os_category in {"linux", "macos"}:
                     linux_allocation = (system, effective_start, fixed_pid)
             elif os_category == "windows":
                 pid, logical_position, counter, candidate_delta = self._preview_windows_pid(
@@ -9763,6 +9973,7 @@ class StateManager:
                 )
                 planned_allocations = tuple(builder._linux_allocations.get(system, ()))
                 pid, logical_position, bucket_patch, candidate_delta = self._preview_linux_pid(
+                    os_category=os_category,
                     system=system,
                     counter=counter,
                     rng=pid_rng,
@@ -9838,6 +10049,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 principal=username,
+                credentials=credentials,
                 logon_id=logon_id,
                 started_at=effective_start,
                 lifecycle_group_id=process_lifecycle_id,
@@ -10666,6 +10878,68 @@ class StateManager:
                 )
                 process_activity[identity.object_id] = patch
 
+            for execution in plan._process_executions:
+                before, after = execution.target, execution.after
+                process = self._validate_action_live_process_identity(before)
+                if self._pid_os.get(before.hostname) not in {"linux", "macos"}:
+                    raise StateError("Process image replacement requires a POSIX PID namespace")
+                threads = self._running_threads.find("process_object_id", before.object_id)
+                if any(thread.tid != process.primary_tid for thread in threads):
+                    raise StateError(
+                        "Process execution with worker threads requires explicit thread replacement"
+                    )
+                if after.credentials != before.credentials and (
+                    before.credentials is None
+                    or after.credentials is None
+                    or after.credentials.origin != before.credentials.origin
+                ):
+                    raise StateError("Process execution changed real or audit credentials")
+                expected = replace(
+                    before,
+                    image=after.image,
+                    command_line=after.command_line,
+                    credentials=after.credentials,
+                    execution_ordinal=before.execution_ordinal + 1,
+                    lifetime_image=before.initial_image,
+                    executed_at=after.executed_at,
+                )
+                if after != expected or after.execution_started_at <= before.execution_started_at:
+                    raise StateError("Process execution changed lifetime ownership or ordinal")
+                if (
+                    process.last_activity_time is not None
+                    and after.execution_started_at < process.last_activity_time
+                ):
+                    raise StateError("Process execution precedes already committed activity")
+                # Until a bundle owns ordered same-cohort dependencies, require a separate
+                # transaction for children, dependent activity and termination after exec.
+                if (
+                    before.object_id in process_activity
+                    or any(
+                        item.identity.object_id == before.object_id
+                        for item in plan._process_terminations
+                    )
+                    or any(
+                        item.parent_identity is not None
+                        and item.parent_identity.object_id == before.object_id
+                        for item in plan._processes
+                    )
+                    or any(
+                        item.identity.logon_id == before.logon_id
+                        for item in plan._session_terminalizations
+                    )
+                ):
+                    raise StateError(
+                        "Process execution requires a separate cohort from dependent activity or close"
+                    )
+                self._validate_activity_before_owning_hard_deadline_locked(
+                    after.execution_started_at,
+                    hostname=before.hostname,
+                    logon_id=before.logon_id,
+                    staged_sessions=staged_sessions,
+                    effective_end_plans=effective_end_plans,
+                    label="Action cohort process execution",
+                )
+
             session_activity: dict[str, ActionCohortSessionActivityPatch] = {}
             for patch in plan._session_activity:
                 identity = self._action_session_identity(patch.target)
@@ -10887,6 +11161,7 @@ class StateManager:
                     *(patch.after.source_ready_time for patch in plan._session_metadata),
                     *(patch.after.network_close_time for patch in plan._session_metadata),
                     *(patch.activity_time for patch in plan._process_activity),
+                    *(patch.after.execution_started_at for patch in plan._process_executions),
                     *(patch.activity_time for patch in plan._session_activity),
                     *(termination.end_time for termination in plan.process_terminations),
                     *(
@@ -10972,6 +11247,7 @@ class StateManager:
             parent_lifecycle_group_id=identity.parent_lifecycle_group_id,
             concurrency_group_id=payload.concurrency_group_id,
             pid_logical_position=payload.pid_logical_position,
+            credentials=identity.credentials,
         )
         thread = RunningThread(
             hostname=primary_thread.hostname,
@@ -11410,6 +11686,8 @@ class StateManager:
                     added_time=(ensure_utc(after_plan.canonical_end) if adds_record else None),
                     adds_record=adds_record,
                 )
+        for execution in plan._process_executions:
+            capture_object(self._processes_by_object_id[execution.target.object_id])
         for patch in plan._process_activity:
             identity = self._action_process_identity(patch.target)
             process = (
@@ -12227,6 +12505,7 @@ class StateManager:
         live_session_process_roles = plan._live_session_process_roles
         session_metadata = plan._session_metadata
         process_activity = plan._process_activity
+        process_executions = plan._process_executions
         session_activity = plan._session_activity
         process_terminations = plan._process_terminations
         session_terminalizations = plan._session_terminalizations
@@ -12254,6 +12533,7 @@ class StateManager:
             live_session_process_roles,
             session_metadata,
             process_activity,
+            process_executions,
             session_activity,
             process_terminations,
             session_terminalizations,
@@ -12278,6 +12558,7 @@ class StateManager:
                 or live_session_process_roles
                 or session_metadata
                 or process_activity
+                or process_executions
                 or session_activity
                 or process_terminations
                 or len(session_terminalizations) != 1
@@ -12324,6 +12605,7 @@ class StateManager:
             "live_session_process_roles": tuple(item for item in live_session_process_roles),
             "session_metadata": tuple(item for item in session_metadata),
             "process_activity": tuple(item for item in process_activity),
+            "process_executions": tuple(item for item in process_executions),
             "session_activity": tuple(item for item in session_activity),
             "process_terminations": tuple(item for item in process_terminations),
             "session_terminalizations": tuple(item for item in session_terminalizations),
@@ -12350,6 +12632,7 @@ class StateManager:
                 live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
                 session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
                 process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+                process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
                 session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
                 process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
                 session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12369,6 +12652,7 @@ class StateManager:
                 live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
                 session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
                 process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+                process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
                 session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
                 process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
                 session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12386,6 +12670,7 @@ class StateManager:
             _live_session_process_roles=snapshot_kwargs["live_session_process_roles"],  # type: ignore[arg-type]
             _session_metadata=snapshot_kwargs["session_metadata"],  # type: ignore[arg-type]
             _process_activity=snapshot_kwargs["process_activity"],  # type: ignore[arg-type]
+            _process_executions=snapshot_kwargs["process_executions"],  # type: ignore[arg-type]
             _session_activity=snapshot_kwargs["session_activity"],  # type: ignore[arg-type]
             _process_terminations=snapshot_kwargs["process_terminations"],  # type: ignore[arg-type]
             _session_terminalizations=snapshot_kwargs["session_terminalizations"],  # type: ignore[arg-type]
@@ -12484,9 +12769,11 @@ class StateManager:
             live_session_process_roles=tuple(item for item in plan._live_session_process_roles),
             session_metadata=tuple(item for item in plan._session_metadata),
             process_activity=tuple(item for item in plan._process_activity),
+            process_executions=tuple(item for item in plan._process_executions),
             session_activity=tuple(item for item in plan._session_activity),
             expected_started_sessions=tuple(item.identity for item in plan._sessions),
             expected_started_processes=tuple(item.identity for item in plan._processes),
+            expected_executed_processes=tuple(item.after for item in plan._process_executions),
             expected_terminated_processes=tuple(
                 item.identity for item in plan._process_terminations
             ),
@@ -12547,6 +12834,7 @@ class StateManager:
                 committed_version=commit_plan.committed_version,
                 started_sessions=commit_plan.expected_started_sessions,
                 started_processes=commit_plan.expected_started_processes,
+                executed_processes=commit_plan.expected_executed_processes,
                 terminated_processes=commit_plan.expected_terminated_processes,
                 terminalized_sessions=commit_plan.expected_terminalized_sessions,
                 smb_file_mutation=(
@@ -13023,6 +13311,18 @@ class StateManager:
             self._commit_action_cohort_live_session_process_roles(patch)
         for patch in prepared.session_metadata:
             self._commit_action_cohort_session_metadata(patch)
+        for execution in prepared.process_executions:
+            process = self._processes_by_object_id[execution.target.object_id]
+            process.prior_executions = (*process.prior_executions, execution.target)[
+                -_MAX_RETAINED_EXECUTIONS_PER_PROCESS:
+            ]
+            process.image = execution.after.image
+            process.command_line = execution.after.command_line
+            process.credentials = execution.after.credentials
+            process.execution_ordinal = execution.after.execution_ordinal
+            process.lifetime_image = execution.after.lifetime_image
+            process.executed_at = execution.after.executed_at
+            process.last_activity_time = execution.after.execution_started_at
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
@@ -13578,7 +13878,7 @@ class StateManager:
             self._pid_os[system] = "windows"
         else:
             self._pid_counters[system] = pid_rng.randint(8000, 42000)
-            self._pid_os[system] = "linux"
+            self._pid_os[system] = os_category
 
     def _pid_is_reserved(
         self,
@@ -13783,7 +14083,11 @@ class StateManager:
         )
         for _probe in range(probe_budget):
             self._pid_candidate_probe_count += 1
-            pid = self._normalize_linux_pid(logical_position)
+            pid = (
+                100 + ((logical_position - 100) % 99900)
+                if self._pid_os.get(system) == "macos"
+                else self._normalize_linux_pid(logical_position)
+            )
             if not allocations.contains_value(logical_position) and not self._pid_is_reserved(
                 system,
                 pid,
@@ -14001,6 +14305,14 @@ class StateManager:
                 candidate += 1
             return candidate
 
+        if os_category == "macos":
+            tid, counter_update, _ = self._preview_primary_thread(
+                system=system, os_category=os_category, object_id=process_object_id, pid=pid
+            )
+            if counter_update is not None:
+                self._thread_id_counters[system] = counter_update[1]
+            return tid
+
         counter = self._thread_id_counters.get(
             system,
             2000 + (4 * (_stable_seed(f"windows_tid_initial:{system}") % 5000)),
@@ -14170,14 +14482,35 @@ class StateManager:
                 return None
             return self._process_identity(process)
 
-    def get_process_identity_by_object_id(self, object_id: str) -> ProcessIdentity | None:
+    def get_process_identity_by_object_id(
+        self, object_id: str, *, event_time: datetime | None = None
+    ) -> ProcessIdentity | None:
         """Resolve a live or ended process by its durable process object identity."""
 
         with self._lock:
             process = self._processes_by_object_id.get(
                 object_id
             ) or self._ended_processes_by_object_id.get(object_id)
-            return self._process_identity(process) if process is not None else None
+            if process is None:
+                return None
+            if event_time is not None:
+                return self._process_execution_active_at(process, ensure_utc(event_time))
+            return self._process_identity(process)
+
+    def _process_execution_active_at(
+        self, process: RunningProcess, event_time: datetime
+    ) -> ProcessIdentity | None:
+        if event_time < process.start_time or (
+            process.end_time is not None and event_time >= process.end_time
+        ):
+            return None
+        current = self._process_identity(process)
+        if event_time >= current.execution_started_at:
+            return current
+        for prior in reversed(process.prior_executions):
+            if prior.execution_started_at <= event_time:
+                return prior
+        return None
 
     def _process_identity(self, process: RunningProcess) -> ProcessIdentity:
         """Project mutable runtime process state to an immutable identity snapshot."""
@@ -14201,6 +14534,10 @@ class StateManager:
             lifecycle_group_id=process.lifecycle_group_id,
             parent_lifecycle_group_id=process.parent_lifecycle_group_id,
             primary_thread=primary_thread,
+            execution_ordinal=process.execution_ordinal,
+            lifetime_image=process.lifetime_image,
+            executed_at=process.executed_at,
+            credentials=process.credentials,
         )
 
     @staticmethod
@@ -14219,6 +14556,10 @@ class StateManager:
             identity.started_at,
             identity.lifecycle_group_id,
             identity.parent_lifecycle_group_id,
+            identity.execution_ordinal,
+            identity.executed_at,
+            identity.lifetime_image,
+            identity.credentials,
         )
 
     def _process_identity_active_at_locked(
@@ -14242,8 +14583,19 @@ class StateManager:
             if process.start_time <= effective_time and (
                 process.end_time is None or effective_time < process.end_time
             ):
-                return self._process_identity(process)
+                return self._process_execution_active_at(process, effective_time)
         return None
+
+    def get_process_identity_at(
+        self, system: str, pid: int, event_time: datetime
+    ) -> ProcessIdentity | None:
+        """Resolve an execution without crossing a reused PID's retired incarnation.
+
+        Delayed observations across PID reuse must use the durable object-ID lookup.
+        """
+
+        with self._lock:
+            return self._process_identity_active_at_locked(system, pid, event_time)
 
     def _validate_process_parent_identity_locked(
         self,

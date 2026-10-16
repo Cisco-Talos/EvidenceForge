@@ -565,5 +565,14 @@
       ],
       "TTLs": []
     }
+  },
+  {
+    "rule": "zsh_history.command",
+    "pass": {
+      "command": "id"
+    },
+    "fail": {
+      "command": ""
+    }
   }
 ]

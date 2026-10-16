@@ -435,16 +435,22 @@ class WorldModel:
         if os_category == "windows":
             capabilities.add(HostCapability.RDP_CLIENT)
             capabilities.add(HostCapability.SMB_CLIENT)
-        if os_category == "linux" and (
-            system.type in ("server", "domain_controller")
-            or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
-        ):
+        if (
+            os_category == "linux"
+            and (
+                system.type in ("server", "domain_controller")
+                or normalized_services.intersection(_SSH_RECEIVER_SERVICES)
+            )
+        ) or (os_category == "macos" and normalized_services.intersection(_SSH_RECEIVER_SERVICES)):
             capabilities.add(HostCapability.SSH_RECEIVER)
         if os_category == "windows" and (
             system.type in ("server", "domain_controller")
             or normalized_services.intersection(_RDP_RECEIVER_SERVICES)
         ):
             capabilities.add(HostCapability.RDP_RECEIVER)
+
+        if os_category == "macos":
+            capabilities.add(HostCapability.SMB_CLIENT)
 
         has_explicit_smb_client = bool(normalized_services & _SMB_CLIENT_SERVICES)
         has_explicit_smb_server = bool(normalized_services & _SMB_SERVER_SERVICES)
@@ -501,6 +507,8 @@ class WorldModel:
             if host.is_server:
                 services.append("smb-server")
             return services
+        if host.os_category == "macos":
+            return ["dns-client", "ntp-client", "smb-client"]
         if host.supports(HostCapability.SMB_SERVER):
             return ["dns-client", "ntp-client", "syslog", "smb-server"]
         return ["dns-client", "ntp-client", "syslog"]

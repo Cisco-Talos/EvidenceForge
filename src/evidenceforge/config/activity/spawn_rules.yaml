@@ -455,3 +455,287 @@ linux:
     lifetime: long
     children:
       - runc
+
+# Native macOS ancestry. These are eligible relationships, not a claim that
+# every application or helper starts in every session.
+macos:
+  launchd:
+    command_templates: [/sbin/launchd]
+    lifetime: long
+    children:
+      - loginwindow
+      - logind
+      - syspolicyd
+      - tccd
+      - smd
+      - mds
+      - Finder
+      - Terminal
+      - Safari
+      - Google Chrome
+      - Microsoft Edge
+      - firefox
+      - Code
+      - dbeaver
+      - idea
+      - sublime_text
+      - Microsoft Word
+      - Microsoft Excel
+      - Microsoft Outlook
+      - MSTeams
+      - Slack
+      - zoom.us
+      - Postman
+      - OneDrive
+      - thunderbird
+      - Dropbox
+      - Google Drive
+  Terminal:
+    command_templates: ['"/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"']
+    lifetime: long
+    children: [login]
+  login:
+    command_templates: ['/usr/bin/login -fp {username}']
+    lifetime: long
+    children: [zsh, bash]
+  zsh:
+    # Only these one-shot invocations are bounded. The canonical login shell
+    # has argv -zsh, so it keeps session ownership and never matches this list.
+    command_templates:
+      - /bin/zsh -c 'id; groups'
+      - /bin/zsh -c 'ls -la ~/Library/LaunchAgents'
+    lifetime: short
+    children:
+      - bash
+      - zsh
+      - docker
+      - git
+      - node
+      - kubectl
+      - vim
+      - nano
+      - emacs
+      - gmake
+      - cargo
+      - mysql
+      - psql
+      - redis-cli
+      - sqlcmd
+      - ldapsearch
+      - 7zz
+      - dotnet
+      - ssh
+      - curl
+      - gcc-16
+  bash:
+    command_templates: [/bin/bash -l]
+    lifetime: long
+    children:
+      - bash
+      - zsh
+      - docker
+      - git
+      - node
+      - kubectl
+      - vim
+      - nano
+      - emacs
+      - gmake
+      - cargo
+      - mysql
+      - psql
+      - redis-cli
+      - sqlcmd
+      - ldapsearch
+      - 7zz
+      - dotnet
+      - ssh
+      - curl
+      - gcc-16
+
+  7zz:
+    command_templates:
+    - /opt/homebrew/bin/7zz i
+    lifetime: short
+    children: []
+
+  dotnet:
+    command_templates:
+    - /opt/homebrew/opt/dotnet/libexec/dotnet --info
+    - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
+    lifetime: short
+    children: []
+
+  node:
+    command_templates:
+    - /opt/homebrew/bin/node --version
+    - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
+    lifetime: short
+    children: []
+
+  git:
+    command_templates:
+    - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} status
+    - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} log --oneline -5
+    lifetime: short
+    children: []
+
+  docker:
+    command_templates:
+    - '"/Applications/Docker.app/Contents/Resources/bin/docker" ps'
+    - '"/Applications/Docker.app/Contents/Resources/bin/docker" images'
+    lifetime: short
+    children: []
+
+  kubectl:
+    command_templates:
+    - /opt/homebrew/bin/kubectl get pods
+    - /opt/homebrew/bin/kubectl get deployments
+    lifetime: short
+    children: []
+
+  ssh:
+    command_templates:
+    - /opt/homebrew/bin/ssh -V
+    lifetime: short
+    children: []
+
+  curl:
+    command_templates:
+    - /opt/homebrew/opt/curl/bin/curl --head {internal_url}
+    lifetime: short
+    children: []
+
+  vim:
+    command_templates:
+    - /opt/homebrew/bin/vim /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  nano:
+    command_templates:
+    - /opt/homebrew/bin/nano /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  emacs:
+    command_templates:
+    - /opt/homebrew/bin/emacs -nw /Users/{username}/Projects/{project}/README.md
+    lifetime: long
+    children: []
+
+  gmake:
+    command_templates:
+    - /opt/homebrew/bin/gmake -C /Users/{username}/Projects/{project} test
+    lifetime: short
+    children: []
+
+  gcc-16:
+    command_templates:
+    - /opt/homebrew/bin/gcc-16 --version
+    lifetime: short
+    children: []
+
+  cargo:
+    command_templates:
+    - /opt/homebrew/bin/cargo check --manifest-path /Users/{username}/Projects/{project}/Cargo.toml
+    lifetime: short
+    children: []
+
+  sqlcmd:
+    command_templates:
+    - /opt/homebrew/bin/sqlcmd -S {db_server} -Q "SELECT 1"
+    lifetime: short
+    children: []
+
+  mysql:
+    command_templates:
+    - /opt/homebrew/opt/mysql-client/bin/mysql --host={db_server} --execute="SELECT
+      1"
+    lifetime: short
+    children: []
+
+  psql:
+    command_templates:
+    - /opt/homebrew/opt/libpq/bin/psql -h {db_server} -c "SELECT 1"
+    lifetime: short
+    children: []
+
+  redis-cli:
+    command_templates:
+    - /opt/homebrew/bin/redis-cli -h {db_server} PING
+    lifetime: short
+    children: []
+
+  ldapsearch:
+    command_templates:
+    - /opt/homebrew/opt/openldap/bin/ldapsearch -x -H ldap://{dc_server} -b "{base_dn}"
+      "(objectClass=person)"
+    lifetime: short
+    children: []
+
+  Microsoft Word:
+    command_templates:
+    - '"/Applications/Microsoft Word.app/Contents/MacOS/Microsoft Word"'
+    lifetime: long
+    children: []
+
+  Microsoft Excel:
+    command_templates:
+    - '"/Applications/Microsoft Excel.app/Contents/MacOS/Microsoft Excel"'
+    lifetime: long
+    children: []
+
+  Microsoft Outlook:
+    command_templates:
+    - '"/Applications/Microsoft Outlook.app/Contents/MacOS/Microsoft Outlook"'
+    lifetime: long
+    children: []
+
+  MSTeams:
+    command_templates:
+    - '"/Applications/Microsoft Teams.app/Contents/MacOS/MSTeams"'
+    lifetime: long
+    children: []
+
+  Slack:
+    command_templates:
+    - '"/Applications/Slack.app/Contents/MacOS/Slack"'
+    lifetime: long
+    children: []
+
+  zoom.us:
+    command_templates:
+    - '"/Applications/zoom.us.app/Contents/MacOS/zoom.us"'
+    lifetime: long
+    children: []
+
+  Postman:
+    command_templates:
+    - '"/Applications/Postman.app/Contents/MacOS/Postman"'
+    lifetime: long
+    children: []
+
+  OneDrive:
+    command_templates:
+    - '"/Applications/OneDrive.app/Contents/MacOS/OneDrive"'
+    lifetime: long
+    children: []
+
+  thunderbird:
+    command_templates:
+    - '"/Applications/Thunderbird.app/Contents/MacOS/thunderbird"'
+    lifetime: long
+    children: []
+
+  Dropbox:
+    command_templates:
+    - '"/Applications/Dropbox.app/Contents/MacOS/Dropbox"'
+    lifetime: long
+    children: []
+
+  Citrix Workspace:
+    command_templates:
+    - '"/Applications/Citrix Workspace.app/Contents/MacOS/Citrix Workspace"'
+    lifetime: long
+    children: []

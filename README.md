@@ -412,3 +412,7 @@ SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used wi
 ## License
 
 [MIT License](LICENSE) - Copyright (c) 2026 Cisco Systems, Inc.
+
+### Modeled macOS workstations (experimental branch work)
+
+The macOS 26 arm64 foundation adds catalog-backed workstation activity, eCAR admission and bounded interactive zsh history. This is separate from running EvidenceForge/Studio on macOS. Full native Endpoint Security/Unified Log and remote/persistence/policy support remain in progress; see the [implementation worklog](docs/worklog/2026-10-15-macos-workstation-implementation.md) for coverage and acceptance gates.

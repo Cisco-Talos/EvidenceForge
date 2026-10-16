@@ -21,7 +21,7 @@ def render_record(tmp_path: Path, case: dict) -> str:
             fields[key] = datetime.fromisoformat(fields[key].replace("Z", "+00:00"))
     if name == "ecar":
         fields["timestamp"] = fields.pop("timestamp_ms") / 1000
-    if name in {"snort_alert", "proxy_access", "web_access", "bash_history"}:
+    if name in {"snort_alert", "proxy_access", "web_access", "bash_history", "zsh_history"}:
         if isinstance(fields.get("timestamp"), (int, float)):
             fields["timestamp"] = datetime.fromtimestamp(fields["timestamp"], UTC)
     if name == "proxy_access":
@@ -36,7 +36,7 @@ def render_record(tmp_path: Path, case: dict) -> str:
     try:
         raw = (
             emitter._prepare_event(fields)["rendered"]
-            if name == "bash_history"
+            if name in {"bash_history", "zsh_history"}
             else emitter._render_alert(fields)
             if name == "snort_alert"
             else emitter._render_event(fields)

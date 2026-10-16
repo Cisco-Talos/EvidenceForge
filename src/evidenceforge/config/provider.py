@@ -529,6 +529,8 @@ def _document_parameter_pools(terms: list[str], os_category: str) -> dict[str, l
     documents = (
         r"C:\Users\{username}\Documents"
         if os_category == "windows"
+        else "/Users/{username}/Documents"
+        if os_category == "macos"
         else "/home/{username}/Documents"
     )
     return {

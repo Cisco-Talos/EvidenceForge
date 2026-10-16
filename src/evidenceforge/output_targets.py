@@ -123,6 +123,12 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "bash_history",
         notes="Target-invariant shell history text.",
     ),
+    "zsh_history": TargetFormatPolicy(
+        "zsh_history",
+        "extended_incremental",
+        "extended_incremental",
+        notes="Experimental native history text; SIEM ingestion is not validated.",
+    ),
     "snort_alert": TargetFormatPolicy("snort_alert", "fast_alert", "fast_alert"),
     "cisco_asa": TargetFormatPolicy(
         "cisco_asa",

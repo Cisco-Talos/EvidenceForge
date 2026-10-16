@@ -60,6 +60,10 @@ from evidenceforge.generation.activity.process_helpers import (
 from evidenceforge.generation.activity.process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
+from evidenceforge.generation.activity.process_helpers import (
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+)
 from evidenceforge.generation.activity.service_process_profiles import matching_service_worker
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -902,8 +906,8 @@ class ProcessPreflightPlanner:
                 sample_key=sample_key,
             )
 
-        if os_category != "linux" or not _linux_shell_process_reserves_foreground(
-            actor.image, actor.command_line
+        if os_category not in {"linux", "macos"} or not _posix_shell_process_reserves_foreground(
+            os_category, actor.image, actor.command_line
         ):
             return None
         actor_exe = actor.image.rsplit("/", 1)[-1].lower()
@@ -965,6 +969,19 @@ class ProcessPreflightPlanner:
         os_category = _get_os_category(request.system.os)
         if os_category == "windows":
             return _windows_process_lifetime_plan(actor.image, actor.command_line)
+        if os_category == "macos":
+            lifetime = _posix_foreground_lifetime(os_category, actor.image, actor.command_line)
+            if lifetime is not None:
+                return ProcessLifetimePlan(
+                    mode=ProcessLifetimeMode.BOUNDED,
+                    minimum_seconds=lifetime[0],
+                    maximum_seconds=lifetime[1],
+                    classification="macos-profiled-foreground-command",
+                )
+            return ProcessLifetimePlan(
+                mode=ProcessLifetimeMode.SESSION_OWNED,
+                classification="macos-session-or-operation-process",
+            )
         if os_category == "linux":
             lifetime = _linux_foreground_lifetime(actor.image, actor.command_line)
             if lifetime is not None:

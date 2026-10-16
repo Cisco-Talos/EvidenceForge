@@ -234,7 +234,8 @@ Each `event_type` string maps to which contexts must/may be populated. "required
 | `system_process_create` | required | - | required | - | - | - | - | - | OS boot process tree (svchost chains, systemd) |
 | `connection` | - | - | - | required | optional | - | - | optional | Network connection (Zeek conn, eCAR FLOW, Snort) |
 | `dns_query` | - | - | - | required | required | - | - | - | DNS lookup (Zeek dns) |
-| `bash_command` | required | required | - | - | - | - | - | - | Bash history entry |
+| `bash_command` | required | required | - | - | - | - | - | - | Explicit Bash history entry (Linux/Mac) |
+| `zsh_command` | required | required | - | - | - | - | - | - | Experimental Mac interactive history entry |
 | `file_operation` | required | - | - | - | - | required | - | - | File create/modify/delete (eCAR FILE) |
 | `registry_operation` | required | - | - | - | - | - | required | - | Registry modification (eCAR REGISTRY) |
 | `image_load` | required | - | optional | - | - | - | - | - | Module/DLL load (Sysmon Event 7, eCAR MODULE/LOAD) |
@@ -316,6 +317,8 @@ _NETWORK_FORMATS = {"zeek_conn", "zeek_dns", "snort_alert"}
 ```
 
 ### 4.2 StateManager Changes
+
+Current Mac implementation: immutable `ProcessIdentity` snapshots distinguish lifetime and execution identity and can carry `PosixProcessCredentials`. The canonical allocation/fork/exec owner preserves historical real/effective UID/GID and optional audit origin. An exec can change effective credentials without rewriting the login principal or earlier observations; unknown audit identity remains absent. These are shared state facts, not native ES wire records. Native audit PID version, saved IDs, supplementary groups and responsible-process snapshots still require explicit ownership before ES generation is admitted.
 
 **New method:** `apply(event)` -- records already-allocated state from a SecurityEvent. Does NOT allocate IDs (those are allocated in the two-phase build before dispatch).
 
@@ -400,6 +403,7 @@ class LogEmitter(ABC):
 | `EcarEmitter` | `{logon, logoff, process_create, process_terminate, system_process_create, ssh_session, connection, file_create, file_modify, file_delete, registry_modify, image_load, create_remote_thread, process_access, service_installed}` |
 | `SnortEmitter` | `{connection}` (only when `event.ids` is populated) |
 | `BashHistoryEmitter` | `{bash_command}` |
+| `ZshHistoryEmitter` | `{zsh_command}` |
 | `WebEmitter` | `{web_request}` |
 
 **`can_handle()` pattern** (common to all emitters):

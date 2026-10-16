@@ -1168,6 +1168,9 @@ class _PrivateJournalDirectory:
 
 
 def _extract_epoch(entry: str) -> int:
+    extended = re.match(r"^: (\d+):\d+;", entry)
+    if extended is not None:
+        return int(extended.group(1))
     for line in entry.splitlines():
         if line.startswith("#") and line[1:].strip().isdigit():
             return int(line[1:].strip())
@@ -1175,6 +1178,9 @@ def _extract_epoch(entry: str) -> int:
 
 
 def _is_clear_entry(entry: str) -> bool:
+    # zsh history mutation is outside the bounded append-only profile.
+    if re.match(r"^: \d+:\d+;", entry):
+        return False
     command = " ".join(line for line in entry.splitlines() if not line.startswith("#")).strip()
     return any(pattern.search(command) for pattern in _CLEAR_PATTERNS)
 
@@ -3249,6 +3255,8 @@ class BashHistoryEmitter(LogEmitter):
     """Multiplex durable history journals by sanitized user and host identity."""
 
     _supported_types: set[str] = {"bash_command"}
+    _history_directory = "bash_history"
+    _history_suffix = ".bash_history"
 
     def __init__(
         self,
@@ -3330,11 +3338,11 @@ class BashHistoryEmitter(LogEmitter):
                 continue
             if (
                 len(relative.parts) != 3
-                or relative.parts[1] != "bash_history"
-                or not relative.parts[2].endswith(".bash_history")
+                or relative.parts[1] != self._history_directory
+                or not relative.parts[2].endswith(self._history_suffix)
             ):
                 continue
-            writer_key = (relative.parts[2][: -len(".bash_history")], relative.parts[0])
+            writer_key = (relative.parts[2][: -len(self._history_suffix)], relative.parts[0])
             if self._writer_path(writer_key) != path:
                 raise ExactPublicationError("Restored Bash history route is not canonical")
             restored.add(writer_key)
@@ -3343,10 +3351,10 @@ class BashHistoryEmitter(LogEmitter):
             self._checkpoint_replace_routes.clear()
 
     def can_handle(self, event: CanonicalOccurrence) -> bool:
-        """Return whether this is a Linux bash-command occurrence."""
+        """Return whether this is an explicitly modeled Bash command on a POSIX host."""
 
         return event.event_type in self._supported_types and (
-            event.src_host is not None and event.src_host.os_category == "linux"
+            event.src_host is not None and event.src_host.os_category in {"linux", "macos"}
         )
 
     def emit(self, event: CanonicalOccurrence) -> None:
@@ -3370,7 +3378,7 @@ class BashHistoryEmitter(LogEmitter):
         return safe_user, safe_host
 
     def _writer_path(self, key: tuple[str, str]) -> Path:
-        return self._base_dir / key[1] / "bash_history" / f"{key[0]}.bash_history"
+        return self._base_dir / key[1] / self._history_directory / f"{key[0]}{self._history_suffix}"
 
     def _get_writer_by_key(
         self,
@@ -3440,10 +3448,7 @@ class BashHistoryEmitter(LogEmitter):
         host_fqdn = detached.get("host_fqdn", detached.get("hostname", "unknown"))
         writer_key = self._writer_key(detached.get("username", "unknown"), host_fqdn)
         _require_contained(self._base_dir, self._writer_path(writer_key))
-        rendered = self._template.render(
-            timestamp=detached.get("timestamp"),
-            command=detached.get("command"),
-        ).strip()
+        rendered = self._render_history_entry(detached)
         if type(rendered) is not str:
             raise TypeError("Bash history rendering must produce one exact string")
         frozen = json.dumps(
@@ -3464,6 +3469,13 @@ class BashHistoryEmitter(LogEmitter):
             "rendered": rendered,
             "user": writer_key[0],
         }
+
+    def _render_history_entry(self, event_data: dict[str, Any]) -> str:
+        """Render one entry with the established Bash whitespace semantics."""
+        return self._template.render(
+            timestamp=event_data.get("timestamp"),
+            command=event_data.get("command"),
+        ).strip()
 
     def _emit_ordinary_event(self, prepared: dict[str, Any]) -> None:
         """Admit ordinary work only when no exact batch owns the FIFO."""
