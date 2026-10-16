@@ -88,6 +88,11 @@ exclude = ["**/._*", "**/.DS_Store"]
 # No need to add individual files — just put them in commands/eforge/.
 "commands/eforge" = "evidenceforge/_data/commands/eforge"
 
+[tool.uv]
+# Avoid system SQLite WAL read-only compatibility failures in Studio.
+# Keep source launches and the shared development test suite on that runtime.
+python-preference = "only-managed"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

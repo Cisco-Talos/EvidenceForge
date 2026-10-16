@@ -103,13 +103,20 @@ test("copy code preserves text despite syntax highlighting", () => {
 });
 
 test("live timer becomes a fixed completed duration and retains commentary", async () => {
-  const view = harness([{ ...seed, items: [
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-16T12:00:00Z"));
+  const view = harness([{ ...seed, started_at: Date.now() / 1000 - 24, items: [
     { id: "progress", type: "agentMessage", phase: "commentary", text: "Review in progress" },
     { id: "done", type: "agentMessage", phase: "final_answer", text: "Completed review" },
   ] }]);
-  expect(await screen.findByText(/Working for 24s/)).toBeTruthy();
+  await act(async () => {});
+  expect(screen.getByText("Working for 24s")).toBeTruthy();
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(screen.getByText("Working for 25s")).toBeTruthy();
   // The terminal event remains visible while authoritative rollout persistence catches up.
   view.event("turn/completed", { turn: { id: "turn", status: "completed", durationMs: 66000 } });
+  expect(screen.getByText("Worked for 1m 6s")).toBeTruthy();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
   expect(screen.getByText("Worked for 1m 6s")).toBeTruthy();
   expect(screen.getByText("Review in progress")).toBeTruthy();
 });

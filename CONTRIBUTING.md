@@ -242,8 +242,28 @@ Install the prerequisites first. Use `dev` for current Studio/prerelease develop
 git clone --branch dev https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 uv python install 3.12
-uv sync --frozen --all-extras --python 3.12
+uv sync --frozen --all-extras --managed-python --python 3.12
 ```
+
+The repository sets `python-preference = "only-managed"` for uv. Source launches and the
+shared test suite use uv-managed CPython, including its bundled SQLite. Some macOS system-linked
+Python builds cannot reopen WAL-mode backups read-only, which breaks Studio state recovery.
+Selecting Python 3.12 alone does not select its SQLite distribution.
+
+For an existing checkout, stop processes using that checkout's `.venv`, then rerun the sync
+command above. uv replaces an incompatible system/pyenv-backed environment; do not replace an
+environment while another chat, test run or Studio helper is using it. Confirm the selection:
+
+```bash
+uv run --no-sync python -c "import sys, sqlite3; print(sys.base_prefix); print(sqlite3.sqlite_version)"
+```
+
+`sys.base_prefix` should identify the uv-managed installation (under `uv python dir`). Run
+`uv run` and `uv sync` from the checkout so they read its configuration. For a separate
+`uv tool install` environment that runs Studio modules, pass `--managed-python --python 3.12`
+explicitly with the existing installation target; tool installation does not read project
+configuration. CLI-only tool installations do not need this Studio-specific runtime change.
+See [uv's Python selection settings](https://docs.astral.sh/uv/reference/settings/#python-preference).
 
 For Studio, also install the locked frontend dependencies and native Rust target:
 
@@ -298,7 +318,8 @@ exact validated source commit through the release workflow.
 
 ### Source launch and Studio tests
 
-Launch from a terminal in the logged-in graphical desktop session:
+After the managed-Python setup above, launch from a terminal in the logged-in graphical desktop
+session:
 
 ```bash
 uv run --no-sync eforge-desktop
