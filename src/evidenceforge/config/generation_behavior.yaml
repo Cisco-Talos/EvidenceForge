@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 168
+current_revision: 169
 history_start_revision: 1
-behavior_surface_sha256: b197fe1cc4af340250045e7d3c481a5771e4af583bc9a692876418a54fbbd511
+behavior_surface_sha256: 29e60016fcb401d9caf6fad1a8dad3687e9ec8fac7402a08705cea07dcb95036
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1680,3 +1680,11 @@ changes:
       - process-file-effects
     formats: [ecar]
     summary: Mac exec replaces task threads atomically, Linux-only implicit file effects are excluded on Mac, and Webex gains a native launch. SSH preserves exact receiver publication when Zeek is filtered out.
+  - revision: 169
+    id: macos-authenticated-audit-session-state
+    impact: localized
+    domains:
+      - authentication-identity
+      - checkpoint-state
+    formats: []
+    summary: Adds allocation-free Mac SSH audit-origin metadata with atomic host-local allocation and durable recovery. Receiver integration remains unavailable; existing authored inputs and source output are unchanged.

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from evidenceforge.events.application import ApplicationChannelBudget, ApplicationTransportBinding
 from evidenceforge.events.identity import (
+    MacosAuditSession,
     PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
@@ -86,6 +87,7 @@ _ACTIVE_SESSION_FIELDS = (
     "auth_session_ref",
     "effective_uid",
     "effective_gid",
+    "audit_origin",
 )
 _RUNNING_PROCESS_FIELDS = (
     "pid",
@@ -342,7 +344,8 @@ _NETWORK_TRANSACTION_PLAN_FIELDS = (
 )
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
-    "active-session": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "active-session-v2": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "macos-audit-session-v1": (MacosAuditSession, ("audit_uid", "audit_session_id", "created_at")),
     "application-channel-budget": (
         ApplicationChannelBudget,
         _APPLICATION_CHANNEL_BUDGET_FIELDS,
@@ -491,6 +494,9 @@ def decode_state_value(value: object) -> object:
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        if record_tag == "active-session" and len(encoded_fields) == 34:
+            record_tag = "active-session-v2"
+            encoded_fields = [*encoded_fields, None]
         # Explicit, lossless upgrade of pre-exec process records. Old readers reject
         # the versioned tags; new readers retain legacy scenarios/checkpoint state.
         if record_tag == "running-process" and len(encoded_fields) == 21:

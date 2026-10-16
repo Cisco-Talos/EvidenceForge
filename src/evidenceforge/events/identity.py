@@ -87,6 +87,31 @@ class ThreadIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class MacosAuditSession:
+    """Explicit authenticated audit origin, independent of desktop/session IDs.
+
+    Kernel-assigned IDs occupy a separate namespace above native process IDs.
+    This snapshot does not assert native audit-trail collection or logout timing.
+    """
+
+    audit_uid: PosixIdentifier
+    audit_session_id: PosixIdentifier
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        """Reject unknown account sentinels and non-kernel-assigned session IDs."""
+        if type(self.audit_uid) is not int or not 0 <= self.audit_uid < 2**32 - 1:
+            raise ValueError("Authenticated audit origin requires a known unsigned account ID")
+        if (
+            type(self.audit_session_id) is not int
+            or not 100_000 <= self.audit_session_id < 2**32 - 1
+        ):
+            raise ValueError("macOS audit session requires a kernel-assigned session ID")
+        if type(self.created_at) is not datetime or self.created_at.utcoffset() is None:
+            raise ValueError("Audit session creation requires an aware timestamp")
+
+
+@dataclass(frozen=True, slots=True)
 class PosixProcessCredentials:
     """Explicit credential snapshot, independent of login principal and process PID.
 

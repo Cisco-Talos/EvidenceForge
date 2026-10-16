@@ -8,6 +8,7 @@ bounded allocator windows remain in the small live head. No arbitrary object gra
 from __future__ import annotations
 
 from datetime import datetime
+from itertools import chain
 
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
@@ -23,7 +24,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -401,6 +402,33 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         setattr(fresh, name, indexes)
 
     _restore_process_indexes(fresh, document["process_indexes"])
+    for host, value in fresh._macos_audit_session_counters.items():
+        if (
+            type(host) is not str
+            or fresh._pid_os.get(host) != "macos"
+            or type(value) is not int
+            or not 100_000 <= value < 2**32 - 1
+        ):
+            raise CheckpointCorruptionError("StateManager macOS audit session counter is invalid")
+    for session in chain(
+        fresh._active_sessions.values(), (row[0] for row in fresh._ended_sessions.values())
+    ):
+        origin = session.audit_origin
+        if origin is not None and (
+            session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or origin.audit_session_id > fresh._macos_audit_session_counters.get(session.system, 0)
+            or origin.created_at < session.start_time
+            or (
+                session.source_ready_time is not None
+                and origin.created_at > session.source_ready_time
+            )
+            or (
+                session.network_close_time is not None
+                and origin.created_at >= session.network_close_time
+            )
+        ):
+            raise CheckpointCorruptionError("StateManager native session audit origin is invalid")
     for host, version in fresh._macos_audit_pid_versions.items():
         if (
             type(host) is not str

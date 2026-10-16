@@ -44,6 +44,7 @@ from threading import RLock, Thread, current_thread, get_ident
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import (
+    MacosAuditSession,
     PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
@@ -536,6 +537,7 @@ class _SessionAllocatorPatch:
     used_logon_id: int | None
     windows_session_counter: tuple[str, int] | None
     linux_logind: _LinuxLogindAllocatorPatch | None
+    macos_audit_session_counter: tuple[str, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,6 +559,7 @@ class _SessionMaterializationPayload:
     source_ready_time: datetime | None = None
     closure_owned_by_bundle: bool = False
     end_plan: SessionEndPlan | None = None
+    audit_origin: MacosAuditSession | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,6 +606,11 @@ class SessionMaterializationPlan:
         """Return the immutable session-closure plan carried by this start."""
 
         return self._payload.end_plan
+
+    @property
+    def audit_origin(self) -> MacosAuditSession | None:
+        """Return the explicitly planned native authentication origin, if any."""
+        return self._payload.audit_origin
 
     @property
     def external_rng_state_after(self) -> object | None:
@@ -1170,6 +1178,23 @@ class MaterializationBatchBuilder:
         plan = self._manager._plan_batch_session(self, kwargs)
         self._session = plan
         return plan
+
+    def enrich_macos_audit_session(
+        self,
+        plan: SessionMaterializationPlan,
+        *,
+        audit_uid: int,
+        authenticated_at: datetime,
+    ) -> SessionMaterializationPlan:
+        """Reserve native SSH audit origin before planning receiver processes."""
+        self._require_open()
+        if self._session is not plan or self._processes:
+            raise StateError("macOS audit enrichment must precede batch process planning")
+        enriched = self._manager._enrich_batch_macos_audit_session(
+            self, plan, audit_uid=audit_uid, authenticated_at=authenticated_at
+        )
+        self._session = enriched
+        return enriched
 
     def enrich_linux_logind_session(
         self,
@@ -3370,7 +3395,32 @@ def _materialization_integrity_token(
 ) -> str:
     """Authenticate every immutable plan and allocator-patch field."""
 
-    del payload, allocator_patch
+    if (
+        type(payload) is _SessionMaterializationPayload
+        and type(allocator_patch) is not _SessionAllocatorPatch
+    ):
+        raise StateError("Session materialization requires an exact session allocator")
+    if type(payload) is _SessionMaterializationPayload and (
+        payload.audit_origin is not None or allocator_patch.macos_audit_session_counter is not None
+    ):
+        origin = payload.audit_origin
+        counter = allocator_patch.macos_audit_session_counter
+        if (
+            type(origin) is not MacosAuditSession
+            or type(counter) is not tuple
+            or len(counter) != 2
+            or counter != (identity.hostname, origin.audit_session_id)
+        ):
+            raise StateError("macOS audit session plan has inconsistent origin/allocator facts")
+        _validate_action_cohort_safe_value((identity, payload, allocator_patch), set())
+        return _trusted_capability_digest(
+            authority_secret,
+            "session-macos-audit-v1",
+            expected_version,
+            identity,
+            payload,
+            allocator_patch,
+        )
     return _trusted_capability_digest(
         authority_secret,
         kind,
@@ -3573,6 +3623,7 @@ def _materialization_batch_integrity_token(
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
         PosixProcessCredentials,
+        MacosAuditSession,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -4413,6 +4464,7 @@ class StateManager:
         self._thread_id_counters: dict[str, int] = {}
         self._thread_id_rngs: dict[str, random.Random] = {}
         self._windows_session_id_counters: dict[str, int] = {}
+        self._macos_audit_session_counters: dict[str, int] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
@@ -5792,8 +5844,10 @@ class StateManager:
                 raise StateError("SMB connection root session counter patch is malformed")
             self._bounded_smb_connection_text(counter[0], label="root session counter host")
             self._bounded_smb_connection_int(counter[1], label="root session counter")
-        if allocator.linux_logind is not None:
-            raise StateError("SMB connection root cannot use a Linux logind allocator")
+        if allocator.linux_logind is not None or allocator.macos_audit_session_counter is not None:
+            raise StateError("SMB connection root cannot use an interactive session allocator")
+        if payload.audit_origin is not None:
+            raise StateError("SMB connection root cannot establish a native audit origin")
         if type(plan._integrity_token) is not str or len(plan._integrity_token) != 64:
             raise StateError("SMB connection root session token is malformed")
 
@@ -7617,6 +7671,79 @@ class StateManager:
                 raise StateError("Materialization batch session fence changed during planning")
             return plan
 
+    def _enrich_batch_macos_audit_session(
+        self,
+        builder: MaterializationBatchBuilder,
+        plan: SessionMaterializationPlan,
+        *,
+        audit_uid: int,
+        authenticated_at: datetime,
+    ) -> SessionMaterializationPlan:
+        """Reserve one audit origin without consuming state or collector settings."""
+        with self._capability_minting_guard(
+            "MaterializationBatchBuilder.enrich_macos_audit_session"
+        ):
+            if (
+                type(builder) is not MaterializationBatchBuilder
+                or builder._manager is not self
+                or builder._session is not plan
+                or builder._processes
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+                or builder.expected_version != self._materialization_version
+                or self.state.current_time != builder._expected_state_time
+            ):
+                raise StateError("macOS audit enrichment requires the current unpopulated batch")
+            self._validate_session_materialization_plan(plan)
+            if (
+                plan.audit_origin is not None
+                or plan._allocator_patch.macos_audit_session_counter is not None
+                or plan._allocator_patch.linux_logind is not None
+                or plan.identity.session_id != 0
+                or plan.identity.session_kind != "ssh"
+                or plan._payload.auth_protocol != "ssh"
+                or self._pid_os.get(plan.identity.hostname) != "macos"
+            ):
+                raise StateError("macOS audit enrichment requires an unenriched Mac SSH session")
+            created_at = ensure_utc(authenticated_at)
+            if (
+                created_at < plan.identity.started_at
+                or (
+                    plan._payload.source_ready_time is not None
+                    and created_at > plan._payload.source_ready_time
+                )
+                or (
+                    plan._payload.network_close_time is not None
+                    and created_at >= plan._payload.network_close_time
+                )
+            ):
+                raise StateError("Audit authentication must fall inside the session open interval")
+            host = plan.identity.hostname
+            previous = self._macos_audit_session_counters.get(host, 99_999)
+            if type(previous) is not int or not 99_999 <= previous < 2**32 - 2:
+                raise StateError("macOS audit session namespace is exhausted or invalid")
+            origin = MacosAuditSession(audit_uid, previous + 1, created_at)
+            payload = replace(
+                plan._payload,
+                audit_origin=origin,
+                state_time=max(plan._payload.state_time, created_at),
+            )
+            allocator = replace(
+                plan._allocator_patch, macos_audit_session_counter=(host, previous + 1)
+            )
+            return replace(
+                plan,
+                _payload=payload,
+                _allocator_patch=allocator,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    allocator,
+                ),
+            )
+
     def _enrich_batch_linux_logind_session(
         self,
         builder: MaterializationBatchBuilder,
@@ -7994,8 +8121,8 @@ class StateManager:
             self._validate_session_materialization_plan(plan)
             if plan.expected_version != self._materialization_version:
                 raise StateError("Session materialization plan became stale before enrichment")
-            if plan._allocator_patch.linux_logind is not None:
-                raise StateError("Session materialization plan already owns a Linux logind ID")
+            if plan._allocator_patch.linux_logind is not None or plan.audit_origin is not None:
+                raise StateError("Session materialization plan already owns a native session ID")
             if plan.identity.session_id != 0:
                 raise StateError("Linux logind enrichment requires an unresolved session_id=0 plan")
             session_id, logind_patch = self._preview_linux_logind_session_id(
@@ -8070,6 +8197,9 @@ class StateManager:
         if patch.windows_session_counter is not None:
             host, counter = patch.windows_session_counter
             self._windows_session_id_counters[host] = counter
+        if patch.macos_audit_session_counter is not None:
+            host, counter = patch.macos_audit_session_counter
+            self._macos_audit_session_counters[host] = counter
         if patch.linux_logind is not None:
             self._commit_linux_logind_allocator_patch(
                 patch.linux_logind,
@@ -11371,6 +11501,7 @@ class StateManager:
             auth_session_ref=payload.auth_session_ref,
             effective_uid=payload.effective_uid,
             effective_gid=payload.effective_gid,
+            audit_origin=payload.audit_origin,
             network_close_time=payload.network_close_time,
             source_ready_time=payload.source_ready_time,
             closure_owned_by_bundle=payload.closure_owned_by_bundle,
@@ -11696,6 +11827,10 @@ class StateManager:
                 capture_mapping(
                     self._windows_session_id_counters,
                     patch.windows_session_counter[0],
+                )  # type: ignore[arg-type]
+            if patch.macos_audit_session_counter is not None:
+                capture_mapping(
+                    self._macos_audit_session_counters, patch.macos_audit_session_counter[0]
                 )  # type: ignore[arg-type]
             if patch.linux_logind is not None:
                 logind = patch.linux_logind
@@ -17780,6 +17915,8 @@ class StateManager:
 
         if type(session) is not ActiveSession:
             raise StateError("SMB connection runtime session has an invalid exact type")
+        if session.audit_origin is not None:
+            raise StateError("SMB connection runtime session cannot establish native audit origin")
 
         def optional_int(value: int | None, label: str) -> bytes:
             if value is None:

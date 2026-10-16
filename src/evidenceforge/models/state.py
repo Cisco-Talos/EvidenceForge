@@ -33,7 +33,12 @@ runtime state tracking.
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from evidenceforge.events.identity import PosixIdentifier, PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.identity import (
+    MacosAuditSession,
+    PosixIdentifier,
+    PosixProcessCredentials,
+    ProcessIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
 
@@ -95,6 +100,7 @@ class ActiveSession:
     auth_session_ref: str = ""
     effective_uid: int | None = None
     effective_gid: int | None = None
+    audit_origin: MacosAuditSession | None = None
 
 
 @dataclass
