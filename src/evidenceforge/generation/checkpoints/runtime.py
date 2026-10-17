@@ -369,7 +369,11 @@ class IncrementalCheckpointController:
                 raise CheckpointError(
                     f"checkpoint has no head for participant {participant.checkpoint_owner!r}"
                 )
-            if head.schema_version != participant.checkpoint_schema_version:
+            compatible_heads = getattr(participant, "checkpoint_compatible_head_versions", ())
+            if head.schema_version not in (
+                participant.checkpoint_schema_version,
+                *compatible_heads,
+            ):
                 raise CheckpointError(
                     f"checkpoint participant {participant.checkpoint_owner!r} schema is "
                     f"{head.schema_version!r}; runtime requires "

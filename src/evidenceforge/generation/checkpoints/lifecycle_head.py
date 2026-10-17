@@ -43,6 +43,7 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
     TransportSessionBindingSnapshot,
 )
+from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleRegistry,
@@ -64,7 +65,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "5"
+_SCHEMA_VERSION = "6"
 
 
 @dataclass(frozen=True)
@@ -642,12 +643,17 @@ def _service_identity(value: ServiceInstanceLifecycleIdentity) -> list[object]:
         value.instance_id,
         _time(value.started_at),
         value.parent_service_object_id,
+        value.launchd_job.model_dump_json() if value.launchd_job is not None else None,
     ]
 
 
-def _decode_service_identity(value: object) -> ServiceInstanceLifecycleIdentity:
-    hostname, object_id, logical_id, boot_id, instance_id, started_at, parent_id = _record(
-        value, 7, "service identity"
+def _decode_service_identity(
+    value: object, *, legacy: bool = False
+) -> ServiceInstanceLifecycleIdentity:
+    if legacy:
+        value = [*_record(value, 7, "legacy service identity"), None]
+    hostname, object_id, logical_id, boot_id, instance_id, started_at, parent_id, job = _record(
+        value, 8, "service identity"
     )
     try:
         return ServiceInstanceLifecycleIdentity(
@@ -658,6 +664,9 @@ def _decode_service_identity(value: object) -> ServiceInstanceLifecycleIdentity:
             instance_id=instance_id,  # type: ignore[arg-type]
             started_at=_decode_time(started_at),  # type: ignore[arg-type]
             parent_service_object_id=parent_id,  # type: ignore[arg-type]
+            launchd_job=LaunchdSystemJobDefinition.model_validate_json(job)
+            if job is not None
+            else None,
         )
     except (TypeError, ValueError) as error:
         raise CheckpointCorruptionError(
@@ -1191,7 +1200,9 @@ def _decode_snapshot_rows(
             decoded = _decode_state(state)
             snapshot = ServiceInstanceLifecycleSnapshot(
                 logical_identity=_decode_logical_service(logical),
-                identity=_decode_service_identity(identity),
+                identity=_decode_service_identity(
+                    identity, legacy=document.get("schema_version") == "5"
+                ),
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
             services.append(snapshot)
@@ -1336,6 +1347,7 @@ def _register_parent_ordered(
     parent_id: Callable[[object], str],
     register: Callable[[object], object],
     register_missing_parent: Callable[[object], object] | None = None,
+    order_key: Callable[[object], object] | None = None,
 ) -> tuple[object, ...]:
     """Register one retained parent graph in deterministic near-linear order."""
 
@@ -1361,11 +1373,14 @@ def _register_parent_ordered(
             if parent:
                 missing_parent.append(snapshot)
 
-    ready = [object_id for object_id, degree in indegree.items() if degree == 0]
+    def priority(object_id: str) -> tuple[object, str]:
+        return (object_id if order_key is None else order_key(by_id[object_id]), object_id)
+
+    ready = [priority(object_id) for object_id, degree in indegree.items() if degree == 0]
     heapq.heapify(ready)
     registered = 0
     while ready:
-        object_id = heapq.heappop(ready)
+        _, object_id = heapq.heappop(ready)
         snapshot = by_id[object_id]
         parent = parent_id(snapshot)
         if parent and parent not in by_id:
@@ -1381,7 +1396,7 @@ def _register_parent_ordered(
         for child_id in sorted(children.get(object_id, ())):
             indegree[child_id] -= 1
             if indegree[child_id] == 0:
-                heapq.heappush(ready, child_id)
+                heapq.heappush(ready, priority(child_id))
 
     if registered != len(by_id):
         cycle = sorted(object_id for object_id, degree in indegree.items() if degree)
@@ -1620,7 +1635,7 @@ def _install_resource_lease_entry(
 
 def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagnostics:
     document = loads(head)
-    if type(document) is not dict or document.get("schema_version") != _SCHEMA_VERSION:
+    if type(document) is not dict or document.get("schema_version") not in {"5", _SCHEMA_VERSION}:
         raise CheckpointCorruptionError("lifecycle checkpoint head schema is invalid")
     integer_fields = (
         "closed_retention_us",
@@ -1660,17 +1675,32 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             transition_id=start.transition_id,
             transition_ordinal=start.transition_ordinal,
         )
+
+    def register_service(snapshot: ServiceInstanceLifecycleSnapshot) -> None:
+        start = _start(snapshot, states[snapshot.identity.object_id])
+        fresh.register_service_instance(
+            snapshot.logical_identity,
+            snapshot.identity,
+            action_id=start.action_id,
+            transition_id=start.transition_id,
+            transition_ordinal=start.transition_ordinal,
+        )
+        # Rebuild temporal admission using the retained interval. Closure itself
+        # is still authenticated below, after all owned bindings are hydrated.
+        partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+        partition._ensure_full_state(
+            partition._entry(snapshot.identity.ref)
+        ).closed_at = snapshot.closed_at
+
     _register_parent_ordered(
         services,
         parent_id=lambda item: item.identity.parent_service_object_id,
-        register=lambda item: fresh.register_service_instance(
-            item.logical_identity,
-            item.identity,
-            action_id=_start(item, states[item.identity.object_id]).action_id,
-            transition_id=_start(item, states[item.identity.object_id]).transition_id,
-            transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
-        ),
+        register=register_service,
+        order_key=lambda item: item.identity.started_at,
     )
+    for snapshot in services:
+        partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+        partition._ensure_full_state(partition._entry(snapshot.identity.ref)).closed_at = None
     for snapshot in sorted(
         transports, key=lambda item: (item.identity.opened_at, item.identity.object_id)
     ):
@@ -1827,6 +1857,7 @@ class LifecycleRegistryParticipant:
     checkpoint_owner = "lifecycle-registry"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
+    checkpoint_compatible_head_versions = ("5",)
     checkpoint_state_fields = (
         OwnerStateField("retained_entities", "bounded-live-head"),
         OwnerStateField("immutable_history", "immutable-incremental-segments"),

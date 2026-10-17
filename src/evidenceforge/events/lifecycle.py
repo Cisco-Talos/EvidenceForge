@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from evidenceforge.events.content_identity import ServiceDeploymentIdentity
+from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.utils.time import ensure_utc
 
@@ -18,7 +19,7 @@ SessionEndAuthority = Literal["explicit_storyline", "action_bundle", "generated"
 LifecycleEntityKind = Literal["process", "session", "service", "transport"]
 LifecycleOwnerKind = Literal["boot", "service", "session", "transport", "detached"]
 LifecycleCloseAuthority = Literal["authoritative", "generated"]
-LifecycleServiceKind = Literal["builtin", "installed"]
+LifecycleServiceKind = Literal["builtin", "installed", "launchd"]
 TransportSessionBindingRole = Literal[
     "authentication",
     "session",
@@ -49,7 +50,7 @@ _LIFECYCLE_TRANSITION_KINDS = frozenset(
         "closed",
     }
 )
-_LIFECYCLE_SERVICE_KINDS = frozenset({"builtin", "installed"})
+_LIFECYCLE_SERVICE_KINDS = frozenset({"builtin", "installed", "launchd"})
 _TRANSPORT_SESSION_BINDING_ROLES = frozenset(
     {"authentication", "session", "control", "application", "scanner"}
 )
@@ -286,6 +287,10 @@ class LogicalServiceIdentity:
             raise ValueError(f"Unsupported lifecycle service kind {self.service_kind!r}")
         if self.service_kind == "installed" and not self.deployment_service_id:
             raise ValueError("Installed logical services require a deployment service identity")
+        if self.service_kind == "launchd" and (
+            self.deployment_service_id or self.deployment_identity
+        ):
+            raise ValueError("Launchd installation belongs to its loaded runtime definition")
         deployment_identity = self.deployment_identity
         if deployment_identity is None:
             return
@@ -314,6 +319,7 @@ class ServiceInstanceLifecycleIdentity:
     instance_id: str
     started_at: datetime
     parent_service_object_id: str = ""
+    launchd_job: LaunchdSystemJobDefinition | None = None
 
     def __post_init__(self) -> None:
         """Normalize start time and require a complete boot-scoped identity."""
@@ -330,6 +336,16 @@ class ServiceInstanceLifecycleIdentity:
             raise ValueError(
                 "Service instances require host, object, logical service, boot, and instance IDs"
             )
+        if (
+            self.launchd_job is not None
+            and self.launchd_job.plist.hostname != self.hostname.strip().casefold()
+        ):
+            raise ValueError("Loaded launchd definition host must match its runtime instance")
+        if (
+            self.launchd_job is not None
+            and self.launchd_job.logical_service_id != self.logical_service_id
+        ):
+            raise ValueError("Loaded launchd definition must match its logical service ID")
         if self.parent_service_object_id == self.object_id:
             raise ValueError("A service instance cannot parent itself")
         object.__setattr__(self, "started_at", ensure_utc(self.started_at))

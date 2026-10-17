@@ -13,11 +13,17 @@ from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
 from evidenceforge.events.lifecycle import LogicalServiceIdentity, ServiceInstanceLifecycleIdentity
+from evidenceforge.events.macos_launchd import (
+    LaunchdSystemJobDefinition,
+    LaunchdSystemJobSpec,
+    validate_launchd_label,
+)
 from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.lifecycle_production_adapters import (
     ServiceLifecyclePublicationPlan,
     service_boot_id,
 )
+from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.utils.rng import stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
@@ -33,7 +39,7 @@ def macos_system_job_deployment_identity(
     host = deployment_registry.host_deployment(hostname)
     if host is None or host.platform != "macos" or host.architecture != "arm64":
         raise ValueError("Launchd registration requires a compiled arm64 Mac host")
-    _validate_label(label)
+    validate_launchd_label(label)
     logical_id = stable_uuid("macos-launchd-system-job", host.hostname, label)
     return deployment_registry.runtime_service_deployment_identity(
         hostname=host.hostname,
@@ -42,11 +48,13 @@ def macos_system_job_deployment_identity(
     )
 
 
-def _validate_label(label: str) -> None:
-    if not label or label != label.strip() or any(ord(char) < 32 for char in label):
-        raise ValueError("Launchd label must be a nonempty exact label without control characters")
-    if "/" in label or "\x7f" in label:
-        raise ValueError("Launchd label cannot contain a domain separator or control character")
+def macos_system_job_content_seed(spec: LaunchdSystemJobSpec) -> str:
+    """Bind modeled file content to the exact bounded job semantics."""
+    # Exclude loaded placement/installation fields if passed a loaded definition.
+    semantic_spec = LaunchdSystemJobSpec(
+        **{name: getattr(spec, name) for name in LaunchdSystemJobSpec.model_fields}
+    )
+    return stable_uuid("macos-launchd-definition", semantic_spec.model_dump_json())
 
 
 def macos_system_job_bootstrap_plan(
@@ -57,6 +65,8 @@ def macos_system_job_bootstrap_plan(
     boot_time: datetime,
     bootstrapped_at: datetime,
     deployment_identity: RuntimeServiceDeploymentIdentity,
+    definition: LaunchdSystemJobDefinition,
+    runtime_content: RuntimeContentIdentityManager,
     action_id: str,
 ) -> ServiceLifecyclePublicationPlan:
     """Prepare a loaded, dormant system job without implying process activation.
@@ -71,7 +81,7 @@ def macos_system_job_bootstrap_plan(
     host = deployment_registry.host_deployment(hostname)
     if host is None or host.platform != "macos" or host.architecture != "arm64":
         raise ValueError("Launchd registration requires a compiled arm64 Mac host")
-    _validate_label(label)
+    validate_launchd_label(label)
     if not action_id or action_id != action_id.strip():
         raise ValueError("Launchd registration requires an exact action ID")
     boot_time = ensure_utc(boot_time)
@@ -86,6 +96,21 @@ def macos_system_job_bootstrap_plan(
         or not deployment_registry.admits_service_deployment_identity(deployment_identity)
     ):
         raise ValueError("Launchd registration requires its exact installed job identity")
+    if definition.label != label or definition.installation != deployment_identity:
+        raise ValueError("Launchd registration requires its exact loaded installation and label")
+    artifact = definition.plist
+    record = runtime_content.resolve_record(
+        hostname, artifact.principal, artifact.native_path, "macos"
+    )
+    if (
+        record is None
+        or record.artifact != artifact
+        or record.binary is not None
+        or record.content.seed_ref != macos_system_job_content_seed(definition)
+    ):
+        raise ValueError(
+            "Launchd bootstrap requires the current canonical plist content and definition"
+        )
     boot_id = service_boot_id(host.hostname, boot_time)
     instance_id = stable_uuid("macos-launchd-registration", logical_id, boot_id, action_id)
     object_id = stable_uuid(
@@ -96,9 +121,7 @@ def macos_system_job_bootstrap_plan(
             hostname=hostname,
             logical_service_id=logical_id,
             canonical_name=f"system/{label}",
-            service_kind="installed",
-            deployment_service_id=deployment_identity.deployment_service_id,
-            deployment_identity=deployment_identity,
+            service_kind="launchd",
         ),
         instance_identity=ServiceInstanceLifecycleIdentity(
             hostname=hostname,
@@ -107,6 +130,7 @@ def macos_system_job_bootstrap_plan(
             boot_id=boot_id,
             instance_id=instance_id,
             started_at=bootstrapped_at,
+            launchd_job=definition,
         ),
         action_id=action_id,
         transition_id=stable_uuid("macos-launchd-registration-start", object_id),

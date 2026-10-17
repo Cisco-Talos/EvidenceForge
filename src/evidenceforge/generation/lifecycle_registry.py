@@ -62,6 +62,7 @@ from evidenceforge.events.lifecycle import (
     TransportSessionBindingIdentity,
     TransportSessionBindingSnapshot,
 )
+from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
@@ -94,8 +95,8 @@ _RESOURCE_LEASE_EXPIRY_PAGE = 4_096
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _SESSION_TEXT_FIELD_COUNT = 8
 _SESSION_ROW_HEADER = Struct(">qQI8H")
-_SERVICE_TEXT_FIELD_COUNT = 15
-_SERVICE_ROW_HEADER = Struct(">qI15H")
+_SERVICE_TEXT_FIELD_COUNT = 16
+_SERVICE_ROW_HEADER = Struct(">qI16H")
 _TRANSPORT_TEXT_FIELD_COUNT = 12
 _TRANSPORT_ROW_HEADER = Struct(">qqHHI12H")
 _PACKED_SESSION_ROW_BYTES = 256
@@ -648,6 +649,7 @@ def _pack_service_row(
         transition.transition_id,
         transition.action_id,
         *deployment_fields,
+        identity.launchd_job.model_dump_json() if identity.launchd_job is not None else "",
     )
     lengths = tuple(len(value.encode("utf-8")) for value in text)
     if any(length >= 1 << 16 for length in lengths):
@@ -697,6 +699,7 @@ def _decode_service_row(row: bytes | memoryview) -> _DecodedServiceRow:
         instance_id=text[7],
         started_at=_datetime_from_microseconds(started_us),
         parent_service_object_id=text[8],
+        launchd_job=LaunchdSystemJobDefinition.model_validate_json(text[15]) if text[15] else None,
     )
     return _DecodedServiceRow(
         logical_identity=logical,
@@ -2917,6 +2920,13 @@ class _LifecyclePartition:
             raise StateError("Logical service and runtime instance must use the same host")
         if logical_identity.logical_service_id != identity.logical_service_id:
             raise StateError("Service instance logical identity does not match its service")
+        if (logical_identity.service_kind == "launchd") != (identity.launchd_job is not None):
+            raise StateError("Launchd service instances require exactly one loaded job definition")
+        if (
+            identity.launchd_job is not None
+            and logical_identity.canonical_name != f"system/{identity.launchd_job.label}"
+        ):
+            raise StateError("Loaded launchd label does not match its logical service")
         existing = self._services.get(identity.object_id)
         if existing is not None:
             if (
