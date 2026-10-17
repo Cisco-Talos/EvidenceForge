@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 200
+current_revision: 201
 history_start_revision: 1
-behavior_surface_sha256: 6d408d309b6a223773b7d1829f3de2c84b4b89b4f2a41c93da5cd8f8926af71f
+behavior_surface_sha256: b586d3685c6cf853ac38c1eb24c9f0cf0d701a06a3a19080a88779aa2fd09a8f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1982,3 +1982,10 @@ changes:
     formats:
       - macos_unified_log
     summary: Completes experimental native source output policies and provisional sizing, admits existing Mac spawn-rule overlay semantics and adds a bounded Cisco arm64 GUI variant without altering other platforms.
+  - revision: 201
+    id: macos-dormant-launchd-system-job
+    impact: none
+    domains:
+      - service-lifecycle
+    formats: []
+    summary: Adds an internal system-domain launchd bootstrap adapter reusing immutable installation identity, shared service state and existing checkpoint contracts without exposing authored persistence or native output.
