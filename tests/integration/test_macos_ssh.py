@@ -113,13 +113,14 @@ def test_mac_ssh_client_process_history_transport_and_close(
 
 @pytest.mark.slow
 @pytest.mark.parametrize("external_source", [False, True])
+@pytest.mark.parametrize("macos_receiver", [False, True])
 def test_mac_ssh_fresh_process_and_endpoint_filtering(
-    tmp_path: Path, scenarios_dir: Path, external_source: bool
+    tmp_path: Path, scenarios_dir: Path, external_source: bool, macos_receiver: bool
 ) -> None:
     import yaml
 
     scenario_path = tmp_path / "ssh.yaml"
-    data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json")
+    data = macos_ssh_scenario(scenarios_dir, macos_receiver=macos_receiver).model_dump(mode="json")
     if external_source:
         data["storyline"][1]["events"][0]["source_ip"] = "198.51.100.41"
     scenario_path.write_text(yaml.safe_dump(data))

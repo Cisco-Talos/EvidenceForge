@@ -1,0 +1,85 @@
+# Invented identities only. Experimental macOS 26 arm64 canonical/eCAR profile.
+# No native SSH messages, paired authored logout or SCP/SFTP receiver helpers.
+version: '1.0'
+name: macos-ssh-workstations
+description: Experimental canonical Mac-to-Mac SSH with automatic receiver closure
+environment:
+  description: Two invented arm64 workstations on an observed network
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-01
+  systems:
+  - hostname: MAC-01
+    ip: 192.0.2.10
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+  - hostname: MAC-02
+    ip: 192.0.2.20
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+    services:
+    - ssh
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-01
+      - MAC-02
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 3h
+  warmup: 1h
+baseline_activity:
+  description: Low-volume developer activity; no attack storyline
+  intensity: low
+  variation: low
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: zsh_history
+  - format: bash_history
+  destination: ./output
+  compression: false
+storyline:
+- id: local-login
+  time: +1m
+  actor: alex
+  system: MAC-01
+  activity: Open the local session owning the SSH client
+  events:
+  - type: logon
+    logon_type: 2
+- id: remote-shell
+  time: +50m
+  actor: alex
+  system: MAC-02
+  activity: Connect to the second Mac; the bundle owns helper startup and automatic
+    close
+  events:
+  - type: ssh_session
+    source_ip: 192.0.2.10
+  - type: process
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id

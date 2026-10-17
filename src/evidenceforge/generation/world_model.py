@@ -1396,7 +1396,7 @@ class WorldPlanner:
                 existing.last_activity_time = time
                 if session_end_plan is not None:
                     self.state_manager.plan_session_end(existing.logon_id, session_end_plan)
-                if existing.session_kind == "ssh":
+                if existing.session_kind == "ssh" and _get_os_category(target_system.os) == "linux":
                     ensure_shell = getattr(
                         self.activity_generator,
                         "ensure_linux_ssh_session_shell",
@@ -2158,7 +2158,7 @@ class WorldPlanner:
         # (privilege separation) and bash PID so user commands have distinct
         # parent PIDs and eCAR can observe the parent lifecycle.
         ensure_shell = getattr(self.activity_generator, "ensure_linux_ssh_session_shell", None)
-        if ensure_shell is not None:
+        if ensure_shell is not None and _get_os_category(plan.target_system.os) == "linux":
             ensure_shell(
                 user=user,
                 target_system=plan.target_system,

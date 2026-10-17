@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 194
+current_revision: 195
 history_start_revision: 1
-behavior_surface_sha256: cd31f58d003379d1c9e2a6e3de30b1fcd7952376e1957b402b86cc0efe6af0e7
+behavior_surface_sha256: a46aa0b365deb15f22eb2058549914d61d387ea016cdafb7513bce9c3d5252c9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1923,3 +1923,15 @@ changes:
       - ecar
       - zeek_conn
     summary: Composes existing source-client ownership with exact Mac receiver startup and close after allocation-free preflight, and seeds explicit root credentials on modeled Mac boot processes.
+  - revision: 195
+    id: bounded-macos-ssh-receiver-admission
+    impact: localized
+    domains:
+      - session-lifecycle
+      - process-lifecycle
+      - source-timing
+      - scenario-validation
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Admits explicitly placed local users on modeled arm64 Mac workstation SSH receivers through shared startup and bundle-owned close, selects actual receiver clock bounds, and prevents Linux shell bootstrap on Mac sessions.

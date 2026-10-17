@@ -72,7 +72,7 @@ def test_mac_ssh_source_deadline_uses_mac_clock_and_linux_receiver_clock() -> No
     assert mac - linux == pytest.approx(6.0)
 
 
-def test_unimplemented_mac_receiver_fails_before_executor_or_linux_shell_access() -> None:
+def test_unqualified_mac_receiver_fails_before_executor_or_linux_shell_access() -> None:
     executor = Mock()
     target = System(hostname="MAC-RECEIVER", ip="192.0.2.20", os="macOS 26", type="workstation")
     user = User(username="casey", full_name="Casey", email="casey@example.test")
@@ -80,7 +80,7 @@ def test_unimplemented_mac_receiver_fails_before_executor_or_linux_shell_access(
     request = SshSessionRequest(
         user=user, target_system=target, time=timestamp, source_ip="198.51.100.10"
     )
-    with pytest.raises(StateError, match="macOS SSH receivers are not implemented"):
+    with pytest.raises(StateError, match="explicit arm64 workstation"):
         SshSessionActionBundle(request, executor).execute_with_identity()
     with pytest.raises(StateError, match="Linux SSH shell bootstrap"):
         ActivityGenerator.ensure_linux_ssh_session_shell(
@@ -89,26 +89,105 @@ def test_unimplemented_mac_receiver_fails_before_executor_or_linux_shell_access(
     assert executor.mock_calls == []
 
 
-@pytest.mark.parametrize("event_type", ["ssh_session", "logon"])
-@pytest.mark.parametrize("services", [[], ["ssh"]])
-def test_mac_remote_receiver_validation_exposes_current_implementation_boundary(
-    scenarios_dir: Path, event_type: str, services: list[str]
-) -> None:
-    document = macos_ssh_scenario(scenarios_dir).model_dump(mode="json")
-    document["environment"]["systems"][1].update(
-        os="macOS 26", architecture="arm64", type="workstation", services=services
-    )
-    spec: dict[str, object] = {"type": event_type, "source_ip": "10.0.0.10"}
-    if event_type == "logon":
-        spec["logon_type"] = 10
-    document["storyline"][1]["events"] = [spec]
+@pytest.mark.parametrize("damage", ["architecture", "type", "account", "type10", "explicit-close"])
+def test_mac_receiver_validation_exposes_bounded_profile(scenarios_dir: Path, damage: str) -> None:
+    document = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(mode="json")
+    target = document["environment"]["systems"][1]
+    if damage == "architecture":
+        target["architecture"] = "x64"
+    elif damage == "type":
+        target["type"] = "server"
+    elif damage == "account":
+        target["assigned_user"] = None
+    elif damage == "type10":
+        document["storyline"][1]["events"][0] = {
+            "type": "logon",
+            "logon_type": 10,
+            "source_ip": "10.0.0.10",
+        }
+    else:
+        document["storyline"].append(
+            {
+                "id": "remote-close",
+                "time": "+20m",
+                "actor": "test_user",
+                "system": "SSH-TEST",
+                "activity": "Close remote session",
+                "events": [{"type": "logoff"}],
+            }
+        )
     issues = ScenarioValidator(Scenario.model_validate(document)).validate()
-    errors = [issue for issue in issues if "receivers are not implemented" in issue.message]
-    assert len(errors) == 1
-    assert errors[0].severity == "error"
-    assert errors[0].field_path == "storyline.1.events.0"
+    assert any(issue.severity == "error" and "Mac" in issue.message for issue in issues)
+
+
+def test_mac_receiver_validation_admits_existing_fields(scenarios_dir: Path) -> None:
+    issues = ScenarioValidator(macos_ssh_scenario(scenarios_dir, macos_receiver=True)).validate()
+    assert not [issue for issue in issues if issue.severity == "error"]
+
+
+def test_mac_receiver_service_capability_remains_required(scenarios_dir: Path) -> None:
+    scenario = macos_ssh_scenario(scenarios_dir, macos_receiver=True)
+    scenario.environment.systems[1].services = []
+    issues = ScenarioValidator(scenario).validate()
+    assert any(issue.severity == "error" and "ssh" in issue.message.lower() for issue in issues)
 
 
 def test_mac_client_to_linux_receiver_remains_admitted(scenarios_dir: Path) -> None:
     issues = ScenarioValidator(macos_ssh_scenario(scenarios_dir)).validate()
     assert not [issue for issue in issues if "receivers are not implemented" in issue.message]
+
+
+@pytest.mark.parametrize("source_platform", ["linux", "macos", "windows"])
+def test_mac_receiver_deadline_uses_actual_endpoint_clock_bounds(source_platform: str) -> None:
+    deadline = datetime(2026, 10, 15, 12, tzinfo=UTC)
+    planner = Mock()
+    planner.endpoint_clock_positive_headroom.return_value = timedelta(seconds=40)
+    planner.endpoint_clock_negative_headroom.side_effect = lambda _deadline, platform: timedelta(
+        seconds=8 if platform == "macos" else 2
+    )
+    categories = ("macos",) if source_platform == "macos" else ("macos", source_platform)
+    mac = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=planner,
+        source_os_categories=categories,
+        target_os_category="macos",
+    )
+    planner.endpoint_clock_negative_headroom.assert_called_once_with(deadline, "macos")
+    assert [
+        call.args[1] for call in planner.endpoint_clock_positive_headroom.call_args_list
+    ] == list(categories)
+    linux = ssh_action_deadline_transport_headroom_seconds(
+        source_deadline=deadline,
+        source_timing_planner=planner,
+        source_os_categories=categories,
+    )
+    assert mac - linux == pytest.approx(6.0)
+
+
+def test_unsupported_receiver_deadline_platform_fails_before_clock_access() -> None:
+    planner = Mock()
+    with pytest.raises(ValueError, match="target OS"):
+        ssh_action_deadline_transport_headroom_seconds(
+            source_deadline=datetime(2026, 10, 15, 12, tzinfo=UTC),
+            source_timing_planner=planner,
+            target_os_category="windows",
+        )
+    assert planner.mock_calls == []
+
+
+@pytest.mark.parametrize(
+    "image", ["/usr/bin/id", "/Users/test_user/tools/invented-tool", "invented-tool"]
+)
+def test_mac_authored_process_path_validation_preserves_explicit_identity(
+    scenarios_dir: Path, image: str
+) -> None:
+    document = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(mode="json")
+    document["storyline"][1]["events"].append(
+        {"type": "process", "process_name": image, "command_line": image}
+    )
+    issues = ScenarioValidator(Scenario.model_validate(document)).validate()
+    errors = [issue for issue in issues if issue.severity == "error"]
+    if image.startswith("/"):
+        assert errors == []
+    else:
+        assert any("canonical catalog path" in issue.message for issue in errors)

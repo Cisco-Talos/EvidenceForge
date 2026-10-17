@@ -46,8 +46,10 @@ bundle owns TCP/22, authentication, shell/session evidence, command ownership, a
 not add an independent `logon` or port-22 `connection` for the same session.
 
 Experimental Mac clients require an existing local interactive session for native client process
-and history evidence. Set the event's system to the Linux receiver and `source_ip` to the modeled
-Mac address. Mac SSH receiver support and native Mac SSH log messages remain incomplete; see
+and history evidence. Set the event's system to the receiver and `source_ip` to the modeled
+client address. Experimental arm64 Mac workstation receivers require an explicitly placed local
+actor and SSH service. Their bundle owns closure; paired authored logoff, SCP/SFTP receiver helpers
+and native Mac SSH log messages remain unavailable. See
 /eforge:references:evidence-endpoint-macos.
 
 ## `rdp_session`

@@ -9,7 +9,7 @@ from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 
 
-def macos_ssh_scenario(scenarios_dir: Path) -> Scenario:
+def macos_ssh_scenario(scenarios_dir: Path, *, macos_receiver: bool = False) -> Scenario:
     """Build existing authored intent without new platform configuration fields."""
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
@@ -56,4 +56,12 @@ def macos_ssh_scenario(scenarios_dir: Path) -> Scenario:
     data["output"]["logs"] = [
         {"format": name} for name in ("ecar", "zeek", "syslog", "zsh_history")
     ]
+    if macos_receiver:
+        data["environment"]["systems"][1].update(
+            os="macOS 26", architecture="arm64", type="workstation", assigned_user="test_user"
+        )
+        data["storyline"][1]["activity"] = "Connect between modeled Mac workstations"
+        data["output"]["logs"] = [
+            row for row in data["output"]["logs"] if row["format"] != "syslog"
+        ]
     return Scenario.model_validate(data)

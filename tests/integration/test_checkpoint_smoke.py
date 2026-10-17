@@ -33,17 +33,22 @@ def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize(
-    "target,start,macos,smb_server,ssh_client",
+    "target,start,macos,smb_server,ssh_client,macos_receiver",
     [
-        ("default", None, False, None, False),
-        ("sof-elk", None, False, None, False),
+        ("default", None, False, None, False, False),
+        ("sof-elk", None, False, None, False, False),
         pytest.param(
-            "default", "2026-10-09T09:59:17.125Z", False, None, False, marks=pytest.mark.slow
+            "default", "2026-10-09T09:59:17.125Z", False, None, False, False, marks=pytest.mark.slow
         ),
-        pytest.param("default", None, True, None, False, marks=pytest.mark.slow),
-        pytest.param("default", None, True, "windows", False, marks=pytest.mark.slow),
-        pytest.param("default", None, True, "linux", False, marks=pytest.mark.slow),
-        pytest.param("default", None, True, None, True, marks=pytest.mark.slow, id="mac-ssh"),
+        pytest.param("default", None, True, None, False, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "windows", False, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "linux", False, False, marks=pytest.mark.slow),
+        pytest.param(
+            "default", None, True, None, True, False, marks=pytest.mark.slow, id="mac-ssh"
+        ),
+        pytest.param(
+            "default", None, True, None, True, True, marks=pytest.mark.slow, id="mac-ssh-receiver"
+        ),
     ],
 )
 def test_short_generation_checkpoint_suspension_and_resume(
@@ -54,6 +59,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     macos: bool,
     smb_server: str | None,
     ssh_client: bool,
+    macos_receiver: bool,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -63,7 +69,11 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     scenario_data = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
     if ssh_client:
-        scenario_data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json", exclude_none=True)
+        scenario_data = macos_ssh_scenario(scenarios_dir, macos_receiver=macos_receiver).model_dump(
+            mode="json", exclude_none=True
+        )
+        if macos_receiver:
+            scenario_data["storyline"][1]["time"] = "+50m"
         second_session = dict(scenario_data["storyline"][1])
         second_session.update(id="ssh-after-resume", time="+1h30m")
         scenario_data["storyline"].append(second_session)
@@ -176,6 +186,17 @@ def test_short_generation_checkpoint_suspension_and_resume(
     assert 2 <= status["simulated_hour"] < 4
     index = output / ".eforge-generation" / "CURRENT.json"
     before_verify = index.read_bytes()
+    if macos_receiver:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "activity-generator"))
+        assert any(
+            any(isinstance(member, list) and member and member[0] == "macos-v1" for member in row)
+            for row in head["ssh_lifecycles"]
+        ), "The checkpoint must retain an active Mac receiver close continuation"
     _run_cli("checkpoint", "verify", str(output), environment=environment)
     assert index.read_bytes() == before_verify
     _run_cli("generate", "--output", str(output), "--resume", environment=environment)

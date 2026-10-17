@@ -334,6 +334,7 @@ def _ssh_action_deadline_runtime_headrooms(
     source_ip: str,
     target_ip: str,
     source_os_categories: tuple[str, ...],
+    target_os_category: str = "linux",
     source_clock_headroom: timedelta,
     network_sensor_headroom: timedelta,
     ecar_observation_headroom: timedelta,
@@ -342,6 +343,8 @@ def _ssh_action_deadline_runtime_headrooms(
 ) -> tuple[timedelta, timedelta, timedelta, timedelta, timedelta]:
     """Resolve conservative source and sensor bounds without allocating timing state."""
 
+    if target_os_category not in {"linux", "macos"}:
+        raise ValueError("SSH deadline target OS must be Linux or macOS")
     if type(source_ip) is not str or type(target_ip) is not str:
         raise TypeError("SSH deadline endpoints must be strings")
     if (
@@ -458,6 +461,7 @@ def ssh_action_deadline_transport_headroom_seconds(
     source_ip: str = "",
     target_ip: str = "",
     source_os_categories: tuple[str, ...] = ("linux", "windows"),
+    target_os_category: str = "linux",
     source_clock_headroom: timedelta = timedelta(0),
     network_sensor_headroom: timedelta = timedelta(0),
     ecar_observation_headroom: timedelta = timedelta(0),
@@ -490,6 +494,7 @@ def ssh_action_deadline_transport_headroom_seconds(
         source_ip=source_ip,
         target_ip=target_ip,
         source_os_categories=source_os_categories,
+        target_os_category=target_os_category,
         source_clock_headroom=source_clock_headroom,
         network_sensor_headroom=network_sensor_headroom,
         ecar_observation_headroom=ecar_observation_headroom,
@@ -500,7 +505,7 @@ def ssh_action_deadline_transport_headroom_seconds(
     if source_deadline is not None and source_timing_planner is not None:
         target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
             ensure_utc(source_deadline),
-            "linux",
+            target_os_category,
         )
         if type(
             target_clock_negative_headroom
@@ -3151,10 +3156,24 @@ class SshSessionActionBundle:
         """Expand the bundle and return its transport UID and owned session LogonID."""
 
         if _get_os_category(self.request.target_system.os) == "macos":
-            raise StateError(
-                "macOS SSH receivers are not implemented yet. Use a Linux receiver; "
-                "macOS clients are supported."
-            )
+            if (
+                self.request.target_system.architecture != "arm64"
+                or self.request.target_system.type != "workstation"
+            ):
+                raise StateError("Mac SSH receivers require an explicit arm64 workstation")
+            if self.request.session_end_plan and self.request.session_end_plan.is_authoritative:
+                raise StateError(
+                    "Mac SSH receivers currently require bundle-owned closure; "
+                    "an explicit paired logoff is not supported yet"
+                )
+            if not self.request.emit_session_close:
+                return replace(
+                    self,
+                    request=replace(
+                        self.request, emit_session_close=True, defer_session_close=True
+                    ),
+                )._execute_macos_receiver()
+            return self._execute_macos_receiver()
         # Hard-deadline admission is read-only and must precede every RNG/state/
         # source-port/evidence side effect in exact and compatibility paths.
         self._hard_deadline_transport_close_limit()
@@ -3305,9 +3324,9 @@ class SshSessionActionBundle:
     def _execute_macos_receiver(self) -> tuple[str, str]:
         """Compose a source-client prerequisite with the exact native receiver.
 
-        Kept private until caller closure and full generation/replay integration
-        are complete. Client creation uses the established process/session owners,
-        independently of the following atomic transport/receiver publication.
+        Client creation uses the established process/session owners independently
+        of the following atomic transport/receiver publication. The public caller
+        admits only the bounded workstation profile and bundle-owned closure.
         """
         if _get_os_category(self.request.target_system.os) != "macos":
             raise StateError("Mac receiver composition requires a modeled Mac target")
@@ -3868,7 +3887,7 @@ class SshSessionActionBundle:
         source_timing_planner = runtime_options["source_timing_planner"]
         target_clock_negative_headroom = source_timing_planner.endpoint_clock_negative_headroom(
             ensure_utc(deadline),
-            "linux",
+            runtime_options["target_os_category"],
         )
         route_class = "private" if self._source_system() is not None else "public"
         return _ssh_minimum_transport_seconds(
@@ -3920,6 +3939,10 @@ class SshSessionActionBundle:
         ):
             raise StateError("SSH deadline admission requires observation-delay support")
         source_os = self._source_os()
+        target_os = _get_os_category(self.request.target_system.os)
+        source_os_categories = (target_os,)
+        if source_os != target_os:
+            source_os_categories += (source_os if source_os in {"linux", "macos"} else "windows",)
         return {
             "source_deadline": deadline,
             "source_timing_planner": source_timing_planner,
@@ -3927,13 +3950,8 @@ class SshSessionActionBundle:
             "observation_policy": observation_policy,
             "source_ip": self.request.source_ip,
             "target_ip": self.request.target_system.ip,
-            "source_os_categories": (
-                ("linux", "macos")
-                if source_os == "macos"
-                else ("linux",)
-                if source_os == "linux"
-                else ("linux", "windows")
-            ),
+            "source_os_categories": source_os_categories,
+            "target_os_category": target_os,
         }
 
     def _action_rendered_source_tail(self, deadline: datetime) -> timedelta:

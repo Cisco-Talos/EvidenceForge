@@ -3264,6 +3264,20 @@ class ScenarioValidator:
         if not self.scenario.storyline:
             return
 
+        # Follow the existing authored session pairing order. A local login after
+        # SSH may own a later logoff; do not reject that unrelated local closure.
+        pending: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+        explicit_ssh_ends: set[tuple[int, int]] = set()
+        for idx, event in enumerate(self.scenario.storyline):
+            key = (event.actor, event.system)
+            for spec_idx, spec in enumerate(event.events):
+                if spec.type in {"ssh_session", "rdp_session", "logon"}:
+                    pending.setdefault(key, []).append((idx, spec_idx, spec.type))
+                elif spec.type == "logoff" and pending.get(key):
+                    start_idx, start_spec_idx, start_type = pending[key].pop()
+                    if start_type == "ssh_session":
+                        explicit_ssh_ends.add((start_idx, start_spec_idx))
+
         for idx, event in enumerate(self.scenario.storyline):
             system = self._get_system(event.system)
             if not system:
@@ -3274,23 +3288,50 @@ class ScenarioValidator:
 
             for spec_idx, spec in enumerate(event.events):
                 event_type = spec.type
-
-                if os_cat == "macos" and (
-                    event_type == "ssh_session"
-                    or (event_type == "logon" and getattr(spec, "logon_type", None) == 10)
-                ):
-                    self.issues.append(
-                        ValidationIssue(
-                            severity="error",
-                            field_path=f"storyline.{idx}.events.{spec_idx}",
-                            message=(
-                                f"[{event.id}] macOS remote interactive receivers are not "
-                                "implemented yet; configured SSH service availability does "
-                                "not enable the receiver lifecycle"
+                if os_cat == "macos":
+                    limitation: str | None = None
+                    if event_type == "logon" and getattr(spec, "logon_type", None) == 10:
+                        limitation = "Use ssh_session for Mac remote interactive activity"
+                    elif event_type == "ssh_session":
+                        actor = next(
+                            (
+                                user
+                                for user in self.scenario.environment.users
+                                if user.username == event.actor
                             ),
-                            suggestion="Use a Linux SSH receiver; macOS clients are supported.",
+                            None,
                         )
-                    )
+                        if system.architecture != "arm64" or system.type != "workstation":
+                            limitation = "Mac SSH receivers require an explicit arm64 workstation"
+                        elif (
+                            actor is None
+                            or not (
+                                actor.primary_system == system.hostname
+                                or system.assigned_user == actor.username
+                            )
+                            or actor.username.casefold() in {"root", "_sshd", "sshd"}
+                        ):
+                            limitation = (
+                                "Mac SSH receivers require an explicitly placed local user; "
+                                "use primary_system or assigned_user"
+                            )
+                        elif (idx, spec_idx) in explicit_ssh_ends:
+                            limitation = (
+                                "Mac SSH receivers currently require bundle-owned closure; "
+                                "an explicit paired logoff is not supported yet"
+                            )
+                    if limitation is not None:
+                        self.issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                field_path=f"storyline.{idx}.events.{spec_idx}",
+                                message=f"[{event.id}] {limitation}",
+                                suggestion=(
+                                    "Use the bounded Mac SSH workstation profile, or a Linux "
+                                    "receiver for other remote-session behavior."
+                                ),
+                            )
+                        )
 
                 # Windows-only events on Linux
                 if os_cat == "linux" and event_type in _WINDOWS_EVENT_TYPES:
@@ -3333,6 +3374,22 @@ class ScenarioValidator:
                     process_name = getattr(spec, "process_name", "")
 
                     if process_name and not _is_full_process_path(process_name):
+                        from evidenceforge.generation.activity.application_catalog import (
+                            has_catalog_entry,
+                        )
+
+                        if os_cat == "macos" and not has_catalog_entry(process_name, os_cat):
+                            self.issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    field_path=f"storyline.{idx}.events.{spec_idx}.process_name",
+                                    message=(
+                                        f"[{event.id}] Unknown macOS executable "
+                                        f"'{process_name}' has no canonical catalog path"
+                                    ),
+                                    suggestion="Provide a full path or add a Mac catalog entry.",
+                                )
+                            )
                         self.issues.append(
                             ValidationIssue(
                                 severity="info",
@@ -3349,11 +3406,16 @@ class ScenarioValidator:
                         )
                     elif process_name:
                         from evidenceforge.generation.activity.application_catalog import (
+                            has_catalog_entry,
                             resolve_image_path,
                         )
 
                         basename = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
-                        resolved = resolve_image_path(basename, os_cat)
+                        resolved = (
+                            basename
+                            if os_cat == "macos" and not has_catalog_entry(basename, os_cat)
+                            else resolve_image_path(basename, os_cat)
+                        )
                         if resolved != basename and resolved.lower() != process_name.lower():
                             self.issues.append(
                                 ValidationIssue(

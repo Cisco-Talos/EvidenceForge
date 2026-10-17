@@ -71,7 +71,7 @@ def test_macos_receiver_implicit_client_real_engine(
                 emit_session_close=True,
                 defer_session_close=deferred,
             )
-            uid, logon = SshSessionActionBundle(request, generator)._execute_macos_receiver()
+            uid, logon = SshSessionActionBundle(request, generator).execute_with_identity()
             assert uid and logon and len(clients) == 1 and clients[0] is not None
             client_pid, client_image = clients[0]
             assert engine.state_manager.get_process(source.hostname, client_pid) is None
@@ -121,3 +121,36 @@ def test_macos_receiver_implicit_client_real_engine(
         history = "".join(path.read_text() for path in tmp_path.rglob("*.zsh_history"))
         assert "ssh " in history
     assert not any("SSH-TEST" in str(path) for path in tmp_path.rglob("syslog.log"))
+
+
+@pytest.mark.slow
+def test_authored_mac_receiver_command_uses_remote_shell_and_closes(tmp_path: Path) -> None:
+    from evidenceforge.utils import load_yaml
+
+    scenario = Scenario.model_validate(
+        load_yaml(Path("scenarios/macos-ssh-workstations/scenario.yaml"))
+    )
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.generate()
+    path = next(path for path in tmp_path.rglob("ecar.json") if "MAC-02." in str(path))
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    command = next(
+        row
+        for row in rows
+        if row["action"] == "CREATE"
+        and row.get("properties", {}).get("command_line") == "/usr/bin/id"
+    )
+    assert command["properties"]["parent_image_path"] == "/bin/zsh"
+    sessions = [
+        row
+        for row in rows
+        if row["object"] == "USER_SESSION"
+        and row.get("properties", {}).get("logon_id") == command["properties"]["logon_id"]
+    ]
+    assert [row["action"] for row in sessions] == ["LOGIN", "LOGOUT"]
+    assert all(row["properties"]["session_type"] == "ssh" for row in sessions)
+    assert sessions[0]["timestamp_ms"] < command["timestamp_ms"] < sessions[1]["timestamp_ms"]
+    assert any(
+        row["objectID"] == command["objectID"] and row["action"] == "TERMINATE" for row in rows
+    )
+    assert not list(path.parent.glob("syslog.log"))
