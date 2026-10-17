@@ -1306,6 +1306,18 @@ class WorldPlanner:
                 session_kind=session_kind,
             )
 
+        host = self.world_model.hosts.get(target_system.hostname)
+        if session_kind is None and host is not None and host.os_category == "macos":
+            # Resolve Mac workstation intent before considering existing sessions.
+            # A newer network/service/SSH login cannot stand in for the GUI owner.
+            session_kind = self.world_model.plan_session(
+                user=user,
+                target_system=target_system,
+                rng=rng,
+                source_system=source_system,
+                source_ip_override=source_ip_override,
+            ).session_kind
+
         reconnect_logon_id: str | None = None
         if session_kind == "rdp":
             if rdp_transport_time is not None:
