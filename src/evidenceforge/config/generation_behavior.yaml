@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 193
+current_revision: 194
 history_start_revision: 1
-behavior_surface_sha256: bdbbb42d242ce9dad712ee5d10fce213b3e210d8bea963e6d4a7c9aea87a20b5
+behavior_surface_sha256: cd31f58d003379d1c9e2a6e3de30b1fcd7952376e1957b402b86cc0efe6af0e7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1912,3 +1912,14 @@ changes:
       - ecar
       - zeek_conn
     summary: Prepares explicit Mac receiver accounts, catalog helpers and launchd ancestry with exact startup timing replay, retaining source omissions and zero-row recovery without changing existing Linux/RDP proof requirements.
+  - revision: 194
+    id: macos-ssh-source-client-composition
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - source-projection
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Composes existing source-client ownership with exact Mac receiver startup and close after allocation-free preflight, and seeds explicit root credentials on modeled Mac boot processes.

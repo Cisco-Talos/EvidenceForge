@@ -3159,92 +3159,7 @@ class SshSessionActionBundle:
         # source-port/evidence side effect in exact and compatibility paths.
         self._hard_deadline_transport_close_limit()
         if self._uses_exact_deferred_publication():
-            owner_rng = _get_rng()
-            rng_state_before = owner_rng.getstate()
-            state: _SshTransportState | None = None
-            prepared: _PreparedDeferredSshOpen | None = None
-            transaction: NetworkTransactionPlan | None = None
-            continuation: _SshCloseContinuation | None = None
-            try:
-                state = self._plan_transport(deferred_publication=True)
-                self._fit_transport_to_source_session_end(state, self.request.source_pid)
-                prepared = self._prepare_deferred_open(state)
-                transaction = self._open_deferred_transport(state, prepared)
-                continuation = self._bind_deferred_close_continuation(
-                    prepared,
-                    transaction,
-                )
-                if continuation is not None:
-                    # This exact journal is the first postcommit owner.  Cache
-                    # publication and source teardown are consequences of an
-                    # already-durable terminal continuation.
-                    self.executor._defer_ssh_session_close(continuation)
-                    continuation.prepared.drain_receiver_startup(self.executor)
-                self._remember_deferred_open_tuple(state, prepared)
-                if self.request.emit_session_close:
-                    close_bundle = (
-                        continuation.materialize_bundle(self.executor)
-                        if continuation is not None
-                        else self
-                    )
-                    close_bundle._terminate_source_ssh_client_process(
-                        state,
-                        continuation=continuation,
-                    )
-                if continuation is not None and not self.request.defer_session_close:
-                    self.executor._finalize_exact_ssh_close_continuation(continuation)
-            except BaseException as primary:
-                committed = bool(
-                    prepared is not None and prepared.identity_capture.transaction is not None
-                )
-                if not committed and prepared is not None:
-                    try:
-                        live_session = self.executor.state_manager.get_session(
-                            prepared.session_plan.identity.logon_id
-                        )
-                        committed = bool(
-                            live_session is not None
-                            and live_session.ecar_object_id
-                            == prepared.session_plan.identity.object_id
-                            and ensure_utc(live_session.start_time)
-                            == prepared.session_plan.identity.started_at
-                        )
-                    except BaseException as recovery_error:
-                        self._note_exact_recovery_error(
-                            primary,
-                            "commit detection",
-                            recovery_error,
-                        )
-                if not committed:
-                    if prepared is not None and prepared.close_continuation is not None:
-                        try:
-                            self.executor._cancel_exact_ssh_close_continuation_reservation(
-                                prepared.close_continuation
-                            )
-                        except BaseException as recovery_error:
-                            self._note_exact_recovery_error(
-                                primary,
-                                "close-reservation cancellation",
-                                recovery_error,
-                            )
-                    try:
-                        owner_rng.setstate(rng_state_before)
-                    except BaseException as recovery_error:
-                        self._note_exact_recovery_error(
-                            primary,
-                            "precommit RNG rollback",
-                            recovery_error,
-                        )
-                elif state is not None and prepared is not None:
-                    self._recover_committed_deferred_open(primary, state, prepared)
-                raise
-            logger.debug(
-                "Generated exact SSH session: %s -> %s (UID: %s)",
-                self.request.user.username,
-                self.request.target_system.hostname,
-                state.uid,
-            )
-            return (state.uid if state.network_visible else ""), state.logon_id
+            return self._execute_exact_deferred()
 
         ecar_after_accept = self._freeze_linux_ecar_readiness()
         state = self._plan_transport()
@@ -3290,6 +3205,172 @@ class SshSessionActionBundle:
             state.uid,
         )
         return (state.uid if state.network_visible else ""), state.logon_id
+
+    def _execute_exact_deferred(
+        self,
+        state: _SshTransportState | None = None,
+    ) -> tuple[str, str]:
+        """Commit the shared exact transport and retain every postcommit consequence.
+
+        A supplied transport has been planned before a separately materialized
+        source client. Rollback restores this owner's RNG boundary, never a prior
+        source action's committed work. RDP uses the same source-first convention.
+        """
+        owner_rng = _get_rng()
+        rng_state_before = owner_rng.getstate()
+        prepared: _PreparedDeferredSshOpen | None = None
+        transaction: NetworkTransactionPlan | None = None
+        continuation: _SshCloseContinuation | None = None
+        try:
+            if state is None:
+                state = self._plan_transport(deferred_publication=True)
+            self._fit_transport_to_source_session_end(state, self.request.source_pid)
+            prepared = self._prepare_deferred_open(state)
+            transaction = self._open_deferred_transport(state, prepared)
+            continuation = self._bind_deferred_close_continuation(
+                prepared,
+                transaction,
+            )
+            if continuation is not None:
+                # This exact journal is the first postcommit owner.  Cache
+                # publication and source teardown are consequences of an
+                # already-durable terminal continuation.
+                self.executor._defer_ssh_session_close(continuation)
+                continuation.prepared.drain_receiver_startup(self.executor)
+            self._remember_deferred_open_tuple(state, prepared)
+            if self.request.emit_session_close:
+                close_bundle = (
+                    continuation.materialize_bundle(self.executor)
+                    if continuation is not None
+                    else self
+                )
+                close_bundle._terminate_source_ssh_client_process(
+                    state,
+                    continuation=continuation,
+                )
+            if continuation is not None and not self.request.defer_session_close:
+                self.executor._finalize_exact_ssh_close_continuation(continuation)
+        except BaseException as primary:
+            committed = bool(
+                prepared is not None and prepared.identity_capture.transaction is not None
+            )
+            if not committed and prepared is not None:
+                try:
+                    live_session = self.executor.state_manager.get_session(
+                        prepared.session_plan.identity.logon_id
+                    )
+                    committed = bool(
+                        live_session is not None
+                        and live_session.ecar_object_id == prepared.session_plan.identity.object_id
+                        and ensure_utc(live_session.start_time)
+                        == prepared.session_plan.identity.started_at
+                    )
+                except BaseException as recovery_error:
+                    self._note_exact_recovery_error(
+                        primary,
+                        "commit detection",
+                        recovery_error,
+                    )
+            if not committed:
+                if prepared is not None and prepared.close_continuation is not None:
+                    try:
+                        self.executor._cancel_exact_ssh_close_continuation_reservation(
+                            prepared.close_continuation
+                        )
+                    except BaseException as recovery_error:
+                        self._note_exact_recovery_error(
+                            primary,
+                            "close-reservation cancellation",
+                            recovery_error,
+                        )
+                try:
+                    owner_rng.setstate(rng_state_before)
+                except BaseException as recovery_error:
+                    self._note_exact_recovery_error(
+                        primary,
+                        "precommit RNG rollback",
+                        recovery_error,
+                    )
+            elif state is not None and prepared is not None:
+                self._recover_committed_deferred_open(primary, state, prepared)
+            raise
+        logger.debug(
+            "Generated exact SSH session: %s -> %s (UID: %s)",
+            self.request.user.username,
+            self.request.target_system.hostname,
+            state.uid,
+        )
+        return (state.uid if state.network_visible else ""), state.logon_id
+
+    def _execute_macos_receiver(self) -> tuple[str, str]:
+        """Compose a source-client prerequisite with the exact native receiver.
+
+        Kept private until caller closure and full generation/replay integration
+        are complete. Client creation uses the established process/session owners,
+        independently of the following atomic transport/receiver publication.
+        """
+        if _get_os_category(self.request.target_system.os) != "macos":
+            raise StateError("Mac receiver composition requires a modeled Mac target")
+        if self._deferred_operation_kind() is not SshOperationKind.SHELL:
+            raise StateError(
+                "Mac SSH receiver currently supports shell sessions, not SCP/SFTP helpers"
+            )
+        self._hard_deadline_transport_close_limit()
+        request = self.request
+        source = self._source_system()
+        needs_client = bool(
+            request.source_pid <= 0
+            and not request.source_process_image
+            and source is not None
+            and self.executor.has_implicit_ssh_client_owner(
+                user=request.user,
+                source_system=source,
+                time=request.time,
+            )
+        )
+        if not self._uses_exact_deferred_publication(allow_mac_source_prerequisite=needs_client):
+            raise StateError(
+                "Mac receiver requires exact sources and an authenticated source actor"
+            )
+        rng = _get_rng()
+        before = rng.getstate()
+        state: _SshTransportState | None = None
+        preview: _PreparedDeferredSshOpen | None = None
+        try:
+            state = self._plan_transport(deferred_publication=True)
+            self._fit_transport_to_source_session_end(state, request.source_pid)
+            # Validate accounts, parent, catalog, timing and journal capacity before
+            # a source-side prerequisite is allowed to materialize.
+            preview = self._prepare_deferred_open(state)
+        except BaseException:
+            rng.setstate(before)
+            raise
+        if preview.close_continuation is not None:
+            self.executor._cancel_exact_ssh_close_continuation_reservation(
+                preview.close_continuation
+            )
+        if not needs_client:
+            rng.setstate(before)
+            return self._execute_exact_deferred()
+        assert source is not None
+        client = self.executor.ensure_ssh_client_process(
+            user=request.user,
+            source_system=source,
+            target_system=request.target_system,
+            time=request.time,
+            process_image="",
+            source_port=state.source_port,
+            required_until=state.close_time
+            if _get_os_category(source.os) in {"linux", "macos"}
+            else None,
+        )
+        if client is None:
+            raise StateError("Mac receiver source session could not materialize its SSH client")
+        pid, image = client
+        bound = replace(self, request=replace(request, source_pid=pid, source_process_image=image))
+        if bound._deferred_source_process_binding() is None:
+            raise StateError("Mac receiver source client lost its canonical session identity")
+        return bound._execute_exact_deferred(state)
 
     def _remember_deferred_open_tuple(
         self,
@@ -3361,14 +3442,16 @@ class SshSessionActionBundle:
         # executes the same idempotent teardown after projection recovery and
         # before target-session retirement.
 
-    def _uses_exact_deferred_publication(self) -> bool:
+    def _uses_exact_deferred_publication(
+        self, *, allow_mac_source_prerequisite: bool = False
+    ) -> bool:
         """Return whether this call has the closed exact SSH source cohort."""
 
         if (
             self.request.logon_id
             or self.request.session_obj_id
             or self.request.sshd_pid is not None
-            or _get_os_category(self.request.target_system.os) != "linux"
+            or _get_os_category(self.request.target_system.os) not in {"linux", "macos"}
         ):
             return False
         source_system = self._source_system()
@@ -3385,7 +3468,11 @@ class SshSessionActionBundle:
             # Compatibility owns implicit source-process creation and teardown.
             # Exact preparation can bind a preexisting actor, but cannot publish
             # a new prerequisite outside its State/projection rollback authority.
-            return False
+            if not (
+                allow_mac_source_prerequisite
+                and _get_os_category(self.request.target_system.os) == "macos"
+            ):
+                return False
         if (self.request.source_pid > 0 or self.request.source_process_image) and (
             self._deferred_source_process_binding() is None
         ):
@@ -3401,7 +3488,10 @@ class SshSessionActionBundle:
             return False
         if type(dict.get(emitters, "ecar")) is EcarEmitter:
             return True
-        return "ecar" not in emitters and self._no_ecar_cohort_is_provably_warmup()
+        return "ecar" not in emitters and (
+            _get_os_category(self.request.target_system.os) == "macos"
+            or self._no_ecar_cohort_is_provably_warmup()
+        )
 
     def _no_ecar_cohort_is_provably_warmup(self) -> bool:
         """Conservatively admit an exact no-eCAR cohort only when wholly suppressed."""

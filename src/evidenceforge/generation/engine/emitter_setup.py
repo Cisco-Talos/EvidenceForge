@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from evidenceforge.events.collection_policy import canonical_source_hostname
+from evidenceforge.events.identity import PosixProcessCredentials
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -1174,6 +1175,7 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=host.os_category,
+                credentials=PosixProcessCredentials(0, 0, 0, 0),
                 logon_id=member.logon_id,
             )
             with state.materialization_guard(plan.expected_version):
@@ -1424,6 +1426,11 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=member.os_category,
+                credentials=(
+                    PosixProcessCredentials(0, 0, 0, 0)
+                    if member.os_category == "macos" and member.username == "root"
+                    else None
+                ),
                 logon_id=member.logon_id,
                 start_time=member.start_time,
                 parent_plan=parent_plan,
