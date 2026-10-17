@@ -33,21 +33,47 @@ def _run_cli(*arguments: str, environment: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize(
-    "target,start,macos,smb_server,ssh_client,macos_receiver",
+    "target,start,macos,smb_server,ssh_client,macos_receiver,authored_close",
     [
-        ("default", None, False, None, False, False),
-        ("sof-elk", None, False, None, False, False),
+        ("default", None, False, None, False, False, False),
+        ("sof-elk", None, False, None, False, False, False),
         pytest.param(
-            "default", "2026-10-09T09:59:17.125Z", False, None, False, False, marks=pytest.mark.slow
+            "default",
+            "2026-10-09T09:59:17.125Z",
+            False,
+            None,
+            False,
+            False,
+            False,
+            marks=pytest.mark.slow,
         ),
-        pytest.param("default", None, True, None, False, False, marks=pytest.mark.slow),
-        pytest.param("default", None, True, "windows", False, False, marks=pytest.mark.slow),
-        pytest.param("default", None, True, "linux", False, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, None, False, False, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "windows", False, False, False, marks=pytest.mark.slow),
+        pytest.param("default", None, True, "linux", False, False, False, marks=pytest.mark.slow),
         pytest.param(
-            "default", None, True, None, True, False, marks=pytest.mark.slow, id="mac-ssh"
+            "default", None, True, None, True, False, False, marks=pytest.mark.slow, id="mac-ssh"
         ),
         pytest.param(
-            "default", None, True, None, True, True, marks=pytest.mark.slow, id="mac-ssh-receiver"
+            "default",
+            None,
+            True,
+            None,
+            True,
+            True,
+            False,
+            marks=pytest.mark.slow,
+            id="mac-ssh-receiver",
+        ),
+        pytest.param(
+            "default",
+            None,
+            True,
+            None,
+            True,
+            True,
+            True,
+            marks=pytest.mark.slow,
+            id="mac-ssh-authored-close",
         ),
     ],
 )
@@ -60,6 +86,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     smb_server: str | None,
     ssh_client: bool,
     macos_receiver: bool,
+    authored_close: bool,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -69,13 +96,16 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     scenario_data = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
     if ssh_client:
-        scenario_data = macos_ssh_scenario(scenarios_dir, macos_receiver=macos_receiver).model_dump(
-            mode="json", exclude_none=True
-        )
+        scenario_data = macos_ssh_scenario(
+            scenarios_dir, macos_receiver=macos_receiver, authored_close=authored_close
+        ).model_dump(mode="json", exclude_none=True)
         if macos_receiver:
             scenario_data["storyline"][1]["time"] = "+50m"
+        if authored_close:
+            scenario_data["storyline"][1]["time"] = "+1h50m"
+            scenario_data["storyline"][2]["time"] = "+2h20m"
         second_session = dict(scenario_data["storyline"][1])
-        second_session.update(id="ssh-after-resume", time="+1h30m")
+        second_session.update(id="ssh-after-resume", time="+2h30m" if authored_close else "+1h30m")
         scenario_data["storyline"].append(second_session)
     if smb_server is not None:
         scenario_data = macos_smb_scenario(scenarios_dir, server_platform=smb_server).model_dump(
@@ -197,6 +227,10 @@ def test_short_generation_checkpoint_suspension_and_resume(
             any(isinstance(member, list) and member and member[0] == "macos-v1" for member in row)
             for row in head["ssh_lifecycles"]
         ), "The checkpoint must retain an active Mac receiver close continuation"
+        if authored_close:
+            assert any(len(row) == 32 and row[31] is not None for row in head["ssh_lifecycles"]), (
+                "The active continuation must retain its authored end owner"
+            )
     _run_cli("checkpoint", "verify", str(output), environment=environment)
     assert index.read_bytes() == before_verify
     _run_cli("generate", "--output", str(output), "--resume", environment=environment)

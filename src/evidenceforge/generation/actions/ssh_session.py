@@ -716,10 +716,12 @@ class SshSessionRequest:
 
     @property
     def bundle_owns_close(self) -> bool:
-        """Return whether this action, rather than explicit intent, owns closure."""
+        """Return whether the SSH continuation owns terminal execution."""
 
         return self.emit_session_close and not (
-            self.session_end_plan is not None and self.session_end_plan.is_authoritative
+            self.session_end_plan is not None
+            and self.session_end_plan.is_authoritative
+            and _get_os_category(self.target_system.os) != "macos"
         )
 
     @property
@@ -1119,6 +1121,7 @@ class _PreparedSshClosePlan:
     source_identity: ProcessIdentity | None
     auth_state: _SshLinuxAuthState | _SshMacAuthState
     source_tag: str
+    authoritative_end_plan: SessionEndPlan | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete, mutable, or temporally impossible close facts."""
@@ -1162,6 +1165,13 @@ class _PreparedSshClosePlan:
         if type(self.auth_state) not in {_SshLinuxAuthState, _SshMacAuthState}:
             raise TypeError("Exact SSH close plan authentication state changed type")
         macos = type(self.auth_state) is _SshMacAuthState
+        if self.authoritative_end_plan is not None and (
+            not macos
+            or type(self.authoritative_end_plan) is not SessionEndPlan
+            or not self.authoritative_end_plan.is_authoritative
+            or not self.authoritative_end_plan.storyline_event_id
+        ):
+            raise ValueError("Exact SSH authored closure requires a Mac storyline end owner")
         if self.target_host.os_category != ("macos" if macos else "linux"):
             raise ValueError("Exact SSH close authentication crossed its platform owner")
         if macos != (self.logind_remove_time is None):
@@ -1267,6 +1277,8 @@ class _PreparedSshClosePlan:
             sshd_pid=self.auth_state.receiver.responder_pid,
             transport_close_time=self.close_time,
         )
+        if self.authoritative_end_plan is not None:
+            expected_session_close = ensure_utc(self.authoritative_end_plan.canonical_end)
         expected_receiver_terminate = _ssh_receiver_process_terminate_time(
             target_hostname=self.target_system.hostname,
             source_ip=self.source_ip,
@@ -2377,6 +2389,10 @@ class _PreparedSshCloseContinuation:
     def verify_completed_receiver_startup(self, state: StateManager) -> None:
         """Validate canonical Mac roles when no live startup coordinator is retained."""
         self._startup.verify_completed_state(self, state)
+        if self.plan.authoritative_end_plan is not None:
+            session = state.get_session(self.plan.logon_id)
+            if session is None or session.end_plan != self.plan.authoritative_end_plan:
+                raise StateError("Exact Mac SSH authored close lost its State end owner")
 
     def require_application_owner_shape(self) -> None:
         """Require the exact built-in manager and its original shared registry."""
@@ -2777,6 +2793,7 @@ class _SshCloseContinuation:
             emit_session_close=True,
             defer_session_close=True,
             source=plan.source_tag,
+            session_end_plan=plan.authoritative_end_plan,
         )
         return SshSessionActionBundle(request=request, executor=executor)
 
@@ -3161,11 +3178,6 @@ class SshSessionActionBundle:
                 or self.request.target_system.type != "workstation"
             ):
                 raise StateError("Mac SSH receivers require an explicit arm64 workstation")
-            if self.request.session_end_plan and self.request.session_end_plan.is_authoritative:
-                raise StateError(
-                    "Mac SSH receivers currently require bundle-owned closure; "
-                    "an explicit paired logoff is not supported yet"
-                )
             if not self.request.emit_session_close:
                 return replace(
                     self,
@@ -3334,6 +3346,12 @@ class SshSessionActionBundle:
             raise StateError(
                 "Mac SSH receiver currently supports shell sessions, not SCP/SFTP helpers"
             )
+        if (
+            self.request.session_end_plan is not None
+            and self.request.session_end_plan.is_authoritative
+            and not self.request.defer_session_close
+        ):
+            raise StateError("Authored Mac SSH close must retain its deferred continuation")
         self._hard_deadline_transport_close_limit()
         request = self.request
         source = self._source_system()
@@ -4042,6 +4060,14 @@ class SshSessionActionBundle:
             sshd_pid=auth_state.receiver.responder_pid,
             transport_close_time=transport_close_time,
         )
+        authoritative_end_plan = (
+            self.request.session_end_plan
+            if self.request.session_end_plan is not None
+            and self.request.session_end_plan.is_authoritative
+            else None
+        )
+        if authoritative_end_plan is not None:
+            session_close_time = ensure_utc(authoritative_end_plan.canonical_end)
         receiver_terminate_time = _ssh_receiver_process_terminate_time(
             target_hostname=self.request.target_system.hostname,
             source_ip=self.request.source_ip,
@@ -4111,6 +4137,7 @@ class SshSessionActionBundle:
             source_identity=source_identity,
             auth_state=auth_state,
             source_tag=self.request.source,
+            authoritative_end_plan=authoritative_end_plan,
         )
 
     def _owned_terminal_window_end(self) -> datetime:

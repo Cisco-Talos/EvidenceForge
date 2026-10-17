@@ -3410,6 +3410,11 @@ class BaselineMixin:
     def _use_server_admin_persona(self, system: Any, session: Any) -> bool:
         """Return whether this session should use the server-admin traffic overlay."""
 
+        if (
+            _get_os_category(getattr(system, "os", "")) == "macos"
+            and getattr(session, "session_kind", None) == "ssh"
+        ):
+            return True
         host_type = (getattr(system, "type", None) or "workstation").lower()
         assigned_user = getattr(system, "assigned_user", None)
         is_own_workstation = host_type == "workstation" and assigned_user == session.username

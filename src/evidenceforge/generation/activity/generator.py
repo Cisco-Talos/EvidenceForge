@@ -5626,7 +5626,7 @@ class ActivityGenerator:
         for item in pending:
             if type(item) is _SshCloseContinuation:
                 item.prepared.drain_receiver_startup(self)
-                if item.close_time > window_end:
+                if item.plan.authoritative_end_plan is not None or item.close_time > window_end:
                     continue
                 self._finalize_exact_ssh_close_continuation(item)
                 continue
@@ -15837,8 +15837,49 @@ class ActivityGenerator:
             raise StateError("Bundle-owned RDP logoff returned before exact session closure")
         return True
 
+    def _execute_macos_ssh_authored_logoff(self, request: LogoffRequest) -> bool:
+        """Consume one matching authored close through its retained SSH owner."""
+        from evidenceforge.generation.actions.ssh_session import _SshCloseContinuation
+
+        if _get_os_category(request.system.os) != "macos":
+            return False
+        with self._ssh_close_journal_lock:
+            matches = tuple(
+                item
+                for item in self._pending_ssh_session_closures
+                if type(item) is _SshCloseContinuation and item.plan.logon_id == request.logon_id
+            )
+        if not matches:
+            return False
+        if len(matches) != 1:
+            raise StateError("Mac SSH authored close has ambiguous continuation ownership")
+        continuation = matches[0]
+        plan = continuation.plan
+        if (
+            plan.authoritative_end_plan is None
+            or request.session_end_plan != plan.authoritative_end_plan
+            or not request.from_storyline
+            or ensure_utc(request.time) != plan.session_close_time
+            or request.user.username != plan.username
+            or request.system.hostname != plan.target_host.hostname
+            or request.system.ip != plan.target_host.ip
+        ):
+            raise StateError("Mac SSH logoff differs from its exact authored close owner")
+        session = self.state_manager.get_session(request.logon_id)
+        if session is not None and (
+            session.end_plan != plan.authoritative_end_plan
+            or session.ecar_object_id != plan.session_object_id
+            or session.system != plan.target_host.hostname
+            or session.username != plan.username
+        ):
+            raise StateError("Mac SSH authored close lost its live session end owner")
+        self._finalize_exact_ssh_close_continuation(continuation)
+        return True
+
     def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
         """Expand a logoff bundle through the compatibility adapter."""
+        if self._execute_macos_ssh_authored_logoff(request):
+            return
         pending_linux_sudo = self._claim_pending_linux_sudo_logoff(request)
         if pending_linux_sudo is not None:
             try:

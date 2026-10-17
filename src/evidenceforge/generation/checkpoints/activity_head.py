@@ -971,6 +971,11 @@ def _capture_ssh_lifecycles(generator: ActivityGenerator) -> list[list[object]]:
                 plan.source_tag,
                 list(completed_phases),
                 encode_state_value(continuation.transaction),
+                *(
+                    [encode_state_value(plan.authoritative_end_plan)]
+                    if plan.authoritative_end_plan is not None
+                    else []
+                ),
             ]
         )
     return rows
@@ -1362,7 +1367,7 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             continue
         if (
             type(row) is not list
-            or len(row) != 31
+            or len(row) not in {31, 32}
             or type(row[0]) is not str
             or not row[0]
             or row[0] in seen
@@ -1385,6 +1390,9 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             for value in times
         ):
             raise CheckpointCorruptionError("SSH checkpoint journal row changed type")
+        authoritative_end_plan = decode_state_value(row[31]) if len(row) == 32 else None
+        if len(row) == 32 and authoritative_end_plan is None:
+            raise CheckpointCorruptionError("SSH authored close journal lacks its end owner")
         plan = _PreparedSshClosePlan(
             continuation_id=row[0],
             username=row[1],
@@ -1415,6 +1423,7 @@ def _restore_ssh_lifecycles(generator: ActivityGenerator, rows: object) -> None:
             source_identity=source_identity,
             auth_state=auth_state,
             source_tag=row[28],
+            authoritative_end_plan=authoritative_end_plan,
         )
         capture = NetworkConnectionIdentityCapture()
         capture.publish(transaction, lifecycle_mode="deferred_session")

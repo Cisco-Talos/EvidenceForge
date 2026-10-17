@@ -9,7 +9,9 @@ from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
 
 
-def macos_ssh_scenario(scenarios_dir: Path, *, macos_receiver: bool = False) -> Scenario:
+def macos_ssh_scenario(
+    scenarios_dir: Path, *, macos_receiver: bool = False, authored_close: bool = False
+) -> Scenario:
     """Build existing authored intent without new platform configuration fields."""
     data = load_yaml(scenarios_dir / "minimal.yaml")
     data["generation_seed"] = 99
@@ -64,4 +66,17 @@ def macos_ssh_scenario(scenarios_dir: Path, *, macos_receiver: bool = False) -> 
         data["output"]["logs"] = [
             row for row in data["output"]["logs"] if row["format"] != "syslog"
         ]
+    if authored_close:
+        if not macos_receiver:
+            raise ValueError("Authored Mac receiver close requires a Mac receiver")
+        data["storyline"].append(
+            {
+                "id": "remote-close",
+                "time": "+30m",
+                "actor": "test_user",
+                "system": "SSH-TEST",
+                "activity": "Close the remote session at its authored deadline",
+                "events": [{"type": "logoff"}],
+            }
+        )
     return Scenario.model_validate(data)

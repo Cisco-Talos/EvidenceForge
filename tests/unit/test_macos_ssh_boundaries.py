@@ -89,7 +89,7 @@ def test_unqualified_mac_receiver_fails_before_executor_or_linux_shell_access() 
     assert executor.mock_calls == []
 
 
-@pytest.mark.parametrize("damage", ["architecture", "type", "account", "type10", "explicit-close"])
+@pytest.mark.parametrize("damage", ["architecture", "type", "account", "type10"])
 def test_mac_receiver_validation_exposes_bounded_profile(scenarios_dir: Path, damage: str) -> None:
     document = macos_ssh_scenario(scenarios_dir, macos_receiver=True).model_dump(mode="json")
     target = document["environment"]["systems"][1]
@@ -105,23 +105,17 @@ def test_mac_receiver_validation_exposes_bounded_profile(scenarios_dir: Path, da
             "logon_type": 10,
             "source_ip": "10.0.0.10",
         }
-    else:
-        document["storyline"].append(
-            {
-                "id": "remote-close",
-                "time": "+20m",
-                "actor": "test_user",
-                "system": "SSH-TEST",
-                "activity": "Close remote session",
-                "events": [{"type": "logoff"}],
-            }
-        )
     issues = ScenarioValidator(Scenario.model_validate(document)).validate()
     assert any(issue.severity == "error" and "Mac" in issue.message for issue in issues)
 
 
-def test_mac_receiver_validation_admits_existing_fields(scenarios_dir: Path) -> None:
-    issues = ScenarioValidator(macos_ssh_scenario(scenarios_dir, macos_receiver=True)).validate()
+@pytest.mark.parametrize("authored_close", [False, True])
+def test_mac_receiver_validation_admits_existing_fields(
+    scenarios_dir: Path, authored_close: bool
+) -> None:
+    issues = ScenarioValidator(
+        macos_ssh_scenario(scenarios_dir, macos_receiver=True, authored_close=authored_close)
+    ).validate()
     assert not [issue for issue in issues if issue.severity == "error"]
 
 

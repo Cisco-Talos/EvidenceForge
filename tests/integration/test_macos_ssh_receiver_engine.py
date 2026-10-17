@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.ssh_session import SshSessionActionBundle, SshSessionRequest
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.models.scenario import Scenario
@@ -19,7 +20,7 @@ from tests.support.macos_ssh import macos_ssh_scenario
 @pytest.mark.slow
 @pytest.mark.parametrize("platform", ["macos", "linux", "windows"])
 @pytest.mark.parametrize("collection", ["all", "network"])
-@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("deferred,authored", [(False, False), (True, False), (True, True)])
 def test_macos_receiver_implicit_client_real_engine(
     scenarios_dir: Path,
     tmp_path: Path,
@@ -27,6 +28,7 @@ def test_macos_receiver_implicit_client_real_engine(
     platform: str,
     collection: str,
     deferred: bool,
+    authored: bool,
 ) -> None:
     data = macos_ssh_scenario(scenarios_dir).model_dump(mode="json")
     data["environment"]["systems"][1].update(
@@ -70,6 +72,15 @@ def test_macos_receiver_implicit_client_real_engine(
                 duration=120,
                 emit_session_close=True,
                 defer_session_close=deferred,
+                session_end_plan=(
+                    SessionEndPlan(
+                        engine.start_time + timedelta(minutes=12),
+                        "explicit_storyline",
+                        "end-remote",
+                    )
+                    if authored
+                    else None
+                ),
             )
             uid, logon = SshSessionActionBundle(request, generator).execute_with_identity()
             assert uid and logon and len(clients) == 1 and clients[0] is not None
@@ -78,6 +89,16 @@ def test_macos_receiver_implicit_client_real_engine(
             assert engine.state_manager.get_session(source_logon) is not None
             assert (engine.state_manager.get_session(logon) is not None) == deferred
             generator.finalize_ssh_session_lifecycles(request.time + timedelta(minutes=5))
+            if authored:
+                assert engine.state_manager.get_session(logon) is not None
+                generator.generate_logoff(
+                    user,
+                    target,
+                    request.session_end_plan.canonical_end,
+                    logon,
+                    from_storyline=True,
+                    session_end_plan=request.session_end_plan,
+                )
             assert engine.state_manager.get_session(logon) is None
             assert generator.ssh_close_journal_census().total_pending == 0
             assert (

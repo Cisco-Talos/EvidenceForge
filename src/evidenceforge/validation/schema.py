@@ -3264,20 +3264,6 @@ class ScenarioValidator:
         if not self.scenario.storyline:
             return
 
-        # Follow the existing authored session pairing order. A local login after
-        # SSH may own a later logoff; do not reject that unrelated local closure.
-        pending: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
-        explicit_ssh_ends: set[tuple[int, int]] = set()
-        for idx, event in enumerate(self.scenario.storyline):
-            key = (event.actor, event.system)
-            for spec_idx, spec in enumerate(event.events):
-                if spec.type in {"ssh_session", "rdp_session", "logon"}:
-                    pending.setdefault(key, []).append((idx, spec_idx, spec.type))
-                elif spec.type == "logoff" and pending.get(key):
-                    start_idx, start_spec_idx, start_type = pending[key].pop()
-                    if start_type == "ssh_session":
-                        explicit_ssh_ends.add((start_idx, start_spec_idx))
-
         for idx, event in enumerate(self.scenario.storyline):
             system = self._get_system(event.system)
             if not system:
@@ -3314,11 +3300,6 @@ class ScenarioValidator:
                             limitation = (
                                 "Mac SSH receivers require an explicitly placed local user; "
                                 "use primary_system or assigned_user"
-                            )
-                        elif (idx, spec_idx) in explicit_ssh_ends:
-                            limitation = (
-                                "Mac SSH receivers currently require bundle-owned closure; "
-                                "an explicit paired logoff is not supported yet"
                             )
                     if limitation is not None:
                         self.issues.append(

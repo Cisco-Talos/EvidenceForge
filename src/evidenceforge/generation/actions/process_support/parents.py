@@ -119,7 +119,9 @@ class ProcessParentResolver:
             parent = self.state_manager.get_process(system.hostname, parent_pid)
             if parent is not None and (not parent.logon_id or parent.logon_id == logon_id):
                 return parent_pid
-        if logon_id and ".app/Contents/MacOS/" not in process_name:
+        session = self.state_manager.get_session(logon_id) if logon_id else None
+        ssh_session = session is not None and session.session_kind == "ssh"
+        if logon_id and (ssh_session or ".app/Contents/MacOS/" not in process_name):
             for process in self.state_manager.get_processes_for_session(logon_id):
                 if (
                     process.system == system.hostname
@@ -127,6 +129,8 @@ class ProcessParentResolver:
                     and self.queries._is_pid_active_at(system, process.pid, time)
                 ):
                     return process.pid
+        if ssh_session:
+            raise StateError("Mac SSH process creation requires its live session shell")
         init = self.state_manager.get_process(system.hostname, 1)
         if init is None or init.image != "/sbin/launchd" or init.start_time > time:
             raise StateError("Mac process creation requires its modeled launchd boot identity")

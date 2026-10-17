@@ -1,8 +1,8 @@
 # Invented identities only. Experimental macOS 26 arm64 canonical/eCAR profile.
-# No native SSH messages, paired authored logout or SCP/SFTP receiver helpers.
+# No native SSH messages or SCP/SFTP receiver helpers.
 version: '1.0'
 name: macos-ssh-workstations
-description: Experimental canonical Mac-to-Mac SSH with automatic receiver closure
+description: Experimental canonical Mac-to-Mac SSH with authored receiver closure
 environment:
   description: Two invented arm64 workstations on an observed network
   domain: example.test
@@ -75,11 +75,18 @@ storyline:
   time: +50m
   actor: alex
   system: MAC-02
-  activity: Connect to the second Mac; the bundle owns helper startup and automatic
-    close
+  activity: Connect to the second Mac; the bundle owns helper startup and the paired
+    authored close
   events:
   - type: ssh_session
     source_ip: 192.0.2.10
   - type: process
     process_name: /usr/bin/id
     command_line: /usr/bin/id
+- id: remote-close
+  time: +1h20m
+  actor: alex
+  system: MAC-02
+  activity: Close the remote session through its retained SSH lifecycle owner
+  events:
+  - type: logoff

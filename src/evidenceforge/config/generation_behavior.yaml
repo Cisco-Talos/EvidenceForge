@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 195
+current_revision: 196
 history_start_revision: 1
-behavior_surface_sha256: a46aa0b365deb15f22eb2058549914d61d387ea016cdafb7513bce9c3d5252c9
+behavior_surface_sha256: 778e18f5b24012d28fb98d323d62d6f1628f053964ffd2005c290030c0d1469a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1935,3 +1935,15 @@ changes:
       - ecar
       - zeek_conn
     summary: Admits explicitly placed local users on modeled arm64 Mac workstation SSH receivers through shared startup and bundle-owned close, selects actual receiver clock bounds, and prevents Linux shell bootstrap on Mac sessions.
+  - revision: 196
+    id: macos-ssh-authored-close-owner
+    impact: localized
+    domains:
+      - session-lifecycle
+      - process-lifecycle
+      - checkpoint-recovery
+      - scenario-validation
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Retains existing authored Mac SSH logout intent in the exact shared continuation through checkpoint restoration and recoverable terminal publication without changing Linux closure or authored configuration fields.
