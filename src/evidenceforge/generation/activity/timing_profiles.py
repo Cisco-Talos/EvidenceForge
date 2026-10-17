@@ -10,7 +10,7 @@ import random
 from collections.abc import Callable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import Enum
 from itertools import islice
 from threading import Condition, get_ident
@@ -3072,6 +3072,54 @@ def plan_ssh_authentication_timing(
         pam_gap_ms=pam_gap_ms,
         logind_gap_ms=logind_gap_ms,
     )
+
+
+def plan_macos_ssh_startup_times(
+    *,
+    connection_time: datetime,
+    authenticated_at: datetime,
+    session_open_time: datetime,
+    ready_at: datetime,
+    timing_runtime: _SshTimingRuntime,
+    scope: TimingScope,
+) -> tuple[datetime, ...]:
+    """Fit the fixed helper graph within the shared modeled SSH readiness budget.
+
+    The enclosing authentication budget is shared with SSH on other platforms;
+    using it does not assert PAM/logind behavior or empirical Mac calibration.
+    The ten variable transition delays use an ordinary overlayable relationship.
+    An incompatible overlay fails before admission rather than compressing stages.
+    """
+    key = "macos.ssh_receiver_stage"
+    window = get_timing_window(key, default_min_ms=0, default_max_ms=0, default_position="after")
+    if window.position != "after" or window.min_ms <= 0:
+        raise ValueError("Mac SSH receiver stage timing requires a positive after window")
+    planner = BaselineTimingPlanner(timing_runtime, source=scope.source)
+    phases: list[datetime] = []
+    current = connection_time
+    for ordinal in range(11):
+        if ordinal == 6:
+            if current >= authenticated_at:
+                raise ValueError("Mac SSH receiver stages exceed the authentication budget")
+            phases.append(authenticated_at)
+            current = session_open_time
+            continue
+        gap = planner.triangular_seconds(
+            relationship_key=key,
+            stable_id=scope.stable_id,
+            minimum=window.min_ms / 1000,
+            mode=window.min_ms / 1000,
+            maximum=window.max_ms / 1000,
+            host=scope.host,
+            lifecycle_id=scope.lifecycle_id,
+            ordinal=ordinal,
+            sample_key="receiver-stage",
+        )
+        current += timedelta(seconds=gap)
+        phases.append(current)
+    if current > ready_at:
+        raise ValueError("Mac SSH receiver stages exceed the shell-readiness budget")
+    return tuple(phases)
 
 
 def sample_ssh_authentication_phase_ms_compatibility(

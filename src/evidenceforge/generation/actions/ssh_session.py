@@ -57,7 +57,12 @@ from evidenceforge.events.dispatcher import (
     StateNeutralProjectionPublicationReceipt,
     StateNeutralProjectionPublicationResult,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+)
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
     ProcessLifecycleSnapshot,
@@ -78,6 +83,7 @@ from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.activity.timing_profiles import (
     SshAuthenticationTimingPlan,
     get_timing_window,
+    plan_macos_ssh_startup_times,
     plan_ssh_authentication_timing,
     ssh_authentication_timing_support,
     sysmon_envelope_timing,
@@ -2857,7 +2863,7 @@ class _PreparedDeferredSshOpen:
     receiver_plan: ProcessMaterializationPlan
     source_identity: ProcessIdentity | None
     source_session_object_id: str
-    auth_state: _SshLinuxAuthState
+    auth_state: _SshLinuxAuthState | _SshMacAuthState
     close_continuation: _PreparedSshCloseContinuation | None
 
 
@@ -3871,7 +3877,7 @@ class SshSessionActionBundle:
         session_plan: SessionMaterializationPlan,
         receiver_identity: ProcessIdentity,
         source_identity: ProcessIdentity | None,
-        auth_state: _SshLinuxAuthState,
+        auth_state: _SshLinuxAuthState | _SshMacAuthState,
     ) -> _PreparedSshClosePlan | None:
         """Freeze an action-owned close before the network owner may commit."""
 
@@ -3903,13 +3909,13 @@ class SshSessionActionBundle:
         if (
             type(event) is not OccurrenceBuilder
             or event.event_type != "ssh_session"
-            or event.timestamp != auth_state.pam_time
+            or event.timestamp != auth_state.receiver.session_open_time
             or type(event.auth) is not AuthContext
             or event.auth.username != self.request.user.username
             or event.auth.source_ip != self.request.source_ip
             or event.auth.source_port != state.source_port
             or event.auth.logon_id != session_plan.identity.logon_id
-            or event.auth.session_id != auth_state.logind_session_id
+            or event.auth.session_id != auth_state.receiver.session_id
             or type(event.dst_host) is not HostContext
             or event.dst_host.hostname != self.request.target_system.hostname
             or event.dst_host.ip != self.request.target_system.ip
@@ -3925,24 +3931,28 @@ class SshSessionActionBundle:
             username=self.request.user.username,
             source_ip=self.request.source_ip,
             source_port=state.source_port,
-            sshd_pid=auth_state.sshd_pid,
+            sshd_pid=auth_state.receiver.responder_pid,
             transport_close_time=transport_close_time,
         )
         receiver_terminate_time = _ssh_receiver_process_terminate_time(
             target_hostname=self.request.target_system.hostname,
             source_ip=self.request.source_ip,
             source_port=state.source_port,
-            sshd_pid=auth_state.sshd_pid,
+            sshd_pid=auth_state.receiver.responder_pid,
             receiver_started_at=receiver_identity.started_at,
             session_close_time=session_close_time,
         )
-        logind_remove_time = _ssh_logind_removed_time(
-            target_hostname=self.request.target_system.hostname,
-            username=self.request.user.username,
-            source_ip=self.request.source_ip,
-            source_port=state.source_port,
-            logind_session_id=auth_state.logind_session_id,
-            session_close_time=session_close_time,
+        logind_remove_time = (
+            None
+            if type(auth_state) is _SshMacAuthState
+            else _ssh_logind_removed_time(
+                target_hostname=self.request.target_system.hostname,
+                username=self.request.user.username,
+                source_ip=self.request.source_ip,
+                source_port=state.source_port,
+                logind_session_id=auth_state.receiver.session_id,
+                session_close_time=session_close_time,
+            )
         )
         source_terminate_time = (
             _ssh_source_process_terminate_time(
@@ -4009,6 +4019,11 @@ class SshSessionActionBundle:
     def _prepare_deferred_open(self, state: _SshTransportState) -> _PreparedDeferredSshOpen:
         """Prepare the exact SSH State/application/dependent handoff without mutation."""
 
+        from evidenceforge.generation.actions.macos_ssh_receiver import (
+            MacosSshReceiverStartupRequest,
+            resolve_macos_ssh_receiver_environment,
+        )
+
         request = self.request
         executor = self.executor
         timing_runtime = self._exact_deferred_timing_runtime()
@@ -4065,6 +4080,28 @@ class SshSessionActionBundle:
         ):
             raise StateError("Exact SSH session end cannot precede its transport close")
 
+        macos = _get_os_category(request.target_system.os) == "macos"
+        environment = None
+        phase_times: tuple[datetime, ...] = ()
+        if macos:
+            if not request.bundle_owns_close:
+                raise StateError("Mac SSH receiver requires bundle-owned session closure")
+            environment = resolve_macos_ssh_receiver_environment(
+                hostname=request.target_system.hostname,
+                username=request.user.username,
+                started_at=receiver_start,
+                state=executor.state_manager,
+                identities=executor.identity_directory,
+                deployment=executor.dispatcher.deployment_registry,
+            )
+            phase_times = plan_macos_ssh_startup_times(
+                connection_time=connection_time,
+                authenticated_at=accepted_time,
+                session_open_time=pam_time,
+                ready_at=logind_time,
+                timing_runtime=timing_preview,
+                scope=timing_scope,
+            )
         batch_builder = executor.state_manager.begin_materialization_batch()
         session_plan = batch_builder.plan_session(
             username=request.user.username,
@@ -4076,34 +4113,52 @@ class SshSessionActionBundle:
             start_time=session_start,
             lifecycle_group_id=execution_id,
             auth_protocol="ssh",
-            effective_uid=_linux_uid_for_user(request.user.username),
-            effective_gid=_linux_uid_for_user(request.user.username),
+            effective_uid=environment.account.uid
+            if environment
+            else _linux_uid_for_user(request.user.username),
+            effective_gid=environment.account.gid
+            if environment
+            else _linux_uid_for_user(request.user.username),
             network_close_time=state.close_time,
             source_ready_time=logind_time,
             closure_owned_by_bundle=request.bundle_owns_close,
             end_plan=request.session_end_plan,
         )
-        logind_rng = random.Random(
-            _stable_seed(
-                "ssh_deferred_logind:"
-                f"{request.target_system.hostname}:{request.user.username}:"
-                f"{request.source_ip}:{state.source_port}:{logind_time.isoformat()}"
+        if environment is not None:
+            session_plan = batch_builder.enrich_macos_audit_session(
+                session_plan,
+                audit_uid=environment.account.uid,
+                authenticated_at=accepted_time,
             )
-        )
-        session_plan = batch_builder.enrich_linux_logind_session(
-            session_plan,
-            rng=logind_rng,
-            event_time=logind_time,
-        )
-        receiver_parent_pid, receiver_parent_group = self._deferred_receiver_parent(receiver_start)
+            receiver_parent_pid = environment.parent.pid
+            receiver_parent_group = environment.parent.lifecycle_group_id
+        else:
+            logind_rng = random.Random(
+                _stable_seed(
+                    "ssh_deferred_logind:"
+                    f"{request.target_system.hostname}:{request.user.username}:"
+                    f"{request.source_ip}:{state.source_port}:{logind_time.isoformat()}"
+                )
+            )
+            session_plan = batch_builder.enrich_linux_logind_session(
+                session_plan,
+                rng=logind_rng,
+                event_time=logind_time,
+            )
+            receiver_parent_pid, receiver_parent_group = self._deferred_receiver_parent(
+                receiver_start
+            )
         receiver_plan = batch_builder.plan_process(
             system=request.target_system.hostname,
             parent_pid=receiver_parent_pid,
-            image="/usr/sbin/sshd",
-            command_line=f"sshd: {request.user.username} [priv]",
+            image=environment.wrapper.image_path if environment else "/usr/sbin/sshd",
+            command_line=environment.wrapper.command_templates[0]
+            if environment
+            else f"sshd: {request.user.username} [priv]",
             username="root",
             integrity_level="System",
-            os_category="linux",
+            os_category="macos" if environment else "linux",
+            credentials=PosixProcessCredentials(0, 0, 0, 0) if environment else None,
             logon_id=session_plan.identity.logon_id,
             lifecycle_group_id=stable_uuid(
                 "ssh-deferred-receiver-lifecycle",
@@ -4132,23 +4187,43 @@ class SshSessionActionBundle:
         source_session_object_id = (
             source_session_identity.object_id if source_session_identity is not None else ""
         )
-        auth_state = _SshLinuxAuthState(
-            receiver=SshReceiverAuthentication(
-                responder_pid=receiver_plan.identity.pid,
-                session_id=session_plan.identity.session_id,
-                connection_time=connection_time,
-                authenticated_at=accepted_time,
-                session_open_time=pam_time,
-                ready_at=logind_time,
-            ),
-            syslog_seed=(
-                request.target_system.hostname,
-                request.source_ip,
-                state.source_port,
-                receiver_plan.identity.pid,
-                request.time.isoformat(),
-            ),
+        authentication = SshReceiverAuthentication(
+            responder_pid=receiver_plan.identity.pid,
+            session_id=session_plan.identity.session_id,
+            connection_time=connection_time,
+            authenticated_at=accepted_time,
+            session_open_time=pam_time,
+            ready_at=logind_time,
         )
+        startup_request = None
+        auth_state: _SshLinuxAuthState | _SshMacAuthState
+        if environment is not None:
+            auth_state = _SshMacAuthState(
+                receiver=authentication,
+                initial_receiver_image=environment.wrapper.image_path,
+                receiver_image=environment.session_worker.image_path,
+            )
+            startup_request = MacosSshReceiverStartupRequest(
+                receiver=receiver_plan.identity,
+                service_account=environment.service_account,
+                wrapper=environment.wrapper,
+                daemon=environment.daemon,
+                session_worker=environment.session_worker,
+                authentication_worker=environment.authentication_worker,
+                shell=environment.shell,
+                phase_times=phase_times,
+            )
+        else:
+            auth_state = _SshLinuxAuthState(
+                receiver=authentication,
+                syslog_seed=(
+                    request.target_system.hostname,
+                    request.source_ip,
+                    state.source_port,
+                    receiver_plan.identity.pid,
+                    request.time.isoformat(),
+                ),
+            )
         close_plan = self._prepare_deferred_close_plan(
             state,
             session_plan=session_plan,
@@ -4160,6 +4235,7 @@ class SshSessionActionBundle:
         close_continuation = (
             _PreparedSshCloseContinuation(
                 plan=close_plan,
+                startup_request=startup_request,
                 identity_capture=identity_capture,
                 dispatcher_owner=executor.dispatcher,
                 ecar_owner=executor.dispatcher.emitters.get("ecar"),
@@ -4249,6 +4325,7 @@ class SshSessionActionBundle:
                 transport_open_time=open_time,
                 ready_at=logind_time,
                 receiver_bootstrap_headroom=receiver_start - open_time,
+                macos_startup_times=phase_times,
             ),
             ssh_timing_runtime=timing_runtime,
         )

@@ -71,6 +71,7 @@ from evidenceforge.generation.actions.network_identity import (
 from evidenceforge.generation.activity.timing_profiles import (
     SshAcceptedAuthenticationTiming,
     SshAuthenticationTimingPlan,
+    plan_macos_ssh_startup_times,
     plan_ssh_authentication_timing,
 )
 from evidenceforge.generation.deferred_session_composition import (
@@ -713,6 +714,7 @@ class DeferredSshTimingIntent:
     transport_open_time: datetime
     ready_at: datetime
     receiver_bootstrap_headroom: timedelta = timedelta(seconds=2)
+    macos_startup_times: tuple[datetime, ...] = ()
 
     def __post_init__(self) -> None:
         """Require bounded inert inputs and an internally consistent ready time."""
@@ -775,6 +777,20 @@ class DeferredSshTimingIntent:
         expected_ready = pam_at + timedelta(milliseconds=max(1.0, self.expected_plan.logind_gap_ms))
         if ready_at != expected_ready:
             raise ValueError("Deferred SSH timing preview changed its authentication ready time")
+        phases = self.macos_startup_times
+        if type(phases) is not tuple or (
+            phases
+            and (
+                len(phases) != 11
+                or any(type(at) is not datetime or at.utcoffset() is None for at in phases)
+                or phases[0] <= open_time + receiver_bootstrap_headroom
+                or phases[6] != accepted_at
+                or phases[7] <= pam_at
+                or phases[-1] > ready_at
+                or any(left >= right for left, right in zip(phases, phases[1:], strict=False))
+            )
+        ):
+            raise ValueError("Deferred Mac SSH timing changed its ordered startup phases")
         object.__setattr__(self, "auth_method", self.auth_method.strip())
         object.__setattr__(self, "public_key_type", self.public_key_type.strip())
         object.__setattr__(self, "transport_open_time", open_time)
@@ -805,6 +821,26 @@ class DeferredSshTimingIntent:
         )
         if type(replayed) is not SshAuthenticationTimingPlan or replayed != self.expected_plan:
             raise StateError("Deferred SSH timing replay disagrees with its previewed plan")
+        if self.macos_startup_times:
+            connection_time = (
+                self.transport_open_time
+                + self.receiver_bootstrap_headroom
+                + timedelta(milliseconds=max(1.0, replayed.connection_gap_ms))
+            )
+            accepted_at = connection_time + timedelta(
+                milliseconds=max(250.0, replayed.accepted_gap_ms)
+            )
+            replayed_phases = plan_macos_ssh_startup_times(
+                connection_time=connection_time,
+                authenticated_at=accepted_at,
+                session_open_time=accepted_at
+                + timedelta(milliseconds=max(1.0, replayed.pam_gap_ms)),
+                ready_at=self.ready_at,
+                timing_runtime=runtime,
+                scope=self.scope,
+            )
+            if replayed_phases != self.macos_startup_times:
+                raise StateError("Deferred Mac SSH timing replay disagrees with its startup plan")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1516,6 +1552,11 @@ class DeferredSessionNetworkAuthority:
             if timing_auth_method != application_intent.auth_method:
                 raise ValueError("Deferred SSH timing changed its application auth method")
             receiver_plan = self.state_batch.processes[0]
+            if bool(self.ssh_timing_intent.macos_startup_times) != (
+                session_plan.audit_origin is not None
+            ):
+                raise ValueError("Deferred SSH startup timing changed its receiver platform")
+
             if receiver_plan.identity.started_at != (
                 self.ssh_timing_intent.transport_open_time
                 + self.ssh_timing_intent.receiver_bootstrap_headroom

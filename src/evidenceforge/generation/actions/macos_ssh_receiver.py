@@ -31,10 +31,95 @@ from evidenceforge.generation.actions.posix_process import (
     process_exit_occurrence,
     process_fork_occurrence,
 )
-from evidenceforge.generation.deployment_registry import CompiledApplicationDescriptor
-from evidenceforge.generation.identity import MacAccount
+from evidenceforge.generation.deployment_registry import (
+    CompiledApplicationDescriptor,
+    DeploymentContentRegistry,
+)
+from evidenceforge.generation.identity import IdentityDirectory, MacAccount
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
+
+
+@dataclass(frozen=True, slots=True)
+class MacosSshReceiverEnvironment:
+    """Explicit local identities and effective compiled executables for one receiver."""
+
+    account: MacAccount
+    service_account: MacAccount
+    parent: ProcessIdentity
+    wrapper: CompiledApplicationDescriptor
+    daemon: CompiledApplicationDescriptor
+    session_worker: CompiledApplicationDescriptor
+    authentication_worker: CompiledApplicationDescriptor
+    shell: CompiledApplicationDescriptor
+
+
+def resolve_macos_ssh_receiver_environment(
+    *,
+    hostname: str,
+    username: str,
+    started_at: datetime,
+    state: StateManager,
+    identities: IdentityDirectory | None,
+    deployment: DeploymentContentRegistry | None,
+) -> MacosSshReceiverEnvironment:
+    """Resolve existing modeled owners without allocating identities or host I/O."""
+    if identities is None or deployment is None:
+        raise StateError("Mac SSH receiver requires modeled accounts and compiled applications")
+    account = identities.macos_account(username, hostname)
+    service = identities.macos_account("_sshd", hostname)
+    if (
+        account is None
+        or account.host != hostname
+        or account.logical_name != username
+        or account.scope != "local"
+        or account.uid <= 0
+        or account.gid < 0
+        or service is None
+        or service.host != hostname
+        or service.account_name != "_sshd"
+        or service.scope != "well_known"
+    ):
+        raise StateError("Mac SSH receiver requires an explicit local user and _sshd account")
+    # Match the existing account shell to a compiled native entry, without a
+    # basename guess, cross-platform fallback, or consulting the generator host.
+    shells = tuple(
+        descriptor
+        for application in ("macos-zsh", "macos-bash")
+        if (descriptor := deployment.application_descriptor(application, "macos")) is not None
+        and descriptor.image_path == account.shell
+    )
+    if len(shells) != 1:
+        raise StateError("Mac SSH receiver account shell requires a unique compiled zsh/bash entry")
+    applications: list[CompiledApplicationDescriptor] = []
+    for application in (
+        "macos-launchd",
+        "macos-sshd-keygen-wrapper",
+        "macos-sshd",
+        "macos-sshd-session",
+        "macos-sshd-auth",
+    ):
+        descriptor = deployment.application_descriptor(application, "macos")
+        if descriptor is None or descriptor.platform != "macos":
+            raise StateError(f"Mac SSH receiver requires compiled entry {application}")
+        applications.append(descriptor)
+    launchd, wrapper, daemon, worker, authentication = applications
+    parent = state.get_process_identity(hostname, 1)
+    running = state.get_process(hostname, 1)
+    if (
+        state._pid_os.get(hostname) != "macos"
+        or parent is None
+        or running is None
+        or parent.object_id != running.ecar_object_id
+        or parent.started_at > started_at
+        or parent.image != launchd.image_path
+        or parent.principal != "root"
+        or parent.credentials != PosixProcessCredentials(0, 0, 0, 0)
+    ):
+        raise StateError("Mac SSH receiver requires its live modeled launchd parent")
+    return MacosSshReceiverEnvironment(
+        account, service, parent, wrapper, daemon, worker, authentication, shells[0]
+    )
 
 
 @dataclass(frozen=True, slots=True)

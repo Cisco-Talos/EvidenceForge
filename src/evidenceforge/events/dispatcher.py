@@ -11033,6 +11033,21 @@ class EventDispatcher:
                     for prepared in owner.dispatches
                 )
             )
+            uncollected_mac_terminal = bool(
+                type(owner) is _PreparedDeferredSessionPublicationRecord
+                and owner.exact_recovery is record
+                and not owner.all_suppressed
+                and owner.prepared_target_proofs is record.target_proofs
+                and owner.prepared_identifiers is record.member_identifiers
+                and record.target_proofs == ()
+                and record.batch.commit_cursor == 0
+                and all(member == () for member in record.member_identifiers)
+                and self._is_macos_ssh_receiver_projection_cohort(owner.dispatches)
+                and all(
+                    not self._deferred_session_exact_target_slices(prepared._projection)
+                    for prepared in owner.dispatches
+                )
+            )
             positive_target_terminal = bool(
                 type(owner) is _PreparedDeferredSessionPublicationRecord
                 and owner.exact_recovery is record
@@ -11050,7 +11065,9 @@ class EventDispatcher:
                 and result.identifiers is record.member_identifiers
                 and receipt.occurrence_ids == record.occurrence_ids
                 and receipt.target_proof_digest == self._prepared_dispatch_owner_token
-                and (positive_target_terminal or all_suppressed_terminal)
+                and (
+                    positive_target_terminal or all_suppressed_terminal or uncollected_mac_terminal
+                )
                 and receipt.member_integrity_digest == record.member_integrity_digest
                 and len(outcomes) == len(record.occurrence_ids)
                 and len(record.member_identifiers) == len(record.occurrence_ids)
@@ -12048,6 +12065,36 @@ class EventDispatcher:
             identifiers_by_member.append(tuple(sorted(member_identifiers.items())))
         return tuple(identifiers_by_member), tuple(proofs)
 
+    @staticmethod
+    def _is_macos_ssh_receiver_projection_cohort(
+        dispatches: tuple[PreparedDispatch, ...],
+    ) -> bool:
+        """Recognize the already-authenticated transport/receiver/session cohort.
+
+        Root ownership and every dependent State member are validated before the
+        projection proof is built. This narrow arm permits collection omission;
+        any selected visible sink must still produce an authenticated positive row.
+        """
+        if len(dispatches) != 3:
+            return False
+        transport, process, session = (member._occurrence for member in dispatches)
+        host = session.dst_host
+        return bool(
+            transport.event_type is EventKind.CONNECTION
+            and process.event_type is EventKind.SYSTEM_PROCESS_CREATE
+            and session.event_type is EventKind.SSH_SESSION
+            and host is not None
+            and host.os_category == "macos"
+            and process.src_host is not None
+            and process.src_host.os_category == "macos"
+            and process.src_host.hostname == host.hostname
+            and transport.dst_host is not None
+            and transport.dst_host.hostname == host.hostname
+            and process.process is not None
+            and session.auth is not None
+            and process.process.logon_id == session.auth.logon_id
+        )
+
     def _validate_deferred_session_target_proofs(
         self,
         dispatches: tuple[PreparedDispatch, ...],
@@ -12097,7 +12144,11 @@ class EventDispatcher:
                 "Deferred-session exact projection target proof cardinality changed"
             )
         proven_members = {proof.member_ordinal for proof in proofs}
-        if proven_members != set(range(len(dispatches))):
+        macos_receiver = self._is_macos_ssh_receiver_projection_cohort(dispatches)
+        required_members = (
+            {target[0] for target in expected} if macos_receiver else set(range(len(dispatches)))
+        )
+        if proven_members != required_members:
             raise EventContractError(
                 "Deferred-session publication requires a positive exact target for every member"
             )
@@ -12242,8 +12293,10 @@ class EventDispatcher:
             ) in expected
             if member_ordinal == 0
         )
-        if any(member_ordinal > 0 for member_ordinal, *_rest in expected) and not (
-            transport_targets
+        if (
+            not macos_receiver
+            and any(member_ordinal > 0 for member_ordinal, *_rest in expected)
+            and not (transport_targets)
         ):
             raise EventContractError(
                 "Deferred-session visible dependents require exact transport evidence"
@@ -12275,6 +12328,8 @@ class EventDispatcher:
         )
         for proof in proofs:
             if proof.member_ordinal == 0 or proof.format_name != "ecar":
+                continue
+            if not transport_ecar_keys and macos_receiver:
                 continue
             if not transport_ecar_keys or min(proof.source_order_keys) <= max(transport_ecar_keys):
                 raise EventContractError(

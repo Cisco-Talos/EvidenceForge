@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 192
+current_revision: 193
 history_start_revision: 1
-behavior_surface_sha256: fb35de22b33b9aaaef57e6a7a9278c8b0137d91f5d2e3824435594ffbfa10b55
+behavior_surface_sha256: bdbbb42d242ce9dad712ee5d10fce213b3e210d8bea963e6d4a7c9aea87a20b5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1900,3 +1900,15 @@ changes:
     formats:
       - ecar
     summary: Retains Mac receiver startup on the exact SSH continuation through source failures, drains it before close or checkpoint, verifies restored canonical roles, and preserves canonical behavior with an originally absent endpoint sink.
+  - revision: 193
+    id: macos-ssh-receiver-preparation
+    impact: localized
+    domains:
+      - process-lifecycle
+      - session-lifecycle
+      - source-projection
+      - source-timing
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Prepares explicit Mac receiver accounts, catalog helpers and launchd ancestry with exact startup timing replay, retaining source omissions and zero-row recovery without changing existing Linux/RDP proof requirements.

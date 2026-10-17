@@ -194,6 +194,11 @@ relationships:
     min_ms: 12
     max_ms: 520
   # Modeled terminal readiness; not empirical native timing calibration.
+  macos.ssh_receiver_stage:
+    class: causal_prerequisite
+    position: after
+    min_ms: 1
+    max_ms: 20
   macos.terminal_stage_ready:
     class: human_workflow
     position: after
