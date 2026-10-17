@@ -43,3 +43,8 @@ original bytes. Decode and compare before writing YAML.
 
 Do not weaken poison-marker, reserved-host, containment, or authorization validation to make a
 payload pass.
+
+Mac `process_command_line` exposures use a family's `carriers.process_command_line_macos`
+or existing local POSIX commands. Do not infer a Linux tool installation on the Mac.
+Mac shell-history/syslog exposure surfaces remain unavailable; these events do not add native
+Endpoint Security or Unified Log coverage.

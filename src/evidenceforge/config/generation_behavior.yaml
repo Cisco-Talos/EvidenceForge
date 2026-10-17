@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 201
+current_revision: 202
 history_start_revision: 1
-behavior_surface_sha256: b586d3685c6cf853ac38c1eb24c9f0cf0d701a06a3a19080a88779aa2fd09a8f
+behavior_surface_sha256: b1356f4f365eeac97ab17ce94f28cdce5bca94d8a06de7bd9145653e250c13ea
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1989,3 +1989,11 @@ changes:
       - service-lifecycle
     formats: []
     summary: Adds an internal system-domain launchd bootstrap adapter reusing immutable installation identity, shared service state and existing checkpoint contracts without exposing authored persistence or native output.
+  - revision: 202
+    id: macos-process-exposure-carriers
+    impact: localized
+    domains:
+      - process-command-exposure
+    formats:
+      - ecar
+    summary: Uses explicit Mac carrier variants or existing local POSIX commands for credential and adversarial process exposures without inheriting Linux-specific tool installations or changing Windows/Linux rendering.

@@ -63,6 +63,11 @@ just presence. A family may instead declare a single `value_template` or literal
 | `dns_qname` | DNS query to the resolver (UDP/53) | `zeek_dns` (the payload **is** the query NAME; **requires a network sensor**) | LDH encoding into ≤63-byte labels under the non-resolving canary domain — a terse DGA-style directive; the echo-canary survives as a DNS-safe label |
 | `auth_user` | failed SSH logon (the attempted username) | `syslog` (`…/auth.log`: `Failed password for <user>`; **Linux-modeled**) | control-character escaping (a username must not corrupt the auth line) |
 
+Mac `process_command_line` uses `carriers.process_command_line_macos` when supplied,
+or the existing local POSIX `env` commands. A family's Linux tool path is not a Mac
+installation claim. This reuses the existing carrier dictionary and adds no scenario
+field or native ES/Unified Log family.
+
 `syslog_message` and `auth_user` are Linux-modeled; `process_command_line` and the
 `http_*` surfaces are cross-OS; `dns_qname` is cross-OS but **requires a network
 sensor emitting Zeek** (a host keeps no DNS log of its own, so without a sensor the

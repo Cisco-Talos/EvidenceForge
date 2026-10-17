@@ -662,6 +662,12 @@ def _choose_carrier(
         carriers = fam_carriers.get("process_command_line_windows") or list(
             _GENERIC_CARRIERS_WINDOWS["process_command_line"]
         )
+    elif surface == "process_command_line" and os_category == "macos":
+        # Family-specific Linux tool paths cannot imply Mac application availability.
+        # Reuse the existing local POSIX env carriers unless a Mac variant is provided.
+        carriers = fam_carriers.get("process_command_line_macos") or list(
+            _GENERIC_CARRIERS["process_command_line"]
+        )
     else:
         carriers = fam_carriers.get(surface) or list(_GENERIC_CARRIERS.get(surface, ("{value}",)))
     return rng.choice(sorted(carriers))

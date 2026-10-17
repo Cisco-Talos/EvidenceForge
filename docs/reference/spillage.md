@@ -55,7 +55,11 @@ the corpus is not a single memorizable string.
 `http_*` surfaces are cross-OS. For `process_command_line` the carrier is OS-aware:
 a Windows host renders a `cmd`/PowerShell/`.exe` command line (from a family's
 `process_command_line_windows` carriers, or a generic Windows fallback), never a
-Linux `/usr/bin` command — so the Windows 4688/eCAR record stays plausible. The
+Linux `/usr/bin` command — so the Windows 4688/eCAR record stays plausible.
+Mac hosts select a family's `process_command_line_macos` carrier or the existing
+local POSIX `env` commands; Linux-specific tool paths do not imply a Mac install.
+This is an optional key in the existing `carriers` dictionary, not a new scenario
+field. Mac shell-history/syslog spillage remains unavailable. The
 `http_*` surfaces model an outbound request **from the actor's host directly to a
 web server** — a host with `roles: [web_server]` must exist in the environment (a
 hard validation error otherwise), since the credential is recorded by that
