@@ -14,6 +14,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from evidenceforge.events.macos_logging import MacosUnifiedLogObservation
+
 type NativeUInt64 = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
 type NativeUInt32 = Annotated[int, Field(ge=0, le=(1 << 32) - 1)]
 type NativeImageUUID = Annotated[
@@ -143,3 +145,49 @@ def decode_unified_log_record(raw: str) -> UnifiedLogRecord | UnifiedLogCompleti
     if isinstance(value, dict) and "eventType" not in value and "finished" in value:
         return UnifiedLogCompletion.model_validate_json(raw)
     return UnifiedLogRecord.model_validate_json(raw)
+
+
+def project_unified_log_observation(
+    observation: MacosUnifiedLogObservation,
+    *,
+    wall_time: datetime,
+    timezone_name: str,
+) -> UnifiedLogRecord:
+    """Project owned native facts using the source planner's explicit wall time.
+
+    The caller owns clock skew, collection delay and output timezone selection.
+    Uptime, writer credentials and image identity remain the canonical snapshot.
+    No completion object or absent source/backtrace fields are synthesized.
+    """
+    if type(observation) is not MacosUnifiedLogObservation:
+        raise ValueError("Unified Log projection requires exact immutable observation facts")
+    if type(wall_time) is not datetime or wall_time.utcoffset() is None:
+        raise ValueError("Unified Log projection requires an aware source wall time")
+    writer = observation.writer
+    image = observation.binary.mach_o_image
+    credentials = writer.credentials
+    assert image is not None and credentials is not None
+    callsite = observation.callsite
+    return UnifiedLogRecord(
+        eventType="logEvent",
+        messageType=callsite.message_type,
+        timezoneName=timezone_name,
+        timestamp=wall_time.strftime("%Y-%m-%d %H:%M:%S.%f%z"),
+        machTimestamp=observation.mach_timestamp,
+        bootUUID=observation.boot_uuid,
+        processID=writer.pid,
+        userID=credentials.effective_uid,
+        threadID=observation.thread.tid,
+        processImagePath=writer.image,
+        processImageUUID=image.build_uuid,
+        senderImagePath=writer.image,
+        senderImageUUID=image.build_uuid,
+        senderProgramCounter=callsite.program_counter,
+        activityIdentifier=0,
+        parentActivityIdentifier=0,
+        traceID=callsite.trace_id,
+        subsystem=callsite.subsystem,
+        category=callsite.category,
+        formatString=callsite.format_string,
+        eventMessage=observation.message,
+    )

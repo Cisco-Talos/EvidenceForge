@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 197
+current_revision: 198
 history_start_revision: 1
-behavior_surface_sha256: 70eb5a1ce4f50b777d1a3956246e3ba6755136cd68df3d681475663bf332027e
+behavior_surface_sha256: c930db72171bfbb763fc73651f08fd85054e6c5494dcbc9a44ae245d59f66002
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1955,3 +1955,10 @@ changes:
       - application-catalog
     formats: []
     summary: Compiles explicit arm64 Mach-O main-executable metadata into release-scoped image UUIDs while preserving unknown format, helper isolation and existing catalog inputs.
+  - revision: 198
+    id: canonical-macos-unified-log-writer
+    impact: none
+    domains:
+      - native-source-projection
+    formats: []
+    summary: Adds allocation-free native Unified Log writer preparation and immutable projection contracts without registering a new generation source or changing existing emitted evidence.

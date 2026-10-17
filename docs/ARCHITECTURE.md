@@ -1036,6 +1036,8 @@ EvaluationEngine
 
 Native Mac exports have explicit `native_codec` validation routes to the nested versioned wire models. Their bounded NDJSON readers preserve source-native fields and directory provenance; valid Unified Log completion markers do not become evidence records. These ingestion routes are independent of generator source admission. Unsupported native families fail structure checks; missing native correlation/diagnostic rules remain unavailable rather than being represented by a flat template schema.
 
+`generation/macos_logging.py` prepares an immutable Unified Log writer snapshot from the exact active process execution, primary thread, deployed native image and registered boot clock. The source view keeps service credentials separate from the subject session and survives later process exit/PID reuse without another State lookup. `events/macos_logging.py` validates the bounded static main-image callsite and native tracepoint encoding; the format projector only serializes supplied facts and the source planner’s wall time. This internal boundary does not yet register generation or provide a GUI lifecycle template.
+
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:
 
 Snort finalization incrementally builds a bounded `ids_evaluation` contract in
