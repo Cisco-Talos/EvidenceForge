@@ -219,6 +219,8 @@ disk:
     bash_history: {bytes_per_host_second: 2.0, system_scope: posix}
     # Provisional zsh estimate follows Bash sizing; not empirical Mac calibration.
     zsh_history: {bytes_per_host_second: 2.0, system_scope: macos}
+    # Provisional sizing allowance for workspace entry only, not an empirical ULS rate.
+    macos_unified_log: {bytes_per_host_second: 2.0, system_scope: macos}
     snort_alert: {bytes_per_host_second: 0.5, system_scope: all}
     cisco_asa: {bytes_per_host_second: 1.0, system_scope: all}
     web_access: {bytes_per_host_second: 10.0, system_scope: "role:web_server"}

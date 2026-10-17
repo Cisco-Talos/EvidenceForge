@@ -148,7 +148,14 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
     for case, field, mode in MUTATIONS:
         name = case["format"]
         raw = rendered[(name, case.get("variant"))]
-        path = tmp_path / (name + (".xml" if name.startswith("windows_") else ".json"))
+        extension = (
+            ".xml"
+            if name.startswith("windows_")
+            else ".ndjson"
+            if name == "macos_unified_log"
+            else ".json"
+        )
+        path = tmp_path / (name + extension)
         with path.open("a") as stream:
             stream.write(mutate_native(raw, name, field, mode) + "\n")
         expected[name] = expected.get(name, 0) + 1
@@ -157,7 +164,8 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         obj = json.loads(rendered[(name, case.get("variant"))])
         container = obj["properties"] if name == "ecar" and field.name not in obj else obj
         container[field.name] = {"wrong": "type"}
-        with (tmp_path / (name + ".json")).open("a") as stream:
+        extension = ".ndjson" if name == "macos_unified_log" else ".json"
+        with (tmp_path / (name + extension)).open("a") as stream:
             stream.write(json.dumps(obj) + "\n")
         expected[name] = expected.get(name, 0) + 1
     for name in (
@@ -177,7 +185,7 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         )
         path.write_text(raw + "\n")
         expected[name] = len(list(get_parser(name).parse_file(path)))
-    assert len(expected) == 25
+    assert len(expected) == 26
     result = CliRunner().invoke(
         app,
         [

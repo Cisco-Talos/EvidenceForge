@@ -24,7 +24,11 @@ FIXTURES = Path(__file__).parents[1] / "fixtures"
 def test_every_parser_schema_and_emitter_has_an_owner() -> None:
     routes.validate_route_inventory()
     native = {r.validator for r in routes.VALIDATION_ROUTES if r.kind == "native"}
-    assert native == set(load_all_formats()) == set(_build_emitter_classes())
+    # Registered codec-backed emitters retain the stricter native codec owner.
+    emitted_codecs = {"macos_unified_log"}
+    assert native | emitted_codecs == set(load_all_formats()) == set(_build_emitter_classes())
+    for source in emitted_codecs:
+        assert routes.get_validation_route(source).kind == "native_codec"
     for definition in load_all_formats().values():
         for template in (
             definition.output.template,
@@ -143,45 +147,18 @@ RECORD_CASES = sum(
 
 @pytest.mark.parametrize("case", RECORD_CASES, ids=lambda c: c.get("variant", c["format"]))
 def test_native_render_parse_validate_roundtrip(tmp_path: Path, case: dict) -> None:
-    from datetime import UTC, datetime
-
     from evidenceforge.formats.loader import load_format
+    from tests.support.native_records import render_record
 
     name = case["format"]
     definition = load_format(name)
-    fields = dict(case["fields"])
-    for key in ("timestamp", "TimeCreated", "ts"):
-        if isinstance(fields.get(key), str):
-            fields[key] = datetime.fromisoformat(fields[key].replace("Z", "+00:00"))
-    if name == "ecar":
-        fields["timestamp"] = fields.pop("timestamp_ms") / 1000
-    if name in {"snort_alert", "proxy_access", "web_access", "bash_history", "zsh_history"}:
-        if isinstance(fields.get("timestamp"), (int, float)):
-            fields["timestamp"] = datetime.fromtimestamp(fields["timestamp"], UTC)
-    if name == "proxy_access":
-        fields.update(method="GET", url="http://example/", protocol="HTTP/1.1", sc_bytes=1)
-    if name == "zeek_smb_files":
-        for key in ("size", "prev_name", "fuid"):
-            fields.setdefault(key, None)
-    if case.get("variant") == "process_creation":
-        fields.setdefault("TargetUserSid", "S-1-0-0")
+    raw = render_record(tmp_path, case)
     path = tmp_path / (name + definition.output.file_extension)
-    emitter = _build_emitter_classes()[name](definition, path, threaded=False)
-    try:
-        raw = (
-            emitter._prepare_event(fields)["rendered"]
-            if name in {"bash_history", "zsh_history"}
-            else emitter._render_alert(fields)
-            if name == "snort_alert"
-            else emitter._render_event(fields)
-        )
-        path.write_text(raw + "\n")
-        records = list(get_parser(name).parse_file(path))
-        assert len(records) == 1
-        schema, constraints = ParseabilityScorer()._score_both({name: records})
-        assert schema.score == constraints.score == 100, (schema, constraints, raw)
-    finally:
-        emitter.close()
+    path.write_text(raw + "\n")
+    records = list(get_parser(name).parse_file(path))
+    assert len(records) == 1
+    schema, constraints = ParseabilityScorer()._score_both({name: records})
+    assert schema.score == constraints.score == 100, (schema, constraints, raw)
 
 
 def test_mixed_native_email_bundle_retains_cross_source_checks() -> None:

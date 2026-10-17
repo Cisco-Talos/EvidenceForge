@@ -435,5 +435,39 @@
       "hostname": "MAC-TEST.example.test",
       "command": "/opt/homebrew/bin/git status"
     }
+  },
+  {
+    "format": "macos_unified_log",
+    "fields": {
+      "eventType": "logEvent",
+      "messageType": "Default",
+      "timezoneName": "",
+      "timestamp": "2026-10-19 14:00:00.123456+0000",
+      "machTimestamp": 24000000,
+      "bootUUID": "11111111-2222-3333-4444-555555555555",
+      "processID": 702,
+      "userID": 501,
+      "threadID": 4107,
+      "processImagePath": "/Applications/Example.app/Contents/MacOS/Example",
+      "processImageUUID": "22222222-3333-4444-5555-666666666666",
+      "senderImagePath": "/Applications/Example.app/Contents/MacOS/Example",
+      "senderImageUUID": "22222222-3333-4444-5555-666666666666",
+      "senderProgramCounter": 1024,
+      "activityIdentifier": 0,
+      "parentActivityIdentifier": 0,
+      "traceID": 123456789,
+      "subsystem": "org.example.synthetic",
+      "category": "contract-test",
+      "formatString": "Example value: %{private}s",
+      "eventMessage": "Example value: <private>",
+      "backtrace": {
+        "frames": [
+          {
+            "imageOffset": 1024,
+            "imageUUID": "22222222-3333-4444-5555-666666666666"
+          }
+        ]
+      }
+    }
   }
 ]

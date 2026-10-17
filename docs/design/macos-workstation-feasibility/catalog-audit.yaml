@@ -239,10 +239,12 @@ applications:
   architecture_reference: https://www.citrix.com/blogs/2022/10/25/native-support-for-citrix-workspace-app-on-macs-with-apple-silicon-m1-series/
   boundary: Native arm64 application launch and generic HTTPS relationship. Universal package snapshot supplies release identity. HDX sessions, helpers, authentication and updater lifecycle are not inferred from launch.
 - id: cisco_secure_client
-  availability: unresolved
-  variant: unavailable
+  availability: supported
+  variant: prefilled
   reference: https://www.cisco.com/c/en/us/td/docs/security/vpn_client/anyconnect/Cisco-Secure-Client-5/release/notes/release-notes-cisco-secure-client-5-1.html
-  boundary: Vendor release notes establish macOS 26 support from 5.1.12.146. Exact native arm64 GUI executable and module-specific build/helper contracts remain unresolved; no Mac variant is admitted.
+  executable_reference: https://macadmin.fraserhess.com/2025/11/22/packaging-changes-in-cisco-secure-client-5-1-13/
+  architecture_reference: https://community.cisco.com/t5/cisco-software-discussions/apple-silicon-version-of-cisco-anyconnect-secure-mobility-client/td-p/5548787
+  boundary: Native arm64 GUI launch only. Vendor release notes distinguish UI 5.1.16.1663 from VPN core 5.1.16.194 and establish macOS 26 support. Firsthand package and architecture reports corroborate the executable and arm64 UI. Model availability is the review date, not the release date. VPN tunnels, authentication, helpers, signing, updates and native telemetry remain unmodeled.
 - id: globalprotect
   availability: supported
   variant: prefilled

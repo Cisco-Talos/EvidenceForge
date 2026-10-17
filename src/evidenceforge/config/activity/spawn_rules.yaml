@@ -492,6 +492,7 @@ macos:
       - Google Drive
       - AdobeAcrobat
       - Webex
+      - Cisco Secure Client
       - GlobalProtect
       - Tableau
   Terminal:
@@ -764,5 +765,9 @@ macos:
   Tableau:
     command_templates:
     - '"/Applications/Tableau Desktop 2026.1.app/Contents/MacOS/Tableau"'
+    lifetime: long
+    children: []
+  Cisco Secure Client:
+    command_templates: ['"/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"']
     lifetime: long
     children: []

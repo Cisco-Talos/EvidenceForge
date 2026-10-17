@@ -3,6 +3,7 @@
 
 """Production rendering boundary for validation fixtures."""
 
+import json
 from pathlib import Path
 
 from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
@@ -17,8 +18,14 @@ def render_record(tmp_path: Path, case: dict) -> str:
     definition = load_format(name)
     fields = dict(case["fields"])
     for key in ("timestamp", "TimeCreated", "ts"):
-        if isinstance(fields.get(key), str):
+        if name != "macos_unified_log" and isinstance(fields.get(key), str):
             fields[key] = datetime.fromisoformat(fields[key].replace("Z", "+00:00"))
+    if name == "macos_unified_log":
+        from evidenceforge.formats.macos_unified_log import UnifiedLogRecord
+
+        fields = {
+            "native_json": UnifiedLogRecord.model_validate_json(json.dumps(fields)).to_ndjson()
+        }
     if name == "ecar":
         fields["timestamp"] = fields.pop("timestamp_ms") / 1000
     if name in {"snort_alert", "proxy_access", "web_access", "bash_history", "zsh_history"}:

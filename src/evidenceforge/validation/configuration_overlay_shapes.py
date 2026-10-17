@@ -31,7 +31,7 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
         "dict_fields": {"role_traffic", "persona_traffic"},
     },
     "activity/spawn_rules.yaml": {
-        "dict_fields": {"windows", "linux"},
+        "dict_fields": {"windows", "linux", "macos"},
     },
     "activity/proxy_uri_templates.yaml": {
         "dict_fields": {"domains", "tags", "generic"},

@@ -1878,6 +1878,18 @@ applications:
             release_policy: host_build
           - path: 'C:\Windows\System32\ws2_32.dll'
             release_policy: host_build
+      macos:
+        available_from: "2026-10-16"
+        image_path: "/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"
+        deployment:
+          kind: managed
+          product_id: cisco-secure-client-ui
+          version: "5.1.16"
+          build: "1663"
+          scope: machine
+          architectures: [arm64]
+        command_templates:
+          - '"/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"'
     categories: [user_app]
     personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, help_desk, default]
     system_types: [workstation]

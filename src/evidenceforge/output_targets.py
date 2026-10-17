@@ -129,6 +129,12 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "extended_incremental",
         notes="Experimental native history text; SIEM ingestion is not validated.",
     ),
+    "macos_unified_log": TargetFormatPolicy(
+        "macos_unified_log",
+        "ndjson",
+        "ndjson",
+        notes="Experimental workspace-entry export; external SIEM ingestion is not validated.",
+    ),
     "snort_alert": TargetFormatPolicy("snort_alert", "fast_alert", "fast_alert"),
     "cisco_asa": TargetFormatPolicy(
         "cisco_asa",

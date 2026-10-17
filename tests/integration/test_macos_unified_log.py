@@ -37,10 +37,12 @@ def test_native_workspace_generation_is_deterministic_filtered_and_mac_local(
     scenario = tmp_path / "scenario.yaml"
     scenario.write_text(yaml.safe_dump(data, sort_keys=False))
     outputs: list[dict[str, bytes]] = []
-    for label, seed, formats in [
-        ("all", "17", ""),
-        ("repeat", "91", ""),
-        ("native", "6", "macos_unified_log"),
+    for label, seed, formats, target in [
+        ("all", "17", "", "default"),
+        ("repeat", "91", "", "default"),
+        ("native", "6", "macos_unified_log", "default"),
+        ("native-sof", "8", "macos_unified_log", "sof-elk"),
+        ("native-splunk", "9", "macos_unified_log", "splunk"),
     ]:
         output = tmp_path / label
         arguments = [
@@ -53,6 +55,8 @@ def test_native_workspace_generation_is_deterministic_filtered_and_mac_local(
             str(output),
             "--seed",
             "123",
+            "--target",
+            target,
             "--checkpoint-hours",
             "0",
             "--project-root",
@@ -77,11 +81,13 @@ def test_native_workspace_generation_is_deterministic_filtered_and_mac_local(
         if name.endswith("macos_unified_log.ndjson")
     }
     assert len(native) == 1 and all("MAC-01." in name for name in native)
-    assert native == {
-        name: value
-        for name, value in outputs[2].items()
-        if name.endswith("macos_unified_log.ndjson")
-    }
+    # Targets preserve native bytes; this is not an external ingestion claim.
+    for filtered in outputs[2:]:
+        assert native == {
+            name: value
+            for name, value in filtered.items()
+            if name.endswith("macos_unified_log.ndjson")
+        }
     records = [
         decode_unified_log_record(line)
         for content in native.values()
