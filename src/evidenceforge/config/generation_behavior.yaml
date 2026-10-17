@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 207
+current_revision: 208
 history_start_revision: 1
-behavior_surface_sha256: e879579f807404b7e1573a1514a69969e62f72295edcb95fc15c4b189a768edd
+behavior_surface_sha256: 3d62c07fb893a71c8814d1f51216874d550d7dd804ca0947a7422f2febf8016a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2039,3 +2039,11 @@ changes:
       - process-file-effects
     formats: []
     summary: Prepares bounded job-definition writes through existing atomic process-owned file effects while preserving loaded-job separation, collection independence and rollback without enabling authored persistence or native messages.
+  - revision: 208
+    id: macos-launchd-unload-completion
+    impact: none
+    domains:
+      - service-lifecycle
+      - process-lifecycle
+    formats: []
+    summary: Prepares terminal unload for dormant or single-process Mac system jobs through shared closure owners, retaining file state and rejecting unsupported child-process group inference without enabling native or authored persistence.

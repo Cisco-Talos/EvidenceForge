@@ -10,10 +10,13 @@ occurrences before this boundary is exposed to scenario authoring.
 """
 
 import shlex
+from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
 from evidenceforge.events.lifecycle import (
+    LifecycleCloseBarrier,
+    LifecycleEntityRef,
     LogicalServiceIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceProcessBindingIdentity,
@@ -39,9 +42,18 @@ from evidenceforge.generation.lifecycle_production_adapters import (
     ServiceLifecyclePublicationPlan,
     service_boot_id,
 )
-from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.lifecycle_registry import (
+    LifecycleRegistry,
+    LifecycleServiceProcessBindingClosure,
+    LifecycleServiceProcessClosureRequest,
+    LifecycleSubjectClosureControl,
+)
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
-from evidenceforge.generation.state_manager import ProcessMaterializationPlan
+from evidenceforge.generation.state_manager import (
+    ProcessMaterializationPlan,
+    ProcessTerminationMaterializationPlan,
+    StateManager,
+)
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
 from evidenceforge.utils.time import ensure_utc
@@ -304,5 +316,100 @@ def macos_system_job_activation_plan(
         process_bindings=(binding,),
         staged_process_bindings=(
             lifecycle_authority.service_staged_process_binding_member(process_plan, binding),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MacosSystemJobUnloadPlan:
+    """Explicit terminal unload closure, separate from its request and file removal."""
+
+    closure: LifecycleServiceProcessClosureRequest
+    process: ProcessTerminationMaterializationPlan | None = None
+
+
+def macos_system_job_unload_completion_plan(
+    *,
+    lifecycle_registry: LifecycleRegistry,
+    state_manager: StateManager,
+    service_object_id: str,
+    completed_at: datetime,
+    action_id: str,
+) -> MacosSystemJobUnloadPlan:
+    """Prepare a dormant or single-process job's terminal unload transition.
+
+    The caller owns the completed outcome and its timing. This adapter does not
+    infer SIGTERM delivery, process groups, escalation delays or native messages.
+    A process-bearing plan must use the shared process/service closure composite;
+    a dormant plan uses the ordinary prepared service closure. Child processes
+    require a separate supported group/lifecycle owner and are rejected here.
+    """
+    if not action_id or action_id != action_id.strip():
+        raise ValueError("Launchd unload requires an exact action ID")
+    completed_at = ensure_utc(completed_at)
+    snapshot = lifecycle_registry.get_service_instance(service_object_id)
+    if snapshot is None or snapshot.identity.launchd_job is None:
+        raise StateError("Launchd unload requires a retained loaded system job")
+    if snapshot.closed_at is not None or snapshot.close_barrier is not None:
+        raise StateError("Launchd unload requires a live job without another close intent")
+    if completed_at < snapshot.identity.started_at:
+        raise StateError("Launchd unload cannot precede bootstrap")
+
+    def control(subject: LifecycleEntityRef) -> LifecycleSubjectClosureControl:
+        return LifecycleSubjectClosureControl(
+            barrier=LifecycleCloseBarrier(
+                barrier_id=stable_uuid(
+                    "macos-launchd-unload-barrier", action_id, subject.kind, subject.object_id
+                ),
+                subject=subject,
+                requested_at=completed_at,
+                authority="generated",
+                action_id=action_id,
+            ),
+            ticket_id=stable_uuid(
+                "macos-launchd-unload-ticket", action_id, subject.kind, subject.object_id
+            ),
+        )
+
+    bindings, more = lifecycle_registry.service_process_binding_page(
+        service_object_id=service_object_id, limit=2
+    )
+    if more is not None or len(bindings) > 1:
+        raise StateError("Launchd unload profile requires at most one active job process")
+    service_close = control(snapshot.identity.ref)
+    if not bindings:
+        return MacosSystemJobUnloadPlan(
+            closure=LifecycleServiceProcessClosureRequest(
+                binding_closures=(), service_closures=(service_close,)
+            )
+        )
+    binding = bindings[0].identity
+    process_snapshot = lifecycle_registry.get_process(binding.process_object_id)
+    if process_snapshot is None or process_snapshot.closed_at is not None:
+        raise StateError("Launchd unload requires its exact live bound process")
+    children, more_children = lifecycle_registry.live_child_process_page(
+        binding.process_object_id, limit=1
+    )
+    if children or more_children is not None:
+        raise StateError("Launchd unload of child processes requires process-group ownership")
+    process = state_manager.plan_process_termination_materialization(
+        system=snapshot.identity.hostname,
+        pid=process_snapshot.identity.pid,
+        end_time=completed_at,
+    )
+    if process.identity.object_id != binding.process_object_id:
+        raise StateError("Launchd unload cannot substitute a reused process ID")
+    if completed_at < binding.bound_at:
+        raise StateError("Launchd unload cannot precede process activation")
+    return MacosSystemJobUnloadPlan(
+        process=process,
+        closure=LifecycleServiceProcessClosureRequest(
+            binding_closures=(
+                LifecycleServiceProcessBindingClosure(
+                    identity=binding, closed_at=completed_at, action_id=action_id
+                ),
+            ),
+            process_closures=(control(process_snapshot.identity.ref),),
+            service_closures=(service_close,),
         ),
     )
