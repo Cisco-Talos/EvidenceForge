@@ -3365,6 +3365,16 @@ class _LifecyclePartition:
             raise StateError("Service/process binding service is not active")
         if service_barrier is not None:
             raise StateError("Service/process binding service already accepted a close barrier")
+        if service_identity.launchd_job is not None:
+            aggregate = self._service_processes_by_service.get(identity.service_object_id)
+            if aggregate is not None and aggregate.unclosed:
+                raise StateError("Loaded launchd job already has an active process binding")
+            if (
+                aggregate is not None
+                and aggregate.latest_closed_at is not None
+                and aggregate.latest_closed_at > identity.bound_at
+            ):
+                raise StateError("Launchd activation cannot overlap its preceding process binding")
         if not process_active:
             raise StateError("Service/process binding process is not active")
         if process_barrier is not None:
@@ -7491,6 +7501,8 @@ class LifecycleServicePublicationRequest:
             raise ValueError("Logical service and instance hosts must match")
         if self.logical_identity.logical_service_id != self.identity.logical_service_id:
             raise ValueError("Logical service and instance IDs must match")
+        if self.identity.launchd_job is not None and len(self.process_bindings) > 1:
+            raise ValueError("Loaded launchd job publication admits only one process binding")
         binding_ids = [binding.binding_id for binding in self.process_bindings]
         process_ids = [binding.process_object_id for binding in self.process_bindings]
         if len(set(binding_ids)) != len(binding_ids):

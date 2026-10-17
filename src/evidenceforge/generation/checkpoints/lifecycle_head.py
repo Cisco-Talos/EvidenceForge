@@ -1734,7 +1734,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
     transport_ids = {snapshot.identity.object_id for snapshot in transports}
     for partition_id, binding in sorted(
         service_bindings,
-        key=lambda item: item[1].identity.binding_id,
+        key=lambda item: (item[1].identity.bound_at, item[1].identity.binding_id),
     ):
         identity = binding.identity
         if (

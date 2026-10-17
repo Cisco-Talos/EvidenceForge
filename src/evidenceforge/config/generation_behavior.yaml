@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 203
+current_revision: 204
 history_start_revision: 1
-behavior_surface_sha256: e5f741b81ed2dd6f701d0d4714b1a8cdab6c66297696a567587fa54ddf13ecdc
+behavior_surface_sha256: e6c992efa0af3e54d001e96fd34daeb80a9572802e6319528e2732eaedb4e7cc
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2005,3 +2005,11 @@ changes:
       - checkpoint-restoration
     formats: []
     summary: Retains loaded system-job definitions on shared runtime service instances and restores sequential service intervals with explicit legacy checkpoint compatibility, without enabling authored persistence or changing existing evidence.
+  - revision: 204
+    id: macos-launchd-process-activation
+    impact: none
+    domains:
+      - service-lifecycle
+      - checkpoint-restoration
+    formats: []
+    summary: Prepares explicit root system-job activations through the shared atomic process/service contract, rejects overlapping job processes and preserves binding chronology during recovery without enabling authored persistence or native messages.
