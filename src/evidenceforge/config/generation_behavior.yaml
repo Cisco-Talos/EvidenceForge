@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 205
+current_revision: 206
 history_start_revision: 1
-behavior_surface_sha256: 8ac43a5825ce31b2659e0455d5a3b4829e1d2710a7160584e9cac83af4950756
+behavior_surface_sha256: ed7ae2bd14b720ab1afe7f2b0cd9f606ca4879b3aed1e3f73fbc6e69e1b8ee30
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2022,3 +2022,12 @@ changes:
       - checkpoint-restoration
     formats: []
     summary: Retains bounded launchd specs on canonical Mac file versions, restores legacy artifact heads and keeps retained facts stable across seed contexts without emitting filesystem artifacts.
+  - revision: 206
+    id: local-artifact-placement-withdrawal
+    impact: none
+    domains:
+      - file-content-identity
+      - service-lifecycle
+      - checkpoint-restoration
+    formats: []
+    summary: Removes retained local placements independently of immutable content and loaded jobs, prevents older-version resurrection, and restores compatible artifact heads without enabling authored persistence or native messages.

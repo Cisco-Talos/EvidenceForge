@@ -19,6 +19,7 @@ from evidenceforge.generation.lifecycle_production_adapters import (
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import ProcessMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
 from tests.unit.test_lifecycle_service_preparation import _publish
@@ -26,7 +27,9 @@ from tests.unit.test_macos_launch_registration import _START, _plan
 from tests.unit.test_process_service_lifecycle_authority import _closure_request
 
 
-def _setup() -> tuple[
+def _setup(
+    runtime_content: RuntimeContentIdentityManager | None = None,
+) -> tuple[
     StateManager,
     LifecycleRegistry,
     GeneratorLifecycleAuthority,
@@ -53,7 +56,7 @@ def _setup() -> tuple[
         credentials=PosixProcessCredentials(0, 0, 0, 0),
     )
     authority.materialize_process(parent)
-    job = _plan()
+    job = _plan(**({"runtime_content": runtime_content} if runtime_content is not None else {}))
     _publish(adapter, job)
     state.set_current_time(_START + timedelta(seconds=1))
     return state, registry, authority, adapter, job

@@ -3611,6 +3611,7 @@ class _PackedArtifactStore:
 
     __slots__ = (
         "_active",
+        "_withdrawn",
         "_application_profile_index",
         "_artifact_digests",
         "_artifact_index",
@@ -3644,6 +3645,7 @@ class _PackedArtifactStore:
 
     def __init__(self, capacity: int) -> None:
         self._active = bytearray(capacity)
+        self._withdrawn = bytearray(capacity)
         self._payload_arena = bytearray(capacity * _ARTIFACT_INLINE_PAYLOAD_BYTES)
         self._payload_lengths = array("I", [0]) * capacity
         self._payload_overflow: dict[int, bytes] = {}
@@ -3966,6 +3968,7 @@ class _PackedArtifactStore:
             # The shard lock excludes readers while indexes are installed. Marking
             # the staged columns active lets exact index callbacks inspect them;
             # every escaping failure clears the flag before the lock is released.
+            self._withdrawn[handle] = 0
             self._active[handle] = 1
 
             started.append((self._primary, version_digest, self._version_digest, None))
@@ -4109,6 +4112,7 @@ class _PackedArtifactStore:
         self._write_digest(self._artifact_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._active[handle] = 0
+        self._withdrawn[handle] = 0
         self._append_free_handle(handle)
         self._live -= 1
         return artifact
@@ -4311,11 +4315,15 @@ class _PackedArtifactStore:
         self,
         index_name: str,
         indexed_value: Hashable,
+        *,
+        placed_only: bool = False,
     ) -> Iterator[LocalArtifactVersionRecord]:
         """Yield canonical records for one exact equality-index value."""
 
         index, digest, digest_for_handle, equals_handle = self._query(index_name, indexed_value)
         for handle in index.iter_handles(digest, digest_for_handle, equals_handle):
+            if placed_only and self._withdrawn[handle]:
+                continue
             record = self.get_record_by_handle(handle)
             if record is not None:
                 yield record
@@ -4381,6 +4389,7 @@ class _PackedArtifactStore:
                 for value in (
                     self,
                     self._active,
+                    self._withdrawn,
                     self._payload_arena,
                     self._payload_lengths,
                     self._payload_overflow,
@@ -10208,9 +10217,11 @@ class LocalArtifactVersionRegistry:
             )
         )
         resolved: LocalArtifactVersionRecord | None = None
-        for shard in self._shards:
-            with shard.lock:
-                for candidate in shard.store.find_record_iter("execution_path", key):
+        with self._all_shards_locked():
+            for shard in self._shards:
+                for candidate in shard.store.find_record_iter(
+                    "execution_path", key, placed_only=True
+                ):
                     if resolved is None or (
                         candidate.artifact.version,
                         candidate.artifact.artifact_version_id,
@@ -10220,6 +10231,86 @@ class LocalArtifactVersionRegistry:
                     ):
                         resolved = candidate
         return resolved
+
+    def withdraw_execution_path(
+        self,
+        expected: LocalArtifactVersionRecord,
+        observed_at: datetime,
+    ) -> bool:
+        """Remove an exact current placement while retaining historical content.
+
+        The action owner supplies the current canonical version and owns event
+        ordering. All retained versions at this placement are withdrawn together,
+        so expiration of the newest record cannot resurrect older leased content.
+        Replaying a retained publication does not restore its placement; a new
+        write requires a new artifact version. This is a synchronous state
+        transition, not an evidence publication or file-cache eviction.
+        """
+        expected = _canonical_local_artifact_record(expected)
+        artifact = expected.artifact
+        key = "\0".join(
+            (
+                artifact.hostname,
+                artifact.principal,
+                artifact.platform,
+                artifact.normalized_native_path,
+            )
+        )
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self._require_after_watermark_locked(
+                ensure_utc(observed_at), "artifact removal observed_at", allow_boundary=True
+            )
+            for reservation in self._prepared_reservations.values():
+                staged = reservation.canonical_token.record.artifact
+                if (
+                    staged.hostname,
+                    staged.principal,
+                    staged.platform,
+                    staged.normalized_native_path,
+                ) == (
+                    artifact.hostname,
+                    artifact.principal,
+                    artifact.platform,
+                    artifact.normalized_native_path,
+                ):
+                    raise StateError("artifact placement has a prepared publication")
+            located = self._existing_locator(artifact.artifact_version_id)
+            if located is None:
+                raise StateError("artifact removal requires a retained current file version")
+            expected_shard, expected_handle = located
+            if expected_shard.store.get_record_by_handle(expected_handle) != expected:
+                raise StateError("artifact removal does not match the retained file version")
+            current = self.resolve_record_for_execution_path(
+                artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+            )
+            if current is None and expected_shard.store._withdrawn[expected_handle]:
+                return False
+            if current != expected:
+                raise StateError("artifact removal requires the current file version")
+            updates: list[tuple[_LocalArtifactShard, int, int]] = []
+            versions: list[tuple[_LocalArtifactShard, int]] = []
+            for shard in self._shards:
+                index, digest, digest_for_handle, equals_handle = shard.store._query(
+                    "execution_path", key
+                )
+                handles = tuple(index.iter_handles(digest, digest_for_handle, equals_handle))
+                if handles:
+                    versions.append((shard, shard.mutation_version))
+                    updates.extend(
+                        (shard, handle, shard.store._withdrawn[handle]) for handle in handles
+                    )
+            try:
+                for shard, handle, _ in updates:
+                    shard.store._withdrawn[handle] = 1
+                for shard, version in versions:
+                    shard.mutation_version = version + 1
+            except BaseException:
+                for shard, handle, prior in updates:
+                    shard.store._withdrawn[handle] = prior
+                for shard, version in versions:
+                    shard.mutation_version = version
+                raise
+            return True
 
     def resolve_binary_for_path(
         self,

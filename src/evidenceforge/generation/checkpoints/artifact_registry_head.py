@@ -40,8 +40,8 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "2"
-_ROW_WIDTH = 9
+_SCHEMA_VERSION = "3"
+_ROW_WIDTH = 10
 _ALLOCATOR_ROW_WIDTH = 3
 
 
@@ -177,6 +177,11 @@ def _capture_rows(
             REFERENCE_LEASE_INDEX_CHECKPOINT_FIELDS,
             owner_name=f"ArtifactLeases[{shard.shard_id}]",
         )
+        if any(flag not in {0, 1} for flag in shard.store._withdrawn) or any(
+            flag and not shard.store.is_live_handle(handle)
+            for handle, flag in enumerate(shard.store._withdrawn)
+        ):
+            raise RuntimeError("local artifact checkpoint placement state diverged")
         if any(shard.store._reserved) or any(shard.store._release_pending):
             raise RuntimeError("local artifact checkpoint retains a reserved packed handle")
         leases_by_version: dict[str, list[list[object]]] = {}
@@ -207,6 +212,7 @@ def _capture_rows(
                     0 if deadline is None else int(shard.deadlines._orders[handle]),
                     pending,
                     leases_by_version.pop(version_id, []),
+                    bool(shard.store._withdrawn[handle]),
                 ]
             )
         free_handles = [
@@ -276,6 +282,8 @@ def _restore_row(
         or type(row[7]) is not bool
     ):
         raise CheckpointCorruptionError("local artifact checkpoint row is invalid")
+    if type(row[9]) is not bool:
+        raise CheckpointCorruptionError("local artifact placement flag is invalid")
     record = _decode_record(row[3], row[4], legacy=legacy)
     version_id = record.artifact.artifact_version_id
     deadline = None if row[5] is None else float(row[5])
@@ -295,6 +303,7 @@ def _restore_row(
     try:
         shard.store.insert_reserved(handle, record.artifact, record, packed_payload=row[4])
         shard.store.consume_reserved_handle(handle)
+        shard.store._withdrawn[handle] = int(row[9])
     except (IndexError, StateError, ValueError) as error:
         raise CheckpointCorruptionError(
             "local artifact checkpoint packed handle is invalid"
@@ -381,7 +390,7 @@ class LocalArtifactVersionRegistryParticipant:
     checkpoint_owner = "local-artifacts"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = ("1",)
+    checkpoint_compatible_head_versions = ("1", "2")
     checkpoint_state_fields = LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS
 
     def __init__(self, registry: LocalArtifactVersionRegistry) -> None:
@@ -455,7 +464,7 @@ class LocalArtifactVersionRegistryParticipant:
         retention = decode_state_value(document.retention)
         watermark = None if document.watermark is None else decode_state_value(document.watermark)
         if (
-            document.schema_version not in {"1", self.checkpoint_schema_version}
+            document.schema_version not in {"1", "2", self.checkpoint_schema_version}
             or document.capacity != self.registry._capacity
             or type(retention) is not timedelta
             or retention != self.registry._retention
@@ -468,6 +477,11 @@ class LocalArtifactVersionRegistryParticipant:
             )
         ):
             raise CheckpointCorruptionError("local artifact checkpoint configuration changed")
+        if document.schema_version in {"1", "2"}:
+            for row in document.records:
+                if type(row) is not list or len(row) != 9:
+                    raise CheckpointCorruptionError("legacy local artifact row is invalid")
+                row.append(False)
         if self.registry._live_count or any(shard.store for shard in self.registry._shards):
             raise ValueError("local artifact checkpoint hydration requires a fresh registry")
         self.registry._watermark = watermark
