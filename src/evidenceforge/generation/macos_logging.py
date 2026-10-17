@@ -3,10 +3,19 @@
 
 """Read-only native logging preparation against canonical State and deployment."""
 
+import re
 from datetime import datetime
 
-from evidenceforge.events.identity import ProcessIdentity
-from evidenceforge.events.macos_logging import MacosUnifiedLogObservation, UnifiedLogCallsite
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
+from evidenceforge.events.macos_logging import (
+    MacosUnifiedLogObservation,
+    MacosWorkspaceRequest,
+    UnifiedLogCallsite,
+)
+from evidenceforge.generation.activity.macos_unified_log_profiles import (
+    load_macos_unified_log_profiles,
+    workspace_request_callsite,
+)
 from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing.macos import MachTimebase
@@ -62,3 +71,53 @@ def prepare_unified_log_observation(
         )
     except ValueError as error:
         raise StateError(f"Invalid Unified Log writer facts: {error}") from error
+
+
+def prepare_workspace_request(
+    state: StateManager,
+    deployment: DeploymentContentRegistry | None,
+    *,
+    session: SessionIdentity,
+    writer_pid: int,
+    requested_at: datetime,
+    os_name: str,
+) -> MacosWorkspaceRequest:
+    """Prepare a GUI request independently of source selection and collection."""
+    if (
+        state.get_session_identity(session.logon_id) != session
+        or state.get_session_at(session.logon_id, requested_at) is None
+    ):
+        raise StateError("Workspace request requires its exact active session")
+    writer = state.get_process_identity_at(session.hostname, writer_pid, requested_at)
+    if (
+        re.fullmatch(
+            r"(?:(?:macos|mac os x|os x)\s+26(?:\.\d+)*|darwin\s+25(?:\.\d+)*)",
+            os_name.strip().casefold(),
+        )
+        is None
+    ):
+        return MacosWorkspaceRequest(session, requested_at, writer, None, "profile_unavailable")
+    if writer is None:
+        return MacosWorkspaceRequest(session, requested_at, None, None, "writer_unavailable")
+    binary = (
+        deployment.resolve_binary(
+            writer.hostname, writer.image, "macos", principal=writer.principal
+        )
+        if deployment is not None
+        else None
+    )
+    if binary is None or binary.mach_o_image is None:
+        return MacosWorkspaceRequest(
+            session, requested_at, writer, None, "native_image_unavailable"
+        )
+    profile = load_macos_unified_log_profiles()
+    native = prepare_unified_log_observation(
+        state,
+        deployment,
+        writer=writer,
+        canonical_time=requested_at,
+        timebase=MachTimebase(profile.mach_timebase.numerator, profile.mach_timebase.denominator),
+        callsite=workspace_request_callsite(),
+        message=profile.workspace_request.message,
+    )
+    return MacosWorkspaceRequest(session, requested_at, writer, native)

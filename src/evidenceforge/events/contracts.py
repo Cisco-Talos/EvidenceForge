@@ -50,6 +50,7 @@ class EventKind(StrEnum):
     LOGOFF = "logoff"
     LOGON = "logon"
     MACHINE_LOGON = "machine_logon"
+    MACOS_WORKSPACE_REQUEST = "macos_workspace_request"
     NTLM_VALIDATION = "ntlm_validation"
     PASSWORD_CHANGE = "password_change"
     PASSWORD_RESET = "password_reset"
@@ -105,6 +106,7 @@ class ContextKind(StrEnum):
     IMAGE_LOAD = "image_load"
     KERBEROS = "kerberos"
     LIFECYCLE = "lifecycle"
+    MACOS_WORKSPACE = "macos_workspace"
     NAT = "nat"
     NETWORK = "network"
     NETWORK_ENDPOINT = "network_endpoint"
@@ -139,6 +141,7 @@ class FormatKind(StrEnum):
     ZSH_HISTORY = "zsh_history"
     CISCO_ASA = "cisco_asa"
     ECAR = "ecar"
+    MACOS_UNIFIED_LOG = "macos_unified_log"
     PROXY_ACCESS = "proxy_access"
     SNORT_ALERT = "snort_alert"
     SYSLOG = "syslog"
@@ -615,6 +618,17 @@ _TASK_REQUIRED = _contexts(ContextKind.AUTH, ContextKind.SCHEDULED_TASK, Context
 
 
 EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
+    EventKind.MACOS_WORKSPACE_REQUEST: _contract(
+        EventKind.MACOS_WORKSPACE_REQUEST,
+        required=_contexts(
+            ContextKind.SRC_HOST, ContextKind.MACOS_WORKSPACE, ContextKind.LIFECYCLE
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.MACOS_UNIFIED_LOG),
+    ),
     EventKind.ACCOUNT_CHANGED: _contract(
         EventKind.ACCOUNT_CHANGED,
         required=_ACCOUNT_REQUIRED,
@@ -1209,6 +1223,36 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                     code=ContractViolationCode.INVALID_IDENTITY,
                     event_type=event.event_type,
                     message=str(exc),
+                )
+            )
+
+    if contract.kind is EventKind.MACOS_WORKSPACE_REQUEST:
+        from evidenceforge.events.macos_logging import MacosWorkspaceRequest
+
+        workspace = getattr(event, "macos_workspace", None)
+        host = getattr(event, "src_host", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(workspace) is not MacosWorkspaceRequest
+            or host is None
+            or host.os_category != "macos"
+            or workspace.session.hostname != host.hostname
+            or workspace.requested_at != event.timestamp
+            or identities is None
+            or identities.subject != workspace.session
+            or identities.session != workspace.session
+            or identities.actor != workspace.writer
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != workspace.session.lifecycle_group_id
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac workspace request must preserve its exact host, session and writer roles",
                 )
             )
 

@@ -1,0 +1,20 @@
+# Experimental macOS 26 arm64 source vocabulary, not a captured record template.
+# Main-image workspace method entry does not prove workspace completion.
+# Public provenance and limits: docs/design/macos-workstation-feasibility/capability-matrix.md
+# Offsets below are independently chosen model values, not Apple binary offsets.
+# The explicit timebase models an awake host; it is not inferred from arm64 and
+# does not claim empirical calibration for every Mac. No sleep/wake profile.
+schema_version: "1.0"
+profile: macos26-workspace-entry-v1
+mach_timebase:
+  numerator: 125
+  denominator: 3
+workspace_request:
+  message_type: Default
+  subsystem: com.apple.loginwindow.logging
+  category: Standard
+  format_string: "%s | enter"
+  message: "-[Login1 launchWorkspace] | enter"
+  format_string_offset: 131072
+  program_counter: 65536
+  has_rules: true

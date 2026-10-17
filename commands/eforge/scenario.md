@@ -163,3 +163,5 @@ If the user wants logs, hand off to `/eforge generate`. If they want a focused v
 explanation, hand off to `/eforge validate`. Do not silently generate logs as part of authoring.
 
 Read `/eforge:references:record-validation` for validation policy; `process_exec` is internal-only.
+
+For modeled macOS 26 arm64 workstations, consult `/eforge:references:evidence-endpoint-macos` before selecting experimental native output. `macos_unified_log` currently covers workspace-method entry only; the session bundle creates the internal stage from a local interactive login. Do not author that internal event or imply completed desktop startup.

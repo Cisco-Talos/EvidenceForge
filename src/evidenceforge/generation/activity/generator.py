@@ -11800,6 +11800,56 @@ class ActivityGenerator:
         )
         return LogonActionBundle(self, request).execute()
 
+    def _emit_macos_workspace_request(self, system: System, logon_id: str, time: datetime) -> None:
+        """Publish a distinct GUI request stage without asserting desktop completion."""
+        from evidenceforge.generation.macos_logging import prepare_workspace_request
+
+        session = self.state_manager.get_session_identity(logon_id)
+        if session is None:
+            raise StateError("Mac workspace request lost its canonical session")
+        gap = self._freeze_profile_activity_gap(
+            "macos.workspace_request",
+            stable_id=f"mac-workspace:{session.object_id}",
+            host=system.hostname,
+            source="macos_workspace",
+            lifecycle_id=session.lifecycle_group_id,
+        )
+        requested_at = ensure_utc(time) + gap.value
+        if self.state_manager.get_session_at(logon_id, requested_at) is None:
+            return
+        workspace = prepare_workspace_request(
+            self.state_manager,
+            self.dispatcher.deployment_registry,
+            session=session,
+            writer_pid=self._get_system_pid(system.hostname, "loginwindow", 0),
+            requested_at=requested_at,
+            os_name=system.os,
+        )
+        if workspace.native is None and "macos_unified_log" in self.dispatcher.emitters:
+            logger.warning(
+                "Native Unified Log workspace observation unavailable for %s: %s",
+                system.hostname,
+                workspace.unavailable_reason,
+            )
+        self.dispatcher.dispatch_builder(
+            OccurrenceBuilder(
+                timestamp=requested_at,
+                event_type="macos_workspace_request",
+                src_host=self._build_host_context(system),
+                macos_workspace=workspace,
+                identity_plan=EventIdentityPlan(
+                    subject=session, actor=workspace.writer, session=session
+                ),
+                lifecycle=ActionLifecycleContext(
+                    group_id=session.lifecycle_group_id,
+                    canonical_start=session.started_at,
+                    phase="dependent",
+                    parent_group_id=session.parent_lifecycle_group_id or None,
+                ),
+            )
+        )
+        gap.publish()
+
     def _execute_logon_bundle(self, request: LogonRequest) -> str:
         """Expand a successful logon bundle through the compatibility adapter."""
         if _get_os_category(request.system.os) == "macos" and self.identity_directory is not None:
@@ -12154,6 +12204,9 @@ class ActivityGenerator:
             and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
             and session_kind not in _LINUX_REMOTE_SESSION_KINDS
         )
+        local_macos_session = (
+            os_cat == "macos" and logon_type == 2 and session_kind == "interactive"
+        )
         if logon_id is None:
             logon_id = self.state_manager.create_session(
                 username=user.username,
@@ -12223,8 +12276,10 @@ class ActivityGenerator:
 
         session_for_login = self.state_manager.get_session(logon_id)
         if (
-            os_cat == "linux"
-            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            (
+                (os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES)
+                or local_macos_session
+            )
             and session_for_login is not None
             and session_for_login.login_occurrence_emitted
         ):
@@ -12521,7 +12576,11 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch_builder(event)
-        if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
+        if local_macos_session and system.type == "workstation":
+            self._emit_macos_workspace_request(system, logon_id, time)
+        if (
+            os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+        ) or local_macos_session:
             session_for_login = self.state_manager.get_session(logon_id)
             if session_for_login is not None:
                 session_for_login.login_occurrence_emitted = True

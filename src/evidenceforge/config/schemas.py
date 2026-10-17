@@ -3932,6 +3932,47 @@ class SpawnRuleEntry(BaseModel, extra="forbid"):
     max_children: int | None = None
 
 
+class MacosMachTimebaseConfig(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled native clock ratio; never inferred from architecture."""
+
+    numerator: int = Field(strict=True, gt=0, lt=2**32)
+    denominator: int = Field(strict=True, gt=0, lt=2**32)
+
+
+class MacosWorkspaceLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Data-owned vocabulary and modeled offsets for workspace-entry observation."""
+
+    message_type: Literal["Default", "Info", "Debug", "Error", "Fault"]
+    subsystem: str
+    category: str
+    format_string: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+    has_rules: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def validate_native_text(self) -> MacosWorkspaceLogProfile:
+        """Reject strings that cannot describe the selected native profile."""
+        if any(
+            "\x00" in value
+            for value in (self.subsystem, self.category, self.format_string, self.message)
+        ):
+            raise ValueError("Native log profile text cannot contain NUL")
+        if self.category and not self.subsystem:
+            raise ValueError("Native log profile category requires its subsystem")
+        return self
+
+
+class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded source profile; no collector or management configuration duplicates."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["macos26-workspace-entry-v1"]
+    mach_timebase: MacosMachTimebaseConfig
+    workspace_request: MacosWorkspaceLogProfile
+
+
 # --- System Processes ---
 
 

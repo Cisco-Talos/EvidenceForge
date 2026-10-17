@@ -43,6 +43,17 @@ ssh_authentication:
     RSA: {min: 20, max: 240}
 
 relationships:
+  macos.workspace_request:
+    # Modeled ordering budget, not empirically calibrated login latency.
+    class: human_workflow
+    position: after
+    min_ms: 25
+    max_ms: 225
+  source.macos_unified_log:
+    class: source_latency
+    position: after
+    min_ms: 0
+    max_ms: 0
   linux.pipeline_stage_start:
     class: burst_fanout
     position: after

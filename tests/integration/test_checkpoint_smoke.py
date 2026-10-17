@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     ssh_client: bool,
     macos_receiver: bool,
     authored_close: bool,
+    native: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -125,6 +127,26 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "events": [{"type": "logon", "logon_type": 2}],
             },
         )
+    if native:
+        scenario_data["output"]["logs"].append({"format": "macos_unified_log"})
+        scenario_data["storyline"] = [
+            {
+                "id": f"workspace-{index}",
+                "time": when,
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Local session transition across checkpoint recovery",
+                "events": [{"type": kind, **({"logon_type": 2} if kind == "logon" else {})}],
+            }
+            for index, (when, kind) in enumerate(
+                [
+                    ("+1m", "logoff"),
+                    ("+2m", "logon"),
+                    ("+1h10m", "logoff"),
+                    ("+1h11m", "logon"),
+                ]
+            )
+        ]
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
     if start is not None:
@@ -250,6 +272,24 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
+    if native:
+        from evidenceforge.formats.macos_unified_log import decode_unified_log_record
+
+        records = [
+            decode_unified_log_record(line)
+            for name, content in resumed_files.items()
+            if name.endswith("/macos_unified_log.ndjson")
+            for line in content.splitlines()
+        ]
+        assert len(records) >= 2
+        assert len({record.boot_uuid for record in records}) == 1
+        assert len({record.process_id for record in records}) == 1
+        # Assert observations on both sides of the recovery cursor; session-close
+        # holds and modeled source clocks need not equal authored minute anchors.
+        cursor_time = datetime(2026, 10, 19, 15, tzinfo=UTC)
+        timestamps = [datetime.fromisoformat(record.timestamp) for record in records]
+        assert any(timestamp < cursor_time for timestamp in timestamps)
+        assert any(timestamp > cursor_time for timestamp in timestamps)
     if start is not None:
         for index in range(2):
             assert any(
@@ -300,4 +340,11 @@ def test_short_generation_checkpoint_suspension_and_resume(
         any(line and not line.startswith(b"#") for line in content.splitlines())
         for name, content in resumed_files.items()
         if name.endswith("/conn.json")
+    )
+
+
+@pytest.mark.slow
+def test_macos_native_workspace_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path, scenarios_dir, "default", None, True, None, False, False, False, native=True
     )

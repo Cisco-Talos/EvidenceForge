@@ -445,7 +445,8 @@ class TestLoadAllFormats:
         formats = load_all_formats()
 
         # Existing formats plus the bounded zsh history projection.
-        assert len(formats) == 26
+        assert len(formats) == 27
+        assert "macos_unified_log" in formats
         assert "windows_event_security" in formats
         assert "zeek_conn" in formats
         assert "ecar" in formats

@@ -1,0 +1,97 @@
+# Nested native validation is owned by the explicit native_codec route.
+name: macos_unified_log
+version: '1.0'
+description: 'Experimental macOS 26 arm64 Unified Log NDJSON: workspace request entry
+  only (UTC export)'
+category: host
+fields:
+- name: eventType
+  type: string
+  required: true
+  description: Only the implemented export event kind
+- name: messageType
+  type: string
+  required: true
+  description: Source-native log level
+- name: timezoneName
+  type: string
+  required: true
+  description: Export timezone label; may be empty
+- name: timestamp
+  type: string
+  required: true
+  description: Native wall-clock timestamp with explicit UTC offset
+- name: machTimestamp
+  type: integer
+  required: true
+  description: Host Mach clock value
+- name: bootUUID
+  type: string
+  required: true
+  description: Host boot identity
+- name: processID
+  type: integer
+  required: true
+  description: Observed host-local PID
+- name: userID
+  type: integer
+  required: true
+  description: Observed effective user ID
+- name: threadID
+  type: integer
+  required: true
+  description: Observed native thread ID
+- name: processImagePath
+  type: string
+  required: true
+  description: Process executable path
+- name: processImageUUID
+  type: string
+  required: true
+  description: Process Mach-O image UUID
+- name: senderImagePath
+  type: string
+  required: true
+  description: Image with the logging call
+- name: senderImageUUID
+  type: string
+  required: true
+  description: Sender Mach-O image UUID
+- name: senderProgramCounter
+  type: integer
+  required: true
+  description: Sender image-relative program counter
+- name: activityIdentifier
+  type: integer
+  required: true
+  description: Native activity identity
+- name: parentActivityIdentifier
+  type: integer
+  required: true
+  description: Parent activity identity
+- name: traceID
+  type: integer
+  required: true
+  description: Native trace identifier
+- name: subsystem
+  type: string
+  required: true
+  description: Logging subsystem; may be empty
+- name: category
+  type: string
+  required: true
+  description: Logging category; may be empty
+- name: formatString
+  type: string
+  required: true
+  description: Native format string with privacy annotations retained
+- name: eventMessage
+  type: string
+  required: true
+  description: Rendered source message, including any redaction
+output:
+  format: json
+  file_extension: .ndjson
+  encoding: utf-8
+  template: '{{ native_json }}'
+validators: []

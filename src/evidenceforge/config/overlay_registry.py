@@ -58,6 +58,12 @@ def _family(
 
 _FAMILIES = (
     _family(
+        "activity/macos_unified_log_profiles.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Experimental native Mac log vocabulary, modeled callsites and explicit timebase.",
+    ),
+    _family(
         "personas/*.yaml",
         "persona-deep-merge",
         "config-personas.md",

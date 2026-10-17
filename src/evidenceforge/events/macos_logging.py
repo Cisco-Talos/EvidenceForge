@@ -17,7 +17,7 @@ from typing import Literal
 from uuid import UUID
 
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
-from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
+from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 
 type UnifiedLogLevel = Literal["Default", "Info", "Debug", "Error", "Fault"]
 
@@ -151,3 +151,44 @@ class MacosUnifiedLogObservation:
         object.__setattr__(self, "boot_uuid", str(boot_uuid).upper())
         if type(self.message) is not str or "\x00" in self.message:
             raise ValueError("Unified Log message requires a NUL-free string")
+
+
+@dataclass(frozen=True, slots=True)
+class MacosWorkspaceRequest:
+    """Workspace method entry, distinct from authentication or desktop completion.
+
+    The canonical request can occur without native source reachability. An
+    unavailable projection retains its reason instead of manufacturing a writer.
+    """
+
+    session: SessionIdentity
+    requested_at: datetime
+    writer: ProcessIdentity | None
+    native: MacosUnifiedLogObservation | None
+    unavailable_reason: Literal[
+        "", "writer_unavailable", "native_image_unavailable", "profile_unavailable"
+    ] = ""
+
+    def __post_init__(self) -> None:
+        """Keep the request's subject separate from its reporting process."""
+        if type(self.session) is not SessionIdentity or self.session.session_kind != "interactive":
+            raise ValueError("Mac workspace request requires a local interactive session")
+        _aware(self.requested_at, "Mac workspace request")
+        if self.requested_at < self.session.started_at:
+            raise ValueError("Mac workspace request cannot precede its session")
+        if self.writer is not None and (
+            type(self.writer) is not ProcessIdentity
+            or self.writer.hostname != self.session.hostname
+        ):
+            raise ValueError("Mac workspace writer must belong to the subject host")
+        if self.native is None:
+            expected = "writer_unavailable" if self.writer is None else "native_image_unavailable"
+            if self.unavailable_reason not in {expected, "profile_unavailable"}:
+                raise ValueError("Unavailable native workspace observation requires its reason")
+        elif (
+            type(self.native) is not MacosUnifiedLogObservation
+            or self.native.writer != self.writer
+            or self.native.canonical_time != self.requested_at
+            or self.unavailable_reason != ""
+        ):
+            raise ValueError("Native workspace observation must match the exact request and writer")

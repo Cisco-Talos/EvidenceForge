@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 198
+current_revision: 199
 history_start_revision: 1
-behavior_surface_sha256: c930db72171bfbb763fc73651f08fd85054e6c5494dcbc9a44ae245d59f66002
+behavior_surface_sha256: 731a1d7361dd121deb44cce6a4fbbad7d4bf68c94186aef8356f38a738f0f07f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1962,3 +1962,12 @@ changes:
       - native-source-projection
     formats: []
     summary: Adds allocation-free native Unified Log writer preparation and immutable projection contracts without registering a new generation source or changing existing emitted evidence.
+  - revision: 199
+    id: experimental-macos-workspace-unified-log
+    impact: localized
+    domains:
+      - session-lifecycle
+      - native-source-projection
+    formats:
+      - macos_unified_log
+    summary: Adds an experimental data-driven Unified Log workspace request projection through canonical session and native writer ownership.

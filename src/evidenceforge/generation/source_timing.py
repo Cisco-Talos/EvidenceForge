@@ -3499,6 +3499,11 @@ class SourceTimingPlanner:
         plan = self._ensure_plan(event)
         if format_name is not None:
             plan.observation_delays[source_instance or format_name] = observation_delay
+        if format_name == "macos_unified_log":
+            native_time = self.source_time(event, "source.macos_unified_log")
+            projected = native_time + observation_delay
+            plan.finalized_times["macos_unified_log.event"] = projected
+            return replace(event, timestamp=projected)
         runtime_owned = self._runtime_owns_projection(event, format_name)
         if observation_delay and not runtime_owned:
             event = replace(
@@ -8135,6 +8140,10 @@ class SourceTimingPlanner:
             host = event.src_host or event.dst_host
             hostname = getattr(host, "hostname", "") or ""
             return (hostname, "linux") if hostname else None
+        if source_key == "source.macos_unified_log":
+            host = event.src_host
+            if host is not None and host.os_category == "macos":
+                return (host.hostname, "macos")
         return None
 
     def _source_micro_noise(

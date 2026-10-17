@@ -1,7 +1,6 @@
 # Application, process, and endpoint overlays
 
-Read only the section matching the requested family. Inspect the packaged YAML and existing overlay
-before editing; several files that look alike have different merge behavior.
+Inspect the relevant packaged YAML and overlay before editing; similar-looking families can merge differently.
 
 ## Contents
 

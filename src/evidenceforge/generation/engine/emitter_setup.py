@@ -246,7 +246,10 @@ def _has_dhcp_event(step: object) -> bool:
 
 def _build_emitter_classes() -> dict:
     """Build emitter class map at call time (supports test patching of module-level names)."""
+    from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
+
     return {
+        "macos_unified_log": MacosUnifiedLogEmitter,
         "windows_event_security": WindowsEventEmitter,
         "windows_event_sysmon": SysmonEventEmitter,
         "zeek_conn": ZeekEmitter,
@@ -298,6 +301,7 @@ _ZEEK_FORMATS = _ZEEK_FORMAT_NAMES
 # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
 _SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert", "cisco_asa"}
 _HOST_FORMATS = {
+    "macos_unified_log",
     "windows_event_security",
     "windows_event_sysmon",
     "ecar",

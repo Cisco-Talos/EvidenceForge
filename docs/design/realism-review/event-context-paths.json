@@ -7475,6 +7475,67 @@
         "tests/unit/test_network_observation.py"
       ],
       "validators": []
+    },
+    {
+      "constructors": [
+        {
+          "call": "MacosWorkspaceRequest",
+          "file": "src/evidenceforge/generation/macos_logging.py",
+          "line": 83,
+          "scope": "prepare_workspace_request"
+        }
+      ],
+      "fields": [
+        {
+          "annotation": "SessionIdentity",
+          "default": "",
+          "name": "session"
+        },
+        {
+          "annotation": "datetime",
+          "default": "",
+          "name": "requested_at"
+        },
+        {
+          "annotation": "ProcessIdentity | None",
+          "default": "",
+          "name": "writer"
+        },
+        {
+          "annotation": "MacosUnifiedLogObservation | None",
+          "default": "",
+          "name": "native"
+        },
+        {
+          "annotation": "Literal[\"\", \"writer_unavailable\", \"native_image_unavailable\", \"profile_unavailable\"]",
+          "default": "\"\"",
+          "name": "unavailable_reason"
+        }
+      ],
+      "file": "src/evidenceforge/events/macos_logging.py",
+      "frozen": true,
+      "line": 157,
+      "name": "MacosWorkspaceRequest",
+      "occurrence_builder_slots": [
+        "macos_workspace"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Exact session and optional writer snapshot describe method entry only; source absence cannot change the canonical request or imply desktop completion.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session workspace request preparation"
+      },
+      "review_status": "path_review_complete",
+      "slots": true,
+      "source_consumer_files": [
+        "src/evidenceforge/generation/emitters/macos_unified_log.py"
+      ],
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ],
+      "validators": [
+        "__post_init__"
+      ]
     }
   ],
   "events": [
@@ -13561,6 +13622,50 @@
       "test_files": [
         "tests/unit/test_process_fork_projection.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "macos_workspace",
+            "src_host"
+          ],
+          "event_type_expression": "'macos_workspace_request'",
+          "event_type_literals": [
+            "macos_workspace_request"
+          ],
+          "file": "src/evidenceforge/generation/activity/generator.py",
+          "line": 11828,
+          "scope": "ActivityGenerator._emit_macos_workspace_request"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "macos_workspace",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "macos_unified_log"
+      ],
+      "event_type": "macos_workspace_request",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The shared auth/session executor owns the distinct workspace-request occurrence; it cannot assert desktop completion. Native projection reads immutable writer facts only.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session action bundle compatibility executor"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ]
     }
   ],
   "formats": [
@@ -14903,6 +15008,35 @@
         "tests/integration/test_format_definitions.py",
         "tests/unit/test_macos_foundations.py"
       ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/macos_unified_log.yaml",
+      "emitter_class": "MacosUnifiedLogEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/macos_unified_log.py",
+      "emitter_line": 26,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/parsers/macos_native.py"
+      ],
+      "format": "macos_unified_log",
+      "occurrence_builder_fields_consumed": [
+        "event_type",
+        "macos_workspace",
+        "src_host",
+        "timestamp"
+      ],
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The shared auth/session executor owns the distinct workspace-request occurrence; it cannot assert desktop completion. Native projection reads immutable writer facts only.",
+        "classification": "single_canonical_path",
+        "owner": "auth/session action bundle compatibility executor"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [
+        "macos_workspace_request"
+      ],
+      "test_files": [
+        "tests/unit/test_macos_workspace_logging.py"
+      ]
     }
   ],
   "method": "python-ast-static-inventory",
@@ -15966,6 +16100,22 @@
         "file": "src/evidenceforge/generation/engine/storyline.py",
         "line": 3778,
         "scope": "StorylineMixin._execute_typed_event"
+      },
+      {
+        "call": "OccurrenceBuilder",
+        "contexts_attached_at_construction": [
+          "identity_plan",
+          "lifecycle",
+          "macos_workspace",
+          "src_host"
+        ],
+        "event_type_expression": "'macos_workspace_request'",
+        "event_type_literals": [
+          "macos_workspace_request"
+        ],
+        "file": "src/evidenceforge/generation/activity/generator.py",
+        "line": 11828,
+        "scope": "ActivityGenerator._emit_macos_workspace_request"
       }
     ],
     "dynamic_event_type_constructors": [
@@ -16407,6 +16557,12 @@
         "default": "'visible'",
         "line": 187,
         "name": "_source_observation_status"
+      },
+      {
+        "annotation": "MacosWorkspaceRequest | None",
+        "default": "None",
+        "line": 134,
+        "name": "macos_workspace"
       }
     ],
     "file": "src/evidenceforge/events/base.py",
@@ -16428,6 +16584,7 @@
       "image_load",
       "kerberos",
       "lifecycle",
+      "macos_workspace",
       "nat",
       "network",
       "network_endpoint",

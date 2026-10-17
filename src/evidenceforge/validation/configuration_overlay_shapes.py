@@ -13,6 +13,10 @@
 # "string_dict_fields": mappings whose keys and values must be non-empty strings
 # "string_fields" / "number_fields": scalar root fields with explicit primitive types
 OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
+    "activity/macos_unified_log_profiles.yaml": {
+        "dict_fields": {"mach_timebase", "workspace_request"},
+        "string_fields": {"schema_version", "profile"},
+    },
     "activity/dns_registry.yaml": {
         "list_fields": {"domains": "domain"},
         "dict_fields": {"valid_tags", "long_tail", "ipv6_map", "ipv6_prefixes"},

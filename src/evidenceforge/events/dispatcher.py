@@ -15611,7 +15611,13 @@ class EventDispatcher:
             "ssh_session",
         }:
             required |= CollectionCapability.AUTHENTICATION
-        if event_type in {"logon", "machine_logon", "logoff", "ssh_session"}:
+        if event_type in {
+            "logon",
+            "machine_logon",
+            "logoff",
+            "ssh_session",
+            "macos_workspace_request",
+        }:
             required |= CollectionCapability.SESSION
         if event.file is not None or event_type.startswith("smb_file_"):
             required |= CollectionCapability.FILE

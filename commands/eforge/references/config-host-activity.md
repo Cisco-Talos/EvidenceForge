@@ -1,11 +1,11 @@
 # Host activity, authentication, observation, and timing overlays
 
-Read only the matching section. Inspect packaged YAML and the existing overlay before editing; use
-validation as the schema authority.
+Inspect the matching packaged YAML and existing overlay before editing; validation is the schema authority.
 
 ## Contents
 
 - [Linux activity](#linux-activity)
+- [Mac native logging profile](#mac-native-logging-profile)
 - [SMB client and server profiles](#smb-client-and-server-profiles)
 - [Authentication and endpoint noise](#authentication-and-endpoint-noise)
 - [Volume and distribution](#volume-and-distribution)
@@ -16,12 +16,9 @@ validation as the schema authority.
 
 ### `bash_commands.yaml`
 
-Deep-merges shared command roles and behavior models: `common`, persona/shared roles,
-`storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`,
-`keyboard_adjacency`, and `params`.
+Deep-merges command roles and models: `common`, persona/shared roles, `storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`, `keyboard_adjacency`, and `params`.
 
-Runtime maps personas to reusable roles—for example, developers can use `dba`/`webadmin` and
-security analysts can use `security`. Do not add duplicate persona-named pools.
+Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names.
 
 Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths.
 Probabilities must be 0-1 and count/range bounds ordered.
@@ -147,3 +144,7 @@ reserved-host allowlists extend. They cannot authorize live credentials/hosts, p
 
 Treat cadence, rate, role, missingness, or safety changes as semantic. Run `eforge validate-config
 --json` fresh after every edit; validate affected scenarios from the same working directory.
+
+## Mac native logging profile
+
+`macos_unified_log_profiles.yaml` deep-merges through existing activity overlays and immutable effective configuration. The packaged `macos26-workspace-entry-v1` profile contains the modeled Mach timebase and one static loginwindow callsite/message. Offsets and timing are synthetic profile choices; do not calibrate them from personal logs. Existing timing relationships `macos.workspace_request` and `source.macos_unified_log` own canonical gap and source delay. Collection uses the existing source family and observation policies. No Mac collector flag or top-level scenario block is required. Profile changes do not enable additional native event families.
