@@ -869,6 +869,10 @@ class PlatformConfig(BaseModel, extra="forbid"):
     ) = None
     pe_metadata: dict[str, str] | None = None
     code_signature: MacCodeSignatureEntry | None = None
+    executable_format: Literal["mach_o"] | None = Field(
+        default=None,
+        description="Known main-executable image format; absent means unknown, not a script",
+    )
     command_templates: list[str] | None = None
     command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
@@ -948,6 +952,17 @@ class ApplicationEntry(BaseModel, extra="forbid"):
             if platform.code_signature is not None and platform_name != "macos":
                 raise ValueError(f"{self.id}.{platform_name} code_signature requires macos")
             deployment = platform.deployment
+            if platform.executable_format is not None and (
+                platform_name != "macos"
+                or not isinstance(
+                    deployment, (ApplicationDeploymentEntry, CatalogApplicationDeploymentEntry)
+                )
+                or set(deployment.architectures) != {"arm64"}
+            ):
+                raise ValueError(
+                    f"{self.id}.{platform_name} executable_format=mach_o requires an explicit "
+                    "macos arm64 deployment"
+                )
             if isinstance(deployment, CatalogApplicationDeploymentEntry):
                 if deployment.scope == "machine" and "{username}" in platform.image_path:
                     raise ValueError(

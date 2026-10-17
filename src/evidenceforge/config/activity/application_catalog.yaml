@@ -2585,6 +2585,7 @@ applications:
     platforms:
       macos:
         image_path: /sbin/launchd
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2605,6 +2606,7 @@ applications:
     platforms:
       macos:
         image_path: /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2625,6 +2627,7 @@ applications:
     platforms:
       macos:
         image_path: /System/Library/CoreServices/logind
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build

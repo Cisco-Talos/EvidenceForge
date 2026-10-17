@@ -15,6 +15,8 @@ legacy document in a process.
 
 Mac application platforms optionally accept `code_signature` with required `signing_id` and optional/null `team_id`. Existing catalogs and overlays remain valid without it. This is separate main-executable signing metadata, not a replacement for deployment architecture, publisher, application bundle identity or content hashes. Helpers do not inherit it. The compiler derives a synthetic CodeDirectory hash for the configured release/architecture; it does not read installed binaries or establish notarization/trust. See the [application overlay reference](../../commands/eforge/references/config-apps-processes.md).
 
+Mac platform entries can independently declare `executable_format: mach_o` with an explicit typed `architectures: [arm64]` deployment. Existing fields describe OS, architecture, release and signer, but cannot distinguish a Mach-O executable from a signed script. The new optional fact is omitted from legacy normalized catalogs when absent; no scenario field, schema-version migration or published-pack rewrite is required. The compiler models one image UUID per main executable release; unknown formats and helpers retain absent image metadata.
+
 | Family | Supported legacy input | Current replacement | Compatibility semantics |
 |---|---|---|---|
 | Sensor timing | `clock_skew_us` | `clock_offset_us` | The `{min, max}` range is renamed unchanged. |

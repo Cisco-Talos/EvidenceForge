@@ -75,6 +75,11 @@ Application entry fields:
   team_id: EXAMPLE123}`. `signing_id` is required nonblank text; `team_id` is optional/null. Omit
   the whole field when signing facts are unknown. Helpers do not inherit its signer. Deployment
   architecture remains in the existing `architectures` field.
+- `executable_format: mach_o` explicitly selects the native image profile for a Mac main
+  executable with a typed deployment and `architectures: [arm64]`. Omit it when the format is
+  unknown. Signing alone does not establish image format: scripts can also be signed. The
+  compiler models a release-scoped image UUID; helpers do not inherit it. This field does not
+  assert trust, supply a captured UUID, or enable native source emission by itself.
 - A loaded module declares a `release_policy` and may define signer/PE identity, `load_phase`
   (`startup` or `runtime`), and `startup_probability` from 0 to 1. Known third-party modules require
   native signer and complete PE metadata.

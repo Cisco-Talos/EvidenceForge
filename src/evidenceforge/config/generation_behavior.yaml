@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 196
+current_revision: 197
 history_start_revision: 1
-behavior_surface_sha256: 778e18f5b24012d28fb98d323d62d6f1628f053964ffd2005c290030c0d1469a
+behavior_surface_sha256: 70eb5a1ce4f50b777d1a3956246e3ba6755136cd68df3d681475663bf332027e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -1947,3 +1947,11 @@ changes:
       - ecar
       - zeek_conn
     summary: Retains existing authored Mac SSH logout intent in the exact shared continuation through checkpoint restoration and recoverable terminal publication without changing Linux closure or authored configuration fields.
+  - revision: 197
+    id: explicit-macos-executable-image-format
+    impact: localized
+    domains:
+      - deployment-identity
+      - application-catalog
+    formats: []
+    summary: Compiles explicit arm64 Mach-O main-executable metadata into release-scoped image UUIDs while preserving unknown format, helper isolation and existing catalog inputs.

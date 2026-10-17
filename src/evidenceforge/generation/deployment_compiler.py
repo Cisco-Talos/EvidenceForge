@@ -39,6 +39,7 @@ from evidenceforge.events.content_identity import (
     FileContentIdentity,
     InstalledSoftwareReleaseIdentity,
     MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     SoftwareInstallationIdentity,
@@ -376,6 +377,11 @@ def _release_for_application_artifact(
     return BinaryReleaseIdentity(
         key=key,
         pe_version_info=pe_version_info,
+        mach_o_image=(
+            MachOImageIdentity.derive(key)
+            if platform_config.executable_format == "mach_o" and is_main_executable
+            else None
+        ),
         code_signature=(
             MachOCodeSignature.derive(
                 key, signing_id=signature.signing_id, team_id=signature.team_id
