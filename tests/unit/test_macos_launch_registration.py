@@ -114,6 +114,7 @@ def _definition(
         size_bytes=512,
         mime_type="application/xml",
         seed_ref=macos_system_job_content_seed(spec),
+        launchd_job=spec,
     )
     token = runtime.prepare_publication(descriptor, _START - timedelta(minutes=1))
     with runtime.registry.prepared_publication(token) as prepared:
@@ -215,7 +216,7 @@ def test_wrong_label_installation_is_rejected_before_registration() -> None:
         label="org.example.other",
         installation_action_id="installation-1",
     )
-    with pytest.raises(ValueError, match="exact label"):
+    with pytest.raises(ValueError, match="exact installed job"):
         _plan(deployment_identity=installation)
 
 

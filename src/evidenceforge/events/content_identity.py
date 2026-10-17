@@ -44,6 +44,8 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 from uuid import UUID
 
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
+
 type Platform = Literal["windows", "linux", "macos"]
 type Architecture = Literal["x86", "x64", "arm64", "neutral"]
 type InstallationScope = Literal["machine", "user"]
@@ -1107,12 +1109,20 @@ class LocalArtifactVersionRecord:
     artifact: LocalArtifactIdentity
     content: FileContentIdentity
     binary: LocalArtifactBinaryIdentity | None = None
+    launchd_job: LaunchdSystemJobSpec | None = None
 
     def __post_init__(self) -> None:
         """Reject contradictory artifact, content, or executable descriptors."""
 
         if self.artifact.content_id != self.content.content_id:
             raise ValueError("local artifact content_id must match its file content identity")
+        if self.launchd_job is not None:
+            if type(self.launchd_job) is not LaunchdSystemJobSpec:
+                raise ValueError("launchd file metadata requires an exact bounded spec")
+            if self.artifact.platform != "macos" or self.binary is not None:
+                raise ValueError("launchd metadata belongs to a non-executable Mac file")
+            if self.content.seed_ref != self.launchd_job.content_seed:
+                raise ValueError("launchd file content must match its exact job semantics")
         if self.binary is None:
             return
         if (

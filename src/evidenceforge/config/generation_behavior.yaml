@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 204
+current_revision: 205
 history_start_revision: 1
-behavior_surface_sha256: e6c992efa0af3e54d001e96fd34daeb80a9572802e6319528e2732eaedb4e7cc
+behavior_surface_sha256: 8ac43a5825ce31b2659e0455d5a3b4829e1d2710a7160584e9cac83af4950756
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2013,3 +2013,12 @@ changes:
       - checkpoint-restoration
     formats: []
     summary: Prepares explicit root system-job activations through the shared atomic process/service contract, rejects overlapping job processes and preserves binding chronology during recovery without enabling authored persistence or native messages.
+  - revision: 205
+    id: macos-canonical-launchd-file-metadata
+    impact: none
+    domains:
+      - file-content-identity
+      - service-lifecycle
+      - checkpoint-restoration
+    formats: []
+    summary: Retains bounded launchd specs on canonical Mac file versions, restores legacy artifact heads and keeps retained facts stable across seed contexts without emitting filesystem artifacts.

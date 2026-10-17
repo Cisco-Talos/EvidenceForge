@@ -84,6 +84,7 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
     IndexMetrics,
@@ -2798,22 +2799,25 @@ def _pack_artifact_payload(
                     version_info.original_filename,
                 ),
             )
+    fields: tuple[object, ...] = (
+        artifact.hostname,
+        artifact.principal,
+        artifact.user_profile_id,
+        artifact.application_profile_id,
+        artifact.application_id,
+        artifact.family,
+        artifact.source_object_id,
+        artifact.native_path,
+        artifact.content_id,
+        artifact.slot,
+        artifact.version,
+        content_fields,
+        binary_fields,
+    )
+    if record is not None and record.launchd_job is not None:
+        fields = (*fields, record.launchd_job.model_dump_json())
     encoded = json.dumps(
-        (
-            artifact.hostname,
-            artifact.principal,
-            artifact.user_profile_id,
-            artifact.application_profile_id,
-            artifact.application_id,
-            artifact.family,
-            artifact.source_object_id,
-            artifact.native_path,
-            artifact.content_id,
-            artifact.slot,
-            artifact.version,
-            content_fields,
-            binary_fields,
-        ),
+        fields,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -2914,7 +2918,7 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
                 )
         binary_values = (*binary_text, version_info_values)
 
-    return (
+    values: tuple[object, ...] = (
         artifact_text,
         artifact.version,
         content_text,
@@ -2922,6 +2926,27 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
         content.size_bytes,
         digest_values,
         binary_values,
+    )
+
+    if record.launchd_job is None:
+        return values
+    job = record.launchd_job
+    if type(job) is not LaunchdSystemJobSpec:
+        raise StateError("local artifact publication has malformed launchd metadata")
+    if (
+        type(job.schema_version) is not int
+        or job.schema_version != 1
+        or type(job.arguments) is not tuple
+        or any(
+            type(value) is not str
+            for value in (job.label, job.program, job.principal, *job.arguments)
+        )
+        or type(job.run_at_load) is not bool
+    ):
+        raise StateError("local artifact publication has malformed launchd fields")
+    return (
+        *values,
+        (job.schema_version, job.label, job.program, job.arguments, job.principal, job.run_at_load),
     )
 
 
@@ -2944,6 +2969,16 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
         artifact=canonical_artifact,
         content=canonical_content,
         binary=canonical_binary,
+        launchd_job=None
+        if record.launchd_job is None
+        else LaunchdSystemJobSpec(
+            schema_version=record.launchd_job.schema_version,
+            label=record.launchd_job.label,
+            program=record.launchd_job.program,
+            arguments=record.launchd_job.arguments,
+            principal=record.launchd_job.principal,
+            run_at_load=record.launchd_job.run_at_load,
+        ),
     )
     if _local_artifact_record_primitive(canonical) != primitive:
         raise StateError("local artifact publication record is not canonically self-consistent")
@@ -4142,6 +4177,8 @@ class _PackedArtifactStore:
         values = _unpack_artifact_payload(self._payload(handle))
         if len(values) < 13 or values[11] is None:
             return None
+        if len(values) not in {13, 14}:
+            raise StateError("local artifact content row width is invalid")
         content_values = values[11]
         if not isinstance(content_values, list) or len(content_values) != 5:
             raise StateError("local artifact content descriptor is malformed")
@@ -4183,6 +4220,9 @@ class _PackedArtifactStore:
             artifact=artifact,
             content=content,
             binary=binary,
+            launchd_job=LaunchdSystemJobSpec.model_validate_json(values[13])
+            if len(values) == 14
+            else None,
         )
 
     def bind_record(

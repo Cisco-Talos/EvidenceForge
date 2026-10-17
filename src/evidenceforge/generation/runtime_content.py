@@ -28,6 +28,7 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
     LocalArtifactPublishToken,
@@ -73,6 +74,7 @@ class RuntimeArtifactDescriptor:
     executable: bool = False
     architecture: Architecture | None = None
     pe_version_info: PeVersionInfo | None = None
+    launchd_job: LaunchdSystemJobSpec | None = None
 
     def __post_init__(self) -> None:
         """Fail before registry admission on incomplete or contradictory metadata."""
@@ -173,6 +175,7 @@ class RuntimeContentIdentityManager:
             artifact=artifact,
             content=content,
             binary=binary,
+            launchd_job=descriptor.launchd_job,
         )
 
     def prepare_publication(

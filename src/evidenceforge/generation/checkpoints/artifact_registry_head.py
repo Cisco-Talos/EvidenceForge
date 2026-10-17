@@ -16,6 +16,7 @@ from evidenceforge.events.content_identity import (
     LocalArtifactVersionRecord,
     PeVersionInfo,
 )
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
     _pack_artifact_payload,
@@ -39,7 +40,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 _ROW_WIDTH = 9
 _ALLOCATOR_ROW_WIDTH = 3
 
@@ -61,10 +62,12 @@ class _ArtifactRegistryHead(BaseModel):
     records: list[list[object]] = Field(default_factory=list)
 
 
-def _decode_record(platform: str, payload: bytes) -> LocalArtifactVersionRecord:
+def _decode_record(
+    platform: str, payload: bytes, *, legacy: bool = False
+) -> LocalArtifactVersionRecord:
     try:
         values = _unpack_artifact_payload(payload)
-        if len(values) != 13:
+        if len(values) not in ({13} if legacy else {13, 14}):
             raise ValueError("packed artifact row width changed")
         content_values = values[11]
         if type(content_values) is not list or len(content_values) != 5:
@@ -116,7 +119,14 @@ def _decode_record(platform: str, payload: bytes) -> LocalArtifactVersionRecord:
                 artifact_name=binary_values[1],
                 pe_version_info=version_info,
             )
-        record = LocalArtifactVersionRecord(artifact=artifact, content=content, binary=binary)
+        record = LocalArtifactVersionRecord(
+            artifact=artifact,
+            content=content,
+            binary=binary,
+            launchd_job=LaunchdSystemJobSpec.model_validate_json(values[13])
+            if len(values) == 14
+            else None,
+        )
         if _pack_artifact_payload(artifact, record) != payload:
             raise ValueError("packed artifact row is not canonical")
         return record
@@ -247,6 +257,8 @@ def _restore_row(
     registry: LocalArtifactVersionRegistry,
     row: object,
     lease_rows: dict[int, list[tuple[str, str, float, int]]],
+    *,
+    legacy: bool = False,
 ) -> tuple[int, int]:
     if (
         type(row) is not list
@@ -264,7 +276,7 @@ def _restore_row(
         or type(row[7]) is not bool
     ):
         raise CheckpointCorruptionError("local artifact checkpoint row is invalid")
-    record = _decode_record(row[3], row[4])
+    record = _decode_record(row[3], row[4], legacy=legacy)
     version_id = record.artifact.artifact_version_id
     deadline = None if row[5] is None else float(row[5])
     if (
@@ -369,6 +381,7 @@ class LocalArtifactVersionRegistryParticipant:
     checkpoint_owner = "local-artifacts"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
+    checkpoint_compatible_head_versions = ("1",)
     checkpoint_state_fields = LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS
 
     def __init__(self, registry: LocalArtifactVersionRegistry) -> None:
@@ -442,7 +455,7 @@ class LocalArtifactVersionRegistryParticipant:
         retention = decode_state_value(document.retention)
         watermark = None if document.watermark is None else decode_state_value(document.watermark)
         if (
-            document.schema_version != self.checkpoint_schema_version
+            document.schema_version not in {"1", self.checkpoint_schema_version}
             or document.capacity != self.registry._capacity
             or type(retention) is not timedelta
             or retention != self.registry._retention
@@ -481,7 +494,9 @@ class LocalArtifactVersionRegistryParticipant:
             document.records,
         )
         for row in document.records:
-            shard_id, order = _restore_row(self.registry, row, lease_rows)
+            shard_id, order = _restore_row(
+                self.registry, row, lease_rows, legacy=document.schema_version == "1"
+            )
             if order and order in deadline_orders[shard_id]:
                 raise CheckpointCorruptionError(
                     "local artifact checkpoint deadline order is duplicated"

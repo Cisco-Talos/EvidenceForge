@@ -59,11 +59,32 @@ def macos_system_job_deployment_identity(
 
 def macos_system_job_content_seed(spec: LaunchdSystemJobSpec) -> str:
     """Bind modeled file content to the exact bounded job semantics."""
-    # Exclude loaded placement/installation fields if passed a loaded definition.
-    semantic_spec = LaunchdSystemJobSpec(
-        **{name: getattr(spec, name) for name in LaunchdSystemJobSpec.model_fields}
+    return spec.content_seed
+
+
+def macos_system_job_definition_from_file(
+    *,
+    runtime_content: RuntimeContentIdentityManager,
+    deployment_identity: RuntimeServiceDeploymentIdentity,
+    principal: str,
+    native_path: str,
+) -> LaunchdSystemJobDefinition:
+    """Read the modeled job semantics from the current retained file version."""
+    record = runtime_content.resolve_record(
+        deployment_identity.hostname, principal, native_path, "macos"
     )
-    return stable_uuid("macos-launchd-definition", semantic_spec.model_dump_json())
+    if record is None or record.launchd_job is None:
+        raise ValueError("Launchd bootstrap requires a current file with bounded job semantics")
+    logical_id = stable_uuid(
+        "macos-launchd-system-job", record.artifact.hostname, record.launchd_job.label
+    )
+    if deployment_identity.canonical_name != f"macos-launchd-system:{logical_id}":
+        raise ValueError("Launchd file label must match its exact installation")
+    return LaunchdSystemJobDefinition(
+        **record.launchd_job.model_dump(),
+        installation=deployment_identity,
+        plist=record.artifact,
+    )
 
 
 def macos_system_job_bootstrap_plan(
@@ -116,6 +137,8 @@ def macos_system_job_bootstrap_plan(
         or record.artifact != artifact
         or record.binary is not None
         or record.content.seed_ref != macos_system_job_content_seed(definition)
+        or record.launchd_job is None
+        or record.launchd_job.content_seed != definition.content_seed
     ):
         raise ValueError(
             "Launchd bootstrap requires the current canonical plist content and definition"
