@@ -251,6 +251,13 @@ def _compiled_application_descriptor(
         ),
         singleton_per_session=application.singleton_per_session,
         selection_ordinal=selection_ordinal,
+        child_commands=tuple(
+            (
+                child_image_from_command(platform, command, platform_config.image_path),
+                command,
+            )
+            for command in platform_config.children or ()
+        ),
     )
 
 

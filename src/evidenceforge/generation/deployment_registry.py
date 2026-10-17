@@ -1936,6 +1936,7 @@ def _require_exact_application_descriptor_graph(
     command_parameter_pools: object,
     singleton_per_session: object,
     selection_ordinal: object,
+    child_commands: object,
 ) -> None:
     """Reject callback-capable descriptor values before any virtual operation."""
 
@@ -1952,6 +1953,15 @@ def _require_exact_application_descriptor_graph(
         raise ValueError("compiled application command_templates exceeds the bounded limit")
     if any(type(value) is not str for value in command_templates):
         raise ValueError("command_templates must contain exact str values")
+    if type(child_commands) is not tuple:
+        raise ValueError("child_commands must be an exact tuple")
+    if len(child_commands) > _MAX_APPLICATION_COMMAND_TEMPLATES:
+        raise ValueError("compiled application child_commands exceeds the bounded limit")
+    for child in child_commands:
+        if type(child) is not tuple or len(child) != 2:
+            raise ValueError("child_commands entries must be exact image/command tuples")
+        if any(type(value) is not str for value in child):
+            raise ValueError("child_commands must contain exact str values")
     if type(categories) is not tuple:
         raise ValueError("categories must be an exact tuple")
     if len(categories) > _MAX_APPLICATION_DESCRIPTOR_CATEGORIES:
@@ -1995,6 +2005,7 @@ class CompiledApplicationDescriptor:
     command_parameter_pools: tuple[tuple[str, tuple[str, ...]], ...] = ()
     singleton_per_session: bool = False
     selection_ordinal: int = 0
+    child_commands: tuple[tuple[str, str], ...] = ()
     executable: str = field(init=False)
     command_parameter_pool_names: tuple[str, ...] = field(init=False, repr=False)
     uses_username: bool = field(init=False, repr=False)
@@ -2012,6 +2023,7 @@ class CompiledApplicationDescriptor:
             command_parameter_pools=self.command_parameter_pools,
             singleton_per_session=self.singleton_per_session,
             selection_ordinal=self.selection_ordinal,
+            child_commands=self.child_commands,
         )
         platform = _normalize_platform(self.platform)
         application_id = _normalize_name(
@@ -2108,6 +2120,25 @@ class CompiledApplicationDescriptor:
         if type(self.selection_ordinal) is not int or self.selection_ordinal < 0:
             raise ValueError("selection_ordinal must be a non-negative exact int")
         command_parameter_pools = tuple(sorted(parameter_pools, key=lambda item: item[0]))
+        normalized_children: list[tuple[str, str]] = []
+        children_use_username = False
+        for child_image, child_command in self.child_commands:
+            # Apply the same executable, placeholder and expansion contract as
+            # a main command. The temporary child has no descendants, so this
+            # cannot recurse through caller-supplied descriptor graphs.
+            child = CompiledApplicationDescriptor(
+                application_id=application_id,
+                platform=platform,
+                image_path=child_image,
+                command_templates=(child_command,),
+                categories=categories,
+                command_parameter_pools=command_parameter_pools,
+            )
+            charge_text(child.image_path)
+            charge_text(child.command_templates[0])
+            normalized_children.append((child.image_path, child.command_templates[0]))
+            children_use_username = children_use_username or child.uses_username
+        child_commands = tuple(normalized_children)
         _validate_application_command_expansion_bounds(
             command_templates,
             command_parameter_pools,
@@ -2140,6 +2171,7 @@ class CompiledApplicationDescriptor:
         object.__setattr__(self, "image_path", image_path)
         object.__setattr__(self, "command_templates", command_templates)
         object.__setattr__(self, "categories", categories)
+        object.__setattr__(self, "child_commands", child_commands)
         object.__setattr__(
             self,
             "command_parameter_pools",
@@ -2153,7 +2185,8 @@ class CompiledApplicationDescriptor:
         object.__setattr__(
             self,
             "uses_username",
-            "username" in image_placeholders
+            children_use_username
+            or "username" in image_placeholders
             or any(
                 match.group(1) == "username"
                 for value in (
@@ -4923,22 +4956,34 @@ def _unpack_application_profile(row: bytes) -> ApplicationProfileIdentity:
 
 
 def _pack_application_descriptor(value: CompiledApplicationDescriptor) -> bytes:
-    return _json_row(
-        (
-            value.application_id,
-            value.platform,
-            value.image_path,
-            value.command_templates,
-            value.categories,
-            value.command_parameter_pools,
-            value.singleton_per_session,
-            value.selection_ordinal,
-        )
+    values: tuple[object, ...] = (
+        value.application_id,
+        value.platform,
+        value.image_path,
+        value.command_templates,
+        value.categories,
+        value.command_parameter_pools,
+        value.singleton_per_session,
+        value.selection_ordinal,
     )
+    return _json_row((*values, value.child_commands) if value.child_commands else values)
 
 
 def _unpack_application_descriptor(row: bytes) -> CompiledApplicationDescriptor:
     values = cast(list[object], json.loads(row))
+    if type(values) is not list or len(values) not in {8, 9}:
+        raise ValueError("Unsupported compiled application descriptor row")
+    child_commands: tuple[tuple[str, str], ...] = ()
+    if len(values) == 9:
+        children = values[8]
+        if type(children) is not list or any(
+            type(child) is not list
+            or len(child) != 2
+            or any(type(value) is not str for value in child)
+            for child in children
+        ):
+            raise ValueError("Invalid compiled application child command row")
+        child_commands = tuple((child[0], child[1]) for child in children)
     return CompiledApplicationDescriptor(
         application_id=cast(str, values[0]),
         platform=cast(Platform, values[1]),
@@ -4951,6 +4996,7 @@ def _unpack_application_descriptor(row: bytes) -> CompiledApplicationDescriptor:
         ),
         singleton_per_session=cast(bool, values[6]),
         selection_ordinal=cast(int, values[7]),
+        child_commands=child_commands,
     )
 
 
@@ -5760,6 +5806,7 @@ class DeploymentContentRegistry:
                 command_parameter_pools=source.command_parameter_pools,
                 singleton_per_session=source.singleton_per_session,
                 selection_ordinal=source.selection_ordinal,
+                child_commands=source.child_commands,
             )
             retained_text_bytes += descriptor.retained_text_bytes
             if retained_text_bytes > _MAX_APPLICATION_DESCRIPTOR_REGISTRY_TEXT_BYTES:
@@ -5956,7 +6003,10 @@ class DeploymentContentRegistry:
                 if command_is_bounded is None:
                     try:
                         _validate_application_command_expansion_bounds(
-                            descriptor.command_templates,
+                            (
+                                *descriptor.command_templates,
+                                *(command for _image, command in descriptor.child_commands),
+                            ),
                             descriptor.command_parameter_pools,
                             literal_replacements=(("username", materialization_principal),),
                         )
@@ -6934,8 +6984,63 @@ class DeploymentContentRegistry:
             normalized_username = _normalize_principal(username, registered.platform)
             if normalized_username != registered.principal:
                 return None
+        return image_path, self._materialize_compiled_application_command(
+            rng,
+            descriptor,
+            registered.materialization_principal,
+            rng.choice(descriptor.command_templates),
+        )
+
+    def materialize_application_child_command(
+        self,
+        rng: random.Random,
+        assignment: UserApplicationAssignment,
+        *,
+        child_index: int,
+        username: str = "",
+    ) -> tuple[str, str] | None:
+        """Materialize one installed helper from the exact frozen parent assignment.
+
+        Selection, parent binding and process lifecycle belong to the calling
+        action bundle. This method neither chooses nor launches a child.
+        """
+        if type(child_index) is not int or child_index < 0:
+            return None
+        resolved = self._application_runtime_for_assignment(assignment)
+        if resolved is None:
+            return None
+        registered, descriptor, installation = resolved
+        if child_index >= len(descriptor.child_commands):
+            return None
+        if username and _normalize_principal(username, registered.platform) != registered.principal:
+            return None
+        image, template = descriptor.child_commands[child_index]
+        image = image.replace("{username}", registered.materialization_principal)
+        path_key = canonical_native_path(image, registered.platform)
+        installed_image = next(
+            (
+                path
+                for path in installation.image_paths
+                if canonical_native_path(path, registered.platform) == path_key
+            ),
+            None,
+        )
+        if installed_image is None:
+            return None
+        return installed_image, self._materialize_compiled_application_command(
+            rng, descriptor, registered.materialization_principal, template
+        )
+
+    @staticmethod
+    def _materialize_compiled_application_command(
+        rng: random.Random,
+        descriptor: CompiledApplicationDescriptor,
+        principal: str,
+        template: str,
+    ) -> str:
+        """Expand a validated frozen template using its owning application pools."""
         output: list[str] = []
-        stack: list[tuple[str, str]] = [("text", rng.choice(descriptor.command_templates))]
+        stack: list[tuple[str, str]] = [("text", template)]
         while stack:
             kind, value = stack.pop()
             if kind == "literal":
@@ -6944,7 +7049,7 @@ class DeploymentContentRegistry:
             if kind == "placeholder":
                 name = value[1:-1]
                 if name == "username":
-                    output.append(registered.materialization_principal)
+                    output.append(principal)
                     continue
                 values = descriptor._command_parameter_values(name)
                 if values is None:
@@ -6963,7 +7068,7 @@ class DeploymentContentRegistry:
                 segments.append(("literal", value[cursor:]))
             for segment_kind, segment_value in reversed(segments):
                 stack.append((segment_kind, segment_value))
-        return image_path, "".join(output)
+        return "".join(output)
 
     def host_deployment(self, hostname: str) -> HostDeployment | None:
         """Return the immutable compiled deployment for one exact host."""

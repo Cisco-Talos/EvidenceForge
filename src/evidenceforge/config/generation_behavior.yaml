@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 209
+current_revision: 210
 history_start_revision: 1
-behavior_surface_sha256: 881aa76e044a8cc497a6ae706037669596e9de2a6cf3ab5deaf4e04e2b4547f0
+behavior_surface_sha256: 26761825e508220794980a05f175d21cf7ded22671bae779b65beefefdf19274
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2056,3 +2056,11 @@ changes:
     formats:
       - ecar
     summary: Adds three bounded Chrome Mac helper roles under the existing child catalog and installed release, preserving platform isolation without inferring native signatures or automatic helper lifecycles.
+  - revision: 210
+    id: compiled-application-helper-intent
+    impact: none
+    domains:
+      - application-deployment
+      - process-catalog
+    formats: []
+    summary: Retains bounded helper image/command intent in immutable application descriptors and materializes it only for an exact installed assignment, preserving old packed rows without enabling automatic helper spawning.
