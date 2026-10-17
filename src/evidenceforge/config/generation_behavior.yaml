@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 208
+current_revision: 209
 history_start_revision: 1
-behavior_surface_sha256: 3d62c07fb893a71c8814d1f51216874d550d7dd804ca0947a7422f2febf8016a
+behavior_surface_sha256: 881aa76e044a8cc497a6ae706037669596e9de2a6cf3ab5deaf4e04e2b4547f0
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2047,3 +2047,12 @@ changes:
       - process-lifecycle
     formats: []
     summary: Prepares terminal unload for dormant or single-process Mac system jobs through shared closure owners, retaining file state and rejecting unsupported child-process group inference without enabling native or authored persistence.
+  - revision: 209
+    id: macos-chrome-helper-catalog
+    impact: localized
+    domains:
+      - application-deployment
+      - process-catalog
+    formats:
+      - ecar
+    summary: Adds three bounded Chrome Mac helper roles under the existing child catalog and installed release, preserving platform isolation without inferring native signatures or automatic helper lifecycles.

@@ -659,3 +659,13 @@ Revision 208 adds an internal terminal unload adapter for dormant or single-proc
 The isolated candidate passes **240 shared owner tests**, followed by **11 unload tests** including the added post-exec case, and **two slow generation/recovery gates** (49.68 seconds). Tests cover dormant unload, active closure with a present or removed plist, prior process exit, precommit rollback/retry, checkpoint restoration and a child added after planning. Apple’s archived launchd.plist reference establishes group and signal distinctions, not macOS 26 native messages or measured delays. Authored orchestration, group ownership and native persistence output remain open. No public scenario/configuration fields changed.
 
 Actual revision 208 passes **241 shared owner tests** (4.71 seconds, `launch-unload-actual-owners.txt`). Ruff, formatting (1,127 files), behavior and whitespace checks pass. Digest: `3d62c07fb893a71c8814d1f51216874d550d7dd804ca0947a7422f2febf8016a`. The full routine baseline is revision 207 above; both isolated slow gates passed on the same unload implementation.
+
+Committed and pushed the unload slice as `e760e564`.
+
+### Chrome helper catalog and deployment identity
+
+Revision 209 adds three Mac Chrome helper roles through the existing `children` catalog field: renderer, GPU and utility/network. Public Chromium build/signing sources establish their bundle layout and role names. The existing deployment compiler gives each a distinct binary/content identity within the browser’s arm64 managed release; no Windows/Linux entry changes or new configuration fields are needed. Versioned paths must change with an authored release override. Commands are minimal role templates, not measured native command lines; signing, IPC/sandbox tokens and automatic helper lifecycles remain unclaimed.
+
+The isolated candidate passes **131 catalog/deployment/configuration tests** (7.70 seconds) and the mixed-fleet fresh-process/filter gate (**1 passed**, 30.41 seconds). Windows/Linux evidence remains byte-identical to original dev, **11 files each** (`legacy-equivalence-chrome-helpers-209/`). The compiled baseline intentionally avoids mutable catalog lookup for child spawning; a future helper lifecycle must consume frozen compiled intent. Actual branch checks follow.
+
+Actual revision 209 passes **131 focused tests** (7.00 seconds, `chrome-helpers-actual-owners.txt`). Ruff, formatting (1,128 files), behavior and whitespace checks pass. Digest: `881aa76e044a8cc497a6ae706037669596e9de2a6cf3ab5deaf4e04e2b4547f0`. The isolated mixed-fleet slow gate and legacy byte comparison use the same catalog implementation.

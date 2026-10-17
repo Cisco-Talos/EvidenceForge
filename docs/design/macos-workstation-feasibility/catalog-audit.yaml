@@ -7,7 +7,8 @@ applications:
   availability: supported
   variant: prefilled
   reference: https://formulae.brew.sh/cask/google-chrome
-  boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
+  boundary: Arm64 main executable and three version-owned helper roles prefilled; complete helper lifecycle and native telemetry remain unvalidated.
+  helper_reference: https://chromium.googlesource.com/chromium/src/+/HEAD/chrome/BUILD.gn
 - id: firefox
   availability: supported
   variant: prefilled

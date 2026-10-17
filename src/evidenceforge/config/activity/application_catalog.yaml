@@ -40,6 +40,11 @@ applications:
           - arm64
         command_templates:
         - '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --new-window {internal_url}'
+        # Minimal role arguments; runtime IPC/sandbox switches remain unmodeled.
+        children:
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)" --type=renderer'
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper (GPU).app/Contents/MacOS/Google Chrome Helper (GPU)" --type=gpu-process'
+        - '"/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.80/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper" --type=utility --utility-sub-type=network.mojom.NetworkService'
       windows:
         image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
         deployment:
