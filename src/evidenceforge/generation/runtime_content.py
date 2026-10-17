@@ -220,6 +220,7 @@ class RuntimeContentIdentityManager:
         content_version: int = 1,
         artifact_version: int = 1,
         pe_version_info: PeVersionInfo | None = None,
+        launchd_job: LaunchdSystemJobSpec | None = None,
         retention: timedelta | None = None,
         lease_owner: str = "",
         lease_until: datetime | None = None,
@@ -240,6 +241,12 @@ class RuntimeContentIdentityManager:
         """
 
         normalized_action = str(action).strip().casefold()
+        if launchd_job is not None:
+            if platform != "macos" or executable or normalized_action not in {"create", "modify"}:
+                raise ValueError("launchd job semantics require a non-executable Mac file write")
+            if authored_content_seed_ref and authored_content_seed_ref != launchd_job.content_seed:
+                raise ValueError("launchd file content seed must match its bounded job semantics")
+            authored_content_seed_ref = launchd_job.content_seed
         if normalized_action in {"read", "delete"}:
             return None
         if normalized_action not in {"create", "modify"}:
@@ -345,6 +352,7 @@ class RuntimeContentIdentityManager:
             executable=executable,
             architecture=resolved_architecture if executable else None,
             pe_version_info=pe_version_info,
+            launchd_job=launchd_job,
         )
         return self.prepare_publication(
             descriptor,

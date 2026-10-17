@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 206
+current_revision: 207
 history_start_revision: 1
-behavior_surface_sha256: ed7ae2bd14b720ab1afe7f2b0cd9f606ca4879b3aed1e3f73fbc6e69e1b8ee30
+behavior_surface_sha256: e879579f807404b7e1573a1514a69969e62f72295edcb95fc15c4b189a768edd
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2031,3 +2031,11 @@ changes:
       - checkpoint-restoration
     formats: []
     summary: Removes retained local placements independently of immutable content and loaded jobs, prevents older-version resurrection, and restores compatible artifact heads without enabling authored persistence or native messages.
+  - revision: 207
+    id: macos-process-owned-launchd-file-writes
+    impact: none
+    domains:
+      - file-content-identity
+      - process-file-effects
+    formats: []
+    summary: Prepares bounded job-definition writes through existing atomic process-owned file effects while preserving loaded-job separation, collection independence and rollback without enabling authored persistence or native messages.

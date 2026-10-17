@@ -23,7 +23,17 @@ from evidenceforge.events.macos_launchd import (
     LaunchdSystemJobSpec,
     validate_launchd_label,
 )
-from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
+from evidenceforge.generation.actions.command_effects import FileEffectAction, FileEffectIntent
+from evidenceforge.generation.actions.endpoint_effects import (
+    EndpointEffectSpec,
+    EndpointStateDisposition,
+    PreparedEndpointEffect,
+    PreparedFileEffectPayload,
+)
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactPublishToken,
+)
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import (
     ServiceLifecyclePublicationPlan,
@@ -84,6 +94,44 @@ def macos_system_job_definition_from_file(
         **record.launchd_job.model_dump(),
         installation=deployment_identity,
         plist=record.artifact,
+    )
+
+
+def macos_system_job_write_effect(
+    *,
+    publication: LocalArtifactPublishToken,
+    action: FileEffectAction,
+    instance_key: str,
+    retention_deadline: datetime,
+) -> PreparedEndpointEffect:
+    """Bind an exact reserved job file to the shared process-owned effect path.
+
+    The caller owns writer identity, scheduling and token cancellation if root
+    preflight fails. The ordinary process bundle owns atomic canonical file and
+    source publication. Writing a definition does not bootstrap or run a job.
+    """
+    retention_deadline = ensure_utc(retention_deadline)
+    if retention_deadline > publication.retained_until:
+        raise ValueError("Launchd write retention cannot exceed its reserved file lifetime")
+    record = publication.record
+    if record.artifact.platform != "macos" or record.launchd_job is None:
+        raise ValueError("Launchd write requires canonical Mac job file metadata")
+    if action not in {FileEffectAction.CREATE, FileEffectAction.MODIFY}:
+        raise ValueError("Launchd write action must be create or modify")
+    return PreparedEndpointEffect(
+        spec=EndpointEffectSpec(
+            intent=FileEffectIntent(action=action, path=record.artifact.native_path),
+            occurrence_times=(publication.observed_at,),
+            instance_key=instance_key,
+            state_disposition=EndpointStateDisposition.DURABLE_FINAL,
+            retention_deadline=retention_deadline,
+        ),
+        event_type="file_create" if action == FileEffectAction.CREATE else "file_modify",
+        payload=PreparedFileEffectPayload(
+            path=record.artifact.native_path,
+            action=action,
+            artifact_publication=publication,
+        ),
     )
 
 
