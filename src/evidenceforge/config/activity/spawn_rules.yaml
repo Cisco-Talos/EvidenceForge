@@ -459,6 +459,16 @@ linux:
 # Native macOS ancestry. These are eligible relationships, not a claim that
 # every application or helper starts in every session.
 macos:
+  Google Chrome:
+    command_templates: ['"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"']
+    lifetime: long
+    # Modeled bounds for the initial helper subset, not empirical browser counts.
+    spawn_delay: [0.5, 3.0]
+    max_children: 3
+    children:
+      - Google Chrome Helper (Renderer)
+      - Google Chrome Helper (GPU)
+      - Google Chrome Helper
   launchd:
     command_templates: [/sbin/launchd]
     lifetime: long

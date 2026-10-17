@@ -89,6 +89,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     macos_receiver: bool,
     authored_close: bool,
     native: bool = False,
+    helpers: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -149,6 +150,15 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
+    if helpers:
+        # Cross the normal GUI session close, not only the collection cutoff.
+        scenario_data["time_window"]["duration"] = "12h"
+        scenario_data["environment"]["deployment_overrides"] = [
+            {
+                "system": "MAC-01",
+                "user_applications": [{"user": "alex", "applications": ["chrome", "macos-zsh"]}],
+            }
+        ]
     if start is not None:
         scenario_data["time_window"]["start"] = start
         scenario_data["storyline"] = [
@@ -253,6 +263,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
             assert any(len(row) == 32 and row[31] is not None for row in head["ssh_lifecycles"]), (
                 "The active continuation must retain its authored end owner"
             )
+    retained_helpers: set[str] = set()
+    if helpers:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        retained_helpers = {
+            process.ecar_object_id for _key, process in processes if "/Helpers/" in process.image
+        }
+        assert retained_helpers, "The checkpoint must retain live browser helpers"
     _run_cli("checkpoint", "verify", str(output), environment=environment)
     assert index.read_bytes() == before_verify
     _run_cli("generate", "--output", str(output), "--resume", environment=environment)
@@ -290,6 +314,17 @@ def test_short_generation_checkpoint_suspension_and_resume(
         timestamps = [datetime.fromisoformat(record.timestamp) for record in records]
         assert any(timestamp < cursor_time for timestamp in timestamps)
         assert any(timestamp > cursor_time for timestamp in timestamps)
+    if helpers:
+        rows = [
+            json.loads(line)
+            for name, content in resumed_files.items()
+            if "/MAC-01." in name and name.endswith("/ecar.json")
+            for line in content.splitlines()
+        ]
+        ends = {row["objectID"]: row for row in rows if row["action"] == "TERMINATE"}
+        cursor_ms = int(datetime(2026, 10, 19, 15, tzinfo=UTC).timestamp() * 1000)
+        assert retained_helpers <= ends.keys()
+        assert all(ends[object_id]["timestamp_ms"] > cursor_ms for object_id in retained_helpers)
     if start is not None:
         for index in range(2):
             assert any(
@@ -347,4 +382,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
 def test_macos_native_workspace_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
     test_short_generation_checkpoint_suspension_and_resume(
         tmp_path, scenarios_dir, "default", None, True, None, False, False, False, native=True
+    )
+
+
+@pytest.mark.slow
+def test_macos_browser_helper_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        helpers=True,
     )

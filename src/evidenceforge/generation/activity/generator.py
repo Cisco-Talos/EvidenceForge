@@ -329,6 +329,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.cryptographic_material import CryptographicMaterialRegistry
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
+    UserApplicationAssignment,
 )
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.http_channels import HttpApplicationChannelManager
@@ -679,7 +680,7 @@ from .process_helpers import (
 from .process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
-from .process_helpers import _posix_shell_process_reserves_foreground
+from .process_helpers import _posix_foreground_lifetime, _posix_shell_process_reserves_foreground
 from .process_helpers import (
     _process_termination_delay_after_activity_seconds as _process_termination_delay_after_activity_seconds,
 )
@@ -8070,7 +8071,7 @@ class ActivityGenerator:
         lifetime = (
             _windows_foreground_lifetime(image, command_line)
             if os_category == "windows"
-            else _linux_foreground_lifetime(image, command_line)
+            else _posix_foreground_lifetime(os_category, image, command_line)
         )
         if lifetime is None:
             return
@@ -9116,7 +9117,7 @@ class ActivityGenerator:
             lifetime = (
                 _windows_foreground_lifetime(process.image, process.command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(process.image, process.command_line)
+                else _posix_foreground_lifetime(os_category, process.image, process.command_line)
             )
             if lifetime is not None:
                 return True
@@ -10346,7 +10347,7 @@ class ActivityGenerator:
         process_lifetime = (
             _windows_foreground_lifetime(image, command_line)
             if os_category == "windows"
-            else _linux_foreground_lifetime(image, command_line)
+            else _posix_foreground_lifetime(os_category, image, command_line)
         )
         if process_lifetime is not None:
             lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
@@ -15557,7 +15558,7 @@ class ActivityGenerator:
                 )
                 else _windows_foreground_lifetime(identity.image, identity.command_line)
                 if os_category == "windows"
-                else _linux_foreground_lifetime(identity.image, identity.command_line)
+                else _posix_foreground_lifetime(os_category, identity.image, identity.command_line)
             )
             if process_lifetime is not None:
                 lifetime_rng = random.Random(
@@ -27881,6 +27882,105 @@ class ActivityGenerator:
         )
         return int(sampled + 0.5)
 
+    def _generate_macos_application_children(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+        assignment: UserApplicationAssignment,
+        rng: random.Random,
+    ) -> tuple[int, ...]:
+        """Launch profiled installed helpers through the ordinary process owner.
+
+        Counts and delays are modeled spawn-rule values. Helpers share the live
+        GUI session's close owner; this does not model browser IPC or networking.
+        """
+        from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+        registry = getattr(self.dispatcher, "deployment_registry", None)
+        if registry is None or _get_os_category(system.os) != "macos":
+            return ()
+        descriptor = registry.application_descriptor_for_assignment(assignment)
+        if descriptor is None or not descriptor.child_commands:
+            return ()
+        parent = self.state_manager.get_process(system.hostname, parent_pid)
+        session = self._active_user_local_macos_session(user, system, time)
+        if (
+            parent is None
+            or session is None
+            or session.logon_id != logon_id
+            or parent.logon_id != logon_id
+            or parent.username != user.username
+            or assignment.hostname.casefold() != system.hostname.casefold()
+            or assignment.principal != user.username
+            or parent.image != registry.application_executable_for_assignment(assignment)
+        ):
+            return ()
+        profile = get_parent_config("macos", descriptor.executable)
+        allowed = set(profile.get("children", ()))
+        eligible = [
+            index
+            for index, (image, _command) in enumerate(descriptor.child_commands)
+            if image.rsplit("/", 1)[-1] in allowed
+        ]
+        if not eligible:
+            return ()
+        maximum = profile.get("max_children", len(eligible))
+        maximum = len(eligible) if maximum is None else maximum
+        delay = profile.get("spawn_delay") or [0.5, 3.0]
+        if (
+            type(maximum) is not int
+            or maximum < 1
+            or len(delay) != 2
+            or any(not math.isfinite(value) for value in delay)
+            or not 0 <= delay[0] <= delay[1]
+        ):
+            raise StateError("Mac application helper spawn rule requires positive count and delays")
+        floor = max(
+            ensure_utc(time),
+            ensure_utc(parent.start_time),
+            self.process_source_create_bound(system, parent_pid) or ensure_utc(time),
+        )
+        selected = rng.sample(eligible, rng.randint(1, min(maximum, len(eligible))))
+        starts = sorted(floor + timedelta(seconds=rng.uniform(*delay)) for _ in selected)
+        created: list[int] = []
+        for index, child_time in zip(selected, starts, strict=True):
+            visible_bound = (
+                child_time
+                + self._source_timing_planner.process_create_positive_headroom(child_time, "macos")
+            )
+            if not _session_active_for_activity(
+                session, visible_bound
+            ) or not self._is_within_scenario_window(visible_bound):
+                continue
+            materialized = registry.materialize_application_child_command(
+                rng, assignment, child_index=index, username=user.username
+            )
+            if materialized is None:
+                continue
+            image, command = materialized
+            command = self._parameterize_command_for_system(
+                rng, command, username=user.username, system=system
+            )
+            pid = self.generate_process(
+                user,
+                system,
+                child_time,
+                logon_id,
+                image,
+                command,
+                parent_pid=parent_pid,
+                require_exact_parent=True,
+                allow_existing_browser_reuse=False,
+                allow_browser_launch_spacing=False,
+            )
+            if pid > 0:
+                created.append(pid)
+        return tuple(created)
+
     def execute_baseline_activity(
         self, user: User, system: System, time: datetime, activity_type: str
     ) -> None:
@@ -27931,10 +28031,10 @@ class ActivityGenerator:
                 and not is_service_account
                 and sys_type not in ("server", "domain_controller")
             ):
-                active_interactive = self._active_user_workstation_windows_session(
-                    user,
-                    system,
-                    time,
+                active_interactive = (
+                    self._active_user_local_macos_session(user, system, time)
+                    if os_category == "macos"
+                    else self._active_user_workstation_windows_session(user, system, time)
                 )
             if active_interactive is not None and logon_type in (2, 7, 11):
                 # A baseline "logon" activity while the same user's console
@@ -28470,7 +28570,22 @@ class ActivityGenerator:
                     )
 
                     # Spawn child/utility processes for apps that have them
-                    if activity_type == "process_user_apps" and deployment_registry is None:
+                    if (
+                        activity_type == "process_user_apps"
+                        and os_category == "macos"
+                        and deployment_registry is not None
+                        and selected_assignment is not None
+                    ):
+                        self._generate_macos_application_children(
+                            user=user,
+                            system=system,
+                            time=process_time,
+                            logon_id=logon_id,
+                            parent_pid=pid,
+                            assignment=selected_assignment,
+                            rng=rng,
+                        )
+                    elif activity_type == "process_user_apps" and deployment_registry is None:
                         from evidenceforge.generation.activity.application_catalog import (
                             get_child_processes,
                             parameterize_scoped_command,

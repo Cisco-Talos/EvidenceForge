@@ -10,13 +10,28 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.support.output_equivalence import deterministic_bundle_files
 
 
 @pytest.mark.slow
-def test_mac_mixed_fleet_isolation_fresh_process_determinism_and_filtering(tmp_path: Path) -> None:
+@pytest.mark.parametrize("helpers", [False, True], ids=["ordinary", "browser-helpers"])
+def test_mac_mixed_fleet_isolation_fresh_process_determinism_and_filtering(
+    tmp_path: Path, helpers: bool
+) -> None:
     scenario = Path("scenarios/macos-workstation-example/mixed-fleet.yaml").resolve()
+    if helpers:
+        payload = yaml.safe_load(scenario.read_text())
+        payload["baseline_activity"]["intensity"] = "high"
+        payload["environment"]["deployment_overrides"] = [
+            {
+                "system": "MAC-01",
+                "user_applications": [{"user": "alex", "applications": ["chrome", "macos-zsh"]}],
+            }
+        ]
+        scenario = tmp_path / "helpers.yaml"
+        scenario.write_text(yaml.safe_dump(payload))
     outputs: list[Path] = []
     for label, hash_seed, formats in [
         ("first", "17", ""),
@@ -76,3 +91,28 @@ def test_mac_mixed_fleet_isolation_fresh_process_determinism_and_filtering(tmp_p
     assert "C:\\" not in json.dumps(processes)
     assert any("/WIN-01." in name and name.endswith(".xml") for name in first)
     assert any("/LINUX-01." in name and "syslog" in name for name in first)
+
+    if helpers:
+        children = [
+            row
+            for row in processes
+            if row["action"] == "CREATE" and "/Helpers/" in row["properties"]["image_path"]
+        ]
+        assert children
+        creates = {row["objectID"]: row for row in processes if row["action"] == "CREATE"}
+        ends = {row["objectID"]: row for row in processes if row["action"] == "TERMINATE"}
+        for child in children:
+            parent = creates[child["actorID"]]
+            assert parent["properties"]["image_path"].endswith("/MacOS/Google Chrome")
+            assert parent["pid"] == child["ppid"]
+            assert parent["timestamp_ms"] < child["timestamp_ms"]
+            if parent["objectID"] in ends:
+                assert (
+                    child["timestamp_ms"]
+                    < ends[child["objectID"]]["timestamp_ms"]
+                    <= ends[parent["objectID"]]["timestamp_ms"]
+                )
+            else:
+                # An active session beyond collection need not have a visible close.
+                assert child["objectID"] not in ends
+            assert parent["properties"]["logon_id"] == child["properties"]["logon_id"]

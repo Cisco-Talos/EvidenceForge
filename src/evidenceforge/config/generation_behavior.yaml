@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 210
+current_revision: 211
 history_start_revision: 1
-behavior_surface_sha256: 26761825e508220794980a05f175d21cf7ded22671bae779b65beefefdf19274
+behavior_surface_sha256: 20cc45a3d2cb908f01da9b99713dc05a846575ce1bd5e5d50e25fb405c27acc4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2064,3 +2064,12 @@ changes:
       - process-catalog
     formats: []
     summary: Retains bounded helper image/command intent in immutable application descriptors and materializes it only for an exact installed assignment, preserving old packed rows without enabling automatic helper spawning.
+  - revision: 211
+    id: macos-profiled-application-helper-lifecycle
+    impact: localized
+    domains:
+      - baseline-process-lifecycle
+      - application-deployment
+    formats:
+      - ecar
+    summary: Launches admitted Mac helper subsets from frozen installed commands and spawn-rule bounds through exact parent/session process ownership, with collection-independent deadlines and ordinary session closure.

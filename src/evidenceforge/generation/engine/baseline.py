@@ -89,7 +89,6 @@ from evidenceforge.generation.activity.generator import (
     _dns_base_ttl,
     _dns_is_internal_name,
     _dns_rtt,
-    _linux_foreground_lifetime,
     _linux_uid_for_user,
     _nmap_probe_profile,
     _nmap_target_exposes_port,
@@ -120,6 +119,7 @@ from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
 )
+from evidenceforge.generation.activity.process_helpers import _posix_foreground_lifetime
 from evidenceforge.generation.activity.suspicious_benign import (
     generate_after_hours_admin,
     generate_failed_logon_burst,
@@ -3354,7 +3354,9 @@ class BaselineMixin:
         if _get_os_category(system.os) == "windows":
             lifetime = _windows_foreground_lifetime(running.image, running.command_line)
         else:
-            lifetime = _linux_foreground_lifetime(running.image, running.command_line)
+            lifetime = _posix_foreground_lifetime(
+                _get_os_category(system.os), running.image, running.command_line
+            )
         if lifetime is None:
             return
         canonical_start = max(ensure_utc(start_time), ensure_utc(running.start_time))
@@ -7262,6 +7264,10 @@ class BaselineMixin:
 
         rng = _get_rng()
         for system in self.scenario.environment.systems:
+            # Mac foreground plans and session/operation owners already own close.
+            # Windows fallback durations must not retroactively end those lifetimes.
+            if _get_os_category(system.os) == "macos":
+                continue
             protected_pids = set(seeded_pids.get(system.hostname, ()))
             # Session teardown owns explicit anchors, and no generic stale close may
             # consume a process while a live child still depends on it.

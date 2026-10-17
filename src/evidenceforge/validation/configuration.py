@@ -2834,6 +2834,8 @@ def _validate_process_chains(
     sys_proc_data: dict[str, Any],
 ) -> None:
     """Validate process chains in the established diagnostic order."""
+    from evidenceforge.generation.activity.application_catalog import child_image_from_command
+
     # --- Checks 18-20: Process Chain ---
     # Collect all exe basenames from spawn rules
     spawn_children: set[str] = set()
@@ -2847,13 +2849,17 @@ def _validate_process_chains(
     catalog_exes: set[str] = set()
     persona_exes: set[str] = set()
     for app in apps:
-        for platform in app.get("platforms", {}).values():
+        for platform_name, platform in app.get("platforms", {}).items():
             image_path = platform.get("image_path", "")
             if image_path:
                 basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                 catalog_exes.add(basename)
                 if app.get("personas"):
                     persona_exes.add(basename)
+                for command in platform.get("children", ()):
+                    child_image = child_image_from_command(platform_name, command, image_path)
+                    basename = child_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                    catalog_exes.add(basename)
 
     # sys_proc_data loaded above via overlay-aware loader
     system_exes: set[str] = set()
