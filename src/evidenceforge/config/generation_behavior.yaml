@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 214
+current_revision: 215
 history_start_revision: 1
-behavior_surface_sha256: b2dd5bc89ffb19557857e0b1d7839e7dd5a505d4942f179c2c9a32c18c14f4a4
+behavior_surface_sha256: 8cd218920c8f9ae879b9aca34bd740978c59ea17455319be77311cc486966ed5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2101,3 +2101,13 @@ changes:
     formats:
       - ecar
     summary: Adds host-build arm64 launchctl and plutil entries with explicit query-only command pools and bounded foreground lifetimes, without automatic baseline activation or persistence effects.
+  - revision: 215
+    id: explicit-posix-process-terminal-results
+    impact: localized
+    domains:
+      - process-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Retains explicit POSIX exit or signal results in authenticated termination state and projections, preserves unknown legacy outcomes, and provides bounded Darwin wait-status conversion without admitting native generation.

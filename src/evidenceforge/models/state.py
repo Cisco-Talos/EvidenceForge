@@ -44,6 +44,7 @@ from evidenceforge.events.identity import (
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
+from evidenceforge.events.process_outcome import PosixProcessExit
 
 
 @dataclass
@@ -155,6 +156,7 @@ class RunningProcess:
     audit_binding: MacosProcessAuditBinding | None = None
     privilege_drop: MacosProcessPrivilegeDrop | None = None
     service_drop: MacosProcessServiceDrop | None = None
+    exit_outcome: PosixProcessExit | None = None
 
 
 @dataclass

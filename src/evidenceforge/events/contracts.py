@@ -1197,6 +1197,29 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
             )
         )
 
+    process = getattr(event, "process", None)
+    outcome = getattr(process, "exit_outcome", None)
+    if outcome is not None:
+        from evidenceforge.events.process_outcome import PosixProcessExit
+
+        try:
+            if (
+                contract.kind is not EventKind.PROCESS_TERMINATE
+                or type(outcome) is not PosixProcessExit
+                or getattr(getattr(event, "src_host", None), "os_category", None)
+                not in {"macos", "linux"}
+            ):
+                raise ValueError("Explicit POSIX exit result requires a POSIX termination")
+            outcome.__post_init__()
+        except ValueError as exc:
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message=str(exc),
+                )
+            )
+
     if contract.kind in {
         EventKind.PROCESS_FORK,
         EventKind.PROCESS_EXEC,

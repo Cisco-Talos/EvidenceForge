@@ -16,6 +16,7 @@ from evidenceforge.events.process import (
     process_exit_identity,
     process_fork_identities,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 
 
 def process_exec_occurrence(
@@ -146,8 +147,9 @@ def process_exit_occurrence(
     timestamp: datetime,
     integrity_level: str,
     session: SessionIdentity | None = None,
+    exit_outcome: PosixProcessExit | None = None,
 ) -> OccurrenceBuilder:
-    """Project a State-owned termination without inventing native exit details."""
+    """Project a State-owned termination with an optional explicit terminal result."""
     event = OccurrenceBuilder(
         timestamp=timestamp,
         event_type="process_terminate",
@@ -161,6 +163,7 @@ def process_exit_occurrence(
             integrity_level=integrity_level,
             logon_id=process.logon_id,
             start_time=process.started_at,
+            exit_outcome=exit_outcome,
         ),
         identity_plan=EventIdentityPlan(subject=process, session=session),
         lifecycle=ActionLifecycleContext(

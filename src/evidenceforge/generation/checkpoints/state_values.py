@@ -33,6 +33,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
     RdpRetentionLease,
@@ -123,6 +124,7 @@ _RUNNING_PROCESS_FIELDS = (
     "audit_binding",
     "privilege_drop",
     "service_drop",
+    "exit_outcome",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -404,7 +406,8 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process-v7": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v8": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,
@@ -577,6 +580,9 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         if record_tag == "running-process-v6" and len(encoded_fields) == 29:
             record_tag = "running-process-v7"
+            encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v7" and len(encoded_fields) == 30:
+            record_tag = "running-process-v8"
             encoded_fields = [*encoded_fields, encode_state_value(None)]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

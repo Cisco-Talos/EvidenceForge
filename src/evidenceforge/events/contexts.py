@@ -45,6 +45,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     SignaturePredicate,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.proxy import ProxyTransactionPlan
 
 
@@ -146,6 +147,7 @@ class ProcessContext:
     concurrency_group_id: str = ""  # Explicit same-shell concurrency group (for pipelines)
     target_security_context: ProcessTargetSecurityContext | None = None
     binary_identity: ProcessBinaryIdentity | None = None
+    exit_outcome: PosixProcessExit | None = None
 
 
 @dataclass(slots=True)

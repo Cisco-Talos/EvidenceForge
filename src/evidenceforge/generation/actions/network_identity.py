@@ -1539,6 +1539,14 @@ class _CanonicalIdentityEncoder:
                     semantic_fields = tuple(
                         name for name in semantic_fields if name != optional_name
                     )
+        if type(value) is _contexts.ProcessContext:
+            outcome = _identity_dataclass_field_value(
+                self._types, value, value_mro, "exit_outcome", None, (*path, "exit_outcome")
+            )
+            if outcome is not None:
+                raise ValueError("Network process context cannot carry a terminal exit outcome")
+            # Older process contexts carried no terminal fact. Keep their digest stable.
+            semantic_fields = tuple(name for name in semantic_fields if name != "exit_outcome")
         self._ensure_members(len(semantic_fields), path)
         self._ensure_child_nodes(len(semantic_fields), path)
         self._ensure_encoded(len(semantic_fields) * _IDENTITY_DIGEST_ATOM_BYTES, path)

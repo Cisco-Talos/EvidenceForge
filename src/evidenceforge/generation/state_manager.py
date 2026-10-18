@@ -60,6 +60,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     normalize_zeek_history,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
@@ -735,6 +736,7 @@ class _ProcessTerminationMaterializationPayload:
     parent_identity: ProcessIdentity | None
     parent_activity_time: datetime | None
     session_references: tuple[_ProcessTerminationSessionReference, ...]
+    exit_outcome: PosixProcessExit | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -769,6 +771,12 @@ class ProcessTerminationMaterializationPlan:
         """Return the exact canonical termination time."""
 
         return self._payload.end_time
+
+    @property
+    def exit_outcome(self) -> PosixProcessExit | None:
+        """Return the explicit terminal result, or unknown for legacy callers."""
+
+        return self._payload.exit_outcome
 
     @property
     def parent_activity_time(self) -> datetime | None:
@@ -2259,6 +2267,7 @@ class ActionCohortProcessTermination:
     parent_activity: ActionCohortProcessActivityPatch | None
     staged_session_references: tuple[_ProcessTerminationSessionReference, ...]
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    exit_outcome: PosixProcessExit | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical terminal time."""
@@ -3485,11 +3494,15 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         *,
         end_time: datetime,
         parent_activity_time: datetime | None = None,
+        exit_outcome: PosixProcessExit | None = None,
     ) -> None:
         """Stage one live or same-cohort process terminalization."""
 
         self._require_open()
         normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        self._manager._validate_process_exit_outcome(
+            exit_outcome, self._manager._action_process_identity(normalized).hostname
+        )
         key = self._manager._action_process_target_key(normalized)
         if any(
             self._manager._action_process_target_key(termination.target) == key
@@ -3502,6 +3515,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 pid=normalized.pid,
                 end_time=end_time,
                 parent_activity_time=parent_activity_time,
+                exit_outcome=exit_outcome,
             )
             if close_plan.identity != normalized:
                 raise StateError("Action cohort live process identity drifted before close")
@@ -3531,6 +3545,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 parent_activity=parent_activity,
                 staged_session_references=(),
                 _capability=_ActionCohortCapability(),
+                exit_outcome=exit_outcome,
             )
         )
 
@@ -3865,6 +3880,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         MacosProcessAuditBinding,
         MacosProcessPrivilegeDrop,
         MacosProcessServiceDrop,
+        PosixProcessExit,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -4199,6 +4215,7 @@ def _action_cohort_semantic_preimage(
                 if type(termination.target) is ProcessTerminationMaterializationPlan
                 else _action_cohort_process_target_semantic(termination.target),
                 termination.end_time,
+                termination.exit_outcome,
                 (
                     (
                         _action_cohort_process_target_semantic(termination.parent_activity.target),
@@ -6837,8 +6854,13 @@ class StateManager:
         for termination in plan._process_terminations:
             if type(termination._capability) is not _ActionCohortCapability:
                 raise StateError("Action cohort process termination capability is malformed")
+            self._validate_process_exit_outcome(
+                termination.exit_outcome, termination.identity.hostname
+            )
             if type(termination.target) is ProcessTerminationMaterializationPlan:
                 self._validate_process_termination_materialization_plan(termination.target)
+                if termination.exit_outcome != termination.target.exit_outcome:
+                    raise StateError("Action cohort process exit outcome changed")
                 if termination.target.expected_version != plan.expected_version:
                     raise StateError("Action cohort process close uses another State version")
                 if termination.end_time != termination.target.end_time:
@@ -10318,6 +10340,21 @@ class StateManager:
             )
         )
 
+    def _validate_process_exit_outcome(
+        self, outcome: PosixProcessExit | None, hostname: str
+    ) -> None:
+        """Admit explicit terminal facts only for an established POSIX host."""
+        if outcome is None:
+            return
+        if type(outcome) is not PosixProcessExit:
+            raise StateError("Process termination requires an exact POSIX exit outcome")
+        outcome.__post_init__()
+        platform = self._pid_os.get(hostname)
+        if platform not in {"macos", "linux"}:
+            raise StateError("POSIX exit outcome requires a modeled Linux or macOS process")
+        if platform == "macos" and outcome.signal is not None and outcome.signal >= 32:
+            raise StateError("macOS termination signal is outside the Darwin signal range")
+
     def plan_process_termination_materialization(
         self,
         *,
@@ -10325,10 +10362,12 @@ class StateManager:
         pid: int,
         end_time: datetime | None = None,
         parent_activity_time: datetime | None = None,
+        exit_outcome: PosixProcessExit | None = None,
     ) -> ProcessTerminationMaterializationPlan:
         """Freeze one exact live process termination without publishing state."""
 
         with self._capability_minting_guard("plan_process_termination_materialization"):
+            self._validate_process_exit_outcome(exit_outcome, system)
             process = self.state.running_processes.get((system, pid))
             if process is None:
                 raise StateError(
@@ -10367,6 +10406,7 @@ class StateManager:
                 parent_identity=parent_identity,
                 parent_activity_time=normalized_parent_activity,
                 session_references=self._process_termination_session_references(system, pid),
+                exit_outcome=exit_outcome,
             )
             expected_version = self._materialization_version
             plan = ProcessTerminationMaterializationPlan(
@@ -10768,6 +10808,7 @@ class StateManager:
                 raise StateError("Process termination materialization plan became stale")
 
             identity = plan.identity
+            self._validate_process_exit_outcome(plan.exit_outcome, identity.hostname)
             key = (identity.hostname, identity.pid)
             process = self.state.running_processes.get(key)
             if process is None:
@@ -10887,6 +10928,7 @@ class StateManager:
         else:
             self._active_pid_reservation_counts.pop(identity.hostname)
         process.end_time = payload.end_time
+        process.exit_outcome = payload.exit_outcome
         self._process_object_ids.pop(key)
         self._processes_by_object_id.pop(identity.object_id)
         process_deadline = (
@@ -12064,6 +12106,7 @@ class StateManager:
                     parent_activity.activity_time if parent_activity is not None else None
                 ),
                 session_references=termination.staged_session_references,
+                exit_outcome=termination.exit_outcome,
             )
             primitive = ProcessTerminationMaterializationPlan(
                 _expected_version=target.expected_version,

@@ -15,6 +15,7 @@ from evidenceforge.events.identity import (
     MacosProcessPrivilegeDrop,
     MacosProcessServiceDrop,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
     GroupedTemporalIndex,
@@ -445,6 +446,18 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        outcome = process.exit_outcome
+        if outcome is not None and (
+            type(outcome) is not PosixProcessExit
+            or process.end_time is None
+            or fresh._pid_os.get(process.system) not in {"macos", "linux"}
+            or (
+                fresh._pid_os.get(process.system) == "macos"
+                and outcome.signal is not None
+                and outcome.signal >= 32
+            )
+        ):
+            raise CheckpointCorruptionError("StateManager process exit outcome is invalid")
         binding = process.audit_binding
         if binding is not None and (
             type(binding) is not MacosProcessAuditBinding

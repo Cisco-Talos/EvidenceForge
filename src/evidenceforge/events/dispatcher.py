@@ -4573,6 +4573,14 @@ class EventDispatcher:
             and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
         ):
             raise EventContractError("Process mutation requires its exact State action cohort")
+        if (
+            event.process is not None
+            and event.process.exit_outcome is not None
+            and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+        ):
+            raise EventContractError(
+                "Explicit process exit result requires its State action cohort"
+            )
         if state_intent is not PreparedDispatchStateIntent.APPLY and lifecycle_ticket is None:
             raise EventContractError(
                 "Externally materialized dispatch requires an authority lifecycle ticket"
@@ -6134,6 +6142,8 @@ class EventDispatcher:
                     expected is None
                     or subject != expected.identity
                     or event.timestamp != expected.end_time
+                    or event.process is None
+                    or event.process.exit_outcome != expected.exit_outcome
                 ):
                     raise EventContractError(
                         "Action-cohort process-close projection disagrees with its State plan"

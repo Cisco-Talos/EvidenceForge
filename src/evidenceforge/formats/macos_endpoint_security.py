@@ -15,6 +15,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.process_outcome import PosixProcessExit
 
 type UInt32 = Annotated[int, Field(ge=0, le=(1 << 32) - 1)]
 type UInt64 = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
@@ -231,6 +232,34 @@ class ESExecEvent(_Record):
 
 class ESExit(_Record):
     stat: Int32 = Field(description="Raw wait status, not an already-decoded exit code")
+
+    @classmethod
+    def from_process_exit(cls, outcome: PosixProcessExit) -> Self:
+        """Encode an explicit terminal result using Darwin's wait-status ABI."""
+        if type(outcome) is not PosixProcessExit:
+            raise ValueError("ES exit requires an explicit POSIX terminal result")
+        outcome.__post_init__()
+        if outcome.exit_code is not None:
+            return cls(stat=outcome.exit_code << 8)
+        if outcome.signal is None or outcome.signal >= 32:
+            raise ValueError("ES exit signal is outside the Darwin signal range")
+        return cls(stat=outcome.signal | (128 if outcome.core_dumped else 0))
+
+    def process_exit(self) -> PosixProcessExit:
+        """Decode the bounded terminal subset without altering the original record.
+
+        Stopped/continued, reserved bits and unsupported values remain readable
+        as raw native integers but cannot become canonical terminal outcomes.
+        """
+        status = self.stat
+        if status < 0 or status > 65535:
+            raise ValueError("ES wait status is outside the supported terminal subset")
+        signal = status & 127
+        if signal == 0 and status & 128 == 0:
+            return PosixProcessExit(exit_code=status >> 8)
+        if 1 <= signal < 32 and status < 256:
+            return PosixProcessExit(signal=signal, core_dumped=bool(status & 128))
+        raise ValueError("ES wait status does not describe a supported terminal outcome")
 
 
 class ESExitEvent(_Record):
