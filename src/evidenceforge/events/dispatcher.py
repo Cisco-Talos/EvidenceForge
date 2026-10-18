@@ -6387,7 +6387,31 @@ class EventDispatcher:
             raise EventContractError(
                 "Action-cohort projection references a process/session outside its State plan"
             )
-        if not patch_target_ids.issubset(process_or_session_ids):
+        # Adoption is a canonical consequence of the exact parent exit, not a
+        # separately invented source observation. State authenticates both owners.
+        adoption_ids: set[str] = set()
+        for patch in state_plan.process_activity_patches:
+            change = patch.parentage_change
+            if change is None:
+                continue
+            prior = change.before.current
+            assert prior is not None
+            closing = next(
+                (
+                    item
+                    for item in state_plan.process_terminations
+                    if item.identity.object_id == prior.object_id
+                ),
+                None,
+            )
+            if (
+                closing is None
+                or closing.end_time != change.changed_at
+                or ("process", prior.object_id) not in observed_closes
+            ):
+                raise EventContractError("Parent adoption lacks its exact canonical parent exit")
+            adoption_ids.add(patch.target.object_id)
+        if not (patch_target_ids - adoption_ids).issubset(process_or_session_ids):
             raise EventContractError(
                 "Action-cohort State patch target has no exact canonical member binding"
             )
@@ -6498,6 +6522,8 @@ class EventDispatcher:
                 )
         for patch in state_plan.process_activity_patches:
             identity = self._action_cohort_target_identity(patch.target)
+            if identity.object_id in adoption_ids:
+                continue
             if not has_canonical_member_at(
                 exact_identity_members(identity),
                 patch.activity_time,

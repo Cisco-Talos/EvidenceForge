@@ -13,6 +13,7 @@ from evidenceforge.events.content_identity import ServiceDeploymentIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.parentage import ProcessParentageChange
 from evidenceforge.utils.time import ensure_utc
 
 LifecyclePhase = Literal["start", "dependent", "closure"]
@@ -552,6 +553,7 @@ class LifecycleTransition:
     reason: str = ""
     transition_ordinal: int = 0
     process_change: ProcessRuntimeChange | None = None
+    parentage_change: ProcessParentageChange | None = None
 
     def __post_init__(self) -> None:
         """Normalize transition time and require stable action-relative identity."""
@@ -563,6 +565,16 @@ class LifecycleTransition:
         if self.transition_ordinal < 0:
             raise ValueError("Lifecycle transition_ordinal must be non-negative")
         object.__setattr__(self, "canonical_time", ensure_utc(self.canonical_time))
+        if self.parentage_change is not None:
+            if type(self.parentage_change) is not ProcessParentageChange:
+                raise TypeError("Lifecycle parent change requires an exact transition")
+            if (
+                self.subject.kind != "process"
+                or self.kind != "dependent"
+                or self.process_change is not None
+                or self.parentage_change.changed_at != self.canonical_time
+            ):
+                raise ValueError("Parent adoption requires its own dependent process transition")
         if self.process_change is not None:
             if type(self.process_change) is not ProcessRuntimeChange:
                 raise TypeError("Lifecycle process change requires an exact transition")
@@ -847,6 +859,15 @@ class ProcessLifecycleSnapshot:
     latest_dependent_at: datetime | None = None
     latest_hold_until: datetime | None = None
     runtime_view: ProcessRuntimeView | None = None
+    parentage_change: ProcessParentageChange | None = None
+
+    @property
+    def current_parent_object_id(self) -> str:
+        """Return the current relationship without rewriting the birth parent."""
+        if self.parentage_change is not None:
+            assert self.parentage_change.after.current is not None
+            return self.parentage_change.after.current.object_id
+        return self.identity.parent_object_id
 
     @property
     def current_view(self) -> ProcessRuntimeView:

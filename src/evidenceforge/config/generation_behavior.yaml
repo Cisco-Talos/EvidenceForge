@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 221
+current_revision: 222
 history_start_revision: 1
-behavior_surface_sha256: 392c7e03fa5a80347c32ce53a09e73a50273c739334e3e12ccfbcb37d7e6410b
+behavior_surface_sha256: 957df03c807e0ff9465061aec0ead9b88a4e37e3c2be0be3390c9e40cab0df3f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2173,3 +2173,13 @@ changes:
     formats:
       - ecar
     summary: Retains exact original/current POSIX parent references through fork, exec and recovery, rejects reused-PID parent substitution, and migrates older process records with unknown parentage.
+  - revision: 222
+    id: exact-parent-exit-adoption-and-launchd-cleanup
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - service-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Atomically adopts surviving outside-group children at exact parent exit, preserving original parent and session/group identity through launchd unload, failure recovery and compatible checkpoints.

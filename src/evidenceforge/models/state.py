@@ -47,7 +47,7 @@ from evidenceforge.events.identity import (
 from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
-from evidenceforge.events.parentage import ProcessParentage
+from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
 from evidenceforge.events.process_outcome import PosixProcessExit
 
 
@@ -166,6 +166,7 @@ class RunningProcess:
     job_control_history: tuple[PosixJobControlChange, ...] = ()
     environment: PosixProcessEnvironment | None = None
     parentage: ProcessParentage | None = None
+    parentage_history: tuple[ProcessParentageChange, ...] = ()
 
 
 @dataclass

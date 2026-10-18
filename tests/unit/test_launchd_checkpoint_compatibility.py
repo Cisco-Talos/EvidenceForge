@@ -37,7 +37,8 @@ def _legacy_head(registry: LifecycleRegistry, version: str = "5") -> bytes:
     document["schema_version"] = version
     for partition in document["partitions"]:
         for service in partition[2]:
-            assert service.pop() is None
+            if version in {"5", "6"}:
+                assert service.pop() is None
             if version == "5":
                 assert service[1].pop() is None
     return dumps(document)
@@ -116,7 +117,7 @@ class _LegacyLifecycleParticipant(LifecycleRegistryParticipant):
         )
 
 
-@pytest.mark.parametrize("version", ["5", "6"])
+@pytest.mark.parametrize("version", ["5", "6", "7"])
 def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(
     tmp_path: Path, version: str
 ) -> None:
@@ -137,7 +138,7 @@ def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(
     controller.restore_participants(recovery=recovery, participants=(participant,))
     assert _capture(restored) == _capture(registry)
     manifest = controller.commit(cursor=_cursor(12), participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "7"
+    assert manifest.participant_heads[0].schema_version == "8"
 
 
 def test_legacy_head_does_not_accept_new_service_fields() -> None:

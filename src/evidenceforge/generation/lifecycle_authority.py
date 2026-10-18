@@ -3999,8 +3999,11 @@ class GeneratorLifecycleAuthority:
                     if patch.service_drop is not None
                     else "State POSIX job-control transition"
                     if patch.job_control_change is not None
+                    else "State parent exit adoption"
+                    if patch.parentage_change is not None
                     else "State process activity transition",
                     process_change=process_change,
+                    parentage_change=patch.parentage_change,
                 ),
             )
 
@@ -8518,7 +8521,6 @@ class GeneratorLifecycleAuthority:
                         plan._session_process_links,
                         plan.live_session_process_role_patches,
                         plan.session_metadata_patches,
-                        plan.process_activity_patches,
                         plan.process_executions,
                         plan.session_activity_patches,
                         plan.session_terminalizations,
@@ -8529,6 +8531,11 @@ class GeneratorLifecycleAuthority:
                 or not 1 <= len(plan.process_terminations) <= 256
             ):
                 raise StateError("Group closure requires a bounded termination-only cohort")
+            if len(plan.process_activity_patches) > 256 or any(
+                patch.parentage_change is None or patch.adopting_parent is None
+                for patch in plan.process_activity_patches
+            ):
+                raise StateError("Group closure only permits bounded parent adoption patches")
             closes = tuple(item.target for item in plan.process_terminations)
             if any(type(item) is not ProcessTerminationMaterializationPlan for item in closes):
                 raise StateError("Group closure requires existing exact process close plans")
@@ -8537,6 +8544,13 @@ class GeneratorLifecycleAuthority:
             if not self._registry.authenticates_service_closure_admission_token(service_token):
                 raise StateError("Group closure requires an authentic service admission")
             request = service_token.request
+            if tuple(
+                (patch.target.object_id, patch.parentage_change)
+                for patch in plan.process_activity_patches
+            ) != tuple(
+                (item.subject.object_id, item.parentage_change) for item in request.parent_adoptions
+            ):
+                raise StateError("Group service adoptions must match every exact State patch")
             identities = tuple(item.identity for item in closes)
             at = closes[0].end_time
             if (

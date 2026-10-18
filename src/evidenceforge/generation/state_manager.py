@@ -69,7 +69,11 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     normalize_zeek_history,
 )
-from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
@@ -2250,6 +2254,8 @@ class ActionCohortProcessActivityPatch:
     service_drop: MacosProcessServiceDrop | None = None
     job_control_change: PosixJobControlChange | None = None
     job_control_actor: ProcessIdentity | None = None
+    parentage_change: ProcessParentageChange | None = None
+    adopting_parent: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -3238,6 +3244,42 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._process_activity_patches.append(patch)
         return replace(normalized, job_control=after)
 
+    def adopt_process_after_parent_exit(
+        self, target: ProcessIdentity, *, adopter: ProcessIdentity, changed_at: datetime
+    ) -> ProcessIdentity:
+        """Stage PID-1 adoption; the old parent's exact exit must share this cohort."""
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(adopter) is not ProcessIdentity:
+            raise StateError("Parent adoption requires exact process lifetimes")
+        if type(changed_at) is not datetime or changed_at.utcoffset() is None:
+            raise StateError("Parent adoption requires an aware canonical time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        if normalized.parentage is None:
+            raise StateError("Parent adoption requires known original and current parentage")
+        after = replace(
+            normalized.parentage,
+            current=ProcessParentReference(
+                adopter.hostname, adopter.object_id, adopter.pid, adopter.started_at
+            ),
+        )
+        change = ProcessParentageChange(normalized.parentage, after, ensure_utc(changed_at))
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=change.changed_at,
+            parentage_change=change,
+            adopting_parent=adopter,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_posix_parentage_patch(patch)
+        if any(
+            self._manager._action_process_identity(item.target).object_id == normalized.object_id
+            for item in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        self._process_activity_patches.append(patch)
+        return replace(normalized, parent_pid=adopter.pid, parentage=after)
+
     def bind_macos_process_audit_origin(
         self, target: ProcessIdentity, *, bound_at: datetime
     ) -> ProcessIdentity:
@@ -3987,6 +4029,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         PosixGroupIdentity,
         PosixSessionIdentity,
         ProcessParentage,
+        ProcessParentageChange,
         ProcessParentReference,
         PosixJobControlChange,
         SessionIdentity,
@@ -4298,6 +4341,14 @@ def _action_cohort_semantic_preimage(
                     patch.job_control_actor,
                 )
                 if patch.job_control_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "posix-parent-adoption-v1",
+                    patch.parentage_change,
+                    patch.adopting_parent,
+                )
+                if patch.parentage_change is not None
                 else (
                     _action_cohort_process_target_semantic(patch.target),
                     patch.activity_time,
@@ -11788,6 +11839,7 @@ class StateManager:
                             patch.privilege_drop,
                             patch.service_drop,
                             patch.job_control_change,
+                            patch.parentage_change,
                         )
                     )
                     > 1
@@ -11820,6 +11872,7 @@ class StateManager:
                         patch.privilege_drop,
                         patch.service_drop,
                         patch.job_control_change,
+                        patch.parentage_change,
                     )
                 ):
                     if (
@@ -11866,6 +11919,23 @@ class StateManager:
                         raise StateError("POSIX membership change requires its own process cohort")
                 elif patch.job_control_actor is not None:
                     raise StateError("POSIX membership actor requires a membership change")
+                if patch.parentage_change is not None:
+                    self._validate_posix_parentage_patch(patch)
+                    prior_parent = patch.parentage_change.before.current
+                    assert prior_parent is not None and patch.adopting_parent is not None
+                    if not any(
+                        item.identity.object_id == prior_parent.object_id
+                        and item.end_time == patch.activity_time
+                        for item in plan._process_terminations
+                    ) or any(
+                        item.identity.object_id == patch.adopting_parent.object_id
+                        for item in plan._process_terminations
+                    ):
+                        raise StateError(
+                            "Parent adoption requires its old parent's exact cohort exit"
+                        )
+                elif patch.adopting_parent is not None:
+                    raise StateError("Adopting parent requires an authenticated parent transition")
                 process_activity[identity.object_id] = patch
 
             execution_thread_ids: set[tuple[str, int]] = {
@@ -14485,6 +14555,11 @@ class StateManager:
                     acting = self._processes_by_object_id[patch.job_control_actor.object_id]
                     acting.last_activity_time = patch.activity_time
                 self._running_processes.refresh((identity.hostname, identity.pid))
+            if patch.parentage_change is not None:
+                change = patch.parentage_change
+                process.parentage = change.after
+                process.parent_pid = change.after.current_pid
+                process.parentage_history = (*process.parentage_history, change)
             if patch.audit_binding is not None:
                 process.credentials = patch.audit_binding.after
                 process.audit_binding = patch.audit_binding
@@ -14795,6 +14870,56 @@ class StateManager:
                     raise StateError("POSIX group exceeds this operation's membership budget")
                 members.append(self._process_identity(row))
             return tuple(sorted(members, key=lambda identity: identity.pid))
+
+    def _validate_posix_parentage_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        target, change, adopter = patch.target, patch.parentage_change, patch.adopting_parent
+        if (
+            type(target) is not ProcessIdentity
+            or type(change) is not ProcessParentageChange
+            or type(adopter) is not ProcessIdentity
+        ):
+            raise StateError("Parent adoption requires exact live identities and change")
+        change.__post_init__()
+        process = self._validate_action_live_process_identity(target)
+        self._validate_action_live_process_identity(adopter)
+        prior = change.before.current
+        assert prior is not None
+        parent = self.get_process_identity_by_object_id(prior.object_id)
+        if parent is None:
+            raise StateError("Parent adoption lost its exact original live parent")
+        self._validate_action_live_process_identity(parent)
+        if (
+            self._pid_os.get(target.hostname) not in {"macos", "linux"}
+            or adopter.hostname != target.hostname
+            or adopter.pid != 1
+            or adopter.parent_pid != 0
+            or adopter.principal != "root"
+            or adopter.credentials is None
+            or adopter.credentials.real_uid != 0
+            or adopter.credentials.effective_uid != 0
+            or adopter.parentage != ProcessParentage(None, None)
+            or adopter.object_id == target.object_id
+            or change.before != target.parentage
+            or prior
+            != ProcessParentReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+            or change.after.current
+            != ProcessParentReference(
+                adopter.hostname, adopter.object_id, adopter.pid, adopter.started_at
+            )
+            or change.changed_at != patch.activity_time
+            or change.changed_at < max(target.execution_started_at, adopter.execution_started_at)
+            or change.changed_at < (process.last_activity_time or process.start_time)
+            or (
+                process.parentage_history
+                and change.changed_at <= process.parentage_history[-1].changed_at
+            )
+            or len(process.parentage_history) >= 64
+        ):
+            raise StateError(
+                "Parent adoption has stale, foreign, backdated or unsupported ownership"
+            )
 
     def _validate_posix_job_control_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
         target, change, actor = patch.target, patch.job_control_change, patch.job_control_actor
@@ -16007,6 +16132,13 @@ class StateManager:
                 None,
             )
         )
+        if selected is not None and process.parentage_history:
+            parentage = process.parentage
+            for change in reversed(process.parentage_history):
+                if event_time < change.changed_at:
+                    parentage = change.before
+            assert parentage is not None
+            selected = replace(selected, parentage=parentage, parent_pid=parentage.current_pid)
         if selected is not None and process.job_control_history:
             membership = process.job_control
             for change in reversed(process.job_control_history):

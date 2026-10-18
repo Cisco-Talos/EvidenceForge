@@ -39,7 +39,11 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
-from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
@@ -137,6 +141,7 @@ _RUNNING_PROCESS_FIELDS = (
     "job_control_history",
     "environment",
     "parentage",
+    "parentage_history",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -440,7 +445,8 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("hostname", "object_id", "pid", "started_at"),
     ),
     "process-parentage-v1": (ProcessParentage, ("original", "current")),
-    "running-process-v12": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "process-parentage-change-v1": (ProcessParentageChange, ("before", "after", "changed_at")),
+    "running-process-v13": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -639,6 +645,9 @@ def decode_state_value(value: object) -> object:
         if record_tag == "running-process-v11" and len(encoded_fields) == 35:
             record_tag = "running-process-v12"
             encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v12" and len(encoded_fields) == 36:
+            record_tag = "running-process-v13"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
         if record_tag == "process-identity-v7" and len(encoded_fields) == 20:
             record_tag = "process-identity-v8"
             encoded_fields = [*encoded_fields, None]

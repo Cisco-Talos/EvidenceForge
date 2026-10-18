@@ -46,11 +46,17 @@ from evidenceforge.events.lifecycle import (
 )
 from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
+from evidenceforge.events.parentage import (
+    ProcessParentage,
+    ProcessParentageChange,
+    ProcessParentReference,
+)
 from evidenceforge.generation.lifecycle_registry import (
     LifecycleRegistry,
     _DependentClosureAggregate,
     _ForegroundLeaseEntry,
     _LifecycleState,
+    _LiveChildBinding,
     _ProcessEntry,
     _SingletonLeaseEntry,
 )
@@ -66,7 +72,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "7"
+_SCHEMA_VERSION = "8"
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,46 @@ def _decode_ref(value: object) -> LifecycleEntityRef:
         ) from error
 
 
+def _parentage(value: ProcessParentage) -> list[object]:
+    return [
+        None if ref is None else [ref.hostname, ref.object_id, ref.pid, _time(ref.started_at)]
+        for ref in (value.original, value.current)
+    ]
+
+
+def _decode_parentage(value: object) -> ProcessParentage:
+    refs: list[ProcessParentReference | None] = []
+    for row in _record(value, 2, "parentage"):
+        if row is None:
+            refs.append(None)
+        else:
+            host, object_id, pid, at = _record(row, 4, "parent reference")
+            refs.append(ProcessParentReference(host, object_id, pid, _decode_time(at)))
+    return ProcessParentage(*refs)
+
+
+def _parentage_change(value: ProcessParentageChange | None) -> object:
+    return (
+        None
+        if value is None
+        else [_parentage(value.before), _parentage(value.after), _time(value.changed_at)]
+    )
+
+
+def _decode_parentage_change(value: object) -> ProcessParentageChange | None:
+    if value is None:
+        return None
+    try:
+        before, after, at = _record(value, 3, "parent adoption")
+        return ProcessParentageChange(
+            _decode_parentage(before), _decode_parentage(after), _decode_time(at)
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "lifecycle checkpoint parent adoption is invalid"
+        ) from error
+
+
 def _transition(value: LifecycleTransition) -> list[object]:
     row: list[object] = [
         value.transition_id,
@@ -136,6 +182,8 @@ def _transition(value: LifecycleTransition) -> list[object]:
     if value.process_change is not None:
         change = value.process_change
         row.append([change.kind, _runtime_view(change.before), _runtime_view(change.after)])
+    elif value.parentage_change is not None:
+        row.append(["parent-adoption-v1", _parentage_change(value.parentage_change)])
     return row
 
 
@@ -145,7 +193,17 @@ def _decode_transition(value: object) -> LifecycleTransition:
     transition_id, subject, kind, canonical_time, action_id, reason, ordinal = value[:7]
     try:
         change = None
-        if len(value) == 8:
+        parentage_change = None
+        parent_row = value[7] if len(value) == 8 else None
+        if (
+            type(parent_row) is list
+            and len(parent_row) == 2
+            and parent_row[0] == "parent-adoption-v1"
+        ):
+            parentage_change = _decode_parentage_change(parent_row[1])
+            if parentage_change is None:
+                raise ValueError("Parent adoption cannot be empty")
+        elif len(value) == 8:
             change_kind, before, after = _record(value[7], 3, "process runtime change")
             change = ProcessRuntimeChange(
                 before=_decode_runtime_view(before),
@@ -161,6 +219,7 @@ def _decode_transition(value: object) -> LifecycleTransition:
             reason=reason,  # type: ignore[arg-type]
             transition_ordinal=ordinal,  # type: ignore[arg-type]
             process_change=change,
+            parentage_change=parentage_change,
         )
     except (TypeError, ValueError) as error:
         raise CheckpointCorruptionError("lifecycle checkpoint transition is invalid") from error
@@ -360,7 +419,10 @@ def _decode_state(value: object, *, process_changes: bool = False) -> _DecodedSt
     if any(type(item) is not str for item in durable_transition_ids):
         raise CheckpointCorruptionError("lifecycle checkpoint durable transition ID is invalid")
     decoded_transitions = tuple(_decode_transition(item) for item in transitions)
-    if not process_changes and any(item.process_change is not None for item in decoded_transitions):
+    if not process_changes and any(
+        item.process_change is not None or item.parentage_change is not None
+        for item in decoded_transitions
+    ):
         raise CheckpointCorruptionError(
             "lifecycle checkpoint process change has a non-process owner"
         )
@@ -522,6 +584,33 @@ def _validate_runtime_view(snapshot: ProcessLifecycleSnapshot) -> None:
         raise CheckpointCorruptionError(
             "lifecycle checkpoint process runtime history lost its frontier"
         )
+
+
+def _validate_parentage_frontier(snapshot: ProcessLifecycleSnapshot) -> None:
+    change = snapshot.parentage_change
+    details = [
+        item.parentage_change for item in snapshot.transitions if item.parentage_change is not None
+    ]
+    if change is None:
+        if details:
+            raise CheckpointCorruptionError("Lifecycle checkpoint lost parent adoption frontier")
+        return
+    original, current = change.before.current, change.after.current
+    assert original is not None and current is not None
+    if (
+        change.before.original != original
+        or original.object_id != snapshot.identity.parent_object_id
+        or original.hostname != snapshot.identity.hostname
+        or current.hostname != snapshot.identity.hostname
+        or current.pid != 1
+        or current.object_id == snapshot.identity.object_id
+        or change.changed_at < snapshot.identity.started_at
+        or snapshot.latest_dependent_at is None
+        or change.changed_at > snapshot.latest_dependent_at
+        or (snapshot.closed_at is not None and change.changed_at > snapshot.closed_at)
+        or any(item != change for item in details)
+    ):
+        raise CheckpointCorruptionError("Lifecycle checkpoint parent adoption frontier is invalid")
 
 
 def _membership(value: LifecycleMembership) -> list[object]:
@@ -1080,7 +1169,14 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                         _state(partition._process_snapshot(item), item.state),
                     ]
                     + (
-                        []
+                        [
+                            None
+                            if item.state.runtime_view is None
+                            else _runtime_view(item.state.runtime_view),
+                            _parentage_change(item.state.parentage_change),
+                        ]
+                        if item.state.parentage_change is not None
+                        else []
                         if item.state.runtime_view is None
                         else [_runtime_view(item.state.runtime_view)]
                     )
@@ -1205,18 +1301,26 @@ def _decode_snapshot_rows(
         if not all(type(rows) is list for rows in partition):
             raise CheckpointCorruptionError("lifecycle checkpoint entity table is invalid")
         for row in process_rows:  # type: ignore[union-attr]
-            if type(row) is not list or len(row) not in {4, 5}:
+            if type(row) is not list or len(row) not in {4, 5, 6}:
                 raise CheckpointCorruptionError("lifecycle checkpoint process record is invalid")
+            if document.get("schema_version") != "8" and len(row) == 6:
+                raise CheckpointCorruptionError(
+                    "Legacy lifecycle head cannot contain parent adoption fields"
+                )
             identity, token, membership, state = row[:4]
             decoded = _decode_state(state, process_changes=True)
             snapshot = ProcessLifecycleSnapshot(
                 identity=_decode_process_identity(identity),
                 token=_decode_token(token),
                 membership=_decode_membership(membership),
-                runtime_view=None if len(row) == 4 else _decode_runtime_view(row[4]),
+                runtime_view=None
+                if len(row) == 4 or row[4] is None
+                else _decode_runtime_view(row[4]),
+                parentage_change=None if len(row) < 6 else _decode_parentage_change(row[5]),
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
             _validate_runtime_view(snapshot)
+            _validate_parentage_frontier(snapshot)
             processes.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         for row in session_rows:  # type: ignore[union-attr]
@@ -1502,7 +1606,7 @@ def _close_parent_ordered(
     def default_dependencies(snapshot: object) -> tuple[tuple[str, str], ...]:
         dependencies: list[tuple[str, str]] = []
         if isinstance(snapshot, ProcessLifecycleSnapshot):
-            parent_id = snapshot.identity.parent_object_id
+            parent_id = snapshot.current_parent_object_id
             if parent_id:
                 dependencies.append(("process", parent_id))
             session_id = snapshot.membership.session_object_id
@@ -1614,6 +1718,9 @@ def _install_authority_states(
                 }
             ),
             durable_transition_ids=durable_ids,
+            parentage_change=snapshot.parentage_change
+            if isinstance(snapshot, ProcessLifecycleSnapshot)
+            else None,
             runtime_view=snapshot.runtime_view
             if isinstance(snapshot, ProcessLifecycleSnapshot)
             else None,
@@ -1683,6 +1790,7 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
     if type(document) is not dict or document.get("schema_version") not in {
         "5",
         "6",
+        "7",
         _SCHEMA_VERSION,
     }:
         raise CheckpointCorruptionError("lifecycle checkpoint head schema is invalid")
@@ -1926,6 +2034,54 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
             process = partition._entry(snapshot.identity.ref)
             partition._ensure_full_state(process).runtime_view = snapshot.runtime_view
+    # Restore current edges before any parent closure is replayed. Birth identity
+    # remains immutable, including after the original parent has aged out.
+    retained = {item.identity.object_id: item for item in processes}
+    for snapshot in processes:
+        change = snapshot.parentage_change
+        if change is None:
+            continue
+        old, new = change.before.current, change.after.current
+        assert old is not None and new is not None
+        for ref in (old, new):
+            owner = retained.get(ref.object_id)
+            if owner is not None and (
+                (owner.identity.hostname, owner.identity.pid, owner.identity.started_at)
+                != (ref.hostname, ref.pid, ref.started_at)
+            ):
+                raise CheckpointCorruptionError(
+                    "Parent adoption reference disagrees with retained lifetime"
+                )
+        old_owner, adopter = retained.get(old.object_id), retained.get(new.object_id)
+        if old_owner is not None and old_owner.closed_at != change.changed_at:
+            raise CheckpointCorruptionError("Parent adoption lacks its exact parent exit")
+        if adopter is None and snapshot.closed_at is None:
+            raise CheckpointCorruptionError("Live adopted process lost its current parent")
+        if adopter is not None and (
+            adopter.identity.parent_object_id
+            or adopter.current_view.token.principal != "root"
+            or (
+                adopter.closed_at is not None
+                and (snapshot.closed_at is None or adopter.closed_at < snapshot.closed_at)
+            )
+        ):
+            raise CheckpointCorruptionError("Parent adoption has an invalid system owner")
+        partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+        entry = partition._entry(snapshot.identity.ref)
+        partition._ensure_full_state(entry)
+        if partition._live_children.get(snapshot.identity.object_id) is not None:
+            partition._commit_process_parent_adoption(entry, change)
+        else:
+            if adopter is not None:
+                aggregate = partition._children_by_parent.get(new.object_id)
+                if aggregate is None:
+                    aggregate = _DependentClosureAggregate()
+                    partition._children_by_parent[new.object_id] = aggregate
+                aggregate.register()
+                partition._live_children[snapshot.identity.object_id] = _LiveChildBinding(
+                    new.object_id, snapshot.identity.object_id
+                )
+            entry.state.parentage_change = change
     for lease in sorted(retention_leases, key=lambda item: item.lease_id):
         fresh.add_retention_lease(lease)
     for entry in sorted(
@@ -1995,7 +2151,7 @@ class LifecycleRegistryParticipant:
     checkpoint_owner = "lifecycle-registry"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = ("5", "6")
+    checkpoint_compatible_head_versions = ("5", "6", "7")
     checkpoint_state_fields = (
         OwnerStateField("retained_entities", "bounded-live-head"),
         OwnerStateField("immutable_history", "immutable-incremental-segments"),

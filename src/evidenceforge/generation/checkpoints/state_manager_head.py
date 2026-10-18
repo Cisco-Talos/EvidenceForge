@@ -17,7 +17,7 @@ from evidenceforge.events.identity import (
     validate_process_arguments,
     validate_process_environment,
 )
-from evidenceforge.events.parentage import validate_process_parentage
+from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
@@ -513,6 +513,26 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             "linux",
         }:
             raise CheckpointCorruptionError("StateManager process parentage requires a POSIX host")
+        if type(process.parentage_history) is not tuple or len(process.parentage_history) > 64:
+            raise CheckpointCorruptionError("StateManager parent history is invalid")
+        prior_parent_change = None
+        for change in process.parentage_history:
+            if (
+                type(change) is not ProcessParentageChange
+                or change.changed_at < process.start_time
+                or (process.end_time is not None and change.changed_at > process.end_time)
+                or (
+                    prior_parent_change is not None
+                    and (
+                        prior_parent_change.after != change.before
+                        or prior_parent_change.changed_at >= change.changed_at
+                    )
+                )
+            ):
+                raise CheckpointCorruptionError("StateManager parent history is inconsistent")
+            prior_parent_change = change
+        if prior_parent_change is not None and prior_parent_change.after != process.parentage:
+            raise CheckpointCorruptionError("StateManager parent history lost its current frontier")
         outcome = process.exit_outcome
         if outcome is not None and (
             type(outcome) is not PosixProcessExit

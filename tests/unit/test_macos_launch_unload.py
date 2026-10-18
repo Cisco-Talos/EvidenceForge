@@ -360,7 +360,7 @@ def test_group_unload_closes_exact_members_in_child_first_order(restore: bool) -
 
 
 @pytest.mark.parametrize("separate_group", [False, True])
-def test_group_unload_rejects_membership_drift_or_external_descendants(
+def test_group_unload_rejects_membership_drift_but_adopts_external_descendants(
     separate_group: bool,
 ) -> None:
     state, registry, authority, adapter, job = _setup()
@@ -392,11 +392,21 @@ def test_group_unload_rejects_membership_drift_or_external_descendants(
             action_id="group-unload",
         )
     before = state.materialization_digest()
-    with pytest.raises(StateError):
+    if separate_group:
         authority.materialize_process_group_service_closure_composite(
             plan.cohort, plan.group, adapter.prepare_service_process_closure(plan.closure)
         )
-    assert state.materialization_digest() == before
-    assert registry.get_service_instance(job.instance_identity.object_id).closed_at is None
+        surviving = state.get_process_identity_by_object_id(child.identity.object_id)
+        assert surviving.parent_pid == 1
+        assert surviving.parentage.original == child.identity.parentage.original
+        assert surviving.job_control == child.identity.job_control
+        assert registry.get_service_instance(job.instance_identity.object_id).closed_at is not None
+    else:
+        with pytest.raises(StateError):
+            authority.materialize_process_group_service_closure_composite(
+                plan.cohort, plan.group, adapter.prepare_service_process_closure(plan.closure)
+            )
+        assert state.materialization_digest() == before
+        assert registry.get_service_instance(job.instance_identity.object_id).closed_at is None
     assert registry.get_process(child.identity.object_id).closed_at is None
     assert adapter.service_preparation_census().reserved_keys == 0

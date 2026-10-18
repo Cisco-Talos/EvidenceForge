@@ -86,3 +86,29 @@ def validate_process_parentage(
             raise ValueError("Process parentage must use another lifetime on the same host")
     if parentage.original is not None and parentage.original.started_at > started_at:
         raise ValueError("Original parent cannot start after its child")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessParentageChange:
+    """One parent-lifetime transition, preserving immutable birth parentage."""
+
+    before: ProcessParentage
+    after: ProcessParentage
+    changed_at: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.before) is not ProcessParentage
+            or type(self.after) is not ProcessParentage
+            or self.before.original != self.after.original
+            or self.before.current is None
+            or self.after.current is None
+            or self.before.current == self.after.current
+            or self.before.current.hostname != self.after.current.hostname
+            or type(self.changed_at) is not datetime
+            or self.changed_at.utcoffset() is None
+            or self.changed_at < max(self.before.current.started_at, self.after.current.started_at)
+        ):
+            raise ValueError(
+                "Parent transition requires distinct same-host lifetimes and unchanged origin"
+            )

@@ -18,6 +18,7 @@ from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
+    LifecycleTransition,
     LogicalServiceIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceProcessBindingIdentity,
@@ -27,6 +28,7 @@ from evidenceforge.events.macos_launchd import (
     LaunchdSystemJobSpec,
     validate_launchd_label,
 )
+from evidenceforge.events.parentage import ProcessParentageChange
 from evidenceforge.generation.actions.command_effects import FileEffectAction, FileEffectIntent
 from evidenceforge.generation.actions.endpoint_effects import (
     EndpointEffectSpec,
@@ -430,9 +432,44 @@ def macos_system_job_unload_completion_plan(
             retained = lifecycle_registry.get_process(member.object_id)
             if retained is None or retained.closed_at is not None:
                 raise StateError("Launchd group member is missing its live lifecycle owner")
-            parents[member.object_id] = retained.identity.parent_object_id
+            parents[member.object_id] = retained.current_parent_object_id
         builder = state_manager.begin_action_cohort_materialization()
         controls: list[LifecycleSubjectClosureControl] = []
+        adoptions: list[LifecycleTransition] = []
+        for member in members:
+            children, more = lifecycle_registry.live_child_process_page(member.object_id, limit=257)
+            if more is not None:
+                raise StateError("Launchd group cleanup exceeds its child ownership budget")
+            for child in children:
+                if child.identity.object_id in remaining:
+                    continue
+                if len(adoptions) >= 256:
+                    raise StateError("Launchd group cleanup exceeds its adoption budget")
+                current_child = state_manager.get_process_identity_by_object_id(
+                    child.identity.object_id
+                )
+                adopter = state_manager.get_process_identity(member.hostname, 1)
+                if current_child is None or adopter is None:
+                    raise StateError("Launchd cleanup lost a child or explicit system parent")
+                adopted = builder.adopt_process_after_parent_exit(
+                    current_child, adopter=adopter, changed_at=completed_at
+                )
+                change = ProcessParentageChange(
+                    current_child.parentage, adopted.parentage, completed_at
+                )
+                adoptions.append(
+                    LifecycleTransition(
+                        transition_id=stable_uuid(
+                            "macos-launchd-adoption", action_id, child.identity.object_id
+                        ),
+                        subject=child.identity.ref,
+                        kind="dependent",
+                        canonical_time=completed_at,
+                        action_id=action_id + ":adoption:" + child.identity.object_id,
+                        reason="Launchd group parent exit adoption",
+                        parentage_change=change,
+                    )
+                )
         while remaining:
             # At most 256 exact members; use retained parent identities, not PID guesses.
             parent_ids = {parents[member_id] for member_id in remaining}
@@ -458,6 +495,7 @@ def macos_system_job_unload_completion_plan(
                 if binding is not None
                 else (),
                 process_closures=tuple(controls),
+                parent_adoptions=tuple(adoptions),
                 service_closures=(service_close,),
             ),
         )
