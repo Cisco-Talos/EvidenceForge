@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 212
+current_revision: 213
 history_start_revision: 1
-behavior_surface_sha256: 117450b2de3646b9df814e22e526e2adcdadfd5dfd85bb06e32d6c3f6af67578
+behavior_surface_sha256: 29e1a3f9a06cd71dd05996028cdb8d1d11f64d5f8555b873b5f886c4738e7f36
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2082,3 +2082,13 @@ changes:
     formats:
       - ecar
     summary: Resolves implicit Mac session intent through the world model before reuse, preventing network, service or SSH sessions from replacing the requested local GUI owner.
+  - revision: 213
+    id: macos-authored-local-login-occurrence
+    impact: localized
+    domains:
+      - session-lifecycle
+      - storyline-authentication
+    formats:
+      - ecar
+      - macos_unified_log
+    summary: Distinguishes authored Mac local login occurrences from reusable implicit sessions, preserves explicit origins and defaults omitted local origins without allocating a public identity.

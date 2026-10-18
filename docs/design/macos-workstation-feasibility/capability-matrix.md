@@ -2,6 +2,8 @@
 
 This branch targets modeled macOS 26 arm64 workstations. “Implemented” means a canonical path exists; “experimental” means it is usable with explicit limitations; “validated” requires the named tests and reference boundary. A passing JSON parser does not establish native fidelity. This matrix records implementation progress, not a general macOS support claim.
 
+The [ES metadata map and evidence gates](es-metadata-and-evidence-gates.md) define the remaining engineering blockers, public-search findings, acceptance criteria and controlled-capture fallback. Native Gatekeeper denial and current-build ES exec/exit evidence remain open; no further local-log inspection is authorized without asking the user first.
+
 | Capability | Canonical owner / observing sources | Current implementation | Evidence and remaining validation |
 | --- | --- | --- | --- |
 | Platform and source isolation | Shared OS classifier, world/deployment/source catalog | Implemented; Mac eCAR and history admitted, Windows/Linux endpoint formats excluded | Unit and mixed-fleet fresh-process/filter tests pass; complete routine gate passes 13,918 tests at revision 211; subsequent slices have separately recorded targeted gates |

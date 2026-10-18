@@ -63,6 +63,7 @@ class LogonRequest:
     effective_uid: int | None = None
     effective_gid: int | None = None
     source: str = "activity_generator"
+    allow_local_session_reuse: bool = True
 
     @property
     def stable_id(self) -> str:
@@ -86,6 +87,7 @@ class LogonRequest:
             f"{self.session_kind or ''}:"
             f"{self.auth_protocol}:{self.smb_principal}:{self.account_scope}:"
             f"{self.auth_session_ref}:{self.effective_uid}:{self.effective_gid}"
+            f"{'' if self.allow_local_session_reuse else ':new-session'}"
         )
         return f"logon-{seed:016x}"
 

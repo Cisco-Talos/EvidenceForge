@@ -4,6 +4,8 @@ Branch: `codex/macos-workstation-support`, based on `dev` at `5ce84103`. The use
 
 ## Contract and execution order
 
+Current remaining-work plan: [ES metadata map and evidence gates](../design/macos-workstation-feasibility/es-metadata-and-evidence-gates.md), updated 2026-10-18. It separates engineering blockers from missing reference evidence and supersedes earlier open-ended native-evidence prerequisites. The chronological entries below retain their original point-in-time status.
+
 Target macOS 26 arm64 workstations. Preserve existing scenario/overlay/pack semantics and Windows/Linux behavior. Implement shared platform/state foundations, comprehensive catalog coverage, existing-source integration, bounded experimental native sources and shell history, then remote-access/persistence/policy integration and acceptance checks. Evidence gates apply per capability; missing native fixtures do not block independent work. No product version bump or release is authorized.
 
 Canonical state and action bundles own identities, lifecycle, outcomes and correlation. Emitters project existing facts. Enumerable values remain YAML-driven. Use existing configuration fields and composition paths wherever possible. Keep older published packs immutable. Intel, Rosetta, sleep/wake, roaming, Mac SMB serving, binary log containers and filesystem artifact production remain excluded.
@@ -700,3 +702,21 @@ Revision 212 resolves an implicit Mac session request through the existing world
 The isolated candidate passes **120 session/process/foundation tests** (3.38 seconds), including nine new exact-selection, expired-session and bootstrap cases. All **11 mixed-fleet/checkpoint slow tests pass** (284.05 seconds), covering ordinary/helper-positive fresh-process/filter equivalence, native workspace recovery, retained active helpers and existing platform checkpoint paths. Windows/Linux evidence remains byte-identical to dev, **11 files each** (`legacy-equivalence-mac-session-planner-212/`). Actual branch verification follows.
 
 Actual revision 212 passes **120 focused tests** (5.54 seconds, `session-planner-actual-212.txt`). Ruff, formatting (1,131 files), behavior and whitespace checks pass. Digest: `117450b2de3646b9df814e22e526e2adcdadfd5dfd85bb06e32d6c3f6af67578`. The latest complete routine result remains revision 211 above.
+
+### Public evidence and ES ownership follow-up — 2026-10-18
+
+The user authorized a public evidence search, ES field mapping, plan updates and continued implementation; additional local-log inspection requires asking first. No personal logs, inventories, service configuration or live captures were inspected. Public Apple documentation JSON and pinned Mac Monitor source were downloaded into the existing ignored sample directory with acquisition hashes. Two direct forum HTML fetches returned generic pages; browser-readable discussions supplied the findings, not those HTML files.
+
+The new plan supplement maps every current ES wire-field family to existing canonical owners or a named implementation gap. Historical terminal-denial reports improve semantic understanding but do not validate macOS 26 native output. Mac Monitor's API mapping is useful but its enriched records are not exact Apple eslogger fixtures. No current-build exec/exit or terminal-denial gate was promoted. Future lab capture is a separate approval decision if public evidence remains insufficient.
+
+The previous uncommitted authored-login candidate under `/private/tmp` is no longer present. Its last recorded extended run had nine passes and three SSH checkpoint failures from a reuse-control argument reaching the world planner. Reconstruct the narrow change on the current branch and test the actual call boundary; do not claim that temporary candidate was integrated. Revision 212 remains the pushed baseline.
+
+### Authored Mac local login ownership
+
+Revision 213 reconstructs the narrow authored-login change. An internal request flag distinguishes an explicit Mac Type 2 login from an implicit reusable GUI session. Its default preserves existing callers and stable request IDs; the flag does not reach the world planner or RDP interface. Missing local origins use the existing local marker, while explicit origins remain unchanged. No scenario/configuration field changes.
+
+The actual branch passes **174 focused tests** (3.98 seconds) and **12 slow tests** (282.19 seconds), including all three previously failing SSH checkpoint cases, native workspace recovery, retained helpers and mixed-fleet filtering/fresh-process checks. Representative Windows/Linux data is byte-identical to revision 212: **11 files/858,481 bytes** and **10 files/368,438 bytes**, respectively (`legacy-login-admin/`). The complete routine run reports **13,939 passed, 72 skipped, 2,251 deselected and four failures** (854.22 seconds, `routine-authored-login-213.txt`). Failures are the real-helper retained-worker case and three native helper readiness cases; an isolated rerun is in progress. This is not a clean routine gate and the failures have not been classified as pre-existing.
+
+Behavior digest: `29e1a3f9a06cd71dd05996028cdb8d1d11f64d5f8555b873b5f886c4738e7f36`. Canonical Mac authoring guidance now distinguishes explicit login occurrences from implicit session reuse.
+
+All four Studio cases pass in isolation with no code changes (**4 passed**, 12.00 seconds, `studio-rerun-213.txt`). The full-run failures were not reproduced; their cause is not established. Keep the original failed full-run result visible rather than calling it a clean run. The ignored ChatGPT skill bundles were regenerated through the installer.

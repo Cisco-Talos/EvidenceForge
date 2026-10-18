@@ -102,8 +102,10 @@ def handle_logon(
         )
         source_ip = "-"
     else:
+        macos_local = _get_os_category(system.os) == "macos" and spec.logon_type == 2
         source_ip = (
             spec.source_ip
+            or ("-" if macos_local else None)
             or self.public_identity_registry.bind(
                 "external_logon",
                 f"storyline-logon:{actor.username}:{system.hostname}:{time.isoformat()}",
@@ -116,6 +118,7 @@ def handle_logon(
             logon_type=spec.logon_type,
             source_ip=source_ip,
             session_end_plan=session_end_plan,
+            **({"allow_local_session_reuse": False} if macos_local else {}),
         )
     # Protect storyline-created sessions from baseline logoff
     session = self.state_manager.get_session(logon_id)
@@ -145,6 +148,7 @@ def handle_failed_logon(
     malicious_event = context.malicious_event
     source_ip = (
         spec.source_ip
+        or ("-" if _get_os_category(system.os) == "macos" and spec.logon_type == 2 else None)
         or self.public_identity_registry.bind(
             "failed_logon",
             f"storyline-failed-logon:{actor.username}:{system.hostname}:{time.isoformat()}",

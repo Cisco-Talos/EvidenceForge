@@ -11754,6 +11754,8 @@ class ActivityGenerator:
         effective_uid: int | None = None,
         effective_gid: int | None = None,
         source: str = "activity_generator",
+        *,
+        allow_local_session_reuse: bool = True,
     ) -> str:
         """Generate logon event across all applicable log formats.
 
@@ -11769,6 +11771,8 @@ class ActivityGenerator:
             source_ip: Source IP address for remote logons. Local logons render with no
                 source address in Windows Security, but still use the host IP for DC-side
                 authentication evidence when applicable.
+            allow_local_session_reuse: Whether an implicit local request may reuse its
+                existing session. Explicit authored Mac logins request a new occurrence.
 
         Returns:
             LogonID (hex string format, e.g., "0x3e7")
@@ -11798,6 +11802,7 @@ class ActivityGenerator:
             effective_uid=effective_uid,
             effective_gid=effective_gid,
             source=source,
+            allow_local_session_reuse=allow_local_session_reuse,
         )
         return LogonActionBundle(self, request).execute()
 
@@ -11979,7 +11984,12 @@ class ActivityGenerator:
                 session_end_plan=request.session_end_plan,
             )
             return rendered_logon_id
-        if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
+        if (
+            request.allow_local_session_reuse
+            and logon_id is None
+            and os_cat == "windows"
+            and logon_type in (2, 11)
+        ):
             existing_interactive = self._active_user_workstation_windows_session(
                 user,
                 system,
@@ -11999,7 +12009,8 @@ class ActivityGenerator:
                     return existing_interactive.logon_id
 
         if (
-            logon_id is None
+            request.allow_local_session_reuse
+            and logon_id is None
             and os_cat == "macos"
             and logon_type == 2
             and source_ip in (None, "", "-", system.ip)
@@ -12026,7 +12037,8 @@ class ActivityGenerator:
         if windows_remote_auth_port is not None and not 1 <= windows_remote_auth_port <= 65535:
             raise ValueError("remote_auth_destination_port must be between 1 and 65535")
         if (
-            logon_id is None
+            request.allow_local_session_reuse
+            and logon_id is None
             and os_cat == "linux"
             and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
             and source_ip in (None, "", "-", system.ip)
