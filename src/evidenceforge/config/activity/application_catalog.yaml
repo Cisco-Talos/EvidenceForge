@@ -3217,3 +3217,37 @@ applications:
     personas: []
     system_types:
     - workstation
+
+  - id: macos-launchctl
+    display_name: macOS Launch Control
+    platforms:
+      macos:
+        image_path: /bin/launchctl
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /bin/launchctl list
+    categories: [macos_administration]
+    personas: []
+    system_types: [workstation]
+
+  - id: macos-plutil
+    display_name: macOS Property List Utility
+    platforms:
+      macos:
+        image_path: /usr/bin/plutil
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+        - /usr/bin/plutil -help
+    categories: [macos_administration]
+    personas: []
+    system_types: [workstation]

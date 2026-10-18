@@ -13,47 +13,47 @@ action_applications:
 - id: macos-sshd-keygen-wrapper
   image_path: /usr/libexec/sshd-keygen-wrapper
   availability: supported
-  behavior: catalog_only
+  behavior: ssh_receiver_bundle
   references:
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
-  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain unavailable.
 - id: macos-sshd
   image_path: /usr/sbin/sshd
   availability: supported
-  behavior: catalog_only
+  behavior: ssh_receiver_bundle
   references:
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
-  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain unavailable.
 - id: macos-sshd-session
   image_path: /usr/libexec/sshd-session
   availability: supported
-  behavior: catalog_only
+  behavior: ssh_receiver_bundle
   references:
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
-  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain unavailable.
 - id: macos-sshd-auth
   image_path: /usr/libexec/sshd-auth
   availability: supported
-  behavior: catalog_only
+  behavior: ssh_receiver_bundle
   references:
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/openssh.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/xcconfigs/base.xcconfig
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/com.openssh.sshd.plist
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd.c
   - https://github.com/apple-oss-distributions/OpenSSH/blob/2cc66abd7f8f1eb27d6a3074e476514194efe07e/openssh/sshd-session.c
-  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Receiver integration remains unavailable.
+  boundary: Pinned Apple source supplies executable vocabulary for the split receiver architecture. Host-build release identity is synthetic, not a verified OpenSSH-to-macOS-build mapping. The basic inetd arguments follow the pinned startup path; process titles and environment-specific arguments are not inferred. No baseline activation, permanent listener, numeric service-account IDs or native evidence is implied. Activation is limited to the bounded SSH receiver bundle; native receiver messages and SCP/SFTP remain unavailable.
 applications:
 - id: macos-dock
   image_path: /System/Library/CoreServices/Dock.app/Contents/MacOS/Dock
@@ -170,3 +170,22 @@ code_signatures:
   team_id: null
   reference: https://themittenmac.com/tools
   boundary: Static signing identity corroborated by the previously downloaded historical public SpriteTree eslogger export; not current-build validation. No captured CDHash or event records are copied. The compiler derives its own synthetic CodeDirectory hash for the modeled release/architecture; helper signatures and runtime trust flags remain unavailable.
+
+administration_applications:
+- id: macos-launchctl
+  image_path: /bin/launchctl
+  availability: supported
+  behavior: explicit_query_process
+  references:
+  - https://support.apple.com/guide/terminal/script-management-with-launchd-apdc6c1077b-5d5d-4d35-9c19-60f2397b2369/2.15/mac/26
+  - https://github.com/apple-oss-distributions/launchd/blob/main/man/launchctl.1
+  - https://attack.mitre.org/techniques/T1569/001/
+  boundary: Native host-build executable vocabulary and a list-only command pool. No automatic baseline selection, job registration, activation, unload, native message, or signing identity is implied. Authored persistence requires its separate lifecycle owner.
+- id: macos-plutil
+  image_path: /usr/bin/plutil
+  availability: supported
+  behavior: explicit_query_process
+  references:
+  - https://beta.splunkresearch.com/endpoint/c11f2b57-92c1-4cd2-b46c-064eafb833ac/
+  - https://github.com/swiftlang/swift-corelibs-foundation/tree/main/Sources/plutil
+  boundary: Native path vocabulary and a help-only command pool. No automatic baseline selection, plist modification or native artifact output. The publisher's osquery detection does not validate EvidenceForge Splunk ingestion or current eslogger fields.

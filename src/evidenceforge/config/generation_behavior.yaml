@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 213
+current_revision: 214
 history_start_revision: 1
-behavior_surface_sha256: 29e1a3f9a06cd71dd05996028cdb8d1d11f64d5f8555b873b5f886c4738e7f36
+behavior_surface_sha256: b2dd5bc89ffb19557857e0b1d7839e7dd5a505d4942f179c2c9a32c18c14f4a4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2092,3 +2092,12 @@ changes:
       - ecar
       - macos_unified_log
     summary: Distinguishes authored Mac local login occurrences from reusable implicit sessions, preserves explicit origins and defaults omitted local origins without allocating a public identity.
+  - revision: 214
+    id: macos-explicit-administration-catalog
+    impact: localized
+    domains:
+      - application-deployment
+      - process-catalog
+    formats:
+      - ecar
+    summary: Adds host-build arm64 launchctl and plutil entries with explicit query-only command pools and bounded foreground lifetimes, without automatic baseline activation or persistence effects.

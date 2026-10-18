@@ -720,3 +720,11 @@ The actual branch passes **174 focused tests** (3.98 seconds) and **12 slow test
 Behavior digest: `29e1a3f9a06cd71dd05996028cdb8d1d11f64d5f8555b873b5f886c4738e7f36`. Canonical Mac authoring guidance now distinguishes explicit login occurrences from implicit session reuse.
 
 All four Studio cases pass in isolation with no code changes (**4 passed**, 12.00 seconds, `studio-rerun-213.txt`). The full-run failures were not reproduced; their cause is not established. Keep the original failed full-run result visible rather than calling it a clean run. The ignored ChatGPT skill bundles were regenerated through the installer.
+
+### Bounded native administration catalog
+
+Committed the authored-login fix and evidence-plan supplement as `e004eca5`; the final installer/login gate passes **67 tests** (2.93 seconds). Revision 214 adds `/bin/launchctl list` and `/usr/bin/plutil -help` through existing catalog and spawn-rule fields. Both are arm64 host-build entries, available for explicit selection without automatic persona assignment. Query processes have bounded lifetimes; mutating commands do not inherit that profile. No signing metadata, launchd changes, file effects or native messages are inferred. The native catalog now has 38 entries. The audit also corrects four stale SSH receiver annotations to the already implemented receiver bundle.
+
+The isolated candidate passes **117 focused tests**, **21 final audit tests**, and **three slow tests** (105.40 seconds): ordinary/helper-positive mixed-fleet fresh-process/filter equivalence and native workspace checkpoint recovery. Windows/Linux data remains byte-identical to revision 212 with the same counts as the preceding slice. Public catalog provenance is recorded in the native audit; no personal inventory was used. Actual-branch checks follow.
+
+Actual revision 214 passes **210 catalog/deployment/foundation tests** (6.30 seconds, `admin-actual-214.txt`). Behavior digest: `b2dd5bc89ffb19557857e0b1d7839e7dd5a505d4942f179c2c9a32c18c14f4a4`. The isolated extended gate used the same catalog implementation. No native evidence gate changes.

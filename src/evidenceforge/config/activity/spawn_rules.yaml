@@ -781,3 +781,15 @@ macos:
     command_templates: ['"/Applications/Cisco/Cisco Secure Client.app/Contents/MacOS/Cisco Secure Client"']
     lifetime: long
     children: []
+
+  launchctl:
+    command_templates:
+    - /bin/launchctl list
+    lifetime: short
+    children: []
+
+  plutil:
+    command_templates:
+    - /usr/bin/plutil -help
+    lifetime: short
+    children: []

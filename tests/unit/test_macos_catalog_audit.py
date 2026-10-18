@@ -229,7 +229,7 @@ def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation(
         )
         assert release.key.product_id == "apple-macos"
         assert release.code_signature is None
-        assert entry["behavior"] == "catalog_only"
+        assert entry["behavior"] == "ssh_receiver_bundle"
         assert entry["references"] and all(
             url.startswith("https://github.com/apple-oss-distributions/")
             for url in entry["references"]
