@@ -8507,6 +8507,30 @@ class GeneratorLifecycleAuthority:
         No signal, escalation, group membership or termination success is inferred.
         This transfers the service token, including on precommit rejection.
         """
+        return self._materialize_posix_service_closure_cohort(
+            plan, group, service_token, close_group=True
+        )
+
+    def materialize_process_group_leader_exit_composite(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Close one bound launchd leader and adopt its children, preserving its job/group."""
+        return self._materialize_posix_service_closure_cohort(
+            plan, group, service_token, close_group=False
+        )
+
+    def _materialize_posix_service_closure_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        close_group: bool,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Share the exact transaction boundary for group unload and bound leader exit."""
         state = self._state_manager
         try:
             if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
@@ -8566,6 +8590,27 @@ class GeneratorLifecycleAuthority:
                 )
             ):
                 raise StateError("Group service controls must match every exact State close")
+            if not close_group:
+                if (
+                    len(identities) != 1
+                    or identities[0].object_id != group.leader_object_id
+                    or len(request.binding_closures) != 1
+                    or request.service_closures
+                ):
+                    raise StateError(
+                        "Leader exit requires one bound group leader and a retained loaded job"
+                    )
+                owner = self._registry.get_service_instance(
+                    request.binding_closures[0].identity.service_object_id
+                )
+                if (
+                    owner is None
+                    or owner.closed_at is not None
+                    or owner.close_barrier is not None
+                    or owner.identity.launchd_job is None
+                    or owner.process_group != group
+                ):
+                    raise StateError("Leader exit lost its exact live launchd group owner")
             if not request.binding_closures:
                 owned = tuple(
                     self._registry.get_service_instance(item.barrier.subject.object_id)
@@ -8580,7 +8625,9 @@ class GeneratorLifecycleAuthority:
                 if hook is not None:
                     hook()
                 with state.prepared_action_cohort_materialization(plan) as prepared:
-                    if set(state.get_posix_group_members(group, limit=256)) != set(identities):
+                    if close_group and set(state.get_posix_group_members(group, limit=256)) != set(
+                        identities
+                    ):
                         raise StateError("Group membership changed or the closure omits a member")
                     expected = prepared.expected_result
                     prepared.certify_composite_commit(expected)

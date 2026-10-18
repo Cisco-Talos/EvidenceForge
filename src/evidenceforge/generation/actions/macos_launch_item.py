@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
@@ -29,6 +30,7 @@ from evidenceforge.events.macos_launchd import (
     validate_launchd_label,
 )
 from evidenceforge.events.parentage import ProcessParentageChange
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.command_effects import FileEffectAction, FileEffectIntent
 from evidenceforge.generation.actions.endpoint_effects import (
     EndpointEffectSpec,
@@ -53,6 +55,7 @@ from evidenceforge.generation.lifecycle_registry import (
 )
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationBuilder,
     ActionCohortMaterializationPlan,
     ProcessMaterializationPlan,
     ProcessTerminationMaterializationPlan,
@@ -347,6 +350,55 @@ class MacosSystemJobGroupUnloadPlan:
     group: PosixGroupIdentity
 
 
+def _adopt_surviving_children(
+    *,
+    lifecycle_registry: LifecycleRegistry,
+    state_manager: StateManager,
+    builder: ActionCohortMaterializationBuilder,
+    members: tuple[ProcessIdentity, ...],
+    closing_ids: set[str],
+    completed_at: datetime,
+    action_id: str,
+) -> tuple[LifecycleTransition, ...]:
+    """Prepare bounded exact direct-child adoption for an explicit terminal set."""
+    adoptions: list[LifecycleTransition] = []
+    for member in members:
+        children, more = lifecycle_registry.live_child_process_page(member.object_id, limit=257)
+        if more is not None:
+            raise StateError("Launchd group cleanup exceeds its child ownership budget")
+        for child in children:
+            if child.identity.object_id in closing_ids:
+                continue
+            if len(adoptions) >= 256:
+                raise StateError("Launchd group cleanup exceeds its adoption budget")
+            current_child = state_manager.get_process_identity_by_object_id(
+                child.identity.object_id
+            )
+            adopter = state_manager.get_process_identity(member.hostname, 1)
+            if current_child is None or adopter is None:
+                raise StateError("Launchd cleanup lost a child or explicit system parent")
+            adopted = builder.adopt_process_after_parent_exit(
+                current_child, adopter=adopter, changed_at=completed_at
+            )
+            change = ProcessParentageChange(
+                current_child.parentage, adopted.parentage, completed_at
+            )
+            adoptions.append(
+                LifecycleTransition(
+                    transition_id=stable_uuid(
+                        "macos-launchd-adoption", action_id, child.identity.object_id
+                    ),
+                    subject=child.identity.ref,
+                    kind="dependent",
+                    canonical_time=completed_at,
+                    action_id=action_id + ":adoption:" + child.identity.object_id,
+                    reason="Launchd group parent exit adoption",
+                    parentage_change=change,
+                )
+            )
+    return tuple(adoptions)
+
+
 def macos_system_job_unload_completion_plan(
     *,
     lifecycle_registry: LifecycleRegistry,
@@ -435,41 +487,15 @@ def macos_system_job_unload_completion_plan(
             parents[member.object_id] = retained.current_parent_object_id
         builder = state_manager.begin_action_cohort_materialization()
         controls: list[LifecycleSubjectClosureControl] = []
-        adoptions: list[LifecycleTransition] = []
-        for member in members:
-            children, more = lifecycle_registry.live_child_process_page(member.object_id, limit=257)
-            if more is not None:
-                raise StateError("Launchd group cleanup exceeds its child ownership budget")
-            for child in children:
-                if child.identity.object_id in remaining:
-                    continue
-                if len(adoptions) >= 256:
-                    raise StateError("Launchd group cleanup exceeds its adoption budget")
-                current_child = state_manager.get_process_identity_by_object_id(
-                    child.identity.object_id
-                )
-                adopter = state_manager.get_process_identity(member.hostname, 1)
-                if current_child is None or adopter is None:
-                    raise StateError("Launchd cleanup lost a child or explicit system parent")
-                adopted = builder.adopt_process_after_parent_exit(
-                    current_child, adopter=adopter, changed_at=completed_at
-                )
-                change = ProcessParentageChange(
-                    current_child.parentage, adopted.parentage, completed_at
-                )
-                adoptions.append(
-                    LifecycleTransition(
-                        transition_id=stable_uuid(
-                            "macos-launchd-adoption", action_id, child.identity.object_id
-                        ),
-                        subject=child.identity.ref,
-                        kind="dependent",
-                        canonical_time=completed_at,
-                        action_id=action_id + ":adoption:" + child.identity.object_id,
-                        reason="Launchd group parent exit adoption",
-                        parentage_change=change,
-                    )
-                )
+        adoptions = _adopt_surviving_children(
+            lifecycle_registry=lifecycle_registry,
+            state_manager=state_manager,
+            builder=builder,
+            members=members,
+            closing_ids=set(remaining),
+            completed_at=completed_at,
+            action_id=action_id,
+        )
         while remaining:
             # At most 256 exact members; use retained parent identities, not PID guesses.
             parent_ids = {parents[member_id] for member_id in remaining}
@@ -530,5 +556,98 @@ def macos_system_job_unload_completion_plan(
             ),
             process_closures=(control(process_snapshot.identity.ref),),
             service_closures=(service_close,),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MacosSystemJobLeaderExitPlan:
+    """One completed leader exit, retaining the loaded definition and surviving group."""
+
+    closure: LifecycleServiceProcessClosureRequest
+    cohort: ActionCohortMaterializationPlan
+    group: PosixGroupIdentity
+
+
+def macos_system_job_leader_exit_completion_plan(
+    *,
+    lifecycle_registry: LifecycleRegistry,
+    state_manager: StateManager,
+    service_object_id: str,
+    completed_at: datetime,
+    action_id: str,
+    exit_outcome: PosixProcessExit | None = None,
+) -> MacosSystemJobLeaderExitPlan:
+    """Prepare natural leader exit and direct-child adoption without unloading a job.
+
+    This internal profile requires a retained known group and one active bound
+    leader. It does not schedule respawn, infer a terminal result, or emit a native
+    launchd message. Commit through the dedicated leader-exit composite.
+    """
+    if not action_id or action_id != action_id.strip():
+        raise ValueError("Launchd leader exit requires an exact action ID")
+    at = ensure_utc(completed_at)
+    owner = lifecycle_registry.get_service_instance(service_object_id)
+    if (
+        owner is None
+        or owner.identity.launchd_job is None
+        or owner.closed_at is not None
+        or owner.close_barrier is not None
+        or owner.process_group is None
+    ):
+        raise StateError("Leader exit requires an exact live loaded job with known group")
+    bindings, more = lifecycle_registry.service_process_binding_page(
+        service_object_id=service_object_id, limit=2
+    )
+    if more is not None or len(bindings) != 1:
+        raise StateError("Leader exit requires exactly one active process binding")
+    binding = bindings[0].identity
+    group = owner.process_group
+    leader = state_manager.get_process_identity_by_object_id(binding.process_object_id)
+    snapshot = lifecycle_registry.get_process(binding.process_object_id)
+    if (
+        leader is None
+        or snapshot is None
+        or snapshot.closed_at is not None
+        or snapshot.close_barrier is not None
+        or leader.job_control != group
+        or leader.object_id != group.leader_object_id
+        or at < binding.bound_at
+    ):
+        raise StateError("Leader exit cannot substitute group, process lifetime or activation time")
+    builder = state_manager.begin_action_cohort_materialization()
+    adoptions = _adopt_surviving_children(
+        lifecycle_registry=lifecycle_registry,
+        state_manager=state_manager,
+        builder=builder,
+        members=(leader,),
+        closing_ids={leader.object_id},
+        completed_at=at,
+        action_id=action_id,
+    )
+    builder.terminate_process(leader, end_time=at, exit_outcome=exit_outcome)
+    control = LifecycleSubjectClosureControl(
+        barrier=LifecycleCloseBarrier(
+            barrier_id=stable_uuid(
+                "macos-launchd-leader-exit-barrier", action_id, leader.object_id
+            ),
+            subject=snapshot.identity.ref,
+            requested_at=at,
+            authority="generated",
+            action_id=action_id,
+        ),
+        ticket_id=stable_uuid("macos-launchd-leader-exit-ticket", action_id, leader.object_id),
+    )
+    return MacosSystemJobLeaderExitPlan(
+        cohort=builder.seal(),
+        group=group,
+        closure=LifecycleServiceProcessClosureRequest(
+            binding_closures=(
+                LifecycleServiceProcessBindingClosure(
+                    identity=binding, closed_at=at, action_id=action_id
+                ),
+            ),
+            process_closures=(control,),
+            parent_adoptions=adoptions,
         ),
     )

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 222
+current_revision: 223
 history_start_revision: 1
-behavior_surface_sha256: 957df03c807e0ff9465061aec0ead9b88a4e37e3c2be0be3390c9e40cab0df3f
+behavior_surface_sha256: 17549d1eae51fb0216f9a4df98ef290fa62cdface329eb40cebe0af197098323
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2183,3 +2183,12 @@ changes:
     formats:
       - ecar
     summary: Atomically adopts surviving outside-group children at exact parent exit, preserving original parent and session/group identity through launchd unload, failure recovery and compatible checkpoints.
+  - revision: 223
+    id: launchd-leader-exit-and-retained-job-ownership
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - service-lifecycle
+    formats:
+      - ecar
+    summary: Composes bound launchd leader exit with atomic child adoption while preserving loaded jobs and surviving groups, and binds external close projections to exact State terminal outcomes.

@@ -4577,10 +4577,14 @@ class EventDispatcher:
         if (
             event.process is not None
             and event.process.exit_outcome is not None
-            and state_intent is not PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT
+            and state_intent
+            not in {
+                PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT,
+                PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE,
+            }
         ):
             raise EventContractError(
-                "Explicit process exit result requires its State action cohort"
+                "Explicit process exit result requires its State action cohort or authenticated close"
             )
         if state_intent is not PreparedDispatchStateIntent.APPLY and lifecycle_ticket is None:
             raise EventContractError(
@@ -4654,6 +4658,37 @@ class EventDispatcher:
                 raise EventContractError(
                     "Prepared deferred-session dependent version contradicts its State member"
                 )
+        elif state_intent is PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE:
+            from evidenceforge.events.process import process_exit_identity
+            from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+            if (
+                type(lifecycle_ticket) is not ProcessTerminationMaterializationPlan
+                or not self.state_manager.authenticates_process_termination_plan(lifecycle_ticket)
+            ):
+                raise EventContractError(
+                    "Externally materialized close requires an authentic State plan"
+                )
+            try:
+                identity = process_exit_identity(event)
+            except ValueError as error:
+                raise EventContractError(str(error)) from error
+            live = self.state_manager.get_process(identity.hostname, identity.pid)
+            if (
+                identity != lifecycle_ticket.identity
+                or event.timestamp != lifecycle_ticket.end_time
+                or event.process.exit_outcome != lifecycle_ticket.exit_outcome
+                or live is None
+                or live.ecar_object_id != identity.object_id
+                or event.process.integrity_level != live.integrity_level
+                or event.src_host.os_category != self.state_manager._pid_os.get(identity.hostname)
+            ):
+                raise EventContractError(
+                    "External process-close projection disagrees with its exact State plan"
+                )
+            version = lifecycle_ticket.expected_version
+            if expected_state_version is not None and expected_state_version != version:
+                raise EventContractError("External process close contradicts its State version")
         elif state_intent is not PreparedDispatchStateIntent.APPLY:
             ticket_version = getattr(lifecycle_ticket, "expected_version", None)
             publication_token = getattr(lifecycle_ticket, "publication_token", None)
