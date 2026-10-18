@@ -1743,9 +1743,28 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             for binding in active_group_bindings.get(service.identity.object_id, ())
         ):
             raise CheckpointCorruptionError("Service group disagrees with active job binding")
+    previous_session_by_logon: dict[tuple[str, str], SessionLifecycleSnapshot] = {}
+    temporarily_terminal_sessions: list[SessionLifecycleSnapshot] = []
     for snapshot in sorted(
-        sessions, key=lambda item: (item.identity.started_at, item.identity.object_id)
+        sessions,
+        key=lambda item: (
+            item.identity.started_at,
+            item.closed_at != item.identity.started_at,
+            item.identity.object_id,
+        ),
     ):
+        key = (snapshot.identity.hostname, snapshot.identity.logon_id)
+        previous = previous_session_by_logon.get(key)
+        if previous is not None:
+            if previous.closed_at is None or previous.closed_at > snapshot.identity.started_at:
+                raise CheckpointCorruptionError(
+                    "lifecycle checkpoint has overlapping LogonID lifetimes"
+                )
+            partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+            partition._ensure_full_state(
+                partition._entry(previous.identity.ref)
+            ).closed_at = previous.closed_at
+            temporarily_terminal_sessions.append(previous)
         start = _start(snapshot, states[snapshot.identity.object_id])
         fresh.register_session(
             snapshot.identity,
@@ -1753,6 +1772,11 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             transition_id=start.transition_id,
             transition_ordinal=start.transition_ordinal,
         )
+        previous_session_by_logon[key] = snapshot
+    # Member processes and authenticated closure are replayed after registration.
+    for snapshot in temporarily_terminal_sessions:
+        partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+        partition._ensure_full_state(partition._entry(snapshot.identity.ref)).closed_at = None
 
     def register_service(snapshot: ServiceInstanceLifecycleSnapshot) -> None:
         start = _start(snapshot, states[snapshot.identity.object_id])
@@ -1789,23 +1813,59 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
             transition_id=start.transition_id,
             transition_ordinal=start.transition_ordinal,
         )
+    previous_process_by_pid: dict[tuple[str, int], ProcessLifecycleSnapshot] = {}
+    temporarily_terminal_processes: list[ProcessLifecycleSnapshot] = []
+
+    def register_process(
+        snapshot: ProcessLifecycleSnapshot, *, missing_parent: bool = False
+    ) -> None:
+        # Restore in birth order. Only expose a predecessor's retained terminal
+        # boundary when admitting the next incarnation of that numeric PID. All
+        # valid children of that predecessor have already been registered; making
+        # every parent terminal at its own insertion would reject those children.
+        identity = snapshot.identity
+        key = (identity.hostname, identity.pid)
+        previous = previous_process_by_pid.get(key)
+        if previous is not None:
+            if previous.closed_at is None or previous.closed_at > identity.started_at:
+                raise CheckpointCorruptionError(
+                    "lifecycle checkpoint has overlapping PID lifetimes"
+                )
+            partition = fresh._partitions[fresh._partition_id(identity.hostname)]
+            partition._ensure_full_state(
+                partition._entry(previous.identity.ref)
+            ).closed_at = previous.closed_at
+            temporarily_terminal_processes.append(previous)
+        if missing_parent:
+            _register_process_without_retained_parent(fresh, snapshot, states[identity.object_id])
+        else:
+            start = _start(snapshot, states[identity.object_id])
+            fresh.register_process(
+                identity,
+                token=snapshot.token,
+                membership=snapshot.membership,
+                action_id=start.action_id,
+                transition_id=start.transition_id,
+                transition_ordinal=start.transition_ordinal,
+            )
+        previous_process_by_pid[key] = snapshot
+
     dangling_processes = _register_parent_ordered(
         processes,
         parent_id=lambda item: item.identity.parent_object_id,
-        register=lambda item: fresh.register_process(
-            item.identity,
-            token=item.token,
-            membership=item.membership,
-            action_id=_start(item, states[item.identity.object_id]).action_id,
-            transition_id=_start(item, states[item.identity.object_id]).transition_id,
-            transition_ordinal=_start(item, states[item.identity.object_id]).transition_ordinal,
-        ),
-        register_missing_parent=lambda item: _register_process_without_retained_parent(
-            fresh,
-            item,
-            states[item.identity.object_id],
+        register=register_process,
+        register_missing_parent=lambda item: register_process(item, missing_parent=True),
+        # Empty predecessor intervals at an equal timestamp precede a live reuse.
+        order_key=lambda item: (
+            item.identity.started_at,
+            item.closed_at != item.identity.started_at,
         ),
     )
+    # Temporal admission above is not authenticated closure. Replay bindings,
+    # holds, dependent transitions and exact terminal tickets below as usual.
+    for snapshot in temporarily_terminal_processes:
+        partition = fresh._partitions[fresh._partition_id(snapshot.identity.hostname)]
+        partition._ensure_full_state(partition._entry(snapshot.identity.ref)).closed_at = None
     service_ids = {snapshot.identity.object_id for snapshot in services}
     process_ids = {snapshot.identity.object_id for snapshot in processes}
     session_ids = {snapshot.identity.object_id for snapshot in sessions}
