@@ -354,6 +354,22 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
             for reference in (identity.parentage.original, identity.parentage.current)
         )
         payload = (*payload, ("process-parentage-v1", *parentage))
+    if identity.responsibility is not None:
+        reference = identity.responsibility.responsible
+        payload = (
+            *payload,
+            (
+                "process-responsibility-v1",
+                None
+                if reference is None
+                else (
+                    reference.hostname,
+                    reference.object_id,
+                    reference.pid,
+                    reference.started_at,
+                ),
+            ),
+        )
     if identity.job_control is not None:
         group = identity.job_control
         session = group.session

@@ -53,6 +53,7 @@ from evidenceforge.events.rdp import (
     RdpSessionState,
     RdpTransportGeneration,
 )
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.activity.public_identity_profiles import PublicIdentityBinding
 from evidenceforge.generation.process_runtime_cache import RuntimeProcessBinding
 from evidenceforge.models.state import (
@@ -142,6 +143,7 @@ _RUNNING_PROCESS_FIELDS = (
     "environment",
     "parentage",
     "parentage_history",
+    "responsibility",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -331,6 +333,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "job_control",
     "environment",
     "parentage",
+    "responsibility",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -444,9 +447,14 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ProcessParentReference,
         ("hostname", "object_id", "pid", "started_at"),
     ),
+    "responsible-process-reference-v1": (
+        ResponsibleProcessReference,
+        ("hostname", "object_id", "pid", "started_at"),
+    ),
+    "process-responsibility-v1": (ProcessResponsibility, ("responsible",)),
     "process-parentage-v1": (ProcessParentage, ("original", "current")),
     "process-parentage-change-v1": (ProcessParentageChange, ("before", "after", "changed_at")),
-    "running-process-v13": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v14": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -464,7 +472,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v8": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v9": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -650,6 +658,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, encode_state_value(())]
         if record_tag == "process-identity-v7" and len(encoded_fields) == 20:
             record_tag = "process-identity-v8"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v13" and len(encoded_fields) == 37:
+            record_tag = "running-process-v14"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v8" and len(encoded_fields) == 21:
+            record_tag = "process-identity-v9"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

@@ -52,7 +52,7 @@ def test_explicit_arguments_preserve_empty_whitespace_unicode_and_literal_shell_
     assert identity.arguments == arguments
     assert identity.command_line == shlex.join(arguments)
     assert state.get_process_identity(identity.hostname, identity.pid) == identity
-    assert encode_state_value(identity)[1] == "process-identity-v8"
+    assert encode_state_value(identity)[1] == "process-identity-v9"
     assert decode_state_value(encode_state_value(identity)) == identity
     restored = StateManager()
     _restore_head(restored, _capture_head(state))
@@ -93,7 +93,7 @@ def test_missing_arguments_remain_unknown_and_legacy_records_upgrade_without_par
     )
     process = state.get_process(identity.hostname, identity.pid)
     row = encode_state_value(process)
-    assert row[1] == "running-process-v13"
+    assert row[1] == "running-process-v14"
     assert decode_state_value(["record", "running-process-v8", row[2][:31]]) == replace(
         process, parentage=None
     )

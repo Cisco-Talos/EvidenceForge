@@ -252,6 +252,7 @@ def process_fork_identities(
         or child.command_line != parent.command_line
         or child.job_control != parent.job_control
         or child.environment != parent.environment
+        or child.responsibility != parent.responsibility
         or child.arguments != parent.arguments
         or (
             child.parentage is not None

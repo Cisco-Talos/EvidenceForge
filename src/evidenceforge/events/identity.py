@@ -33,6 +33,10 @@ from pydantic import Field
 
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.parentage import ProcessParentage, validate_process_parentage
+from evidenceforge.events.responsibility import (
+    ProcessResponsibility,
+    validate_process_responsibility,
+)
 
 type PosixIdentifier = Annotated[int, Field(strict=True, ge=0, lt=2**32)]
 type PosixProcessArguments = Annotated[
@@ -373,6 +377,7 @@ class ProcessIdentity:
     job_control: PosixGroupIdentity | None = None
     environment: PosixProcessEnvironment | None = None
     parentage: ProcessParentage | None = None
+    responsibility: ProcessResponsibility | None = None
 
     @property
     def initial_image(self) -> str:
@@ -395,6 +400,12 @@ class ProcessIdentity:
     def __post_init__(self) -> None:
         """Reject incomplete process object identity."""
 
+        validate_process_responsibility(
+            self.responsibility,
+            hostname=self.hostname,
+            object_id=self.object_id,
+            started_at=self.started_at,
+        )
         validate_process_arguments(self.arguments, command_line=self.command_line)
         validate_process_environment(self.environment)
         validate_process_parentage(

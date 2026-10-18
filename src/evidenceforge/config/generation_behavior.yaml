@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 225
+current_revision: 226
 history_start_revision: 1
-behavior_surface_sha256: 6d6a97cad46dfadd3a9def20729948014e222592b7a4ded96b6b85959bfc9e61
+behavior_surface_sha256: a90b1b906fcb8eab2d52f6343dc1a8f416cea74c5810ea8c0233715cf3ff9e6c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2209,3 +2209,12 @@ changes:
     formats:
       - ecar
     summary: Composes explicit Mac boot and SSH receiver sessions, separates shell setsid from exec, and retains exact source-completion truth through lost startup returns without changing legacy Linux or Windows paths.
+  - revision: 226
+    id: exact-process-responsibility-and-observation
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Retains explicit Mac responsible-process lifetime facts through fork and exec, captures event-time identities with proven absent or exited self fallback, and migrates legacy records with unknown responsibility.

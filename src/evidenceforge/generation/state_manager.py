@@ -74,8 +74,13 @@ from evidenceforge.events.parentage import (
     ProcessParentageChange,
     ProcessParentReference,
 )
-from evidenceforge.events.process_observation import ProcessParentObservation
+from evidenceforge.events.process_observation import (
+    ProcessParentObservation,
+    ProcessRelationshipObservation,
+    ProcessResponsibilityObservation,
+)
 from evidenceforge.events.process_outcome import PosixProcessExit
+from evidenceforge.events.responsibility import ProcessResponsibility, ResponsibleProcessReference
 from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
     DeferredSessionBindingDisposition,
@@ -1313,6 +1318,7 @@ class MaterializationBatchBuilder:
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1343,6 +1349,7 @@ class MaterializationBatchBuilder:
             environment=environment,
             new_posix_session=new_posix_session,
             new_posix_group=new_posix_group,
+            responsibility=responsibility,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2979,6 +2986,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        responsibility: ProcessResponsibility | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -3030,6 +3038,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 environment=environment,
                 new_posix_session=new_posix_session,
                 new_posix_group=new_posix_group,
+                responsibility=responsibility,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -3479,6 +3488,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 credentials=parent.credentials,
                 arguments=parent.arguments,
                 environment=parent.environment,
+                responsibility=parent.responsibility,
             )
 
             payload = replace(plan._payload, forked=True)
@@ -4032,6 +4042,8 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ProcessParentage,
         ProcessParentageChange,
         ProcessParentReference,
+        ProcessResponsibility,
+        ResponsibleProcessReference,
         PosixJobControlChange,
         SessionIdentity,
         ProcessIdentity,
@@ -10336,6 +10348,7 @@ class StateManager:
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
+        responsibility: ProcessResponsibility | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
@@ -10490,6 +10503,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, parent_identity),
                 job_control=self._initial_posix_membership(
                     new_posix_session,
@@ -10516,6 +10530,7 @@ class StateManager:
                     started_at=effective_start,
                 ),
             )
+            self._validate_process_responsibility(identity, os_category, parent_identity)
             payload = _ProcessMaterializationPayload(
                 integrity_level=integrity_level,
                 concurrency_group_id=concurrency_group_id,
@@ -10724,6 +10739,7 @@ class StateManager:
         environment: tuple[str, ...] | None,
         new_posix_session: bool,
         new_posix_group: bool,
+        responsibility: ProcessResponsibility | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -11002,6 +11018,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, planned_parent),
                 job_control=self._initial_posix_membership(
                     new_posix_session,
@@ -11029,6 +11046,9 @@ class StateManager:
                     object_id=thread_object_id,
                     started_at=effective_start,
                 ),
+            )
+            self._validate_process_responsibility(
+                identity, os_category, planned_parent, tuple(p.identity for p in builder._processes)
             )
             payload = _ProcessMaterializationPayload(
                 integrity_level=integrity_level,
@@ -12308,6 +12328,23 @@ class StateManager:
                             "Action cohort terminalized session retains a live owned process"
                         )
 
+            for process_plan in plan.processes:
+                facts = process_plan.identity.responsibility
+                parent = process_plan.parent_identity
+                if facts is None or facts.responsible is None:
+                    continue
+                if parent is not None and parent.responsibility == facts:
+                    # Inheritance preserves an established relationship even
+                    # after its responsible lifetime exits. New attribution
+                    # must instead refer to an owner alive at this birth.
+                    continue
+                owner_close = termination_by_process.get(facts.responsible.object_id)
+                if (
+                    owner_close is not None
+                    and owner_close[1].end_time <= process_plan.identity.started_at
+                ):
+                    raise StateError("New responsibility cannot follow its same-cohort owner exit")
+
             self._validate_posix_membership_sequence(plan._processes, plan._process_terminations)
 
             member_frontiers = [
@@ -12410,6 +12447,7 @@ class StateManager:
             credentials=identity.credentials,
             arguments=identity.arguments,
             environment=identity.environment,
+            responsibility=identity.responsibility,
             parentage=identity.parentage,
             job_control=identity.job_control,
             audit_pid_version=identity.audit_pid_version,
@@ -15997,6 +16035,92 @@ class StateManager:
                 return self._process_execution_active_at(process, ensure_utc(event_time))
             return self._process_identity(process)
 
+    def _validate_process_responsibility(
+        self,
+        identity: ProcessIdentity,
+        platform: str,
+        parent: ProcessIdentity | None,
+        staged: tuple[ProcessIdentity, ...] = (),
+    ) -> None:
+        facts = identity.responsibility
+        if facts is None:
+            return
+        if platform != "macos":
+            raise StateError("Explicit process responsibility requires a modeled Mac host")
+        reference = facts.responsible
+        if reference is None:
+            return
+        # A child may inherit a proven relationship whose original responsible
+        # process has already exited or retired. Observation still needs retained
+        # exit proof before it may apply the native self fallback.
+        if parent is not None and parent.responsibility == facts:
+            return
+        target = next((p for p in staged if p.object_id == reference.object_id), None)
+        if target is None:
+            target = self.get_process_identity_by_object_id(
+                reference.object_id, event_time=identity.started_at
+            )
+        if (
+            target is None
+            or ResponsibleProcessReference(
+                target.hostname, target.object_id, target.pid, target.started_at
+            )
+            != reference
+        ):
+            raise StateError("Process responsibility requires an exact active lifetime")
+
+    def observe_process_responsibility(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessResponsibilityObservation:
+        """Freeze responsible execution or explicit self fallback at event time.
+
+        Unknown ownership or expired history cannot become an absent or exited
+        owner. Capture before collection delay; no numeric-PID lookup is used.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("Responsibility observation requires exact process and aware time")
+        at = ensure_utc(observed_at)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or identity.responsibility is None:
+                raise StateError("Responsibility observation has stale, inactive or unknown facts")
+            reference = identity.responsibility.responsible
+            if reference is None:
+                return ProcessResponsibilityObservation(identity, identity, at, "absent")
+            target = self._processes_by_object_id.get(reference.object_id) or (
+                self._ended_processes_by_object_id.get(reference.object_id)
+            )
+            if (
+                target is None
+                or ResponsibleProcessReference(
+                    target.system, target.ecar_object_id, target.pid, target.start_time
+                )
+                != reference
+            ):
+                raise StateError("Responsibility observation lost exact retained lifetime history")
+            if target.end_time is not None and at >= target.end_time:
+                return ProcessResponsibilityObservation(
+                    identity, identity, at, "exited", target.end_time
+                )
+            responsible = self._process_execution_active_at(target, at)
+            if responsible is None:
+                raise StateError("Responsibility observation lost active execution history")
+            return ProcessResponsibilityObservation(identity, responsible, at, "active")
+
+    def observe_process_relationships(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessRelationshipObservation:
+        """Capture both exact relationship owners under one State read boundary."""
+        with self._lock:
+            return ProcessRelationshipObservation(
+                self.observe_process_parent(identity, observed_at=observed_at),
+                self.observe_process_responsibility(identity, observed_at=observed_at),
+            )
+
     def observe_process_parent(
         self, identity: ProcessIdentity, *, observed_at: datetime
     ) -> ProcessParentObservation:
@@ -16260,6 +16384,7 @@ class StateManager:
             credentials=process.credentials,
             arguments=process.arguments,
             environment=process.environment,
+            responsibility=process.responsibility,
             parentage=process.parentage,
             job_control=process.job_control,
             audit_pid_version=process.audit_pid_version,
@@ -16289,6 +16414,7 @@ class StateManager:
             identity.arguments,
             identity.environment,
             identity.parentage,
+            identity.responsibility,
             identity.job_control,
         )
 

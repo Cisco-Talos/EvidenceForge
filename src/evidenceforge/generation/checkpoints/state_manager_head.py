@@ -422,6 +422,20 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
 
     _restore_process_indexes(fresh, document["process_indexes"])
     from evidenceforge.generation.posix_job_control import validate_restored_job_control
+    from evidenceforge.generation.process_responsibility import validate_restored_responsibility
+
+    try:
+        validate_restored_responsibility(
+            tuple(
+                chain(
+                    fresh._processes_by_object_id.values(),
+                    fresh._ended_processes_by_object_id.values(),
+                )
+            ),
+            fresh._pid_os,
+        )
+    except (ValueError, TypeError) as error:
+        raise CheckpointCorruptionError("StateManager responsibility state is invalid") from error
 
     try:
         validate_restored_job_control(
