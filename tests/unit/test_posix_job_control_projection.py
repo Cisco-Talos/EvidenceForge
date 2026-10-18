@@ -35,8 +35,10 @@ from evidenceforge.models.exceptions import EventContractError
 from tests.unit.test_posix_job_control import _START, _change, _fork, _root
 
 
-def _environment() -> tuple[StateManager, EventDispatcher, MagicMock, ProcessIdentity]:
-    state, root = _root()
+def _environment(
+    *, environment: tuple[str, ...] | None = None
+) -> tuple[StateManager, EventDispatcher, MagicMock, ProcessIdentity]:
+    state, root = _root(environment=environment)
     root = _change(state, root, "bootstrap", 0)
     child = _fork(state, root, 1)
     registry = LifecycleRegistry(shard_count=4)
@@ -135,8 +137,23 @@ def test_compatibility_dispatch_and_duplicate_projection_cannot_publish() -> Non
     emitter.emit.assert_not_called()
 
 
+@pytest.mark.parametrize("actor", [False, 0, ""])
+def test_invalid_projection_actor_does_not_become_self(actor: object) -> None:
+    state, _, _, before = _environment()
+    _, event, after = _plan(state, before)
+    with pytest.raises(ValueError, match="exact before/after"):
+        process_job_control_occurrence(
+            host=event.src_host,
+            before=before,
+            after=after,
+            timestamp=event.timestamp,
+            integrity_level="System",
+            actor=actor,
+        )
+
+
 @pytest.mark.parametrize(
-    "damage", ["credentials", "image", "execution", "actor", "time", "windows"]
+    "damage", ["credentials", "image", "execution", "actor", "time", "windows", "environment"]
 )
 def test_membership_contract_rejects_unrelated_identity_changes(damage: str) -> None:
     state, _, _, before = _environment()
@@ -158,6 +175,10 @@ def test_membership_contract_rejects_unrelated_identity_changes(damage: str) -> 
         event.identity_plan = replace(event.identity_plan, target=after)
     elif damage == "time":
         event.timestamp = before.started_at
+    elif damage == "environment":
+        event.identity_plan = replace(
+            event.identity_plan, subject=replace(after, environment=("INVENTED=changed",))
+        )
     else:
         event.src_host.os_category = "windows"
     assert not shadow_seal(event).valid
@@ -199,7 +220,7 @@ def test_dependent_activity_orders_after_membership_observation(restore: bool) -
 
 
 def test_collection_omission_does_not_change_membership() -> None:
-    state, dispatcher, _, before = _environment()
+    state, dispatcher, _, before = _environment(environment=("INVENTED=literal", "DUP=1", "DUP=2"))
     dispatcher.emitters = {}
     plan, event, after = _plan(state, before)
     dispatcher.publish_prepared_action_cohort_batch(_prepare(dispatcher, plan, event, exact=True))
@@ -316,18 +337,27 @@ def test_known_membership_output_is_deterministic_across_fresh_processes(tmp_pat
 
     script = """
 from pathlib import Path
+import json
 import sys
 from evidenceforge.formats.loader import load_format
+from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+from evidenceforge.generation.checkpoints.state_values import encode_state_value
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils.rng import generation_seed_scope
 from tests.unit.test_posix_job_control_projection import _environment, _plan, _prepare
 with generation_seed_scope(217):
-    state, dispatcher, _, before = _environment()
+    state, dispatcher, _, before = _environment(environment=('INVENTED=literal', 'DUP=1', 'DUP=2'))
     emitter = EcarEmitter(load_format('ecar'), Path(sys.argv[1]), threaded=sys.argv[2]=='yes')
     dispatcher.emitters = {'ecar': emitter}
     plan, event, after = _plan(state, before)
     dispatcher.publish_prepared_action_cohort_batch(_prepare(dispatcher, plan, event, exact=True))
     emitter.close()
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    assert restored.get_process_identity(after.hostname, after.pid) == after
+    assert restored.get_process_identity_at(before.hostname, before.pid, before.started_at) == before
+    Path(sys.argv[1], 'identity.json').write_text(json.dumps(encode_state_value(after)))
 """
     snapshots: list[dict[str, bytes]] = []
     for seed, threaded in (("17", "no"), ("91", "yes")):
@@ -341,6 +371,6 @@ with generation_seed_scope(217):
         )
         assert result.returncode == 0, result.stdout + result.stderr
         snapshots.append(
-            {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("ecar.json")}
+            {p.relative_to(output).as_posix(): p.read_bytes() for p in output.rglob("*.json")}
         )
     assert snapshots[0] and snapshots[0] == snapshots[1]

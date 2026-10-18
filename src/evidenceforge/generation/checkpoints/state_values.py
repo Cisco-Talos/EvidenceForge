@@ -134,6 +134,7 @@ _RUNNING_PROCESS_FIELDS = (
     "arguments",
     "job_control",
     "job_control_history",
+    "environment",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -321,6 +322,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "audit_pid_version",
     "arguments",
     "job_control",
+    "environment",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -430,7 +432,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         PosixJobControlReservation,
         ("identity", "members", "updated_at", "ended_at"),
     ),
-    "running-process-v10": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v11": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -448,7 +450,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v6": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v7": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -619,6 +621,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None, encode_state_value(())]
         if record_tag == "process-identity-v5" and len(encoded_fields) == 18:
             record_tag = "process-identity-v6"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v10" and len(encoded_fields) == 34:
+            record_tag = "running-process-v11"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v6" and len(encoded_fields) == 19:
+            record_tag = "process-identity-v7"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

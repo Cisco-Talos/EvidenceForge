@@ -39,6 +39,11 @@ type PosixProcessArguments = Annotated[
     Field(strict=True, min_length=1, max_length=256),
 ]
 
+type PosixProcessEnvironment = Annotated[
+    tuple[Annotated[str, Field(strict=True)], ...],
+    Field(strict=True, max_length=256),
+]
+
 type EntityIdentityKind = Literal[
     "authentication_attempt",
     "authentication_occurrence",
@@ -322,6 +327,26 @@ def validate_process_arguments(
         raise ValueError("Explicit POSIX argv requires its canonical shell-quoted display line")
 
 
+def validate_process_environment(environment: object) -> None:
+    """Validate an explicitly supplied ordered envp vector, without expanding values.
+
+    None is unknown; an empty tuple is a known empty environment. Preserve raw
+    entries and duplicate names: conversion to a mapping would lose source facts.
+    The entry/byte bounds are internal admission budgets, not kernel limits.
+    """
+    if environment is None:
+        return
+    if (
+        type(environment) is not tuple
+        or len(environment) > 256
+        or any(type(value) is not str or "\0" in value for value in environment)
+        or sum(len(value.encode("utf-8")) + 1 for value in environment) > 65536
+    ):
+        raise ValueError(
+            "Explicit process environment requires up to 256 NUL-free strings within 64 KiB"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessIdentity:
     """Immutable identity of one host- and process-start-scoped process object."""
@@ -345,6 +370,7 @@ class ProcessIdentity:
     audit_pid_version: PosixIdentifier | None = None
     arguments: PosixProcessArguments | None = None
     job_control: PosixGroupIdentity | None = None
+    environment: PosixProcessEnvironment | None = None
 
     @property
     def initial_image(self) -> str:
@@ -368,6 +394,7 @@ class ProcessIdentity:
         """Reject incomplete process object identity."""
 
         validate_process_arguments(self.arguments, command_line=self.command_line)
+        validate_process_environment(self.environment)
         if self.job_control is not None and (
             type(self.job_control) is not PosixGroupIdentity
             or self.job_control.session.hostname != self.hostname

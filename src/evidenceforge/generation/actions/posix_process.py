@@ -67,7 +67,7 @@ def process_job_control_occurrence(
         kind="process_job_control",
     )
     event.identity_plan = EventIdentityPlan(
-        subject=after, actor=actor or before, target=before, session=session
+        subject=after, actor=before if actor is None else actor, target=before, session=session
     )
     process_job_control_identities(event)
     return event

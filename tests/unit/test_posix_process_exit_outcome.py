@@ -117,7 +117,7 @@ def test_legacy_exit_remains_unknown_in_new_and_old_checkpoint_records() -> None
     row = state._ended_processes_by_object_id.get(plan.process_terminations[0].identity.object_id)
     assert row.exit_outcome is None
     encoded = encode_state_value(row)
-    assert encoded[1] == "running-process-v10"
+    assert encoded[1] == "running-process-v11"
     legacy = ["record", "running-process-v7", encoded[2][:30]]
     assert decode_state_value(legacy) == row
 

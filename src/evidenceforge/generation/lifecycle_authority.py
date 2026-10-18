@@ -342,6 +342,8 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         payload = (*payload, ("macos-audit-pid-version-v1", identity.audit_pid_version))
     if identity.arguments is not None:
         payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
+    if identity.environment is not None:
+        payload = (*payload, ("posix-process-environment-v1", identity.environment))
     if identity.job_control is not None:
         group = identity.job_control
         session = group.session

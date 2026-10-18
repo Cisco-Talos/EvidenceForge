@@ -20,7 +20,9 @@ from evidenceforge.models.exceptions import StateError
 from tests.unit.test_process_execution_state import _START
 
 
-def _root(platform: str = "macos") -> tuple[StateManager, ProcessIdentity]:
+def _root(
+    platform: str = "macos", *, environment: tuple[str, ...] | None = None
+) -> tuple[StateManager, ProcessIdentity]:
     state = StateManager()
     state.set_current_time(_START)
     plan = state.plan_process_materialization(
@@ -33,6 +35,7 @@ def _root(platform: str = "macos") -> tuple[StateManager, ProcessIdentity]:
         os_category=platform,
         fixed_pid=1,
         credentials=PosixProcessCredentials(0, 0, 0, 0),
+        environment=environment,
     )
     state.materialize_process(plan)
     return state, plan.identity
@@ -71,6 +74,31 @@ def _close(state: StateManager, identity: ProcessIdentity, seconds: int) -> None
     builder = state.begin_action_cohort_materialization()
     builder.terminate_process(identity, end_time=_START + timedelta(seconds=seconds))
     state.materialize_action_cohort(builder.seal())
+
+
+@pytest.mark.parametrize("field", ["actor", "group"])
+@pytest.mark.parametrize("value", [False, 0, ""])
+def test_invalid_optional_membership_inputs_do_not_become_omitted_values(
+    field: str, value: object
+) -> None:
+    state, root = _root()
+    root = _change(state, root, "bootstrap", 0)
+    child = _fork(state, root, 1)
+    builder = state.begin_action_cohort_materialization()
+    before = state.materialization_digest()
+    with pytest.raises(StateError, match="exact"):
+        builder.change_posix_job_control(
+            child,
+            operation="setpgid",
+            changed_at=_START + timedelta(seconds=2),
+            **{field: value},
+        )
+    assert state.materialization_digest() == before
+    after = builder.change_posix_job_control(
+        child, operation="setpgid", changed_at=_START + timedelta(seconds=2)
+    )
+    state.materialize_action_cohort(builder.seal())
+    assert state.get_posix_group_members(after.job_control) == (after,)
 
 
 @pytest.mark.parametrize("platform", ["linux", "macos"])

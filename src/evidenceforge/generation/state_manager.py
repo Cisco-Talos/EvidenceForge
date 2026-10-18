@@ -55,6 +55,7 @@ from evidenceforge.events.identity import (
     SessionIdentity,
     ThreadIdentity,
     validate_process_arguments,
+    validate_process_environment,
 )
 from evidenceforge.events.job_control import (
     PosixGroupIdentity,
@@ -1303,6 +1304,7 @@ class MaterializationBatchBuilder:
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1330,6 +1332,7 @@ class MaterializationBatchBuilder:
             auth_logon_type=auth_logon_type,
             credentials=credentials,
             arguments=arguments,
+            environment=environment,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2961,6 +2964,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -3009,6 +3013,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 auth_logon_type=auth_logon_type,
                 credentials=credentials,
                 arguments=arguments,
+                environment=environment,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -3182,6 +3187,10 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         self._require_open()
         if type(target) is not ProcessIdentity or type(changed_at) is not datetime:
             raise StateError("POSIX membership requires exact process identity and time")
+        if actor is not None and type(actor) is not ProcessIdentity:
+            raise StateError("POSIX membership actor requires an exact process identity")
+        if group is not None and type(group) is not PosixGroupIdentity:
+            raise StateError("POSIX membership destination requires an exact group identity")
         if changed_at.utcoffset() is None:
             raise StateError("POSIX membership requires an aware transition time")
         normalized = self._manager._normalize_action_cohort_process_target(self, target)
@@ -3197,8 +3206,12 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         elif operation == "setpgid":
             if normalized.job_control is None:
                 raise StateError("POSIX group change requires known current membership")
-            after = group or PosixGroupIdentity(
-                normalized.job_control.session, normalized.pid, normalized.object_id, at
+            after = (
+                group
+                if group is not None
+                else PosixGroupIdentity(
+                    normalized.job_control.session, normalized.pid, normalized.object_id, at
+                )
             )
         else:
             raise StateError("Unsupported POSIX membership operation")
@@ -3207,7 +3220,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             target=normalized,
             activity_time=at,
             job_control_change=change,
-            job_control_actor=actor or normalized,
+            job_control_actor=normalized if actor is None else actor,
             _capability=_ActionCohortCapability(),
         )
         self._manager._validate_posix_job_control_patch(patch)
@@ -3413,6 +3426,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 auth_logon_type=process.auth_logon_type,
                 credentials=parent.credentials,
                 arguments=parent.arguments,
+                environment=parent.environment,
             )
 
             payload = replace(plan._payload, forked=True)
@@ -3440,6 +3454,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         executed_at: datetime,
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3468,6 +3483,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             normalized.credentials is None or credentials.origin != normalized.credentials.origin
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
+        validate_process_environment(environment)
         audit_pid_version = self._manager._preview_macos_audit_pid_version(
             normalized.hostname,
             self._manager._pid_os.get(normalized.hostname, "unknown"),
@@ -3520,6 +3536,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             image=image,
             credentials=credentials if credentials is not None else normalized.credentials,
             arguments=arguments,
+            environment=environment,
             command_line=command_line,
             execution_ordinal=normalized.execution_ordinal + 1,
             lifetime_image=normalized.initial_image,
@@ -10182,12 +10199,16 @@ class StateManager:
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
+        environment: tuple[str, ...] | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
+            validate_process_environment(environment)
+            if environment is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit process environment requires a POSIX host")
             if arguments is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
@@ -10324,6 +10345,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 arguments=arguments,
+                environment=environment,
                 job_control=parent_identity.job_control if parent_identity is not None else None,
                 principal=username,
                 credentials=credentials,
@@ -10546,6 +10568,7 @@ class StateManager:
         auth_logon_type: int | None,
         credentials: PosixProcessCredentials | None,
         arguments: tuple[str, ...] | None,
+        environment: tuple[str, ...] | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -10562,6 +10585,9 @@ class StateManager:
                 raise StateError("Materialization batch state-time fence changed during planning")
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
+            validate_process_environment(environment)
+            if environment is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit process environment requires a POSIX host")
             if arguments is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
@@ -10812,6 +10838,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 arguments=arguments,
+                environment=environment,
                 job_control=planned_parent.job_control if planned_parent is not None else None,
                 principal=username,
                 credentials=credentials,
@@ -11831,6 +11858,7 @@ class StateManager:
                     image=after.image,
                     command_line=after.command_line,
                     arguments=after.arguments,
+                    environment=after.environment,
                     credentials=after.credentials,
                     audit_pid_version=after.audit_pid_version,
                     execution_ordinal=before.execution_ordinal + 1,
@@ -12186,6 +12214,7 @@ class StateManager:
             pid_logical_position=payload.pid_logical_position,
             credentials=identity.credentials,
             arguments=identity.arguments,
+            environment=identity.environment,
             job_control=identity.job_control,
             audit_pid_version=identity.audit_pid_version,
         )
@@ -14336,6 +14365,7 @@ class StateManager:
             process.image = execution.after.image
             process.command_line = execution.after.command_line
             process.arguments = execution.after.arguments
+            process.environment = execution.after.environment
             process.credentials = execution.after.credentials
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
@@ -15922,6 +15952,7 @@ class StateManager:
             executed_at=process.executed_at,
             credentials=process.credentials,
             arguments=process.arguments,
+            environment=process.environment,
             job_control=process.job_control,
             audit_pid_version=process.audit_pid_version,
         )
@@ -15948,6 +15979,7 @@ class StateManager:
             identity.credentials,
             identity.audit_pid_version,
             identity.arguments,
+            identity.environment,
             identity.job_control,
         )
 

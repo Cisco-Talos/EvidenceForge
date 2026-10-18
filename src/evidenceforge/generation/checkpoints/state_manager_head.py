@@ -15,6 +15,7 @@ from evidenceforge.events.identity import (
     MacosProcessPrivilegeDrop,
     MacosProcessServiceDrop,
     validate_process_arguments,
+    validate_process_environment,
 )
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
@@ -483,6 +484,19 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             "linux",
         }:
             raise CheckpointCorruptionError("StateManager process argv requires a POSIX host")
+        try:
+            validate_process_environment(process.environment)
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "StateManager process environment is invalid"
+            ) from error
+        if process.environment is not None and fresh._pid_os.get(process.system) not in {
+            "macos",
+            "linux",
+        }:
+            raise CheckpointCorruptionError(
+                "StateManager process environment requires a POSIX host"
+            )
         outcome = process.exit_outcome
         if outcome is not None and (
             type(outcome) is not PosixProcessExit

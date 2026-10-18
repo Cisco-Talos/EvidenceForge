@@ -41,6 +41,7 @@ from evidenceforge.events.identity import (
     PosixIdentifier,
     PosixProcessArguments,
     PosixProcessCredentials,
+    PosixProcessEnvironment,
     ProcessIdentity,
 )
 from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
@@ -162,6 +163,7 @@ class RunningProcess:
     arguments: PosixProcessArguments | None = None
     job_control: PosixGroupIdentity | None = None
     job_control_history: tuple[PosixJobControlChange, ...] = ()
+    environment: PosixProcessEnvironment | None = None
 
 
 @dataclass

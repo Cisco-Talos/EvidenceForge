@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 217
+current_revision: 218
 history_start_revision: 1
-behavior_surface_sha256: 1bc48e7f94cad6c221fb591066a5b6171e7ee63093ab87a4a876c7fcd3ccecc9
+behavior_surface_sha256: 30fdba497015d89d5139c6f78f1ea64f653781004a188d2cbce6d72142831ff7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2134,3 +2134,13 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Owns explicit POSIX group/session lifetimes, fork inheritance, membership changes and leaderless PID reservations; preserves unknown legacy membership and projects authenticated transitions through eCAR and recovery.
+  - revision: 218
+    id: explicit-posix-execution-environment
+    impact: localized
+    domains:
+      - process-execution
+      - checkpoint-state
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Retains explicit ordered POSIX envp across launch, fork, exec and recovery without reading the host environment or adding scenario fields; preserves unknown versus empty and rejects malformed optional job-control arguments.
