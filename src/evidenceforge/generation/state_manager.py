@@ -1305,6 +1305,7 @@ class MaterializationBatchBuilder:
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        new_posix_session: bool = False,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1333,6 +1334,7 @@ class MaterializationBatchBuilder:
             credentials=credentials,
             arguments=arguments,
             environment=environment,
+            new_posix_session=new_posix_session,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2965,6 +2967,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        new_posix_session: bool = False,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -3014,6 +3017,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 credentials=credentials,
                 arguments=arguments,
                 environment=environment,
+                new_posix_session=new_posix_session,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -10177,6 +10181,34 @@ class StateManager:
         ):
             raise StateError("Process credentials require a POSIX platform and immutable snapshot")
 
+    @staticmethod
+    def _validate_new_posix_session(requested: bool, platform: str, parent_pid: int) -> None:
+        if type(requested) is not bool:
+            raise StateError("New POSIX launch session requires an exact boolean")
+        if requested and (platform not in {"macos", "linux"} or parent_pid <= 0):
+            raise StateError("New POSIX launch session requires a POSIX child launch")
+
+    @staticmethod
+    def _initial_posix_membership(
+        requested: bool,
+        parent: ProcessIdentity | None,
+        hostname: str,
+        pid: int,
+        object_id: str,
+        started_at: datetime,
+    ) -> PosixGroupIdentity | None:
+        """Own an explicit session-creating launch without guessing kernel boot state.
+
+        This is a successful aggregate process-launch contract, not an observed
+        fork or setsid syscall. Ordinary creation and explicit fork inherit only.
+        """
+        if requested:
+            if parent is None or pid == 1:
+                raise StateError("New POSIX launch session requires an exact nonroot child")
+            session = PosixSessionIdentity(hostname, pid, object_id, started_at)
+            return PosixGroupIdentity(session, pid, object_id, started_at)
+        return parent.job_control if parent is not None else None
+
     def plan_process_materialization(
         self,
         *,
@@ -10200,10 +10232,12 @@ class StateManager:
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        new_posix_session: bool = False,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
+            self._validate_new_posix_session(new_posix_session, os_category, parent_pid)
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
@@ -10346,7 +10380,9 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
-                job_control=parent_identity.job_control if parent_identity is not None else None,
+                job_control=self._initial_posix_membership(
+                    new_posix_session, parent_identity, system, pid, object_id, effective_start
+                ),
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(system, os_category),
@@ -10569,6 +10605,7 @@ class StateManager:
         credentials: PosixProcessCredentials | None,
         arguments: tuple[str, ...] | None,
         environment: tuple[str, ...] | None,
+        new_posix_session: bool,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -10583,6 +10620,7 @@ class StateManager:
                 raise StateError("Materialization batch became stale during process planning")
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
+            self._validate_new_posix_session(new_posix_session, os_category, parent_pid)
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
@@ -10839,7 +10877,9 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
-                job_control=planned_parent.job_control if planned_parent is not None else None,
+                job_control=self._initial_posix_membership(
+                    new_posix_session, planned_parent, system, pid, object_id, effective_start
+                ),
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(
@@ -10943,7 +10983,11 @@ class StateManager:
             identity = plan.identity
             self._validate_process_exit_outcome(plan.exit_outcome, identity.hostname)
             membership_updates(
-                self._posix_job_control_reservations, identity.job_control, None, plan.end_time
+                self._posix_job_control_reservations,
+                identity.job_control,
+                None,
+                plan.end_time,
+                lifetime_boundary=True,
             )
             key = (identity.hostname, identity.pid)
             process = self.state.running_processes.get(key)
@@ -14675,24 +14719,29 @@ class StateManager:
         self, before: PosixGroupIdentity | None, after: PosixGroupIdentity | None, at: datetime
     ) -> None:
         for key, rows in membership_updates(
-            self._posix_job_control_reservations, before, after, at
+            self._posix_job_control_reservations,
+            before,
+            after,
+            at,
+            lifetime_boundary=before is None or after is None,
         ).items():
             self._replace_posix_reservation_rows(key, rows)
 
-    def get_posix_group_members(self, group: PosixGroupIdentity) -> tuple[ProcessIdentity, ...]:
+    def get_posix_group_members(
+        self, group: PosixGroupIdentity, *, limit: int | None = None
+    ) -> tuple[ProcessIdentity, ...]:
         """Return current exact-lifetime members using the group index."""
         if type(group) is not PosixGroupIdentity:
             raise StateError("POSIX membership lookup requires an exact group identity")
+        if limit is not None and (type(limit) is not int or limit < 1):
+            raise StateError("POSIX membership limit must be a positive integer")
         with self._lock:
-            return tuple(
-                sorted(
-                    (
-                        self._process_identity(row)
-                        for row in self._running_processes.find("posix_group", group)
-                    ),
-                    key=lambda identity: identity.pid,
-                )
-            )
+            members: list[ProcessIdentity] = []
+            for row in self._running_processes.find_iter("posix_group", group):
+                if limit is not None and len(members) >= limit:
+                    raise StateError("POSIX group exceeds this operation's membership budget")
+                members.append(self._process_identity(row))
+            return tuple(sorted(members, key=lambda identity: identity.pid))
 
     def _validate_posix_job_control_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
         target, change, actor = patch.target, patch.job_control_change, patch.job_control_actor
@@ -14796,10 +14845,20 @@ class StateManager:
         view = ChainMap(updates, self._posix_job_control_reservations)
         for plan in starts:
             updates.update(
-                membership_updates(view, None, plan.identity.job_control, plan.identity.started_at)
+                membership_updates(
+                    view,
+                    None,
+                    plan.identity.job_control,
+                    plan.identity.started_at,
+                    lifetime_boundary=True,
+                )
             )
         for plan in closes:
-            updates.update(membership_updates(view, plan.identity.job_control, None, plan.end_time))
+            updates.update(
+                membership_updates(
+                    view, plan.identity.job_control, None, plan.end_time, lifetime_boundary=True
+                )
+            )
 
     def validate_process_materialization(self, plan: ProcessMaterializationPlan) -> None:
         """Validate every fallible process-start condition without publishing state."""

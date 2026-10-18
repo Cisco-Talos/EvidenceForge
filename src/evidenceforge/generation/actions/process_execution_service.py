@@ -273,6 +273,8 @@ class ProcessExecutionService:
     ) -> ProcessReuseCandidate | None:
         """Select in the existing precedence order, keeping preflight allocation-free."""
         system = request.system
+        if request.new_posix_session:
+            return None
         if (
             not preflight
             and not prepared_requires_new_root
@@ -923,6 +925,7 @@ class ProcessExecutionService:
                 auth_session_id=process_session_id,
                 auth_logon_type=launch.logon_type,
                 credentials=credentials,
+                new_posix_session=request.new_posix_session,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -954,6 +957,7 @@ class ProcessExecutionService:
                 start_time=ensure_utc(launch.time),
                 parent_activity_time=ensure_utc(launch.time),
                 credentials=credentials,
+                new_posix_session=request.new_posix_session,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity

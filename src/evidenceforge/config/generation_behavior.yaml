@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 218
+current_revision: 219
 history_start_revision: 1
-behavior_surface_sha256: 30fdba497015d89d5139c6f78f1ea64f653781004a188d2cbce6d72142831ff7
+behavior_surface_sha256: a3a7a08ae47e0ee9fbd235a0b8fbb9aafac25dcf5b6905bd6b027a4fbe97c957
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2144,3 +2144,13 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Retains explicit ordered POSIX envp across launch, fork, exec and recovery without reading the host environment or adding scenario fields; preserves unknown versus empty and rejects malformed optional job-control arguments.
+  - revision: 219
+    id: production-posix-session-and-group-closure
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - service-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Gives Mac terminal login launches explicit POSIX session ownership and composes exact child-first process-group cleanup with atomic State and service closure; preserves unknown boot membership and legacy platform behavior.

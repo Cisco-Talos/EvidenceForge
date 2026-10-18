@@ -28,6 +28,7 @@ from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
@@ -92,6 +93,7 @@ from evidenceforge.generation.network_runtime import (
     NetworkTransportLifecycleMode,
     PreparedNetworkTransactionRoot,
 )
+from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
 from evidenceforge.generation.proxy_channels import (
     ExplicitProxyAdmissionCommitResult,
     ExplicitProxyAdmissionToken,
@@ -8464,6 +8466,111 @@ class GeneratorLifecycleAuthority:
         )
         return LifecycleProcessServiceClosureCompositeResult(process=ended, receipt=receipt)
 
+    def materialize_process_group_service_closure_composite(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Close one exact live group and its service relations in one State version.
+
+        The caller supplies explicit completed outcomes and child-first order.
+        No signal, escalation, group membership or termination success is inferred.
+        This transfers the service token, including on precommit rejection.
+        """
+        state = self._state_manager
+        try:
+            if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
+                plan
+            ):
+                raise StateError("Group closure requires exact group and State cohort identities")
+            if (
+                any(
+                    (
+                        plan.sessions,
+                        plan.processes,
+                        plan._session_process_links,
+                        plan.live_session_process_role_patches,
+                        plan.session_metadata_patches,
+                        plan.process_activity_patches,
+                        plan.process_executions,
+                        plan.session_activity_patches,
+                        plan.session_terminalizations,
+                        plan._smb_connection_finalization is not None,
+                        plan._smb_file_mutation_terminalization is not None,
+                    )
+                )
+                or not 1 <= len(plan.process_terminations) <= 256
+            ):
+                raise StateError("Group closure requires a bounded termination-only cohort")
+            closes = tuple(item.target for item in plan.process_terminations)
+            if any(type(item) is not ProcessTerminationMaterializationPlan for item in closes):
+                raise StateError("Group closure requires existing exact process close plans")
+            if any(item.parent_activity is not None for item in plan.process_terminations):
+                raise StateError("Group closure cannot patch unrelated parent activity")
+            if not self._registry.authenticates_service_closure_admission_token(service_token):
+                raise StateError("Group closure requires an authentic service admission")
+            request = service_token.request
+            identities = tuple(item.identity for item in closes)
+            at = closes[0].end_time
+            if (
+                any(item.end_time != at or item.identity.job_control != group for item in closes)
+                or tuple(item.barrier.subject.object_id for item in request.process_closures)
+                != tuple(identity.object_id for identity in identities)
+                or any(item.barrier.requested_at != at for item in request.process_closures)
+                or any(item.barrier.requested_at != at for item in request.service_closures)
+                or not request.binding_closures
+                or any(
+                    item.closed_at != at
+                    or item.identity.process_object_id not in {row.object_id for row in identities}
+                    for item in request.binding_closures
+                )
+            ):
+                raise StateError("Group service controls must match every exact State close")
+            with self._registry.claimed_service_process_closure(service_token) as service:
+                if any(effective != at for _, effective in service.effective_times):
+                    raise StateError("Group closure cannot precede lifecycle holds or leases")
+                hook = self._materialization_precommit_hook
+                if hook is not None:
+                    hook()
+                with state.prepared_action_cohort_materialization(plan) as prepared:
+                    if set(state.get_posix_group_members(group, limit=256)) != set(identities):
+                        raise StateError("Group membership changed or the closure omits a member")
+                    expected = prepared.expected_result
+                    prepared.certify_composite_commit(expected)
+                    # State remains rollback-owned until the registry's no-fail tail.
+                    prepared.apply_provisional()
+                    try:
+                        receipt = service.commit_no_fail()
+                        result = prepared.finalize_no_fail()
+                    except BaseException as error:
+                        if service.committed:
+                            receipt = service.receipt
+                            assert receipt is not None
+                            if not prepared.committed:
+                                prepared.finalize_no_fail()
+                            proof = PosixGroupServiceClosureReceipt.issue(
+                                secret=self._receipt_secret,
+                                group=group,
+                                plans=closes,
+                                service_receipt=receipt,
+                                prior_version=expected.prior_version,
+                                committed_version=expected.committed_version,
+                            )
+                            error.process_group_service_receipt = proof
+                        raise
+            return PosixGroupServiceClosureReceipt.issue(
+                secret=self._receipt_secret,
+                group=group,
+                plans=closes,
+                service_receipt=receipt,
+                prior_version=result.prior_version,
+                committed_version=result.committed_version,
+            )
+        except BaseException:
+            self._discard_service_closure_admission(service_token)
+            raise
+
     def authenticates_process_service_closure_composite_receipt(
         self,
         plan: ProcessTerminationMaterializationPlan,
@@ -8471,6 +8578,23 @@ class GeneratorLifecycleAuthority:
     ) -> bool:
         """Verify one exact committed State/lifecycle service closure receipt."""
 
+        if type(receipt) is PosixGroupServiceClosureReceipt:
+            if (
+                not receipt.authenticates(self._receipt_secret)
+                or not self._registry.authenticates_service_process_closure_receipt(
+                    receipt.service_receipt
+                )
+                or not self._state_manager.authenticates_process_termination_plan(plan)
+                or plan.expected_version != receipt.prior_version
+                or receipt.committed_version != receipt.prior_version + 1
+            ):
+                return False
+            return any(
+                token == plan.publication_token and identity == plan.identity
+                for token, identity in zip(
+                    receipt.process_plan_tokens, receipt.processes, strict=True
+                )
+            )
         if not isinstance(receipt, LifecycleProcessServiceClosureCompositeReceipt):
             return False
         if not receipt._has_valid_integrity(self._receipt_secret):

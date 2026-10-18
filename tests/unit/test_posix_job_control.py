@@ -329,14 +329,54 @@ def test_cohort_multiple_closes_retire_only_after_final_member() -> None:
         assert rows[-1].ended_at == _START + timedelta(seconds=5)
 
 
-def test_process_starts_inherit_exact_group_and_fail_before_writes_when_backdated() -> None:
+def test_inherited_member_lifetimes_allow_planner_lookahead_but_cannot_retire_early() -> None:
     state, root = _root()
     root = _change(state, root, "bootstrap", 0)
-    _fork(state, root, 4)
+    later = _fork(state, root, 4)
+    _close(state, later, 20)
+    earlier = _fork(state, root, 3)
+    assert earlier.job_control == root.job_control
+    _close(state, earlier, 10)
     before = state.materialization_digest()
     with pytest.raises(StateError, match="backdated"):
-        _fork(state, root, 3)
+        _close(state, root, 15)
     assert state.materialization_digest() == before
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    _close(restored, root, 21)
+    assert restored.get_posix_group_members(root.job_control) == ()
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_explicit_session_launch_owns_fresh_group_without_boot_assumptions(batch: bool) -> None:
+    state, root = _root()
+    owner = state.begin_action_cohort_materialization() if batch else state
+    method = owner.plan_process if batch else owner.plan_process_materialization
+    plan = method(
+        system=root.hostname,
+        parent_pid=root.pid,
+        image="/usr/bin/login",
+        command_line="login test-user",
+        username="test-user",
+        integrity_level="Medium",
+        os_category="macos",
+        start_time=_START + timedelta(seconds=1),
+        new_posix_session=True,
+    )
+    if batch:
+        state.materialize_action_cohort(owner.seal())
+    else:
+        state.materialize_process(plan)
+    group = plan.identity.job_control
+    assert root.job_control is None
+    assert group.pgid == group.session.sid == plan.identity.pid
+    assert group.leader_object_id == group.session.leader_object_id == plan.identity.object_id
+    assert _fork(state, plan.identity, 2).job_control == group
+    with pytest.raises(StateError, match="membership budget"):
+        state.get_posix_group_members(group, limit=1)
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    assert restored.get_posix_group_members(group) == state.get_posix_group_members(group)
 
 
 def test_separate_hosts_can_own_same_numeric_groups() -> None:

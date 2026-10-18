@@ -16846,6 +16846,7 @@ class ActivityGenerator:
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
+        new_posix_session: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -16867,6 +16868,7 @@ class ActivityGenerator:
             parent_pid: Parent process PID (default 4 = System)
             require_exact_parent: Reject the execution if ``parent_pid`` is not the exact
                 live parent instead of applying generic parent-repair heuristics.
+            new_posix_session: Model an explicit session-creating POSIX launch.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -16905,6 +16907,7 @@ class ActivityGenerator:
             command_line=command_line,
             parent_pid=parent_pid,
             require_exact_parent=require_exact_parent,
+            new_posix_session=new_posix_session,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -25094,6 +25097,7 @@ class ActivityGenerator:
                 lifecycle_group_id=session.lifecycle_group_id,
                 source_visible_by=start + gap.value * (index + 1),
                 require_exact_parent=True,
+                new_posix_session=index == 1,
             )
             if pid <= 0:
                 return None

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
@@ -50,6 +51,7 @@ from evidenceforge.generation.lifecycle_registry import (
 )
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import (
+    ActionCohortMaterializationPlan,
     ProcessMaterializationPlan,
     ProcessTerminationMaterializationPlan,
     StateManager,
@@ -329,6 +331,19 @@ class MacosSystemJobUnloadPlan:
     process: ProcessTerminationMaterializationPlan | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class MacosSystemJobGroupUnloadPlan:
+    """Exact child-first group closure for a bound job's own POSIX group.
+
+    Commit through ``materialize_process_group_service_closure_composite``;
+    individual member close plans are projections of that single transaction.
+    """
+
+    closure: LifecycleServiceProcessClosureRequest
+    cohort: ActionCohortMaterializationPlan
+    group: PosixGroupIdentity
+
+
 def macos_system_job_unload_completion_plan(
     *,
     lifecycle_registry: LifecycleRegistry,
@@ -336,14 +351,15 @@ def macos_system_job_unload_completion_plan(
     service_object_id: str,
     completed_at: datetime,
     action_id: str,
-) -> MacosSystemJobUnloadPlan:
-    """Prepare a dormant or single-process job's terminal unload transition.
+) -> MacosSystemJobUnloadPlan | MacosSystemJobGroupUnloadPlan:
+    """Prepare a dormant, single-process or explicitly owned group unload.
 
     The caller owns the completed outcome and its timing. This adapter does not
     infer SIGTERM delivery, process groups, escalation delays or native messages.
     A process-bearing plan must use the shared process/service closure composite;
-    a dormant plan uses the ordinary prepared service closure. Child processes
-    require a separate supported group/lifecycle owner and are rejected here.
+    a dormant plan uses the ordinary prepared service closure. Known job groups
+    use the atomic group closure owner. Unknown membership retains the narrow
+    single-process contract. Neither ancestry nor a shared SID implies membership.
     """
     if not action_id or action_id != action_id.strip():
         raise ValueError("Launchd unload requires an exact action ID")
@@ -388,6 +404,51 @@ def macos_system_job_unload_completion_plan(
     process_snapshot = lifecycle_registry.get_process(binding.process_object_id)
     if process_snapshot is None or process_snapshot.closed_at is not None:
         raise StateError("Launchd unload requires its exact live bound process")
+    current = state_manager.get_process_identity(
+        snapshot.identity.hostname, process_snapshot.identity.pid
+    )
+    if current is None or current.object_id != binding.process_object_id:
+        raise StateError("Launchd unload cannot substitute a reused process ID")
+    group = current.job_control
+    if group is not None:
+        if group.leader_object_id != binding.process_object_id:
+            raise StateError("Launchd unload requires the bound job's own group")
+        members = state_manager.get_posix_group_members(group, limit=256)
+        remaining = {member.object_id: member for member in members}
+        parents: dict[str, str | None] = {}
+        for member in members:
+            retained = lifecycle_registry.get_process(member.object_id)
+            if retained is None or retained.closed_at is not None:
+                raise StateError("Launchd group member is missing its live lifecycle owner")
+            parents[member.object_id] = retained.identity.parent_object_id
+        builder = state_manager.begin_action_cohort_materialization()
+        controls: list[LifecycleSubjectClosureControl] = []
+        while remaining:
+            # At most 256 exact members; use retained parent identities, not PID guesses.
+            parent_ids = {parents[member_id] for member_id in remaining}
+            leaves = sorted(
+                (member for member in remaining.values() if member.object_id not in parent_ids),
+                key=lambda member: (member.pid, member.object_id),
+            )
+            if not leaves:
+                raise StateError("Launchd group contains a cyclic parent graph")
+            for member in leaves:
+                builder.terminate_process(member, end_time=completed_at)
+                controls.append(control(LifecycleEntityRef("process", member.object_id)))
+                del remaining[member.object_id]
+        return MacosSystemJobGroupUnloadPlan(
+            group=group,
+            cohort=builder.seal(),
+            closure=LifecycleServiceProcessClosureRequest(
+                binding_closures=(
+                    LifecycleServiceProcessBindingClosure(
+                        identity=binding, closed_at=completed_at, action_id=action_id
+                    ),
+                ),
+                process_closures=tuple(controls),
+                service_closures=(service_close,),
+            ),
+        )
     children, more_children = lifecycle_registry.live_child_process_page(
         binding.process_object_id, limit=1
     )

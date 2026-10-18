@@ -38,6 +38,8 @@ def membership_updates(
     before: PosixGroupIdentity | None,
     after: PosixGroupIdentity | None,
     at: datetime,
+    *,
+    lifetime_boundary: bool = False,
 ) -> dict[ReservationKey, ReservationRows]:
     """Preflight one membership delta without mutating any state or allocator."""
     updates: dict[ReservationKey, ReservationRows] = {}
@@ -53,15 +55,22 @@ def membership_updates(
             rows = updates.get(key, reservations.get(key, ()))
             active = rows[-1] if rows and rows[-1].ended_at is None else None
             if active is not None:
-                if active.identity != identity or at < active.updated_at:
+                members = active.members + delta
+                if (
+                    active.identity != identity
+                    or at < identity.started_at
+                    or (at < active.updated_at and (not lifetime_boundary or not members))
+                ):
                     raise StateError(
                         "POSIX membership uses a stale lifetime or backdated transition"
                     )
-                members = active.members + delta
                 updates[key] = (
                     *rows[:-1],
                     replace(
-                        active, members=members, updated_at=at, ended_at=at if not members else None
+                        active,
+                        members=members,
+                        updated_at=max(at, active.updated_at),
+                        ended_at=at if not members else None,
                     ),
                 )
             elif delta < 0:

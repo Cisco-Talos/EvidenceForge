@@ -179,6 +179,7 @@ class GenerateProcessCapability(Protocol):
         lifecycle_group_id: str = "",
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
+        new_posix_session: bool = False,
     ) -> int:
         """Delegate to the existing generate process owner."""
         ...

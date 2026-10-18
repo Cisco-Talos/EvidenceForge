@@ -296,3 +296,107 @@ def test_unload_after_authenticated_exec_terminates_current_execution_of_same_li
         == plan.process.end_time
     )
     assert state.get_process("MAC-A", after.pid) is None
+
+
+@pytest.mark.parametrize("restore", [False, True])
+def test_group_unload_closes_exact_members_in_child_first_order(restore: bool) -> None:
+    from evidenceforge.generation.actions.macos_launch_item import MacosSystemJobGroupUnloadPlan
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+    from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
+    from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
+    from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+    from evidenceforge.generation.state_manager import StateManager
+
+    state, registry, authority, adapter, job = _setup()
+    process = _process(state, job, new_posix_session=True)
+    authority.materialize_process_service_composite(
+        process, adapter.prepare_service_publication(_activation(registry, authority, job, process))
+    )
+    child = _process(
+        state, job, parent_pid=process.identity.pid, start_time=_START + timedelta(seconds=2)
+    )
+    authority.materialize_process(child)
+    grandchild = _process(
+        state, job, parent_pid=child.identity.pid, start_time=_START + timedelta(seconds=3)
+    )
+    authority.materialize_process(grandchild)
+    if restore:
+        restored_state = StateManager()
+        _restore_head(restored_state, _capture_head(state))
+        restored_registry = LifecycleRegistry(shard_count=8)
+        _restore(restored_registry, _capture(registry))
+        state, registry = restored_state, restored_registry
+        authority = GeneratorLifecycleAuthority(
+            state, LifecycleShadow(state, registry), shard_count=8
+        )
+        adapter = LifecycleProductionAdapter(registry)
+    at = _START + timedelta(seconds=10)
+    plan = macos_system_job_unload_completion_plan(
+        lifecycle_registry=registry,
+        state_manager=state,
+        service_object_id=job.instance_identity.object_id,
+        completed_at=at,
+        action_id="group-unload",
+    )
+    assert isinstance(plan, MacosSystemJobGroupUnloadPlan)
+    assert tuple(row.identity.object_id for row in plan.cohort.process_terminations) == (
+        grandchild.identity.object_id,
+        child.identity.object_id,
+        process.identity.object_id,
+    )
+    version = state.materialization_version
+    proof = authority.materialize_process_group_service_closure_composite(
+        plan.cohort, plan.group, adapter.prepare_service_process_closure(plan.closure)
+    )
+    assert state.materialization_version == version + 1
+    assert state.get_posix_group_members(plan.group) == ()
+    assert state.get_process("MAC-A", 1) is not None
+    assert registry.get_service_instance(job.instance_identity.object_id).closed_at == at
+    for close in plan.cohort.process_terminations:
+        assert authority.authenticates_process_service_closure_composite_receipt(
+            close.target, proof
+        )
+        assert registry.get_process(close.identity.object_id).closed_at == at
+
+
+@pytest.mark.parametrize("separate_group", [False, True])
+def test_group_unload_rejects_membership_drift_or_external_descendants(
+    separate_group: bool,
+) -> None:
+    state, registry, authority, adapter, job = _setup()
+    process = _process(state, job, new_posix_session=True)
+    authority.materialize_process_service_composite(
+        process, adapter.prepare_service_publication(_activation(registry, authority, job, process))
+    )
+    plan = macos_system_job_unload_completion_plan(
+        lifecycle_registry=registry,
+        state_manager=state,
+        service_object_id=job.instance_identity.object_id,
+        completed_at=_START + timedelta(seconds=10),
+        action_id="group-unload",
+    )
+    child = _process(
+        state,
+        job,
+        parent_pid=process.identity.pid,
+        new_posix_session=separate_group,
+        start_time=_START + timedelta(seconds=2),
+    )
+    authority.materialize_process(child)
+    if separate_group:
+        plan = macos_system_job_unload_completion_plan(
+            lifecycle_registry=registry,
+            state_manager=state,
+            service_object_id=job.instance_identity.object_id,
+            completed_at=_START + timedelta(seconds=10),
+            action_id="group-unload",
+        )
+    before = state.materialization_digest()
+    with pytest.raises(StateError):
+        authority.materialize_process_group_service_closure_composite(
+            plan.cohort, plan.group, adapter.prepare_service_process_closure(plan.closure)
+        )
+    assert state.materialization_digest() == before
+    assert registry.get_service_instance(job.instance_identity.object_id).closed_at is None
+    assert registry.get_process(child.identity.object_id).closed_at is None
+    assert adapter.service_preparation_census().reserved_keys == 0

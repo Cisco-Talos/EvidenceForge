@@ -46,6 +46,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
 )
 from evidenceforge.generation.deployment_registry import LocalArtifactPublishToken
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -272,6 +273,7 @@ class ProcessExecutionRequest:
     lifecycle_group_id: str = ""
     source_visible_by: datetime | None = None
     require_exact_parent: bool = field(default=False, kw_only=True)
+    new_posix_session: bool = field(default=False, kw_only=True)
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -289,6 +291,14 @@ class ProcessExecutionRequest:
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
 
+        if type(self.new_posix_session) is not bool:
+            raise ValueError("New POSIX launch session requires an exact boolean")
+        if self.new_posix_session and (
+            not self.require_exact_parent
+            or self.reuse_intent is not None
+            or platform_for_os(self.system.os) not in {"macos", "linux"}
+        ):
+            raise ValueError("New POSIX launch session requires a fresh exact-parent launch")
         requested_effects = tuple(self.requested_endpoint_effects)
         if any(not isinstance(effect, PreparedEndpointEffect) for effect in requested_effects):
             raise ExecutionEffectPlanError(
@@ -310,6 +320,7 @@ class ProcessExecutionRequest:
         concurrency_suffix = f":{self.concurrency_group_id}" if self.concurrency_group_id else ""
         lifecycle_suffix = f":{self.lifecycle_group_id}" if self.lifecycle_group_id else ""
         exact_parent_suffix = ":exact_parent" if self.require_exact_parent else ""
+        session_suffix = ":new_posix_session" if self.new_posix_session else ""
         endpoint_effect_signature = tuple(
             (
                 effect.spec.instance_key,
@@ -329,7 +340,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

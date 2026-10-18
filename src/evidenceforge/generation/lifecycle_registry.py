@@ -8377,6 +8377,8 @@ class _PreparedServiceClosureCommitPlan:
 
     token: LifecycleServiceClosureAdmissionToken
     already_terminal: bool = False
+    terminal_receipt: LifecycleServiceProcessClosureReceipt | None = None
+    effective_times: tuple[tuple[LifecycleEntityRef, datetime], ...] = ()
 
 
 @dataclass(slots=True)
@@ -8464,15 +8466,17 @@ class PreparedLifecycleServicePublication:
 class PreparedLifecycleServiceProcessClosure:
     """One-shot no-validation commit capability for a claimed service closure."""
 
-    __slots__ = ("_active", "_committed", "_registry", "_result", "_token")
+    __slots__ = ("_active", "_committed", "_plan", "_registry", "_result", "_token")
 
     def __init__(
         self,
         registry: LifecycleRegistry,
         token: LifecycleServiceClosureAdmissionToken,
+        plan: _PreparedServiceClosureCommitPlan,
     ) -> None:
         self._registry = registry
         self._token = token
+        self._plan = plan
         self._active = True
         self._committed = False
         self._result: LifecycleServiceProcessClosureReceipt | None = None
@@ -8481,20 +8485,25 @@ class PreparedLifecycleServiceProcessClosure:
     def committed(self) -> bool:
         """Return whether this exact capability has committed."""
 
-        return self._committed
+        return self._plan.terminal_receipt is not None
 
     @property
     def receipt(self) -> LifecycleServiceProcessClosureReceipt | None:
         """Return the authenticated receipt after successful commit."""
 
-        return self._result
+        return self._plan.terminal_receipt
+
+    @property
+    def effective_times(self) -> tuple[tuple[LifecycleEntityRef, datetime], ...]:
+        """Return admitted closure times, including holds and resource leases."""
+        return self._plan.effective_times
 
     def commit_no_fail(self) -> LifecycleServiceProcessClosureReceipt:
         """Publish every prevalidated closure primitive exactly once."""
 
         if not self._active:
             raise StateError("Prepared lifecycle service closure is no longer active")
-        if self._committed:
+        if self.committed:
             raise StateError("Prepared lifecycle service closure is already committed")
         self._result = self._registry._commit_claimed_service_closure(self._token)
         self._committed = True
@@ -14548,6 +14557,7 @@ class LifecycleRegistry:
         subject: LifecycleEntityRef,
         effective_at: datetime,
         planned_binding_closures: tuple[LifecycleServiceProcessBindingClosure, ...],
+        earlier_process_closures: dict[str, datetime],
     ) -> None:
         partition = self._partitions[partition_id]
         active_ids = set(
@@ -14590,6 +14600,20 @@ class LifecycleRegistry:
             aggregate = partition._service_children_by_parent.get(subject.object_id)
             relationship = "child service instances"
         if aggregate is not None and aggregate.blocks_close_at(effective_at):
+            if (
+                subject.kind == "process"
+                and aggregate.unclosed <= len(earlier_process_closures)
+                and (
+                    aggregate.latest_closed_at is None or aggregate.latest_closed_at <= effective_at
+                )
+            ):
+                children = tuple(partition._live_children.find_iter("parent", subject.object_id))
+                if len(children) == aggregate.unclosed and all(
+                    child.child_object_id in earlier_process_closures
+                    and earlier_process_closures[child.child_object_id] <= effective_at
+                    for child in children
+                ):
+                    return
             raise StateError(
                 f"Cannot close lifecycle {subject.object_id} at {effective_at.isoformat()}: "
                 f"{relationship} remain active"
@@ -14601,6 +14625,8 @@ class LifecycleRegistry:
         *,
         partition_id: int,
         planned_binding_closures: tuple[LifecycleServiceProcessBindingClosure, ...],
+        earlier_process_closures: dict[str, datetime],
+        effective_times: dict[LifecycleEntityRef, datetime],
     ) -> bool:
         partition = self._partitions[partition_id]
         subject = control.barrier.subject
@@ -14638,6 +14664,9 @@ class LifecycleRegistry:
                 )
                 if actual != value:
                     raise StateError("Terminal service/process retry lost exact control state")
+            if subject.kind == "process":
+                earlier_process_closures[subject.object_id] = entry.closed_at
+            effective_times[subject] = entry.closed_at
             return True
         if entry.close_barrier is not None or entry.closure_ticket is not None:
             raise StateError("Partial service/process terminal retry is not admissible")
@@ -14661,6 +14690,7 @@ class LifecycleRegistry:
             subject=subject,
             effective_at=effective_at,
             planned_binding_closures=planned_binding_closures,
+            earlier_process_closures=earlier_process_closures,
         )
         expected = self._expected_subject_closure_transitions(control, effective_at)
         for kind, semantic_id, value in (
@@ -14678,6 +14708,9 @@ class LifecycleRegistry:
                 if actual != value:
                     self._reject_exact_conflict(kind, semantic_id)
                 raise StateError("Partial service/process terminal retry is not admissible")
+        if subject.kind == "process":
+            earlier_process_closures[subject.object_id] = effective_at
+        effective_times[subject] = effective_at
         return False
 
     def _prepare_service_closure_commit_locked(
@@ -14686,6 +14719,8 @@ class LifecycleRegistry:
     ) -> _PreparedServiceClosureCommitPlan:
         request = token.request
         terminal: list[bool] = []
+        earlier_process_closures: dict[str, datetime] = {}
+        effective_times: dict[LifecycleEntityRef, datetime] = {}
         for item in request.binding_closures:
             partition_id = self._routes.get_locked(
                 "service_process_binding", item.identity.binding_id
@@ -14721,6 +14756,8 @@ class LifecycleRegistry:
                     item,
                     partition_id=partition_id,
                     planned_binding_closures=request.binding_closures,
+                    earlier_process_closures=earlier_process_closures,
+                    effective_times=effective_times,
                 )
             )
         for item in request.service_closures:
@@ -14730,6 +14767,8 @@ class LifecycleRegistry:
                     item,
                     partition_id=partition_id,
                     planned_binding_closures=request.binding_closures,
+                    earlier_process_closures=earlier_process_closures,
+                    effective_times=effective_times,
                 )
             )
         if any(terminal) and not all(terminal):
@@ -14737,6 +14776,7 @@ class LifecycleRegistry:
         return _PreparedServiceClosureCommitPlan(
             token=token,
             already_terminal=all(terminal),
+            effective_times=tuple(effective_times.items()),
         )
 
     def prepare_service_process_closure(
@@ -14858,7 +14898,8 @@ class LifecycleRegistry:
             reservation.claimed = True
             reservation.claim_thread_id = get_ident()
             self._service_claimed_closures += 1
-        capability = PreparedLifecycleServiceProcessClosure(self, token)
+        assert reservation.commit_plan is not None
+        capability = PreparedLifecycleServiceProcessClosure(self, token, reservation.commit_plan)
         try:
             yield capability
         except BaseException:
@@ -14880,6 +14921,11 @@ class LifecycleRegistry:
                             self._release_service_closure_reservation_locked(active)
                 raise StateError("Claimed service/process closure exited without commit_no_fail")
         finally:
+            if capability.committed:
+                with self._gate.mutation(), self._closed_transport_preparation_lock:
+                    active = self._service_closure_reservations.get(token.preparation_id)
+                    if active is reservation:
+                        self._release_service_closure_reservation_locked(active)
             capability._close()
 
     def _commit_subject_closure_locked(
@@ -14981,6 +15027,7 @@ class LifecycleRegistry:
             ),
         )
         self._service_closure_receipts[id(receipt)] = receipt
+        plan.terminal_receipt = receipt
         return receipt
 
     def _commit_claimed_service_closure(

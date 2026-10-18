@@ -281,6 +281,9 @@ def test_mac_terminal_chain_is_session_owned_and_reused(tmp_path: Path) -> None:
     assert login.image == "/usr/bin/login"
     assert terminal.image.endswith("Terminal.app/Contents/MacOS/Terminal")
     assert terminal.parent_pid == 1
+    assert terminal.job_control is None
+    assert shell.job_control == login.job_control
+    assert login.job_control.pgid == login.job_control.session.sid == login.pid
     assert shell.logon_id == login.logon_id == terminal.logon_id == logon
     generator.generate_logoff(user, system, _TIME + timedelta(minutes=2), logon)
     emitter.close()
