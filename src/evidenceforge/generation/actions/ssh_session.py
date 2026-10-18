@@ -871,10 +871,13 @@ class _SshMacAuthState:
     receiver: SshReceiverAuthentication
     initial_receiver_image: str
     receiver_image: str
+    owns_posix_session: bool = False
 
     def __post_init__(self) -> None:
         if type(self.receiver) is not SshReceiverAuthentication:
             raise TypeError("Mac SSH close requires exact receiver authentication facts")
+        if type(self.owns_posix_session) is not bool:
+            raise TypeError("Mac SSH session ownership requires an exact boolean")
         for image in (self.initial_receiver_image, self.receiver_image):
             if (
                 type(image) is not str
@@ -2197,6 +2200,7 @@ class _SshReceiverStartupBinding:
                 or request.session_worker.image_path != plan.receiver_image
                 or request.phase_times[6] != plan.auth_state.receiver.authenticated_at
                 or request.phase_times[-1] > plan.auth_state.receiver.ready_at
+                or (len(request.phase_times) == 12) != plan.auth_state.owns_posix_session
             ):
                 raise StateError("Mac SSH retained startup crossed its exact close facts")
             request.__post_init__()
@@ -2311,6 +2315,30 @@ class _SshReceiverStartupBinding:
             or first_shell_exec.execution_started_at < session.audit_origin.created_at
         ):
             raise StateError("Restored Mac SSH startup lacks its authenticated initial shell exec")
+        if plan.auth_state.owns_posix_session:
+            root_group = root.job_control
+            shell_group = first_shell_exec.job_control
+            if (
+                root_group is None
+                or shell_group is None
+                or root_group.pgid != root.pid
+                or root_group.session.sid != root.pid
+                or root_group.leader_object_id != root.object_id
+                or root_group.session.leader_object_id != root.object_id
+                or root_group.started_at != root.started_at
+                or root_group.session.started_at != root.started_at
+                or parent.job_control != root_group
+                or shell_group == root_group
+                or shell_group.pgid != shell.pid
+                or shell_group.session.sid != shell.pid
+                or shell_group.leader_object_id != shell.object_id
+                or shell_group.session.leader_object_id != shell.object_id
+                or shell_group.started_at != shell_group.session.started_at
+                or not shell.started_at
+                < shell_group.started_at
+                < first_shell_exec.execution_started_at
+            ):
+                raise StateError("Restored Mac SSH startup lost its exact POSIX session ownership")
         self._restored_complete = True
 
     def require_checkpoint_ready(self, prepared: _PreparedSshCloseContinuation) -> None:
@@ -4294,6 +4322,7 @@ class SshSessionActionBundle:
             integrity_level="System",
             os_category="macos" if environment else "linux",
             credentials=PosixProcessCredentials(0, 0, 0, 0) if environment else None,
+            new_posix_session=environment is not None,
             logon_id=session_plan.identity.logon_id,
             lifecycle_group_id=stable_uuid(
                 "ssh-deferred-receiver-lifecycle",
@@ -4337,6 +4366,7 @@ class SshSessionActionBundle:
                 receiver=authentication,
                 initial_receiver_image=environment.wrapper.image_path,
                 receiver_image=environment.session_worker.image_path,
+                owns_posix_session=True,
             )
             startup_request = MacosSshReceiverStartupRequest(
                 receiver=receiver_plan.identity,

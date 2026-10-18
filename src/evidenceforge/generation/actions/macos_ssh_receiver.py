@@ -30,6 +30,7 @@ from evidenceforge.generation.actions.posix_process import (
     process_exec_occurrence,
     process_exit_occurrence,
     process_fork_occurrence,
+    process_job_control_occurrence,
 )
 from evidenceforge.generation.deployment_registry import (
     CompiledApplicationDescriptor,
@@ -124,7 +125,7 @@ def resolve_macos_ssh_receiver_environment(
 
 @dataclass(frozen=True, slots=True)
 class MacosSshReceiverStartupRequest:
-    """Existing receiver and compiled executable/timing facts for eleven transitions."""
+    """Existing receiver and compiled executable/timing facts for legacy or session-owning startup."""
 
     receiver: ProcessIdentity
     service_account: MacAccount
@@ -174,12 +175,16 @@ class MacosSshReceiverStartupRequest:
         times = self.phase_times
         if (
             type(times) is not tuple
-            or len(times) != 11
+            or len(times) not in {11, 12}
             or any(type(at) is not datetime or at.utcoffset() is None for at in times)
             or times[0] <= self.receiver.started_at
             or any(left >= right for left, right in zip(times, times[1:], strict=False))
         ):
-            raise StateError("Mac receiver startup requires eleven strictly ordered aware times")
+            raise StateError(
+                "Mac receiver startup requires eleven or twelve strictly ordered aware times"
+            )
+        if len(times) == 12 and self.receiver.job_control is None:
+            raise StateError("Mac receiver session-owning startup requires known membership")
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +201,7 @@ class _PendingStartupPhase:
     batch: PreparedActionCohortBatch
     resulting_identity: ProcessIdentity
     receipt: ActionCohortPublicationReceipt | None = None
+    capability: PreparedActionCohortCapability | None = None
 
 
 class MacosSshReceiverStartup:
@@ -258,7 +264,7 @@ class MacosSshReceiverStartup:
     @property
     def result(self) -> MacosSshReceiverProcesses | None:
         """Expose ready process roles only after every phase has published."""
-        if self._phase != 11:
+        if self._phase != len(self._request.phase_times):
             return None
         assert self._postauth is not None and self._shell is not None
         return MacosSshReceiverProcesses(self._receiver, self._postauth, self._shell)
@@ -274,6 +280,7 @@ class MacosSshReceiverStartup:
         try:
             if pending.receipt is None:
                 with self._dispatcher.claimed_action_cohort(pending.batch) as capability:
+                    pending.capability = capability
                     try:
                         capability.commit_no_fail()
                     finally:
@@ -281,7 +288,7 @@ class MacosSshReceiverStartup:
                         # caller loses its return value after publication.
                         if capability.committed:
                             pending.receipt = capability.receipt
-            else:
+            elif pending.capability is None or not pending.capability.projection_complete:
                 self._dispatcher.resume_action_cohort_projection(pending.receipt)
         except BaseException:
             if pending.receipt is None:
@@ -296,7 +303,7 @@ class MacosSshReceiverStartup:
             self._preauth = after
         elif self._phase in {7, 8}:
             self._postauth = after
-        elif self._phase in {9, 10}:
+        elif self._phase in {9, 10, 11}:
             self._shell = after
         self._phase += 1
         self._pending = None
@@ -318,7 +325,8 @@ class MacosSshReceiverStartup:
         )
         assert before is not None
         integrity = "System" if before.principal == "root" else "Medium"
-        if phase in {0, 1, 3, 10}:
+        shell_exec = len(request.phase_times) - 1
+        if phase in {0, 1, 3, shell_exec}:
             descriptor = (
                 request.daemon
                 if phase == 0
@@ -332,12 +340,14 @@ class MacosSshReceiverStartup:
                 before,
                 image=descriptor.image_path,
                 command_line=(
-                    f"-{descriptor.executable}" if phase == 10 else descriptor.command_templates[0]
+                    f"-{descriptor.executable}"
+                    if phase == shell_exec
+                    else descriptor.command_templates[0]
                 ),
                 executed_at=timestamp,
             )
             session_identity = None
-            if phase == 10:
+            if phase == shell_exec:
                 session_identity = self._state.get_session_identity(after.logon_id)
                 if session_identity is None:
                     raise StateError("Mac receiver shell lost its live session")
@@ -350,6 +360,18 @@ class MacosSshReceiverStartup:
                 session=session_identity,
             )
             root = f"process-exec:{after.execution_id}"
+        elif phase == 10:
+            after = builder.change_posix_job_control(
+                before, operation="setsid", changed_at=timestamp
+            )
+            event = process_job_control_occurrence(
+                host=self._host,
+                before=before,
+                after=after,
+                timestamp=timestamp,
+                integrity_level=integrity,
+            )
+            root = f"process-job-control:{after.execution_id}:{timestamp.isoformat()}"
         elif phase in {2, 7, 9}:
             after = builder.fork_process(before, forked_at=timestamp).identity
             event = process_fork_occurrence(

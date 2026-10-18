@@ -781,7 +781,7 @@ class DeferredSshTimingIntent:
         if type(phases) is not tuple or (
             phases
             and (
-                len(phases) != 11
+                len(phases) not in {11, 12}
                 or any(type(at) is not datetime or at.utcoffset() is None for at in phases)
                 or phases[0] <= open_time + receiver_bootstrap_headroom
                 or phases[6] != accepted_at
@@ -838,6 +838,7 @@ class DeferredSshTimingIntent:
                 ready_at=self.ready_at,
                 timing_runtime=runtime,
                 scope=self.scope,
+                phase_count=len(self.macos_startup_times),
             )
             if replayed_phases != self.macos_startup_times:
                 raise StateError("Deferred Mac SSH timing replay disagrees with its startup plan")

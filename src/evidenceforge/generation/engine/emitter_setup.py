@@ -1180,6 +1180,7 @@ class EmitterSetupMixin:
                 integrity_level=member.integrity_level,
                 os_category=host.os_category,
                 credentials=PosixProcessCredentials(0, 0, 0, 0),
+                new_posix_session=True,
                 logon_id=member.logon_id,
             )
             with state.materialization_guard(plan.expected_version):
@@ -1436,6 +1437,7 @@ class EmitterSetupMixin:
                     else None
                 ),
                 logon_id=member.logon_id,
+                new_posix_session=member.os_category == "macos",
                 start_time=member.start_time,
                 parent_plan=parent_plan,
             )

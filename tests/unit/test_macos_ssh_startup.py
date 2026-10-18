@@ -34,7 +34,9 @@ def _descriptor(application_id: str) -> CompiledApplicationDescriptor:
     )
 
 
-def _request(receiver: ProcessIdentity, shell: str = "macos-zsh") -> MacosSshReceiverStartupRequest:
+def _request(
+    receiver: ProcessIdentity, shell: str = "macos-zsh", *, session_ownership: bool = False
+) -> MacosSshReceiverStartupRequest:
     return MacosSshReceiverStartupRequest(
         receiver=receiver,
         service_account=_account(),
@@ -43,7 +45,10 @@ def _request(receiver: ProcessIdentity, shell: str = "macos-zsh") -> MacosSshRec
         session_worker=_descriptor("macos-sshd-session"),
         authentication_worker=_descriptor("macos-sshd-auth"),
         shell=_descriptor(shell),
-        phase_times=tuple(_START + timedelta(seconds=second) for second in range(1, 12)),
+        phase_times=tuple(
+            _START + timedelta(seconds=second)
+            for second in range(1, 13 if session_ownership else 12)
+        ),
     )
 
 

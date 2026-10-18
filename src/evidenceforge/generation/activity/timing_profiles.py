@@ -3082,14 +3082,17 @@ def plan_macos_ssh_startup_times(
     ready_at: datetime,
     timing_runtime: _SshTimingRuntime,
     scope: TimingScope,
+    phase_count: int = 12,
 ) -> tuple[datetime, ...]:
     """Fit the fixed helper graph within the shared modeled SSH readiness budget.
 
     The enclosing authentication budget is shared with SSH on other platforms;
     using it does not assert PAM/logind behavior or empirical Mac calibration.
-    The ten variable transition delays use an ordinary overlayable relationship.
+    The variable transition delays use an ordinary overlayable relationship.
     An incompatible overlay fails before admission rather than compressing stages.
     """
+    if type(phase_count) is not int or phase_count not in {11, 12}:
+        raise ValueError("Mac SSH startup supports only legacy or session-owning phase counts")
     key = "macos.ssh_receiver_stage"
     window = get_timing_window(key, default_min_ms=0, default_max_ms=0, default_position="after")
     if window.position != "after" or window.min_ms <= 0:
@@ -3097,7 +3100,7 @@ def plan_macos_ssh_startup_times(
     planner = BaselineTimingPlanner(timing_runtime, source=scope.source)
     phases: list[datetime] = []
     current = connection_time
-    for ordinal in range(11):
+    for ordinal in range(phase_count):
         if ordinal == 6:
             if current >= authenticated_at:
                 raise ValueError("Mac SSH receiver stages exceed the authentication budget")

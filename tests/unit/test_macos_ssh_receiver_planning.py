@@ -106,7 +106,7 @@ def test_mac_receiver_preparation_transport_startup_and_close(
     assert len(flows) == (1 if collection in {"all", "network"} else 0)
     assert (
         fixture.generator.timing_runtime.audit.snapshot().sample_counts["macos.ssh_receiver_stage"]
-        == 10
+        == 11
     )
 
 

@@ -256,7 +256,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         recovery = store.recover(read_only=True)
         head = loads(store.read_head(recovery, "activity-generator"))
         assert any(
-            any(isinstance(member, list) and member and member[0] == "macos-v1" for member in row)
+            any(isinstance(member, list) and member and member[0] == "macos-v2" for member in row)
             for row in head["ssh_lifecycles"]
         ), "The checkpoint must retain an active Mac receiver close continuation"
         if authored_close:

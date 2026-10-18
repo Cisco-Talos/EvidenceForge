@@ -10258,13 +10258,31 @@ class StateManager:
 
     @staticmethod
     def _validate_new_posix_session(
-        requested: bool, platform: str, parent_pid: int, new_group: bool = False
+        requested: bool,
+        platform: str,
+        parent_pid: int,
+        new_group: bool = False,
+        *,
+        fixed_pid: int | None = None,
+        credentials: PosixProcessCredentials | None = None,
     ) -> None:
         if type(requested) is not bool or type(new_group) is not bool:
             raise StateError("New POSIX launch session requires an exact boolean")
         if requested and new_group:
             raise StateError("A POSIX launch cannot request both a new session and group")
-        if (requested or new_group) and (platform not in {"macos", "linux"} or parent_pid <= 0):
+        boot_session = (
+            requested
+            and platform == "macos"
+            and parent_pid == 0
+            and type(fixed_pid) is int
+            and fixed_pid == 1
+            and credentials == PosixProcessCredentials(0, 0, 0, 0)
+        )
+        if (
+            (requested or new_group)
+            and not boot_session
+            and (platform not in {"macos", "linux"} or parent_pid <= 0)
+        ):
             raise StateError("New POSIX launch session requires a POSIX child launch")
 
     @staticmethod
@@ -10277,14 +10295,14 @@ class StateManager:
         started_at: datetime,
         new_group: bool,
     ) -> PosixGroupIdentity | None:
-        """Own an explicit session-creating launch without guessing kernel boot state.
+        """Own an explicit session-creating launch or validated Mac PID-1 boot launch.
 
         This is a successful aggregate process-launch contract, not an observed
         fork or setsid syscall. Ordinary creation and explicit fork inherit only.
         """
         if requested:
-            if parent is None or pid == 1:
-                raise StateError("New POSIX launch session requires an exact nonroot child")
+            if parent is None and pid != 1:
+                raise StateError("New POSIX launch session requires an exact parent or boot owner")
             session = PosixSessionIdentity(hostname, pid, object_id, started_at)
             return PosixGroupIdentity(session, pid, object_id, started_at)
         if new_group:
@@ -10323,7 +10341,12 @@ class StateManager:
 
         with self._capability_minting_guard("plan_process_materialization"):
             self._validate_new_posix_session(
-                new_posix_session, os_category, parent_pid, new_posix_group
+                new_posix_session,
+                os_category,
+                parent_pid,
+                new_posix_group,
+                fixed_pid=fixed_pid,
+                credentials=credentials,
             )
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
@@ -10716,7 +10739,12 @@ class StateManager:
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
             self._validate_new_posix_session(
-                new_posix_session, os_category, parent_pid, new_posix_group
+                new_posix_session,
+                os_category,
+                parent_pid,
+                new_posix_group,
+                fixed_pid=fixed_pid,
+                credentials=credentials,
             )
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)

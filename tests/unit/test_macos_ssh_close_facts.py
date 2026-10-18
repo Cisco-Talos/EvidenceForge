@@ -124,12 +124,16 @@ def test_auth_codec_keeps_linux_row_unchanged_and_tags_mac() -> None:
     row = _ssh_auth_row(mac)
     assert row[0] == "macos-v1"
     assert _decode_ssh_auth(loads(dumps(row))) == mac
+    grouped = replace(mac, owns_posix_session=True)
+    grouped_row = _ssh_auth_row(grouped)
+    assert grouped_row[0] == "macos-v2"
+    assert _decode_ssh_auth(loads(dumps(grouped_row))) == grouped
 
 
 @pytest.mark.parametrize(
     "index,value",
     [
-        (0, "macos-v2"),
+        (0, "macos-v3"),
         (1, True),
         (1, 0),
         (2, -1),

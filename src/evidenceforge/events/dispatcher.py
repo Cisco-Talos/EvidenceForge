@@ -737,6 +737,7 @@ class PreparedActionCohortCapability:
         "_batch_id",
         "_claim_token",
         "_committed",
+        "_completed_projection_result",
         "_dispatcher",
         "_receipt",
         "_result",
@@ -754,6 +755,7 @@ class PreparedActionCohortCapability:
         self._claim_token = claim_token
         self._active = True
         self._committed = False
+        self._completed_projection_result: ActionCohortPublicationResult | None = None
         self._receipt: ActionCohortPublicationReceipt | None = None
         self._result: ActionCohortPublicationResult | None = None
 
@@ -774,6 +776,14 @@ class PreparedActionCohortCapability:
         """Return the completed result after every projection renders."""
 
         return self._result
+
+    @property
+    def projection_complete(self) -> bool:
+        """Return exact sink-release completion retained by this claimed capability."""
+        return (
+            self._completed_projection_result is not None
+            and self._completed_projection_result is self._result
+        )
 
     def commit_no_fail(self) -> ActionCohortPublicationResult:
         """Commit every prevalidated owner, then render the frozen projection tail."""
@@ -14347,6 +14357,16 @@ class EventDispatcher:
         # The immutable result returned to the caller remains intact. The batch record has
         # already been detached from every dispatcher registry, so its back-reference is only
         # retired retry scaffolding and would otherwise require a cyclic-GC scan to disappear.
+        capability = record.capability_ref() if record.capability_ref is not None else None
+        if capability is not None:
+            if (
+                record.capability_id != id(capability)
+                or capability.receipt is not recovery.receipt
+                or capability.result is not recovery.result
+                or not capability.committed
+            ):
+                raise EventContractError("Exact projection completion lost its claimed capability")
+            capability._completed_projection_result = recovery.result
         record.exact_recovery = None
 
     def _complete_deferred_session_owner_tail(

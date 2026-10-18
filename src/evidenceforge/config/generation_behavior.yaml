@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 224
+current_revision: 225
 history_start_revision: 1
-behavior_surface_sha256: d81ef84930e3d9af557df3c21e102ba4dff2e5c0efeee0467c32c52a6da3cdc1
+behavior_surface_sha256: 6d6a97cad46dfadd3a9def20729948014e222592b7a4ded96b6b85959bfc9e61
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2200,3 +2200,12 @@ changes:
     formats:
       - ecar
     summary: Captures immutable exact event-time parent executions and credentials through historical State ownership, rejecting unknown or expired relationships without reused-PID substitution or native source admission.
+  - revision: 225
+    id: macos-boot-and-ssh-posix-session-ownership
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Composes explicit Mac boot and SSH receiver sessions, separates shell setsid from exec, and retains exact source-completion truth through lost startup returns without changing legacy Linux or Windows paths.

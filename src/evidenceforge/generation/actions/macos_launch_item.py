@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
-from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
@@ -234,6 +234,64 @@ def macos_system_job_bootstrap_plan(
         action_id=action_id,
         transition_id=stable_uuid("macos-launchd-registration-start", object_id),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class MacosSystemJobLaunchPlan:
+    """One allocation-free loaded-job launch and its exact service binding."""
+
+    process: ProcessMaterializationPlan
+    activation: ServiceLifecyclePublicationPlan
+
+
+def macos_system_job_launch_plan(
+    *,
+    lifecycle_registry: LifecycleRegistry,
+    lifecycle_authority: GeneratorLifecycleAuthority,
+    state_manager: StateManager,
+    service_object_id: str,
+    started_at: datetime,
+    action_id: str,
+) -> MacosSystemJobLaunchPlan:
+    """Compose an explicit successful root job launch from its loaded definition.
+
+    Registration and RunAtLoad do not call this adapter automatically. The caller
+    owns the activation decision and must publish both plans through the shared
+    process/service composite. The loaded definition remains authoritative after
+    its plist is edited or removed. This does not infer environment, terminal,
+    file metadata, native logs, or automatic restart behavior.
+    """
+    if type(started_at) is not datetime or started_at.utcoffset() is None:
+        raise StateError("Launchd job launch requires an aware canonical start time")
+    snapshot = lifecycle_registry.get_service_instance(service_object_id)
+    if snapshot is None or snapshot.identity.launchd_job is None:
+        raise StateError("Launchd job launch requires a retained loaded definition")
+    if snapshot.closed_at is not None or snapshot.close_barrier is not None:
+        raise StateError("Launchd job launch cannot activate an unloading or unloaded job")
+    definition = snapshot.identity.launchd_job
+    if definition.principal != "root":
+        raise StateError("Launchd job launch supports the explicit root system profile only")
+    process = state_manager.plan_process_materialization(
+        system=snapshot.identity.hostname,
+        parent_pid=1,
+        image=definition.program,
+        command_line=shlex.join(definition.arguments),
+        arguments=definition.arguments,
+        username=definition.principal,
+        integrity_level="System",
+        os_category="macos",
+        credentials=PosixProcessCredentials(0, 0, 0, 0),
+        start_time=started_at,
+        new_posix_session=True,
+    )
+    activation = macos_system_job_activation_plan(
+        lifecycle_registry=lifecycle_registry,
+        lifecycle_authority=lifecycle_authority,
+        service_object_id=service_object_id,
+        process_plan=process,
+        action_id=action_id,
+    )
+    return MacosSystemJobLaunchPlan(process, activation)
 
 
 def macos_system_job_activation_plan(
