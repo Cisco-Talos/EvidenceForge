@@ -8247,6 +8247,16 @@ class GeneratorLifecycleAuthority:
         request = token.request
         if request.identity.hostname != plan.identity.hostname:
             raise StateError("Service publication and staged process hosts do not match")
+        if request.process_group is not None and request.process_group != plan.identity.job_control:
+            raise StateError("Service group differs from its exact State process membership")
+        prior_service = self._registry.get_service_instance(request.identity.object_id)
+        if prior_service is not None and prior_service.process_group is not None:
+            if self._state_manager.get_posix_group_members(prior_service.process_group, limit=256):
+                raise StateError("Launchd activation cannot replace a group with live members")
+            if request.process_group is None:
+                raise StateError(
+                    "Group-owned launchd activation must retain explicit group ownership"
+                )
         members = request.staged_process_bindings
         if len(members) != 1:
             raise StateError("Process/service coordinator requires one staged process binding")
@@ -8402,6 +8412,14 @@ class GeneratorLifecycleAuthority:
             raise StateError("Service closure must close every exact process binding at exit")
         if any(item.barrier.requested_at != plan.end_time for item in request.service_closures):
             raise StateError("Service terminalization must share the process exit frontier")
+        for control in request.service_closures:
+            service = self._registry.get_service_instance(control.barrier.subject.object_id)
+            if service is not None and service.process_group is not None:
+                members = self._state_manager.get_posix_group_members(
+                    service.process_group, limit=256
+                )
+                if any(member.object_id != identity.object_id for member in members):
+                    raise StateError("Service unload requires its complete retained process group")
 
     def _discard_service_closure_admission(
         self,
@@ -8519,7 +8537,6 @@ class GeneratorLifecycleAuthority:
                 != tuple(identity.object_id for identity in identities)
                 or any(item.barrier.requested_at != at for item in request.process_closures)
                 or any(item.barrier.requested_at != at for item in request.service_closures)
-                or not request.binding_closures
                 or any(
                     item.closed_at != at
                     or item.identity.process_object_id not in {row.object_id for row in identities}
@@ -8527,6 +8544,13 @@ class GeneratorLifecycleAuthority:
                 )
             ):
                 raise StateError("Group service controls must match every exact State close")
+            if not request.binding_closures:
+                owned = tuple(
+                    self._registry.get_service_instance(item.barrier.subject.object_id)
+                    for item in request.service_closures
+                )
+                if len(owned) != 1 or owned[0] is None or owned[0].process_group != group:
+                    raise StateError("Leaderless group cleanup requires its retained service owner")
             with self._registry.claimed_service_process_closure(service_token) as service:
                 if any(effective != at for _, effective in service.effective_times):
                     raise StateError("Group closure cannot precede lifecycle holds or leases")

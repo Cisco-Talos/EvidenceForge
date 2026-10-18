@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Literal, Protocol
 
 from evidenceforge.events.content_identity import ServiceDeploymentIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.macos_launchd import LaunchdSystemJobDefinition
 from evidenceforge.events.network import NetworkTuple
 from evidenceforge.utils.time import ensure_utc
@@ -892,6 +893,8 @@ class ServiceInstanceLifecycleSnapshot:
     hold_ledger_digest: str = ""
     latest_dependent_at: datetime | None = None
     latest_hold_until: datetime | None = None
+
+    process_group: PosixGroupIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)

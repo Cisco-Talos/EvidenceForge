@@ -796,3 +796,16 @@ The focused owner gate passes **89 tests**; the expanded source/failure gate pas
 
 
 The frozen revision-219 routine gate passes **14,112 tests, 72 skipped and 2,252 deselected** in 819.30 seconds. No engine or Studio failures occurred. Canonical/installed skill checks pass **79 tests** after the guidance update. Ruff and formatting (1,144 files), behavior and whitespace checks pass. Digest: `a3a7a08ae47e0ee9fbd235a0b8fbb9aafac25dcf5b6905bd6b027a4fbe97c957`.
+
+
+### Retained launchd group ownership
+
+Committed revision 219 as `120a0231`, then integrated the separately tested revision-220 service-group retention slice. Each loaded job retains its exact activated group after leader exit and binding expiry. Unload can close an adopted surviving member using canonical membership rather than ancestry. Replacement activation rejects a still-live previous group; complete groups can be replaced without accumulating per-activation ownership history. Existing single-process service unload also rejects remaining group members. Explicit group-creating launches require a known parent session; no kernel membership or public configuration is inferred.
+
+Lifecycle checkpoint head 7 explicitly reads heads 5 and 6 with absent group facts. Restore cross-checks known leader identity, active binding, host, loaded definition and timing before replacing the live registry. Group metadata remains bounded to one value per retained service and retires with that service. External descendants still require reparenting; no parent-closure guard is relaxed. Native ES and persistence messages remain unavailable at their existing evidence gates.
+
+The isolated candidate passes **271 shared owner tests**, a later **244-test ownership/recovery gate**, **190 additional shared-path tests**, and **85 final registry/metadata tests**; these overlap and are not a combined count. Expanded **12 group-closure fault/projection tests** cover holds on child, leader and service, plus lost returns from both commit owners. **Three slow mixed-fleet/filtering/checkpoint tests pass** (106.44 seconds). Windows/Linux evidence remains byte-identical to revision 218, with the same file and byte counts as revision 219. Actual integrated checks follow. No personal logs, local inventories or downloaded records were inspected or committed.
+
+The integrated revision-220 owner gate passes **295 tests, 5 deselected** (7.35 seconds, `retention-actual-owners.txt`). Ruff and formatting (1,145 files), behavior and whitespace checks pass. Digest: `74b3dbaea2f383e0de18a48f3273bb2252754ca09512054c9b0f934e5ffe42b2`. The complete routine gate is running on frozen source (`routine-retained-groups-220.txt`). An isolated parent-reference candidate is being checked separately; it has not changed this running gate's source.
+
+The frozen integrated revision-220 routine gate passes **14,130 tests, 72 skipped and 2,252 deselected** in 853.26 seconds. No engine or Studio failures occurred. The installed/canonical skill gate passes **73 tests** (3.21 seconds). Ruff, formatting, behavior and whitespace checks pass. No native evidence gate is promoted.

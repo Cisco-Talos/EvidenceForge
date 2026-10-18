@@ -207,15 +207,23 @@ def test_group_close_rejects_missing_reversed_or_late_children_without_mutation(
     assert adapter.service_preparation_census().reserved_keys == 0
 
 
-def test_group_close_rejects_hold_shift_before_either_owner_mutates() -> None:
+@pytest.mark.parametrize("held", ["child", "leader", "service"])
+def test_group_close_rejects_hold_shift_before_either_owner_mutates(held: str) -> None:
     from evidenceforge.events.lifecycle import LifecycleEntityRef, LifecycleHold
 
     state, registry, authority, adapter, group, plan, request = _owned_group()
     at = plan.process_terminations[0].end_time
+    subject = (
+        request.service_closures[0].barrier.subject
+        if held == "service"
+        else LifecycleEntityRef(
+            "process", plan.process_terminations[0 if held == "child" else 1].identity.object_id
+        )
+    )
     registry.add_hold(
         LifecycleHold(
             hold_id="group-test-hold",
-            subject=LifecycleEntityRef("process", plan.process_terminations[0].identity.object_id),
+            subject=subject,
             acquired_at=at - timedelta(seconds=1),
             hold_until=at + timedelta(seconds=1),
             action_id="held-transport",
@@ -287,3 +295,30 @@ def test_group_receipt_publishes_each_exact_close_without_reapplying_state(tmp_p
     ]
     assert all(row["object"] == "PROCESS" and row["action"] == "TERMINATE" for row in rows)
     assert state.materialization_version == version
+
+
+def test_lost_state_finalize_return_preserves_both_owners_and_source_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evidenceforge.generation.state_manager import PreparedActionCohortMaterialization
+
+    state, registry, authority, adapter, group, plan, request = _owned_group()
+    original = PreparedActionCohortMaterialization.finalize_no_fail
+
+    def lose_return(prepared: PreparedActionCohortMaterialization) -> None:
+        original(prepared)
+        raise RuntimeError("lost State finalize return")
+
+    monkeypatch.setattr(PreparedActionCohortMaterialization, "finalize_no_fail", lose_return)
+    before = state.materialization_version
+    with pytest.raises(RuntimeError, match="lost State") as caught:
+        authority.materialize_process_group_service_closure_composite(
+            plan, group, adapter.prepare_service_process_closure(request)
+        )
+    assert state.materialization_version == before + 1
+    for close in plan.process_terminations:
+        assert registry.get_process(close.identity.object_id).closed_at == close.end_time
+        assert authority.authenticates_process_service_closure_composite_receipt(
+            close.target, caught.value.process_group_service_receipt
+        )
+    assert adapter.service_preparation_census().reserved_keys == 0

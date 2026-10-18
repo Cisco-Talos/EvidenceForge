@@ -32,12 +32,14 @@ from tests.unit.test_incremental_checkpoints import _cursor
 from tests.unit.test_lifecycle_service_preparation import _START, _control, _publish
 
 
-def _legacy_head(registry: LifecycleRegistry) -> bytes:
+def _legacy_head(registry: LifecycleRegistry, version: str = "5") -> bytes:
     document = loads(_capture(registry))
-    document["schema_version"] = "5"
+    document["schema_version"] = version
     for partition in document["partitions"]:
         for service in partition[2]:
-            assert service[1].pop() is None
+            assert service.pop() is None
+            if version == "5":
+                assert service[1].pop() is None
     return dumps(document)
 
 
@@ -100,12 +102,24 @@ def test_corrupt_overlapping_service_intervals_cannot_replace_live_registry() ->
 class _LegacyLifecycleParticipant(LifecycleRegistryParticipant):
     checkpoint_schema_version = "5"
 
+    def __init__(self, registry: LifecycleRegistry, version: str) -> None:
+        super().__init__(registry)
+        self.checkpoint_schema_version = version
+
     def prepare_checkpoint(self, sequence: int) -> ParticipantSeal:
         seal = super().prepare_checkpoint(sequence)
-        return replace(seal, head=replace(seal.head, payload=_legacy_head(self.registry)))
+        return replace(
+            seal,
+            head=replace(
+                seal.head, payload=_legacy_head(self.registry, self.checkpoint_schema_version)
+            ),
+        )
 
 
-def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", ["5", "6"])
+def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(
+    tmp_path: Path, version: str
+) -> None:
     registry = _sequential_windows_services()
     store = IncrementalCheckpointStore(tmp_path / "output")
     controller = IncrementalCheckpointController(
@@ -114,18 +128,31 @@ def test_controller_loads_legacy_head_and_next_checkpoint_writes_new_schema(tmp_
         checkpoint_hours=6,
         resolved_scenario=b"schema_version: '2.0'\n",
     )
-    controller.commit(cursor=_cursor(6), participants=(_LegacyLifecycleParticipant(registry),))
+    controller.commit(
+        cursor=_cursor(6), participants=(_LegacyLifecycleParticipant(registry, version),)
+    )
     recovery = store.recover()
     restored = LifecycleRegistry(shard_count=8)
     participant = LifecycleRegistryParticipant(restored)
     controller.restore_participants(recovery=recovery, participants=(participant,))
     assert _capture(restored) == _capture(registry)
     manifest = controller.commit(cursor=_cursor(12), participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "6"
+    assert manifest.participant_heads[0].schema_version == "7"
 
 
 def test_legacy_head_does_not_accept_new_service_fields() -> None:
     document = loads(_capture(_sequential_windows_services()))
     document["schema_version"] = "5"
-    with pytest.raises(CheckpointCorruptionError, match="legacy service identity"):
+    with pytest.raises(CheckpointCorruptionError, match="legacy service"):
         _restore(LifecycleRegistry(shard_count=8), dumps(document))
+
+
+def test_previous_loaded_job_head_restores_without_inventing_group_ownership() -> None:
+    from tests.unit.test_macos_launch_activation import _setup
+
+    _, registry, _, _, job = _setup()
+    restored = LifecycleRegistry(shard_count=8)
+    _restore(restored, _legacy_head(registry, "6"))
+    snapshot = restored.get_service_instance(job.instance_identity.object_id)
+    assert snapshot.identity == job.instance_identity
+    assert snapshot.process_group is None

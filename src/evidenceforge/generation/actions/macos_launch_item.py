@@ -317,6 +317,7 @@ def macos_system_job_activation_plan(
         transition_id=start.transition_id,
         transition_ordinal=start.transition_ordinal,
         process_bindings=(binding,),
+        process_group=identity.job_control,
         staged_process_bindings=(
             lifecycle_authority.service_staged_process_binding_member(process_plan, binding),
         ),
@@ -394,26 +395,35 @@ def macos_system_job_unload_completion_plan(
     if more is not None or len(bindings) > 1:
         raise StateError("Launchd unload profile requires at most one active job process")
     service_close = control(snapshot.identity.ref)
-    if not bindings:
-        return MacosSystemJobUnloadPlan(
-            closure=LifecycleServiceProcessClosureRequest(
-                binding_closures=(), service_closures=(service_close,)
-            )
+    binding = bindings[0].identity if bindings else None
+    process_snapshot = None
+    current = None
+    if binding is not None:
+        process_snapshot = lifecycle_registry.get_process(binding.process_object_id)
+        if process_snapshot is None or process_snapshot.closed_at is not None:
+            raise StateError("Launchd unload requires its exact live bound process")
+        current = state_manager.get_process_identity(
+            snapshot.identity.hostname, process_snapshot.identity.pid
         )
-    binding = bindings[0].identity
-    process_snapshot = lifecycle_registry.get_process(binding.process_object_id)
-    if process_snapshot is None or process_snapshot.closed_at is not None:
-        raise StateError("Launchd unload requires its exact live bound process")
-    current = state_manager.get_process_identity(
-        snapshot.identity.hostname, process_snapshot.identity.pid
-    )
-    if current is None or current.object_id != binding.process_object_id:
-        raise StateError("Launchd unload cannot substitute a reused process ID")
-    group = current.job_control
+        if current is None or current.object_id != binding.process_object_id:
+            raise StateError("Launchd unload cannot substitute a reused process ID")
+    group = snapshot.process_group
+    if group is None and current is not None:
+        group = current.job_control
     if group is not None:
-        if group.leader_object_id != binding.process_object_id:
-            raise StateError("Launchd unload requires the bound job's own group")
+        if binding is not None and (
+            group.leader_object_id != binding.process_object_id or current.job_control != group
+        ):
+            raise StateError("Launchd unload requires the bound job's retained group")
         members = state_manager.get_posix_group_members(group, limit=256)
+        if not members:
+            if binding is not None:
+                raise StateError("Launchd bound process is absent from its retained group")
+            return MacosSystemJobUnloadPlan(
+                closure=LifecycleServiceProcessClosureRequest(
+                    binding_closures=(), service_closures=(service_close,)
+                )
+            )
         remaining = {member.object_id: member for member in members}
         parents: dict[str, str | None] = {}
         for member in members:
@@ -444,11 +454,20 @@ def macos_system_job_unload_completion_plan(
                     LifecycleServiceProcessBindingClosure(
                         identity=binding, closed_at=completed_at, action_id=action_id
                     ),
-                ),
+                )
+                if binding is not None
+                else (),
                 process_closures=tuple(controls),
                 service_closures=(service_close,),
             ),
         )
+    if binding is None:
+        return MacosSystemJobUnloadPlan(
+            closure=LifecycleServiceProcessClosureRequest(
+                binding_closures=(), service_closures=(service_close,)
+            )
+        )
+    assert process_snapshot is not None
     children, more_children = lifecycle_registry.live_child_process_page(
         binding.process_object_id, limit=1
     )

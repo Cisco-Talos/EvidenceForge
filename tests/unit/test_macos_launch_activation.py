@@ -29,6 +29,8 @@ from tests.unit.test_process_service_lifecycle_authority import _closure_request
 
 def _setup(
     runtime_content: RuntimeContentIdentityManager | None = None,
+    *,
+    known_boot_group: bool = False,
 ) -> tuple[
     StateManager,
     LifecycleRegistry,
@@ -56,6 +58,10 @@ def _setup(
         credentials=PosixProcessCredentials(0, 0, 0, 0),
     )
     authority.materialize_process(parent)
+    if known_boot_group:
+        builder = state.begin_action_cohort_materialization()
+        builder.change_posix_job_control(parent.identity, operation="bootstrap", changed_at=boot)
+        state.materialize_action_cohort(builder.seal())
     job = _plan(**({"runtime_content": runtime_content} if runtime_content is not None else {}))
     _publish(adapter, job)
     state.set_current_time(_START + timedelta(seconds=1))

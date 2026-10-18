@@ -31,6 +31,7 @@ from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
     RuntimeServiceDeploymentIdentity,
 )
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleClosureTicket,
@@ -1845,6 +1846,7 @@ class _ServiceIndex:
         self._instances = PackedUniqueDigestMap(b"lc-svc-inst")
         self._generations = array("I")
         self._states: IncrementalExactMap[int, _LifecycleState] = IncrementalExactMap()
+        self._process_groups: IncrementalExactMap[int, PosixGroupIdentity] = IncrementalExactMap()
 
     @staticmethod
     def _logical_key(hostname: str, logical_service_id: str) -> str:
@@ -1990,6 +1992,7 @@ class _ServiceIndex:
                     raise StateError("Invalid logical-service route replacement")
                 self._logical[logical_key] = logical_replacement_handle
         self._states.pop(handle, None)
+        self._process_groups.pop(handle, None)
         self._rows.delete(handle)
         return entry
 
@@ -2048,6 +2051,7 @@ class _ServiceIndex:
         )
         rows = self._rows.metrics(estimate_bytes=estimate_bytes)
         states = self._states.metrics(estimate_bytes=estimate_bytes)
+        groups = self._process_groups.metrics(estimate_bytes=estimate_bytes)
         return IndexMetrics(
             live_entries=len(self),
             backing_entries=rows.backing_entries,
@@ -2058,16 +2062,22 @@ class _ServiceIndex:
                 sum(metric.estimated_bytes for metric in maps)
                 + rows.estimated_bytes
                 + states.estimated_bytes
+                + groups.estimated_bytes
                 + (getsizeof(self._generations) if estimate_bytes else 0)
             ),
             primary_map_entries=sum(metric.primary_map_entries for metric in maps)
-            + states.primary_map_entries,
+            + states.primary_map_entries
+            + groups.primary_map_entries,
             primary_map_backing_bytes=sum(metric.primary_map_backing_bytes for metric in maps)
-            + states.primary_map_backing_bytes,
-            primary_compaction_pending=states.primary_compaction_pending,
-            primary_compaction_rotations=states.primary_compaction_rotations,
-            primary_compaction_work=states.primary_compaction_work,
-            primary_compaction_seconds=states.primary_compaction_seconds,
+            + states.primary_map_backing_bytes
+            + groups.primary_map_backing_bytes,
+            primary_compaction_pending=states.primary_compaction_pending
+            or groups.primary_compaction_pending,
+            primary_compaction_rotations=states.primary_compaction_rotations
+            + groups.primary_compaction_rotations,
+            primary_compaction_work=states.primary_compaction_work + groups.primary_compaction_work,
+            primary_compaction_seconds=states.primary_compaction_seconds
+            + groups.primary_compaction_seconds,
         )
 
     @property
@@ -2075,9 +2085,10 @@ class _ServiceIndex:
         return self._rows.estimated_value_bytes
 
     def compact_primary(self, *, max_slots: int = _PRIMARY_COMPACTION_PAGE) -> int:
-        return self._states.compact_primary(
-            max_entries=max_slots,
-            force=not self._states,
+        first = max_slots // 2
+        work = self._states.compact_primary(max_entries=first, force=not self._states)
+        return work + self._process_groups.compact_primary(
+            max_entries=max_slots - first, force=not self._process_groups
         )
 
     def iter_entries(self) -> Iterator[_ServiceEntry]:
@@ -6611,6 +6622,7 @@ class _LifecyclePartition:
         )
         return ServiceInstanceLifecycleSnapshot(
             logical_identity=entry.logical_identity,
+            process_group=self._services._process_groups.get(entry.handle),
             identity=entry.identity,
             transitions=transitions,
             holds=holds,
@@ -7490,6 +7502,8 @@ class LifecycleServicePublicationRequest:
     transition_ordinal: int = 0
     staged_process_bindings: tuple[LifecycleServiceStagedProcessBindingMember, ...] = ()
 
+    process_group: PosixGroupIdentity | None = None
+
     def __post_init__(self) -> None:
         """Reject incomplete, duplicated, or cross-service publication inputs."""
 
@@ -7503,6 +7517,22 @@ class LifecycleServicePublicationRequest:
             raise ValueError("Logical service and instance IDs must match")
         if self.identity.launchd_job is not None and len(self.process_bindings) > 1:
             raise ValueError("Loaded launchd job publication admits only one process binding")
+        group = self.process_group
+        if group is not None:
+            if (
+                type(group) is not PosixGroupIdentity
+                or self.identity.launchd_job is None
+                or group.session.hostname != self.identity.hostname
+                or len(self.staged_process_bindings) != 1
+                or len(self.process_bindings) != 1
+                or self.process_bindings[0].process_object_id != group.leader_object_id
+                or self.staged_process_bindings[0].process_start.identity.object_id
+                != group.leader_object_id
+                or self.staged_process_bindings[0].process_start.identity.pid != group.pgid
+                or self.staged_process_bindings[0].process_start.identity.started_at
+                != group.started_at
+            ):
+                raise ValueError("Service group requires an exact staged launchd group leader")
         binding_ids = [binding.binding_id for binding in self.process_bindings]
         process_ids = [binding.process_object_id for binding in self.process_bindings]
         if len(set(binding_ids)) != len(binding_ids):
@@ -14270,6 +14300,10 @@ class LifecycleRegistry:
                 "service_process_binding", snapshot.identity.binding_id, plan.partition_id
             )
             bindings.append(snapshot)
+        if request.process_group is not None:
+            partition._services._process_groups[handle] = request.process_group
+            service = partition.get_service_instance(request.identity.object_id)
+            assert service is not None
         self._routes.cache_snapshot_locked("service", request.identity.object_id, service)
         binding_results = tuple(bindings)
         committed_digest = sha256(

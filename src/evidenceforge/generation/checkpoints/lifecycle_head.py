@@ -16,6 +16,7 @@ from evidenceforge.events.content_identity import (
     CompiledServiceDeploymentIdentity,
     RuntimeServiceDeploymentIdentity,
 )
+from evidenceforge.events.job_control import PosixGroupIdentity, PosixSessionIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleClosureTicket,
@@ -65,7 +66,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "6"
+_SCHEMA_VERSION = "7"
 
 
 @dataclass(frozen=True)
@@ -634,6 +635,37 @@ def _decode_logical_service(value: object) -> LogicalServiceIdentity:
         ) from error
 
 
+def _service_group(value: PosixGroupIdentity | None) -> list[object] | None:
+    if value is None:
+        return None
+    return [
+        value.session.hostname,
+        value.session.sid,
+        value.session.leader_object_id,
+        _time(value.session.started_at),
+        value.pgid,
+        value.leader_object_id,
+        _time(value.started_at),
+    ]
+
+
+def _decode_service_group(value: object) -> PosixGroupIdentity | None:
+    if value is None:
+        return None
+    host, sid, session_leader, session_start, pgid, leader, start = _record(
+        value, 7, "service group"
+    )
+    try:
+        return PosixGroupIdentity(
+            PosixSessionIdentity(host, sid, session_leader, _decode_time(session_start)),
+            pgid,
+            leader,
+            _decode_time(start),
+        )
+    except (TypeError, ValueError) as error:
+        raise CheckpointCorruptionError("Invalid service process group") from error
+
+
 def _service_identity(value: ServiceInstanceLifecycleIdentity) -> list[object]:
     return [
         value.hostname,
@@ -1066,6 +1098,7 @@ def _capture(registry: LifecycleRegistry) -> bytes:
                         _logical_service(item.logical_identity),
                         _service_identity(item.identity),
                         _state(partition._service_snapshot(item), item.state),
+                        _service_group(partition._services._process_groups.get(item.handle)),
                     ]
                     for item in partition._services.iter_entries()
                 ]
@@ -1196,15 +1229,25 @@ def _decode_snapshot_rows(
             sessions.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         for row in service_rows:  # type: ignore[union-attr]
-            logical, identity, state = _record(row, 3, "service")
+            legacy = document.get("schema_version") in {"5", "6"}
+            if legacy:
+                row = [*_record(row, 3, "legacy service"), None]
+            logical, identity, state, group = _record(row, 4, "service")
             decoded = _decode_state(state)
             snapshot = ServiceInstanceLifecycleSnapshot(
                 logical_identity=_decode_logical_service(logical),
+                process_group=_decode_service_group(group),
                 identity=_decode_service_identity(
                     identity, legacy=document.get("schema_version") == "5"
                 ),
                 **decoded.snapshot_fields,  # type: ignore[arg-type]
             )
+            if snapshot.process_group is not None and (
+                snapshot.identity.launchd_job is None
+                or snapshot.process_group.session.hostname != snapshot.identity.hostname
+                or snapshot.process_group.started_at < snapshot.identity.started_at
+            ):
+                raise CheckpointCorruptionError("Service group disagrees with its loaded job")
             services.append(snapshot)
             states[snapshot.identity.object_id] = decoded
         for row in transport_rows:  # type: ignore[union-attr]
@@ -1591,6 +1634,8 @@ def _install_authority_states(
             partition._sessions._states[entry.handle] = authority
         elif isinstance(snapshot, ServiceInstanceLifecycleSnapshot):
             partition._services._states[entry.handle] = authority
+            if snapshot.process_group is not None:
+                partition._services._process_groups[entry.handle] = snapshot.process_group
         else:
             partition._transports._states[entry.handle] = authority
         if isinstance(snapshot, (ServiceInstanceLifecycleSnapshot, TransportLifecycleSnapshot)):
@@ -1635,7 +1680,11 @@ def _install_resource_lease_entry(
 
 def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagnostics:
     document = loads(head)
-    if type(document) is not dict or document.get("schema_version") not in {"5", _SCHEMA_VERSION}:
+    if type(document) is not dict or document.get("schema_version") not in {
+        "5",
+        "6",
+        _SCHEMA_VERSION,
+    }:
         raise CheckpointCorruptionError("lifecycle checkpoint head schema is invalid")
     integer_fields = (
         "closed_retention_us",
@@ -1665,6 +1714,35 @@ def _restore(registry: LifecycleRegistry, head: bytes) -> LifecycleRestoreDiagno
         singleton_leases,
         states,
     ) = _decode_snapshot_rows(document)
+    process_by_id = {item.identity.object_id: item.identity for item in processes}
+    active_group_bindings: dict[str, list[ServiceProcessBindingIdentity]] = {}
+    for _, binding in service_bindings:
+        if binding.closed_at is None:
+            active_group_bindings.setdefault(binding.identity.service_object_id, []).append(
+                binding.identity
+            )
+    for service in services:
+        group = service.process_group
+        if group is None:
+            continue
+        if service.closed_at is not None and group.started_at > service.closed_at:
+            raise CheckpointCorruptionError("Service group starts after unload")
+        for object_id, pid, started_at in (
+            (group.leader_object_id, group.pgid, group.started_at),
+            (group.session.leader_object_id, group.session.sid, group.session.started_at),
+        ):
+            leader = process_by_id.get(object_id)
+            if leader is not None and (
+                leader.hostname != group.session.hostname
+                or leader.pid != pid
+                or leader.started_at != started_at
+            ):
+                raise CheckpointCorruptionError("Service group disagrees with retained leader")
+        if any(
+            binding.process_object_id != group.leader_object_id
+            for binding in active_group_bindings.get(service.identity.object_id, ())
+        ):
+            raise CheckpointCorruptionError("Service group disagrees with active job binding")
     for snapshot in sorted(
         sessions, key=lambda item: (item.identity.started_at, item.identity.object_id)
     ):
@@ -1857,7 +1935,7 @@ class LifecycleRegistryParticipant:
     checkpoint_owner = "lifecycle-registry"
     checkpoint_restore_priority = 20
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = ("5",)
+    checkpoint_compatible_head_versions = ("5", "6")
     checkpoint_state_fields = (
         OwnerStateField("retained_entities", "bounded-live-head"),
         OwnerStateField("immutable_history", "immutable-incremental-segments"),

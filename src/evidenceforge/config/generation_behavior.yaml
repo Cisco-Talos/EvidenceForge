@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 219
+current_revision: 220
 history_start_revision: 1
-behavior_surface_sha256: a3a7a08ae47e0ee9fbd235a0b8fbb9aafac25dcf5b6905bd6b027a4fbe97c957
+behavior_surface_sha256: 74b3dbaea2f383e0de18a48f3273bb2252754ca09512054c9b0f934e5ffe42b2
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2154,3 +2154,13 @@ changes:
     formats:
       - ecar
     summary: Gives Mac terminal login launches explicit POSIX session ownership and composes exact child-first process-group cleanup with atomic State and service closure; preserves unknown boot membership and legacy platform behavior.
+  - revision: 220
+    id: retained-launchd-process-group-ownership
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - service-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Retains each activated launchd job's exact process group after leader exit and binding expiry, supports atomic leaderless cleanup, and restores older service heads without inferred membership.

@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Protocol
 
 from evidenceforge.events.content_identity import ServiceDeploymentIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleHold,
@@ -85,6 +86,8 @@ class ServiceLifecyclePublicationPlan:
     transition_ordinal: int = 0
     process_bindings: tuple[ServiceProcessBindingIdentity, ...] = ()
     staged_process_bindings: tuple[LifecycleServiceStagedProcessBindingMember, ...] = ()
+
+    process_group: PosixGroupIdentity | None = None
 
     def __post_init__(self) -> None:
         """Reject incomplete or internally inconsistent service plans."""
@@ -398,6 +401,7 @@ class LifecycleProductionAdapter:
             transition_id=plan.transition_id,
             transition_ordinal=plan.transition_ordinal,
             staged_process_bindings=plan.staged_process_bindings,
+            process_group=plan.process_group,
         )
 
     def prepare_service_publication(

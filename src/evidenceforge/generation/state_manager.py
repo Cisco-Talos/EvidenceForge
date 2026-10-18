@@ -1306,6 +1306,7 @@ class MaterializationBatchBuilder:
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
+        new_posix_group: bool = False,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1335,6 +1336,7 @@ class MaterializationBatchBuilder:
             arguments=arguments,
             environment=environment,
             new_posix_session=new_posix_session,
+            new_posix_group=new_posix_group,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2968,6 +2970,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
+        new_posix_group: bool = False,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -3018,6 +3021,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 arguments=arguments,
                 environment=environment,
                 new_posix_session=new_posix_session,
+                new_posix_group=new_posix_group,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -10182,10 +10186,14 @@ class StateManager:
             raise StateError("Process credentials require a POSIX platform and immutable snapshot")
 
     @staticmethod
-    def _validate_new_posix_session(requested: bool, platform: str, parent_pid: int) -> None:
-        if type(requested) is not bool:
+    def _validate_new_posix_session(
+        requested: bool, platform: str, parent_pid: int, new_group: bool = False
+    ) -> None:
+        if type(requested) is not bool or type(new_group) is not bool:
             raise StateError("New POSIX launch session requires an exact boolean")
-        if requested and (platform not in {"macos", "linux"} or parent_pid <= 0):
+        if requested and new_group:
+            raise StateError("A POSIX launch cannot request both a new session and group")
+        if (requested or new_group) and (platform not in {"macos", "linux"} or parent_pid <= 0):
             raise StateError("New POSIX launch session requires a POSIX child launch")
 
     @staticmethod
@@ -10196,6 +10204,7 @@ class StateManager:
         pid: int,
         object_id: str,
         started_at: datetime,
+        new_group: bool,
     ) -> PosixGroupIdentity | None:
         """Own an explicit session-creating launch without guessing kernel boot state.
 
@@ -10207,6 +10216,10 @@ class StateManager:
                 raise StateError("New POSIX launch session requires an exact nonroot child")
             session = PosixSessionIdentity(hostname, pid, object_id, started_at)
             return PosixGroupIdentity(session, pid, object_id, started_at)
+        if new_group:
+            if parent is None or parent.job_control is None or pid == 1:
+                raise StateError("New POSIX launch group requires an exact known parent session")
+            return PosixGroupIdentity(parent.job_control.session, pid, object_id, started_at)
         return parent.job_control if parent is not None else None
 
     def plan_process_materialization(
@@ -10233,11 +10246,14 @@ class StateManager:
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         new_posix_session: bool = False,
+        new_posix_group: bool = False,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
-            self._validate_new_posix_session(new_posix_session, os_category, parent_pid)
+            self._validate_new_posix_session(
+                new_posix_session, os_category, parent_pid, new_posix_group
+            )
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
@@ -10381,7 +10397,13 @@ class StateManager:
                 arguments=arguments,
                 environment=environment,
                 job_control=self._initial_posix_membership(
-                    new_posix_session, parent_identity, system, pid, object_id, effective_start
+                    new_posix_session,
+                    parent_identity,
+                    system,
+                    pid,
+                    object_id,
+                    effective_start,
+                    new_posix_group,
                 ),
                 principal=username,
                 credentials=credentials,
@@ -10606,6 +10628,7 @@ class StateManager:
         arguments: tuple[str, ...] | None,
         environment: tuple[str, ...] | None,
         new_posix_session: bool,
+        new_posix_group: bool,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -10620,7 +10643,9 @@ class StateManager:
                 raise StateError("Materialization batch became stale during process planning")
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
-            self._validate_new_posix_session(new_posix_session, os_category, parent_pid)
+            self._validate_new_posix_session(
+                new_posix_session, os_category, parent_pid, new_posix_group
+            )
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
@@ -10878,7 +10903,13 @@ class StateManager:
                 arguments=arguments,
                 environment=environment,
                 job_control=self._initial_posix_membership(
-                    new_posix_session, planned_parent, system, pid, object_id, effective_start
+                    new_posix_session,
+                    planned_parent,
+                    system,
+                    pid,
+                    object_id,
+                    effective_start,
+                    new_posix_group,
                 ),
                 principal=username,
                 credentials=credentials,
