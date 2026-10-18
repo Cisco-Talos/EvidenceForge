@@ -298,7 +298,7 @@ def test_legacy_process_record_upgrades_with_absent_privilege_drop() -> None:
     encoded[1] = "running-process-v5"
     encoded[2] = encoded[2][:28]
     restored = decode_state_value(encoded)
-    assert restored == process
+    assert restored == replace(process, parentage=None)
     assert restored.privilege_drop is None
 
 

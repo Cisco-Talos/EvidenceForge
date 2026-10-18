@@ -17,6 +17,7 @@ from evidenceforge.events.identity import (
     validate_process_arguments,
     validate_process_environment,
 )
+from evidenceforge.events.parentage import validate_process_parentage
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
     ExpiringIndex,
@@ -497,6 +498,21 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             raise CheckpointCorruptionError(
                 "StateManager process environment requires a POSIX host"
             )
+        try:
+            validate_process_parentage(
+                process.parentage,
+                hostname=process.system,
+                object_id=process.ecar_object_id,
+                parent_pid=process.parent_pid,
+                started_at=process.start_time,
+            )
+        except ValueError as error:
+            raise CheckpointCorruptionError("StateManager process parentage is invalid") from error
+        if process.parentage is not None and fresh._pid_os.get(process.system) not in {
+            "macos",
+            "linux",
+        }:
+            raise CheckpointCorruptionError("StateManager process parentage requires a POSIX host")
         outcome = process.exit_outcome
         if outcome is not None and (
             type(outcome) is not PosixProcessExit

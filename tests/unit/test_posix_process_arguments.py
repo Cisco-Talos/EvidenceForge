@@ -4,6 +4,7 @@
 """Explicit argv is execution state, never a guess from display command text."""
 
 import shlex
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -51,12 +52,12 @@ def test_explicit_arguments_preserve_empty_whitespace_unicode_and_literal_shell_
     assert identity.arguments == arguments
     assert identity.command_line == shlex.join(arguments)
     assert state.get_process_identity(identity.hostname, identity.pid) == identity
-    assert encode_state_value(identity)[1] == "process-identity-v7"
+    assert encode_state_value(identity)[1] == "process-identity-v8"
     assert decode_state_value(encode_state_value(identity)) == identity
     restored = StateManager()
     _restore_head(restored, _capture_head(state))
     assert restored.get_process_identity(identity.hostname, identity.pid) == identity
-    assert _process_identity_payload(identity)[-1] == ("posix-process-arguments-v1", arguments)
+    assert ("posix-process-arguments-v1", arguments) in _process_identity_payload(identity)
 
 
 @pytest.mark.parametrize(
@@ -87,12 +88,18 @@ def test_missing_arguments_remain_unknown_and_legacy_records_upgrade_without_par
     state, identity = _create()
     assert identity.arguments is None
     encoded = encode_state_value(identity)
-    assert decode_state_value(["record", "process-identity-v4", encoded[2][:17]]) == identity
+    assert decode_state_value(["record", "process-identity-v4", encoded[2][:17]]) == replace(
+        identity, parentage=None
+    )
     process = state.get_process(identity.hostname, identity.pid)
     row = encode_state_value(process)
-    assert row[1] == "running-process-v11"
-    assert decode_state_value(["record", "running-process-v8", row[2][:31]]) == process
-    assert _process_identity_payload(identity)[-1][0] == "macos-audit-pid-version-v1"
+    assert row[1] == "running-process-v12"
+    assert decode_state_value(["record", "running-process-v8", row[2][:31]]) == replace(
+        process, parentage=None
+    )
+    assert ("macos-audit-pid-version-v1", identity.audit_pid_version) in _process_identity_payload(
+        identity
+    )
 
 
 @pytest.mark.parametrize(

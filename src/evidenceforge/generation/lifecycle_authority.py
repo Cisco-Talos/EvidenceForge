@@ -346,6 +346,14 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
     if identity.environment is not None:
         payload = (*payload, ("posix-process-environment-v1", identity.environment))
+    if identity.parentage is not None:
+        parentage = tuple(
+            None
+            if reference is None
+            else (reference.hostname, reference.object_id, reference.pid, reference.started_at)
+            for reference in (identity.parentage.original, identity.parentage.current)
+        )
+        payload = (*payload, ("process-parentage-v1", *parentage))
     if identity.job_control is not None:
         group = identity.job_control
         session = group.session

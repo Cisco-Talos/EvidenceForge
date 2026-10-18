@@ -160,7 +160,9 @@ def test_exec_contract_rejects_mismatched_source_facts(damage: str) -> None:
     before, after, event, batch = _prepare(state, dispatcher)
     dispatcher.cancel_prepared_action_cohort_batch(batch)
     if damage == "pid":
-        event.identity_plan = replace(event.identity_plan, subject=replace(after, parent_pid=88))
+        event.identity_plan = replace(
+            event.identity_plan, subject=replace(after, parent_pid=88, parentage=None)
+        )
     elif damage == "principal":
         event.identity_plan = replace(
             event.identity_plan, subject=replace(after, principal="other")

@@ -69,6 +69,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     normalize_zeek_history,
 )
+from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
@@ -3985,6 +3986,8 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         PosixProcessExit,
         PosixGroupIdentity,
         PosixSessionIdentity,
+        ProcessParentage,
+        ProcessParentReference,
         PosixJobControlChange,
         SessionIdentity,
         ProcessIdentity,
@@ -10186,6 +10189,22 @@ class StateManager:
             raise StateError("Process credentials require a POSIX platform and immutable snapshot")
 
     @staticmethod
+    def _initial_process_parentage(
+        platform: str, parent_pid: int, parent: ProcessIdentity | None
+    ) -> ProcessParentage | None:
+        """Freeze the exact already-resolved parent; preserve unknown virtual parents."""
+        if platform not in {"macos", "linux"} or (parent_pid != 0 and parent is None):
+            return None
+        reference = (
+            None
+            if parent is None
+            else ProcessParentReference(
+                parent.hostname, parent.object_id, parent.pid, parent.started_at
+            )
+        )
+        return ProcessParentage(reference, reference)
+
+    @staticmethod
     def _validate_new_posix_session(
         requested: bool, platform: str, parent_pid: int, new_group: bool = False
     ) -> None:
@@ -10396,6 +10415,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                parentage=self._initial_process_parentage(os_category, parent_pid, parent_identity),
                 job_control=self._initial_posix_membership(
                     new_posix_session,
                     parent_identity,
@@ -10902,6 +10922,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                parentage=self._initial_process_parentage(os_category, parent_pid, planned_parent),
                 job_control=self._initial_posix_membership(
                     new_posix_session,
                     planned_parent,
@@ -12290,6 +12311,7 @@ class StateManager:
             credentials=identity.credentials,
             arguments=identity.arguments,
             environment=identity.environment,
+            parentage=identity.parentage,
             job_control=identity.job_control,
             audit_pid_version=identity.audit_pid_version,
         )
@@ -16043,6 +16065,7 @@ class StateManager:
             credentials=process.credentials,
             arguments=process.arguments,
             environment=process.environment,
+            parentage=process.parentage,
             job_control=process.job_control,
             audit_pid_version=process.audit_pid_version,
         )
@@ -16070,6 +16093,7 @@ class StateManager:
             identity.audit_pid_version,
             identity.arguments,
             identity.environment,
+            identity.parentage,
             identity.job_control,
         )
 

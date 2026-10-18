@@ -238,7 +238,7 @@ def test_legacy_process_record_has_no_invented_service_drop() -> None:
     encoded[1] = "running-process-v6"
     encoded[2] = encoded[2][:29]
     restored = decode_state_value(encoded)
-    assert restored == process and restored.service_drop is None
+    assert restored == replace(process, parentage=None) and restored.service_drop is None
 
 
 def test_post_drop_bootstrap_cannot_reinterpret_original_token() -> None:

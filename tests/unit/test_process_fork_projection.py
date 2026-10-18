@@ -154,7 +154,7 @@ def test_fork_contract_rejects_substituted_facts(damage: str) -> None:
     parent, child = process_fork_identities(event)
     if damage == "pid":
         event.identity_plan = replace(
-            event.identity_plan, subject=replace(child, parent_pid=child.pid)
+            event.identity_plan, subject=replace(child, parent_pid=child.pid, parentage=None)
         )
     elif damage == "actor":
         event.identity_plan = replace(event.identity_plan, actor=child)

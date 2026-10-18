@@ -32,6 +32,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from evidenceforge.events.job_control import PosixGroupIdentity
+from evidenceforge.events.parentage import ProcessParentage, validate_process_parentage
 
 type PosixIdentifier = Annotated[int, Field(strict=True, ge=0, lt=2**32)]
 type PosixProcessArguments = Annotated[
@@ -371,6 +372,7 @@ class ProcessIdentity:
     arguments: PosixProcessArguments | None = None
     job_control: PosixGroupIdentity | None = None
     environment: PosixProcessEnvironment | None = None
+    parentage: ProcessParentage | None = None
 
     @property
     def initial_image(self) -> str:
@@ -395,6 +397,13 @@ class ProcessIdentity:
 
         validate_process_arguments(self.arguments, command_line=self.command_line)
         validate_process_environment(self.environment)
+        validate_process_parentage(
+            self.parentage,
+            hostname=self.hostname,
+            object_id=self.object_id,
+            parent_pid=self.parent_pid,
+            started_at=self.started_at,
+        )
         if self.job_control is not None and (
             type(self.job_control) is not PosixGroupIdentity
             or self.job_control.session.hostname != self.hostname

@@ -465,6 +465,14 @@ class LifecycleShadow:
     ) -> ProcessLifecycleIdentity:
         existing = self._registry.get_process(identity.object_id)
         if existing is not None:
+            original_parent = (
+                identity.parentage.original if identity.parentage is not None else None
+            )
+            if (
+                original_parent is not None
+                and original_parent.object_id != existing.identity.parent_object_id
+            ):
+                raise StateError("Lifecycle process changed its exact original parent")
             current_token = existing.current_view.token
             candidate, token, membership = self._project_process(
                 identity,
@@ -530,6 +538,16 @@ class LifecycleShadow:
             parent = self._state_manager.get_process_identity(
                 identity.hostname, identity.parent_pid
             )
+            reference = identity.parentage.current if identity.parentage is not None else None
+            if (
+                parent is not None
+                and reference is not None
+                and (
+                    parent.object_id != reference.object_id
+                    or parent.started_at != reference.started_at
+                )
+            ):
+                raise StateError("Lifecycle parent reference cannot be replaced by a reused PID")
             if parent is not None and self._state_manager.is_process_active_at(
                 identity.hostname,
                 identity.parent_pid,

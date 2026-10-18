@@ -39,6 +39,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
+from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.rdp import (
     RdpLogicalSessionIdentity,
@@ -135,6 +136,7 @@ _RUNNING_PROCESS_FIELDS = (
     "job_control",
     "job_control_history",
     "environment",
+    "parentage",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -323,6 +325,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "arguments",
     "job_control",
     "environment",
+    "parentage",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -432,7 +435,12 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         PosixJobControlReservation,
         ("identity", "members", "updated_at", "ended_at"),
     ),
-    "running-process-v11": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "process-parent-reference-v1": (
+        ProcessParentReference,
+        ("hostname", "object_id", "pid", "started_at"),
+    ),
+    "process-parentage-v1": (ProcessParentage, ("original", "current")),
+    "running-process-v12": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -450,7 +458,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v7": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v8": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -627,6 +635,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None]
         if record_tag == "process-identity-v6" and len(encoded_fields) == 19:
             record_tag = "process-identity-v7"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v11" and len(encoded_fields) == 35:
+            record_tag = "running-process-v12"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v7" and len(encoded_fields) == 20:
+            record_tag = "process-identity-v8"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

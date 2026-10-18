@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Protocol
 
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
+from evidenceforge.events.parentage import ProcessParentage, ProcessParentReference
 
 
 class _ProcessTransitionOccurrence(Protocol):
@@ -252,6 +253,18 @@ def process_fork_identities(
         or child.job_control != parent.job_control
         or child.environment != parent.environment
         or child.arguments != parent.arguments
+        or (
+            child.parentage is not None
+            and child.parentage
+            != ProcessParentage(
+                ProcessParentReference(
+                    parent.hostname, parent.object_id, parent.pid, parent.started_at
+                ),
+                ProcessParentReference(
+                    parent.hostname, parent.object_id, parent.pid, parent.started_at
+                ),
+            )
+        )
         or child.principal != parent.principal
         or child.credentials != parent.credentials
         or child.logon_id != parent.logon_id

@@ -67,10 +67,7 @@ def test_ordered_environment_preserves_unknown_empty_duplicates_and_literals(
     assert restored.get_process_identity(identity.hostname, identity.pid) == identity
     assert decode_state_value(encode_state_value(identity)) == identity
     if environment is not None:
-        assert _process_identity_payload(identity)[-1] == (
-            "posix-process-environment-v1",
-            environment,
-        )
+        assert ("posix-process-environment-v1", environment) in _process_identity_payload(identity)
     else:
         assert all(
             not isinstance(item, tuple) or item[0] != "posix-process-environment-v1"

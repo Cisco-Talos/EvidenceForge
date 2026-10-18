@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 220
+current_revision: 221
 history_start_revision: 1
-behavior_surface_sha256: 74b3dbaea2f383e0de18a48f3273bb2252754ca09512054c9b0f934e5ffe42b2
+behavior_surface_sha256: 392c7e03fa5a80347c32ce53a09e73a50273c739334e3e12ccfbcb37d7e6410b
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2164,3 +2164,12 @@ changes:
     formats:
       - ecar
     summary: Retains each activated launchd job's exact process group after leader exit and binding expiry, supports atomic leaderless cleanup, and restores older service heads without inferred membership.
+  - revision: 221
+    id: exact-posix-parent-lifetime-references
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - checkpoint-state
+    formats:
+      - ecar
+    summary: Retains exact original/current POSIX parent references through fork, exec and recovery, rejects reused-PID parent substitution, and migrates older process records with unknown parentage.
