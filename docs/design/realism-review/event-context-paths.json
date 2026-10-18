@@ -13666,6 +13666,52 @@
       "test_files": [
         "tests/unit/test_macos_workspace_logging.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "process",
+            "src_host"
+          ],
+          "event_type_expression": "kind",
+          "event_type_literals": [
+            "process_job_control"
+          ],
+          "file": "src/evidenceforge/generation/actions/posix_process.py",
+          "line": 110,
+          "scope": "_process_transition_occurrence"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "process",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "ecar"
+      ],
+      "event_type": "process_job_control",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "Internal membership changes retain exact before/after state and the actual changing actor. Dispatcher coverage requires the authenticated singleton State cohort; eCAR observation, collection omission and source recovery cannot redefine the action. Production boot/session/job composition remains unavailable.",
+        "classification": "single_canonical_path",
+        "owner": "State POSIX membership patch, canonical occurrence helper and EventDispatcher exact projection"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_posix_job_control.py",
+        "tests/unit/test_posix_job_control_projection.py",
+        "tests/unit/test_posix_job_control_checkpoint.py"
+      ]
     }
   ],
   "formats": [

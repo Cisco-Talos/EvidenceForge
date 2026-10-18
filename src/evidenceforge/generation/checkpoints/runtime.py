@@ -387,11 +387,13 @@ class IncrementalCheckpointController:
                 ),
                 key=lambda reference: reference.owner_ordinal,
             )
+            compatible_segments = getattr(participant, "checkpoint_compatible_segment_versions", ())
             incompatible_segments = sorted(
                 {
                     reference.schema_version
                     for reference in references
-                    if reference.schema_version != participant.checkpoint_schema_version
+                    if reference.schema_version
+                    not in (participant.checkpoint_schema_version, *compatible_segments)
                 }
             )
             if incompatible_segments:

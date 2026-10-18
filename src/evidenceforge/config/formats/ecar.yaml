@@ -298,6 +298,26 @@ fields:
     required: false
     description: "Known real POSIX user ID after transition"
 
+  - name: process_group_id
+    type: string
+    required: false
+    description: "Explicit POSIX job-control process_group_id; independent of login and audit IDs"
+
+  - name: posix_session_id
+    type: string
+    required: false
+    description: "Explicit POSIX job-control posix_session_id; independent of login and audit IDs"
+
+  - name: previous_process_group_id
+    type: string
+    required: false
+    description: "Explicit POSIX job-control previous_process_group_id; independent of login and audit IDs"
+
+  - name: previous_posix_session_id
+    type: string
+    required: false
+    description: "Explicit POSIX job-control previous_posix_session_id; independent of login and audit IDs"
+
   - name: real_gid
     type: string
     required: false

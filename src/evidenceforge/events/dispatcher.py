@@ -4564,6 +4564,7 @@ class EventDispatcher:
         if (
             event.event_type
             in {
+                EventKind.PROCESS_JOB_CONTROL,
                 EventKind.PROCESS_FORK,
                 EventKind.PROCESS_EXEC,
                 EventKind.PROCESS_AUDIT_BIND,
@@ -5951,6 +5952,12 @@ class EventDispatcher:
             or patch.privilege_drop is not None
             or patch.service_drop is not None
         }
+        job_control_patches = {
+            patch.target.object_id: patch
+            for patch in state_plan.process_activity_patches
+            if patch.job_control_change is not None
+        }
+        observed_job_control: set[str] = set()
         observed_credentials: set[str] = set()
         observed_executions: set[str] = set()
         observed_starts: dict[tuple[str, str], int] = {}
@@ -6077,6 +6084,30 @@ class EventDispatcher:
                         "Process exec changed its State host or integrity facts"
                     )
                 observed_executions.add(after.object_id)
+            elif event.event_type is EventKind.PROCESS_JOB_CONTROL:
+                from evidenceforge.events.process import process_job_control_identities
+
+                before, after = process_job_control_identities(event)
+                patch = job_control_patches.get(after.object_id)
+                change = patch.job_control_change if patch is not None else None
+                live = self.state_manager.get_process(before.hostname, before.pid)
+                if (
+                    patch is None
+                    or change is None
+                    or live is None
+                    or patch.target != before
+                    or patch.job_control_actor != event.identity_plan.actor
+                    or change.before != before.job_control
+                    or change.after != after.job_control
+                    or change.changed_at != event.timestamp
+                    or event.process.integrity_level != live.integrity_level
+                    or event.src_host.os_category != self.state_manager._pid_os.get(before.hostname)
+                    or after.object_id in observed_job_control
+                ):
+                    raise EventContractError(
+                        "POSIX membership projection disagrees with its State transition"
+                    )
+                observed_job_control.add(after.object_id)
             elif event.event_type in {
                 EventKind.PROCESS_AUDIT_BIND,
                 EventKind.PROCESS_PRIVILEGE_DROP,
@@ -6253,6 +6284,10 @@ class EventDispatcher:
                     "Action-cohort projection closes a State member before its start"
                 )
 
+        if observed_job_control != job_control_patches.keys():
+            raise EventContractError(
+                "POSIX membership projections must cover every State transition"
+            )
         if observed_credentials != credential_patches.keys():
             raise EventContractError(
                 "Action-cohort credential transitions lack exact source members"
@@ -6308,6 +6343,11 @@ class EventDispatcher:
                     )
 
         allowed_ids = {
+            *(
+                patch.job_control_actor.object_id
+                for patch in state_plan.process_activity_patches
+                if patch.job_control_actor is not None
+            ),
             *(identity.object_id for identity in session_starts.values()),
             *(identity.object_id for identity in process_starts.values()),
             *(item.identity.object_id for item in state_plan.process_terminations),
@@ -6892,6 +6932,7 @@ class EventDispatcher:
         if len(owned_keys) != sum(plan.occurrence_count for plan in owned_effect_plans):
             raise EventContractError("Action-cohort owned effect plans repeat an exact ordinal")
         bootstrap_kinds = {
+            EventKind.PROCESS_JOB_CONTROL,
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
             EventKind.PROCESS_SERVICE_DROP,
@@ -7791,6 +7832,8 @@ class EventDispatcher:
         projection = record.trusted_projections[0]
         if record.root_action_id.startswith("process-exit:"):
             return self._require_posix_exit_projection(record)
+        if projection.occurrence.event_type is EventKind.PROCESS_JOB_CONTROL:
+            return self._require_process_job_control_projection(record)
         if projection.occurrence.event_type in {
             EventKind.PROCESS_AUDIT_BIND,
             EventKind.PROCESS_PRIVILEGE_DROP,
@@ -7812,6 +7855,41 @@ class EventDispatcher:
                 except EventContractError:
                     return self._require_rdp_terminal_projection(record)
         return "type5"
+
+    @staticmethod
+    def _require_process_job_control_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Require one membership change with its exact authenticated source member."""
+        from evidenceforge.events.process import process_job_control_identities
+
+        if len(record.trusted_projections) != 1 or len(record.dispatches) != 1:
+            raise EventContractError("Exact process membership projection requires one member")
+        event = record.trusted_projections[0].occurrence
+        before, after = process_job_control_identities(event)
+        plan = record.state_plan
+        if (
+            record.root_action_id
+            != f"process-job-control:{after.execution_id}:{event.timestamp.isoformat()}"
+            or len(plan.process_activity_patches) != 1
+            or plan.process_activity_patches[0].target != before
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.process_terminations,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError(
+                "Exact process membership projection changed its singleton owner"
+            )
+        return "process_job_control"
 
     @staticmethod
     def _require_process_credential_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -8543,12 +8621,20 @@ class EventDispatcher:
             "posix_fork",
             "posix_exit",
             "process_credentials",
+            "process_job_control",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         record.exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
+                if exact_kind
+                in {
+                    "posix_exec",
+                    "posix_fork",
+                    "posix_exit",
+                    "process_credentials",
+                    "process_job_control",
+                }
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8578,6 +8664,7 @@ class EventDispatcher:
             "posix_fork",
             "posix_exit",
             "process_credentials",
+            "process_job_control",
         } or exact_kind.startswith("linux_sudo_"):
             self._single_ecar_exact_projection_participants(projection)
         else:
@@ -8603,12 +8690,20 @@ class EventDispatcher:
             "posix_fork",
             "posix_exit",
             "process_credentials",
+            "process_job_control",
         } or exact_kind.startswith(("ssh_", "rdp_", "linux_sudo_"))
         exact_all_suppressed = bool(
             terminal_kind
             and (
                 self._ecar_projection_is_exact_omission(projection)
-                if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
+                if exact_kind
+                in {
+                    "posix_exec",
+                    "posix_fork",
+                    "posix_exit",
+                    "process_credentials",
+                    "process_job_control",
+                }
                 or exact_kind.startswith("linux_sudo_")
                 else self._ssh_terminal_projection_is_exact_omission(projection)
                 if exact_kind.startswith("ssh_")
@@ -8625,7 +8720,14 @@ class EventDispatcher:
             else self._rdp_terminal_exact_projection_participants(projection)
             if exact_kind.startswith("rdp_")
             else self._single_ecar_exact_projection_participants(projection)
-            if exact_kind in {"posix_exec", "posix_fork", "posix_exit", "process_credentials"}
+            if exact_kind
+            in {
+                "posix_exec",
+                "posix_fork",
+                "posix_exit",
+                "process_credentials",
+                "process_job_control",
+            }
             or exact_kind.startswith("linux_sudo_")
             else self._exact_projection_participants(projection)
         )
@@ -15608,6 +15710,7 @@ class EventDispatcher:
             "process_audit_bind",
             "process_privilege_drop",
             "process_service_drop",
+            "process_job_control",
             "create_remote_thread",
             "bash_command",
             "zsh_command",

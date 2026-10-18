@@ -70,6 +70,8 @@ STATE_MANAGER_CHECKPOINT_FIELDS = _fields(
         "_pid_candidate_probe_count",
         "_pid_counters",
         "_pid_os",
+        "_posix_job_control_reservations",
+        "_posix_job_control_reservation_counts",
         "_pid_rngs",
         "_pid_sealed_logical_positions",
         "_pid_time_epochs",

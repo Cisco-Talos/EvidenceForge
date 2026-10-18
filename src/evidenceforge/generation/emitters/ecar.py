@@ -222,6 +222,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "process_audit_bind",
         "process_privilege_drop",
         "process_service_drop",
+        "process_job_control",
         "process_terminate",
         "system_process_create",
         "ssh_session",
@@ -277,6 +278,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "process_audit_bind": self._render_process_transition,
             "process_privilege_drop": self._render_process_transition,
             "process_service_drop": self._render_process_transition,
+            "process_job_control": self._render_process_transition,
             "process_terminate": self._render_process_terminate,
             "system_process_create": self._render_process_create,  # Same rendering
             "ssh_session": self._render_logon,  # SSH session = LOGIN event in EDR
@@ -331,6 +333,9 @@ class EcarEmitter(HostMultiplexEmitter):
         """Project canonical identity roles into eCAR."""
         plan = event.identity_plan
         if plan is not None:
+            if isinstance(plan.subject, ProcessIdentity) and plan.subject.job_control is not None:
+                event_data["process_group_id"] = plan.subject.job_control.pgid
+                event_data["posix_session_id"] = plan.subject.job_control.session.sid
             if plan.object_id:
                 event_data["objectID"] = plan.object_id
             if plan.actor_id:
@@ -352,6 +357,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     "process_audit_bind",
                     "process_privilege_drop",
                     "process_service_drop",
+                    "process_job_control",
                 }
                 and plan.subject.primary_thread is not None
             ):
@@ -735,11 +741,14 @@ class EcarEmitter(HostMultiplexEmitter):
         from evidenceforge.events.process import (
             process_credential_identities,
             process_exec_identities,
+            process_job_control_identities,
         )
 
         before, after = (
             process_exec_identities(event)
             if event.event_type == "process_exec"
+            else process_job_control_identities(event)
+            if event.event_type == "process_job_control"
             else process_credential_identities(event)
         )
         event_data = {
@@ -749,7 +758,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": "MODIFY",
             "pid": after.pid,
             "ppid": after.parent_pid,
-            "principal": before.principal,
+            "principal": event.identity_plan.actor.principal,
             "image_path": after.image,
             "command_line": after.command_line,
             "operation": event.event_type.removeprefix("process_"),
@@ -764,6 +773,9 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["previous_process_principal"] = before.principal
         self._apply_session_properties(event_data, event)
         for prefix, identity in (("previous_", before), ("", after)):
+            if identity.job_control is not None:
+                event_data[prefix + "process_group_id"] = identity.job_control.pgid
+                event_data[prefix + "posix_session_id"] = identity.job_control.session.sid
             credentials = identity.credentials
             if credentials is not None:
                 for field, value in (
@@ -1444,6 +1456,10 @@ class EcarEmitter(HostMultiplexEmitter):
 
     # Property keys that belong in the eCAR properties map.
     _PROPERTY_KEYS = (
+        "process_group_id",
+        "posix_session_id",
+        "previous_process_group_id",
+        "previous_posix_session_id",
         "real_uid",
         "real_gid",
         "audit_uid",

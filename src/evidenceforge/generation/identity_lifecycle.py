@@ -64,6 +64,7 @@ class IdentityLifecyclePlanner:
             "process_audit_bind",
             "process_privilege_drop",
             "process_service_drop",
+            "process_job_control",
         }:
             # Both snapshots belong to the State transition plan, including the prior actor.
             # Inferring from live state would overwrite the immutable role boundary.

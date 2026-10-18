@@ -190,6 +190,34 @@ def process_credential_identities(
     return before, after
 
 
+def process_job_control_identities(
+    event: _ProcessTransitionOccurrence,
+) -> tuple[ProcessIdentity, ProcessIdentity]:
+    """Validate exact membership snapshots; State owns transition authorization."""
+    _validate_transition_time(event)
+    plan = event.identity_plan
+    if (
+        type(plan) is not EventIdentityPlan
+        or type(plan.actor) is not ProcessIdentity
+        or type(plan.subject) is not ProcessIdentity
+        or type(plan.target) is not ProcessIdentity
+    ):
+        raise ValueError("POSIX membership requires exact before/after identity roles")
+    before, after = plan.target, plan.subject
+    if (
+        event.event_type != "process_job_control"
+        or plan.actor.hostname != before.hostname
+        or event.timestamp < plan.actor.execution_started_at
+        or after.job_control is None
+        or after.job_control == before.job_control
+        or replace(after, job_control=before.job_control) != before
+        or event.timestamp < max(before.execution_started_at, after.job_control.started_at)
+    ):
+        raise ValueError("POSIX membership must preserve the exact process execution")
+    _validate_process_context(event, after, platforms={"macos", "linux"})
+    return before, after
+
+
 def process_fork_identities(
     event: _ProcessTransitionOccurrence,
 ) -> tuple[ProcessIdentity, ProcessIdentity]:
@@ -220,6 +248,7 @@ def process_fork_identities(
         or child.started_at < parent.execution_started_at
         or child.image != parent.image
         or child.command_line != parent.command_line
+        or child.job_control != parent.job_control
         or child.arguments != parent.arguments
         or child.principal != parent.principal
         or child.credentials != parent.credentials

@@ -33,6 +33,7 @@ import math
 import random
 import secrets
 from bisect import bisect_left
+from collections import ChainMap
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields, replace
@@ -40,6 +41,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum, StrEnum
 from itertools import islice
 from threading import RLock, Thread, current_thread, get_ident
+from typing import Literal
 
 from evidenceforge.events.authentication import windows_logon_can_own_desktop
 from evidenceforge.events.base import CanonicalOccurrence
@@ -53,6 +55,11 @@ from evidenceforge.events.identity import (
     SessionIdentity,
     ThreadIdentity,
     validate_process_arguments,
+)
+from evidenceforge.events.job_control import (
+    PosixGroupIdentity,
+    PosixJobControlChange,
+    PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
@@ -73,6 +80,14 @@ from evidenceforge.generation.indexes import (
     GroupedTemporalIndex,
     IndexedEntityStore,
     TemporalAllocationIndex,
+)
+from evidenceforge.generation.posix_job_control import (
+    MAX_MEMBERSHIP_CHANGES,
+    ReservationKey,
+    ReservationRows,
+    membership_updates,
+    numeric_id_reserved,
+    reservation_key,
 )
 from evidenceforge.generation.storage_world import CompiledStorageFile
 from evidenceforge.generation.timing.macos import MachTimebase, MacosBootClock
@@ -2225,6 +2240,8 @@ class ActionCohortProcessActivityPatch:
     audit_binding: MacosProcessAuditBinding | None = None
     privilege_drop: MacosProcessPrivilegeDrop | None = None
     service_drop: MacosProcessServiceDrop | None = None
+    job_control_change: PosixJobControlChange | None = None
+    job_control_actor: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -3147,6 +3164,58 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
         )
 
+    def change_posix_job_control(
+        self,
+        target: ProcessIdentity,
+        *,
+        operation: Literal["bootstrap", "setsid", "setpgid"],
+        changed_at: datetime,
+        group: PosixGroupIdentity | None = None,
+        actor: ProcessIdentity | None = None,
+    ) -> ProcessIdentity:
+        """Stage one explicit POSIX membership transition in its own atomic cohort.
+
+        With setpgid, omit group to create the target's own group. An explicit
+        group must already be live in the same session. Actor defaults to self.
+        Bootstrap is limited to the modeled privileged PID-1 process at birth.
+        """
+        self._require_open()
+        if type(target) is not ProcessIdentity or type(changed_at) is not datetime:
+            raise StateError("POSIX membership requires exact process identity and time")
+        if changed_at.utcoffset() is None:
+            raise StateError("POSIX membership requires an aware transition time")
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        assert type(normalized) is ProcessIdentity
+        at = ensure_utc(changed_at)
+        if operation in {"bootstrap", "setsid"}:
+            if group is not None:
+                raise StateError("POSIX session creation does not accept an existing group")
+            session = PosixSessionIdentity(
+                normalized.hostname, normalized.pid, normalized.object_id, at
+            )
+            after = PosixGroupIdentity(session, normalized.pid, normalized.object_id, at)
+        elif operation == "setpgid":
+            if normalized.job_control is None:
+                raise StateError("POSIX group change requires known current membership")
+            after = group or PosixGroupIdentity(
+                normalized.job_control.session, normalized.pid, normalized.object_id, at
+            )
+        else:
+            raise StateError("Unsupported POSIX membership operation")
+        change = PosixJobControlChange(operation, normalized.job_control, after, at)
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=at,
+            job_control_change=change,
+            job_control_actor=actor or normalized,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_posix_job_control_patch(patch)
+        if self._process_activity_patches:
+            raise StateError("POSIX membership change requires its own process cohort")
+        self._process_activity_patches.append(patch)
+        return replace(normalized, job_control=after)
+
     def bind_macos_process_audit_origin(
         self, target: ProcessIdentity, *, bound_at: datetime
     ) -> ProcessIdentity:
@@ -3889,6 +3958,9 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         MacosProcessPrivilegeDrop,
         MacosProcessServiceDrop,
         PosixProcessExit,
+        PosixGroupIdentity,
+        PosixSessionIdentity,
+        PosixJobControlChange,
         SessionIdentity,
         ProcessIdentity,
         ThreadIdentity,
@@ -4190,6 +4262,14 @@ def _action_cohort_semantic_preimage(
                     patch.privilege_drop,
                 )
                 if patch.privilege_drop is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "posix-job-control-v1",
+                    patch.job_control_change,
+                    patch.job_control_actor,
+                )
+                if patch.job_control_change is not None
                 else (
                     _action_cohort_process_target_semantic(patch.target),
                     patch.activity_time,
@@ -4697,6 +4777,10 @@ class StateManager:
                 username=lambda process: process.username,
                 system=lambda process: process.system,
                 logon_id=lambda process: process.logon_id,
+                posix_group=lambda process: process.job_control,
+                posix_session=lambda process: (
+                    process.job_control.session if process.job_control else None
+                ),
             )
         )
         self.state.running_processes = self._running_processes
@@ -4745,6 +4829,8 @@ class StateManager:
         self._macos_audit_pid_versions: dict[str, int] = {}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
+        self._posix_job_control_reservations: dict[ReservationKey, ReservationRows] = {}
+        self._posix_job_control_reservation_counts: dict[str, int] = {}
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._pid_time_epochs: dict[str, datetime] = {}
         self._pid_bucket_offsets: dict[tuple[str, datetime], int] = {}
@@ -10238,6 +10324,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 arguments=arguments,
+                job_control=parent_identity.job_control if parent_identity is not None else None,
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(system, os_category),
@@ -10725,6 +10812,7 @@ class StateManager:
                 image=image,
                 command_line=command_line,
                 arguments=arguments,
+                job_control=planned_parent.job_control if planned_parent is not None else None,
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(
@@ -10827,6 +10915,9 @@ class StateManager:
 
             identity = plan.identity
             self._validate_process_exit_outcome(plan.exit_outcome, identity.hostname)
+            membership_updates(
+                self._posix_job_control_reservations, identity.job_control, None, plan.end_time
+            )
             key = (identity.hostname, identity.pid)
             process = self.state.running_processes.get(key)
             if process is None:
@@ -10939,6 +11030,7 @@ class StateManager:
             thread.end_time = payload.end_time
             self._ended_threads.set(thread_key, thread, thread_deadline)
 
+        self._commit_posix_membership(identity.job_control, None, payload.end_time)
         del self.state.running_processes[key]
         remaining = self._active_pid_reservation_counts[identity.hostname] - 1
         if remaining > 0:
@@ -11572,6 +11664,7 @@ class StateManager:
                             patch.audit_binding,
                             patch.privilege_drop,
                             patch.service_drop,
+                            patch.job_control_change,
                         )
                     )
                     > 1
@@ -11603,6 +11696,7 @@ class StateManager:
                         patch.audit_binding,
                         patch.privilege_drop,
                         patch.service_drop,
+                        patch.job_control_change,
                     )
                 ):
                     if (
@@ -11627,6 +11721,28 @@ class StateManager:
                         raise StateError(
                             "Process credential transitions require a separate cohort from receiver dependencies"
                         )
+                if patch.job_control_change is not None:
+                    self._validate_posix_job_control_patch(patch)
+                    if (
+                        any(
+                            (
+                                plan.sessions,
+                                plan.processes,
+                                plan.process_executions,
+                                plan.process_terminations,
+                                plan.session_terminalizations,
+                                plan.session_metadata_patches,
+                                plan.session_activity_patches,
+                                plan.live_session_process_role_patches,
+                                plan._smb_connection_finalization,
+                                plan._smb_file_mutation_terminalization,
+                            )
+                        )
+                        or len(plan._process_activity) != 1
+                    ):
+                        raise StateError("POSIX membership change requires its own process cohort")
+                elif patch.job_control_actor is not None:
+                    raise StateError("POSIX membership actor requires a membership change")
                 process_activity[identity.object_id] = patch
 
             execution_thread_ids: set[tuple[str, int]] = {
@@ -11969,6 +12085,8 @@ class StateManager:
                             "Action cohort terminalized session retains a live owned process"
                         )
 
+            self._validate_posix_membership_sequence(plan._processes, plan._process_terminations)
+
             member_frontiers = [
                 value
                 for value in (
@@ -12068,6 +12186,7 @@ class StateManager:
             pid_logical_position=payload.pid_logical_position,
             credentials=identity.credentials,
             arguments=identity.arguments,
+            job_control=identity.job_control,
             audit_pid_version=identity.audit_pid_version,
         )
         thread = RunningThread(
@@ -12379,9 +12498,17 @@ class StateManager:
                     item.session.logon_id,
                 )
 
+        def capture_membership(group: PosixGroupIdentity | None) -> None:
+            if group is None:
+                return
+            for member in (group, group.session):
+                capture_mapping(self._posix_job_control_reservations, reservation_key(member))
+            capture_mapping(self._posix_job_control_reservation_counts, group.session.hostname)
+
         for item in processes:
             process = item.process
             thread = item.thread
+            capture_membership(process.job_control)
             capture_object(process)
             capture_object(thread)
             process_key = (process.system, process.pid)
@@ -12433,6 +12560,7 @@ class StateManager:
         ended_thread_keys: set[object] = set()
         for item in process_terminations:
             identity = item.plan.identity
+            capture_membership(identity.job_control)
             process = process_rows.get(identity.object_id) or self._processes_by_object_id.get(
                 identity.object_id
             )
@@ -12531,6 +12659,12 @@ class StateManager:
                 or self._processes_by_object_id[identity.object_id]
             )
             capture_object(process)
+            if patch.job_control_change is not None:
+                if patch.job_control_actor is not None:
+                    capture_object(self._processes_by_object_id[patch.job_control_actor.object_id])
+                capture_membership(patch.job_control_change.before)
+                capture_membership(patch.job_control_change.after)
+                capture_indexed(self._running_processes, (identity.hostname, identity.pid))
             if patch.privilege_drop is not None or patch.service_drop is not None:
                 capture_indexed(self._running_processes, (identity.hostname, identity.pid))
         for patch in plan._session_activity:
@@ -14215,6 +14349,15 @@ class StateManager:
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
+            if patch.job_control_change is not None:
+                change = patch.job_control_change
+                self._commit_posix_membership(change.before, change.after, change.changed_at)
+                process.job_control = change.after
+                process.job_control_history = (*process.job_control_history, change)
+                if patch.job_control_actor is not None:
+                    acting = self._processes_by_object_id[patch.job_control_actor.object_id]
+                    acting.last_activity_time = patch.activity_time
+                self._running_processes.refresh((identity.hostname, identity.pid))
             if patch.audit_binding is not None:
                 process.credentials = patch.audit_binding.after
                 process.audit_binding = patch.audit_binding
@@ -14433,6 +14576,7 @@ class StateManager:
                 staged_processes_by_pid[process_key] = identity
                 staged_pids.add(process_key)
                 staged_threads.add(thread_key)
+            self._validate_posix_membership_sequence(plan.processes)
 
     def _commit_prevalidated_materialization_batch_unclaimed(
         self,
@@ -14484,6 +14628,149 @@ class StateManager:
             self._materialization_version += 1
         return session, processes
 
+    def _replace_posix_reservation_rows(self, key: ReservationKey, rows: ReservationRows) -> None:
+        old = self._posix_job_control_reservations.get(key, ())
+        host = key[1]
+        count = self._posix_job_control_reservation_counts.get(host, 0) + len(rows) - len(old)
+        if rows:
+            self._posix_job_control_reservations[key] = rows
+        else:
+            self._posix_job_control_reservations.pop(key, None)
+        if count:
+            self._posix_job_control_reservation_counts[host] = count
+        else:
+            self._posix_job_control_reservation_counts.pop(host, None)
+
+    def _commit_posix_membership(
+        self, before: PosixGroupIdentity | None, after: PosixGroupIdentity | None, at: datetime
+    ) -> None:
+        for key, rows in membership_updates(
+            self._posix_job_control_reservations, before, after, at
+        ).items():
+            self._replace_posix_reservation_rows(key, rows)
+
+    def get_posix_group_members(self, group: PosixGroupIdentity) -> tuple[ProcessIdentity, ...]:
+        """Return current exact-lifetime members using the group index."""
+        if type(group) is not PosixGroupIdentity:
+            raise StateError("POSIX membership lookup requires an exact group identity")
+        with self._lock:
+            return tuple(
+                sorted(
+                    (
+                        self._process_identity(row)
+                        for row in self._running_processes.find("posix_group", group)
+                    ),
+                    key=lambda identity: identity.pid,
+                )
+            )
+
+    def _validate_posix_job_control_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        target, change, actor = patch.target, patch.job_control_change, patch.job_control_actor
+        if (
+            type(target) is not ProcessIdentity
+            or type(change) is not PosixJobControlChange
+            or type(actor) is not ProcessIdentity
+        ):
+            raise StateError("POSIX membership requires exact live target, actor and transition")
+        process = self._validate_action_live_process_identity(target)
+        acting_process = self._validate_action_live_process_identity(actor)
+        if self._pid_os.get(target.hostname) not in {"macos", "linux"}:
+            raise StateError("POSIX membership requires a POSIX host")
+        if (
+            change.before != target.job_control
+            or change.after.session.hostname != target.hostname
+            or actor.hostname != target.hostname
+            or change.changed_at != patch.activity_time
+            or change.changed_at < max(target.execution_started_at, actor.execution_started_at)
+            or (
+                process.last_activity_time is not None
+                and change.changed_at < process.last_activity_time
+            )
+            or (
+                acting_process.last_activity_time is not None
+                and change.changed_at < acting_process.last_activity_time
+            )
+            or (
+                process.job_control_history
+                and change.changed_at <= process.job_control_history[-1].changed_at
+            )
+            or len(process.job_control_history) >= MAX_MEMBERSHIP_CHANGES
+        ):
+            raise StateError("POSIX membership transition has stale, backdated or oversized state")
+        self._validate_activity_before_owning_hard_deadline_locked(
+            change.changed_at,
+            hostname=actor.hostname,
+            logon_id=actor.logon_id,
+            label="POSIX group-changing actor activity",
+        )
+        own = actor.object_id == target.object_id
+        after, before = change.after, change.before
+        if change.operation == "bootstrap":
+            if (
+                not own
+                or target.pid != 1
+                or target.parent_pid != 0
+                or target.credentials is None
+                or target.credentials.effective_uid != 0
+                or change.changed_at != target.started_at
+                or process.job_control_history
+                or self.state.current_time != target.started_at
+            ):
+                raise StateError("POSIX bootstrap requires the privileged PID-1 process at birth")
+        elif before is None:
+            raise StateError("POSIX membership transition requires known current membership")
+        elif change.operation == "setsid":
+            if not own or before.pgid == target.pid:
+                raise StateError("setsid requires a non-group-leader acting on itself")
+        else:
+            if (
+                before.session != after.session
+                or before.session.sid == target.pid
+                or actor.job_control is None
+                or actor.job_control.session != before.session
+            ):
+                raise StateError("setpgid cannot move a session leader or cross sessions")
+            if not own and (
+                target.parent_pid != actor.pid
+                or target.execution_ordinal != 0
+                or actor.started_at > target.started_at
+            ):
+                raise StateError("setpgid requires self or a child that has not executed")
+            rows = self._posix_job_control_reservations.get(reservation_key(after), ())
+            if after.pgid != target.pid and (
+                not rows or rows[-1].ended_at is not None or rows[-1].identity != after
+            ):
+                raise StateError("setpgid destination must be a live group in the same session")
+        if change.operation in {"bootstrap", "setsid"} and (
+            after.pgid != target.pid
+            or after.leader_object_id != target.object_id
+            or after.started_at != change.changed_at
+            or after.session.sid != target.pid
+            or after.session.leader_object_id != target.object_id
+            or after.session.started_at != change.changed_at
+        ):
+            raise StateError("POSIX session creation must use its creating process identity")
+        if after.pgid == target.pid and (
+            after.leader_object_id != target.object_id or after.started_at != change.changed_at
+        ):
+            raise StateError("New POSIX group must use its creating process identity")
+        membership_updates(self._posix_job_control_reservations, before, after, change.changed_at)
+
+    def _validate_posix_membership_sequence(
+        self,
+        starts: tuple[ProcessMaterializationPlan, ...],
+        closes: tuple[ActionCohortProcessTermination, ...] = (),
+    ) -> None:
+        # Overlay only touched numeric buckets; never copy or scan the process table.
+        updates: dict[ReservationKey, ReservationRows] = {}
+        view = ChainMap(updates, self._posix_job_control_reservations)
+        for plan in starts:
+            updates.update(
+                membership_updates(view, None, plan.identity.job_control, plan.identity.started_at)
+            )
+        for plan in closes:
+            updates.update(membership_updates(view, plan.identity.job_control, None, plan.end_time))
+
     def validate_process_materialization(self, plan: ProcessMaterializationPlan) -> None:
         """Validate every fallible process-start condition without publishing state."""
 
@@ -14515,6 +14802,7 @@ class StateManager:
                     f"Process materialization primary thread is already live: {thread_key!r}"
                 )
             self._validate_process_parent_identity_locked(plan)
+            self._validate_posix_membership_sequence((plan,))
             parent_activity_time = plan._payload.parent_activity_time
             parent_identity = plan._payload.parent_identity
             if parent_activity_time is not None and parent_identity is not None:
@@ -14626,6 +14914,7 @@ class StateManager:
         prepared_start = prepared or self._prepare_action_cohort_process_start(plan)
         process = prepared_start.process
         key = (process.system, process.pid)
+        self._commit_posix_membership(None, identity.job_control, identity.started_at)
         self.state.running_processes[key] = process
         self._active_pid_reservation_counts[process.system] = (
             self._active_pid_reservation_counts.get(process.system, 0) + 1
@@ -14793,6 +15082,10 @@ class StateManager:
         release_time: datetime | None,
     ) -> bool:
         """Return whether a rendered PID overlaps any live reservation."""
+        if numeric_id_reserved(
+            self._posix_job_control_reservations, system, pid, start_time, release_time
+        ):
+            return True
         if (system, pid) in self.state.running_processes:
             return True
         if pid in self._fixed_pid_reservations.get(system, set()):
@@ -14817,6 +15110,7 @@ class StateManager:
             self._active_pid_reservation_counts.get(system, 0)
             + len(self._fixed_pid_reservations.get(system, ()))
             + self._transient_pid_reservation_counts.get(system, 0)
+            + self._posix_job_control_reservation_counts.get(system, 0)
         )
 
     def advance_pid_allocation_watermark(self, cutoff: datetime) -> None:
@@ -14869,6 +15163,11 @@ class StateManager:
                 else:
                     del self._transient_pid_reservations[system]
                     self._transient_pid_reservation_counts.pop(system, None)
+            for key, rows in tuple(self._posix_job_control_reservations.items()):
+                retained = tuple(
+                    row for row in rows if row.ended_at is None or row.ended_at >= normalized_cutoff
+                )
+                self._replace_posix_reservation_rows(key, retained)
             self._pid_allocation_watermark = normalized_cutoff
             self._expire_retained_identities(normalized_cutoff)
             self._materialization_version += 1
@@ -15566,6 +15865,12 @@ class StateManager:
                 None,
             )
         )
+        if selected is not None and process.job_control_history:
+            membership = process.job_control
+            for change in reversed(process.job_control_history):
+                if event_time < change.changed_at:
+                    membership = change.before
+            selected = replace(selected, job_control=membership)
         drop = process.privilege_drop or process.service_drop
         if (
             selected is not None
@@ -15617,6 +15922,7 @@ class StateManager:
             executed_at=process.executed_at,
             credentials=process.credentials,
             arguments=process.arguments,
+            job_control=process.job_control,
             audit_pid_version=process.audit_pid_version,
         )
 
@@ -15642,6 +15948,7 @@ class StateManager:
             identity.credentials,
             identity.audit_pid_version,
             identity.arguments,
+            identity.job_control,
         )
 
     def _process_identity_active_at_locked(

@@ -4397,7 +4397,7 @@ class SourceTimingPlanner:
         identity: ProcessIdentity,
     ) -> tuple[object, ...]:
         credentials = identity.credentials
-        return (
+        key = (
             family,
             source_instance,
             identity.execution_id,
@@ -4415,6 +4415,23 @@ class SourceTimingPlanner:
                 else (None,) * 6
             ),
         )
+
+        if identity.job_control is not None:
+            group = identity.job_control
+            session = group.session
+            key = (
+                *key,
+                (
+                    "posix-job-control-v1",
+                    group.pgid,
+                    group.leader_object_id,
+                    group.started_at,
+                    session.sid,
+                    session.leader_object_id,
+                    session.started_at,
+                ),
+            )
+        return key
 
     def _apply_process_execution_constraints(
         self,
@@ -4435,6 +4452,7 @@ class SourceTimingPlanner:
             "process_audit_bind",
             "process_privilege_drop",
             "process_service_drop",
+            "process_job_control",
         }:
             identity = plan.subject
             floor = (
@@ -4642,6 +4660,7 @@ class SourceTimingPlanner:
             "process_audit_bind",
             "process_privilege_drop",
             "process_service_drop",
+            "process_job_control",
         }:
             identity = event.identity_plan.subject if event.identity_plan is not None else None
             if isinstance(identity, ProcessIdentity):
@@ -4895,6 +4914,7 @@ class SourceTimingPlanner:
             "process_audit_bind",
             "process_privilege_drop",
             "process_service_drop",
+            "process_job_control",
         }:
             return "source.ecar_dependent_after_process_create"
         if family == "ecar" and event.event_type in {

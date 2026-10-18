@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 216
+current_revision: 217
 history_start_revision: 1
-behavior_surface_sha256: 4d5b7bad1ab33600bca0d460f993e5aa4407be4217f898e37cf76d9aa16d94d3
+behavior_surface_sha256: 1bc48e7f94cad6c221fb591066a5b6171e7ee63093ab87a4a876c7fcd3ccecc9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2122,3 +2122,15 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Retains explicitly supplied argv across POSIX creation, fork, exec and recovery; loaded launchd jobs require their exact declared arguments, while legacy command text remains unparsed and unknown argv stays absent.
+  - revision: 217
+    id: canonical-posix-job-control-ownership
+    impact: localized
+    domains:
+      - process-lifecycle
+      - pid-allocation
+      - checkpoint-state
+      - source-timing
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Owns explicit POSIX group/session lifetimes, fork inheritance, membership changes and leaderless PID reservations; preserves unknown legacy membership and projects authenticated transitions through eCAR and recovery.

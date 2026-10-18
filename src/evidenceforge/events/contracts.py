@@ -58,6 +58,7 @@ class EventKind(StrEnum):
     PROCESS_CREATE = "process_create"
     PROCESS_FORK = "process_fork"
     PROCESS_EXEC = "process_exec"
+    PROCESS_JOB_CONTROL = "process_job_control"
     PROCESS_AUDIT_BIND = "process_audit_bind"
     PROCESS_PRIVILEGE_DROP = "process_privilege_drop"
     PROCESS_SERVICE_DROP = "process_service_drop"
@@ -990,6 +991,17 @@ EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
         state=StateEffect.WRITE,
         emitters=_formats(FormatKind.ECAR),
     ),
+    EventKind.PROCESS_JOB_CONTROL: _contract(
+        EventKind.PROCESS_JOB_CONTROL,
+        required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        forbidden=frozenset(ContextKind)
+        - _contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.WRITE,
+        emitters=_formats(FormatKind.ECAR),
+    ),
     EventKind.PROCESS_AUDIT_BIND: _contract(
         EventKind.PROCESS_AUDIT_BIND,
         required=_contexts(ContextKind.PROCESS, ContextKind.SRC_HOST, ContextKind.LIFECYCLE),
@@ -1223,6 +1235,7 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
     if contract.kind in {
         EventKind.PROCESS_FORK,
         EventKind.PROCESS_EXEC,
+        EventKind.PROCESS_JOB_CONTROL,
         EventKind.PROCESS_AUDIT_BIND,
         EventKind.PROCESS_PRIVILEGE_DROP,
         EventKind.PROCESS_SERVICE_DROP,
@@ -1231,11 +1244,14 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
             process_credential_identities,
             process_exec_identities,
             process_fork_identities,
+            process_job_control_identities,
         )
 
         try:
             if contract.kind is EventKind.PROCESS_FORK:
                 process_fork_identities(event)
+            elif contract.kind is EventKind.PROCESS_JOB_CONTROL:
+                process_job_control_identities(event)
             elif contract.kind is EventKind.PROCESS_EXEC:
                 process_exec_identities(event)
             else:

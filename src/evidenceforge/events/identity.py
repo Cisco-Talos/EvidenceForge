@@ -31,6 +31,8 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from evidenceforge.events.job_control import PosixGroupIdentity
+
 type PosixIdentifier = Annotated[int, Field(strict=True, ge=0, lt=2**32)]
 type PosixProcessArguments = Annotated[
     tuple[Annotated[str, Field(strict=True)], ...],
@@ -342,6 +344,7 @@ class ProcessIdentity:
     credentials: PosixProcessCredentials | None = None
     audit_pid_version: PosixIdentifier | None = None
     arguments: PosixProcessArguments | None = None
+    job_control: PosixGroupIdentity | None = None
 
     @property
     def initial_image(self) -> str:
@@ -365,6 +368,11 @@ class ProcessIdentity:
         """Reject incomplete process object identity."""
 
         validate_process_arguments(self.arguments, command_line=self.command_line)
+        if self.job_control is not None and (
+            type(self.job_control) is not PosixGroupIdentity
+            or self.job_control.session.hostname != self.hostname
+        ):
+            raise ValueError("Process job control requires its exact host-scoped group")
 
         if not self.hostname or not self.object_id or not self.lifecycle_group_id:
             raise ValueError("Process identity requires host, object, and lifecycle group")

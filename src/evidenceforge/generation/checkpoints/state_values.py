@@ -23,6 +23,12 @@ from evidenceforge.events.identity import (
     SessionIdentity,
     ThreadIdentity,
 )
+from evidenceforge.events.job_control import (
+    PosixGroupIdentity,
+    PosixJobControlChange,
+    PosixJobControlReservation,
+    PosixSessionIdentity,
+)
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -126,6 +132,8 @@ _RUNNING_PROCESS_FIELDS = (
     "service_drop",
     "exit_outcome",
     "arguments",
+    "job_control",
+    "job_control_history",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -312,6 +320,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "credentials",
     "audit_pid_version",
     "arguments",
+    "job_control",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -408,7 +417,20 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process-v9": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "posix-session-v1": (
+        PosixSessionIdentity,
+        ("hostname", "sid", "leader_object_id", "started_at"),
+    ),
+    "posix-group-v1": (PosixGroupIdentity, ("session", "pgid", "leader_object_id", "started_at")),
+    "posix-job-control-change-v1": (
+        PosixJobControlChange,
+        ("operation", "before", "after", "changed_at"),
+    ),
+    "posix-job-control-reservation-v1": (
+        PosixJobControlReservation,
+        ("identity", "members", "updated_at", "ended_at"),
+    ),
+    "running-process-v10": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -426,7 +448,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v5": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v6": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -591,6 +613,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None]
         if record_tag == "process-identity-v4" and len(encoded_fields) == 17:
             record_tag = "process-identity-v5"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v9" and len(encoded_fields) == 32:
+            record_tag = "running-process-v10"
+            encoded_fields = [*encoded_fields, None, encode_state_value(())]
+        if record_tag == "process-identity-v5" and len(encoded_fields) == 18:
+            record_tag = "process-identity-v6"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

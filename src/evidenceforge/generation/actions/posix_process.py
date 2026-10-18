@@ -15,6 +15,7 @@ from evidenceforge.events.process import (
     process_exec_identities,
     process_exit_identity,
     process_fork_identities,
+    process_job_control_identities,
 )
 from evidenceforge.events.process_outcome import PosixProcessExit
 
@@ -42,6 +43,33 @@ def process_exec_occurrence(
         kind="process_exec",
     )
     process_exec_identities(event)
+    return event
+
+
+def process_job_control_occurrence(
+    *,
+    host: HostContext,
+    before: ProcessIdentity,
+    after: ProcessIdentity,
+    timestamp: datetime,
+    integrity_level: str,
+    session: SessionIdentity | None = None,
+    actor: ProcessIdentity | None = None,
+) -> OccurrenceBuilder:
+    """Project a State-owned membership transition without inventing native ES data."""
+    event = _process_transition_occurrence(
+        host=host,
+        before=before,
+        after=after,
+        timestamp=timestamp,
+        integrity_level=integrity_level,
+        session=session,
+        kind="process_job_control",
+    )
+    event.identity_plan = EventIdentityPlan(
+        subject=after, actor=actor or before, target=before, session=session
+    )
+    process_job_control_identities(event)
     return event
 
 

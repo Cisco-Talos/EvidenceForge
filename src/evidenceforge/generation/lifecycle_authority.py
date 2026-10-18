@@ -342,6 +342,22 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         payload = (*payload, ("macos-audit-pid-version-v1", identity.audit_pid_version))
     if identity.arguments is not None:
         payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
+    if identity.job_control is not None:
+        group = identity.job_control
+        session = group.session
+        payload = (
+            *payload,
+            (
+                "posix-job-control-v1",
+                group.pgid,
+                group.leader_object_id,
+                group.started_at,
+                session.hostname,
+                session.sid,
+                session.leader_object_id,
+                session.started_at,
+            ),
+        )
     return payload
 
 
@@ -3919,6 +3935,28 @@ class GeneratorLifecycleAuthority:
                     ),
                 )
                 process_change = ProcessRuntimeChange(before, after, "credentials")
+            if (
+                patch.job_control_actor is not None
+                and patch.job_control_actor.object_id != identity.object_id
+            ):
+                actor = patch.job_control_actor
+                self._action_cohort_registered_process(actor)
+                append(
+                    patch.activity_time,
+                    2,
+                    LifecycleTransition(
+                        transition_id=self._action_cohort_id(
+                            plan, "job-control-actor", ordinal, actor.object_id, "transition"
+                        ),
+                        subject=LifecycleEntityRef("process", actor.object_id),
+                        kind="dependent",
+                        canonical_time=patch.activity_time,
+                        action_id=self._action_cohort_id(
+                            plan, "job-control-actor", ordinal, actor.object_id, "action"
+                        ),
+                        reason="State POSIX group-changing parent activity",
+                    ),
+                )
             category = "process-activity"
             append(
                 patch.activity_time,
@@ -3947,6 +3985,8 @@ class GeneratorLifecycleAuthority:
                     if patch.privilege_drop is not None
                     else "State service child privilege drop"
                     if patch.service_drop is not None
+                    else "State POSIX job-control transition"
+                    if patch.job_control_change is not None
                     else "State process activity transition",
                     process_change=process_change,
                 ),

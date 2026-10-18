@@ -43,6 +43,7 @@ from evidenceforge.events.identity import (
     PosixProcessCredentials,
     ProcessIdentity,
 )
+from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import NetworkTrafficLedger
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -159,6 +160,8 @@ class RunningProcess:
     service_drop: MacosProcessServiceDrop | None = None
     exit_outcome: PosixProcessExit | None = None
     arguments: PosixProcessArguments | None = None
+    job_control: PosixGroupIdentity | None = None
+    job_control_history: tuple[PosixJobControlChange, ...] = ()
 
 
 @dataclass

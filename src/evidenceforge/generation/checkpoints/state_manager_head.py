@@ -31,7 +31,9 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "6"
+_SCHEMA_VERSION = "7"
+_LEGACY_VERSION = "6"
+_JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -328,7 +330,10 @@ def _capture_head(manager: StateManager) -> bytes:
 
 def _restore_head(manager: StateManager, head: bytes) -> None:
     document = loads(head)
-    if type(document) is not dict or document.get("schema_version") != _SCHEMA_VERSION:
+    if type(document) is not dict or document.get("schema_version") not in {
+        _SCHEMA_VERSION,
+        _LEGACY_VERSION,
+    }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
         "expiring",
@@ -343,6 +348,11 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         raise CheckpointCorruptionError("StateManager checkpoint head fields changed")
     fresh = StateManager()
     simple = document["simple"]
+    legacy = document["schema_version"] == _LEGACY_VERSION
+    if legacy:
+        if type(simple) is not dict or set(simple) != set(_SIMPLE_FIELDS) - _JOB_CONTROL_FIELDS:
+            raise CheckpointCorruptionError("Legacy StateManager fields changed")
+        simple = {**simple, **{name: encode_state_value({}) for name in _JOB_CONTROL_FIELDS}}
     if type(simple) is not dict or set(simple) != set(_SIMPLE_FIELDS):
         raise CheckpointCorruptionError("StateManager checkpoint simple fields changed")
     for name in _SIMPLE_FIELDS:
@@ -409,6 +419,23 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         setattr(fresh, name, indexes)
 
     _restore_process_indexes(fresh, document["process_indexes"])
+    from evidenceforge.generation.posix_job_control import validate_restored_job_control
+
+    try:
+        validate_restored_job_control(
+            fresh._posix_job_control_reservations,
+            fresh._posix_job_control_reservation_counts,
+            tuple(
+                chain(
+                    fresh._processes_by_object_id.values(),
+                    fresh._ended_processes_by_object_id.values(),
+                )
+            ),
+            fresh._pid_os,
+            legacy=legacy,
+        )
+    except (ValueError, TypeError) as error:
+        raise CheckpointCorruptionError("StateManager POSIX membership state is invalid") from error
     for host, value in fresh._macos_audit_session_counters.items():
         if (
             type(host) is not str
@@ -606,6 +633,8 @@ class StateManagerParticipant:
     checkpoint_owner = "state-manager"
     checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
+    checkpoint_compatible_head_versions = (_LEGACY_VERSION,)
+    checkpoint_compatible_segment_versions = (_LEGACY_VERSION,)
     checkpoint_state_fields = STATE_MANAGER_CHECKPOINT_FIELDS
 
     def __init__(self, manager: StateManager) -> None:
@@ -697,7 +726,7 @@ class StateManagerParticipant:
             document = loads(payload)
             if (
                 type(document) is not dict
-                or document.get("schema_version") != _SCHEMA_VERSION
+                or document.get("schema_version") not in {_SCHEMA_VERSION, _LEGACY_VERSION}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

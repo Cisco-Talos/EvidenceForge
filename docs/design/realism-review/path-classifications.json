@@ -166,6 +166,14 @@
       "classification": "single_canonical_path",
       "owner": "State credential patch, POSIX occurrence helper and EventDispatcher exact projection",
       "assessment": "One internal credential observation binds to its exact authenticated State patch. Lifetime and execution identity remain unchanged; current authored producers and Mac receivers do not yet request this transition."
+    },
+    {
+      "names": [
+        "process_job_control"
+      ],
+      "classification": "single_canonical_path",
+      "owner": "State POSIX membership patch, canonical occurrence helper and EventDispatcher exact projection",
+      "assessment": "Internal membership changes retain exact before/after state and the actual changing actor. Dispatcher coverage requires the authenticated singleton State cohort; eCAR observation, collection omission and source recovery cannot redefine the action. Production boot/session/job composition remains unavailable."
     }
   ],
   "contexts": [
