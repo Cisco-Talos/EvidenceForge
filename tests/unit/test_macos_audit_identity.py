@@ -160,7 +160,8 @@ def test_v3_identity_upgrade_preserves_unknown_version_and_authentication_binds_
     original = _start(StateManager())
     old = encode_state_value(original)
     old[1] = "process-identity-v3"
-    old[2] = old[2][:-1]
+    # v3 has exactly 16 fields, regardless of later optional identity extensions.
+    old[2] = old[2][:16]
     restored = decode_state_value(old)
     assert restored == replace(original, audit_pid_version=None)
     assert _process_identity_payload(restored) != _process_identity_payload(original)

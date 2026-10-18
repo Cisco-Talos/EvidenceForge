@@ -95,6 +95,31 @@ def test_missing_arguments_remain_unknown_and_legacy_records_upgrade_without_par
     assert _process_identity_payload(identity)[-1][0] == "macos-audit-pid-version-v1"
 
 
+@pytest.mark.parametrize(
+    ("tag", "width"),
+    [
+        ("process-identity", 12),
+        ("process-identity-v2", 15),
+        ("process-identity-v3", 16),
+        ("process-identity-v4", 17),
+    ],
+)
+def test_legacy_identity_widths_preserve_unknown_argv_and_reject_extra_fields(
+    tag: str, width: int
+) -> None:
+    from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
+
+    _, identity = _create(("-zsh", "-l"))
+    fields = encode_state_value(identity)[2]
+    restored = decode_state_value(["record", tag, fields[:width]])
+    assert restored.arguments is None
+    assert restored.command_line == identity.command_line
+    assert restored.object_id == identity.object_id
+    assert restored.audit_pid_version == (identity.audit_pid_version if width == 17 else None)
+    with pytest.raises(CheckpointCorruptionError):
+        decode_state_value(["record", tag, fields[: width + 1]])
+
+
 @pytest.mark.parametrize("arguments", [["zero"], (1,), ("zero", False)])
 def test_checkpoint_argv_type_is_strict(arguments: object) -> None:
     with pytest.raises(ValidationError):
