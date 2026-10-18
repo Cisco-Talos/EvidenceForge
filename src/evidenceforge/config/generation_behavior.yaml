@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 223
+current_revision: 224
 history_start_revision: 1
-behavior_surface_sha256: 17549d1eae51fb0216f9a4df98ef290fa62cdface329eb40cebe0af197098323
+behavior_surface_sha256: d81ef84930e3d9af557df3c21e102ba4dff2e5c0efeee0467c32c52a6da3cdc1
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2192,3 +2192,11 @@ changes:
     formats:
       - ecar
     summary: Composes bound launchd leader exit with atomic child adoption while preserving loaded jobs and surviving groups, and binds external close projections to exact State terminal outcomes.
+  - revision: 224
+    id: event-time-parent-execution-observations
+    impact: localized
+    domains:
+      - process-session-lifecycle
+    formats:
+      - ecar
+    summary: Captures immutable exact event-time parent executions and credentials through historical State ownership, rejecting unknown or expired relationships without reused-PID substitution or native source admission.

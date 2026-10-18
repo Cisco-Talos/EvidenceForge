@@ -74,6 +74,7 @@ from evidenceforge.events.parentage import (
     ProcessParentageChange,
     ProcessParentReference,
 )
+from evidenceforge.events.process_observation import ProcessParentObservation
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.boot_identity import modeled_boot_id
 from evidenceforge.generation.deferred_session_preseal import (
@@ -15967,6 +15968,40 @@ class StateManager:
             if event_time is not None:
                 return self._process_execution_active_at(process, ensure_utc(event_time))
             return self._process_identity(process)
+
+    def observe_process_parent(
+        self, identity: ProcessIdentity, *, observed_at: datetime
+    ) -> ProcessParentObservation:
+        """Capture exact event-time parent execution before source delay or retention.
+
+        Lookup uses durable object identities and historical execution, credential
+        and parentage state. Missing/expired facts reject instead of consulting a
+        reused PID. Callers must retain this immutable value with their occurrence;
+        reconstructing it later cannot restore already-retired history.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("Parent observation requires exact process identity and aware time")
+        at = ensure_utc(observed_at)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or identity.parentage is None:
+                raise StateError("Parent observation has stale, inactive or unknown process facts")
+            reference = identity.parentage.current
+            parent = None
+            if reference is not None:
+                parent = self.get_process_identity_by_object_id(reference.object_id, event_time=at)
+                if parent is None:
+                    raise StateError("Parent observation lost its exact active parent history")
+            try:
+                return ProcessParentObservation(identity, parent, at)
+            except ValueError as error:
+                raise StateError(
+                    "Parent observation disagrees with canonical parent ownership"
+                ) from error
 
     def _validate_macos_process_service_drop(
         self, target: ProcessIdentity, drop: MacosProcessServiceDrop
