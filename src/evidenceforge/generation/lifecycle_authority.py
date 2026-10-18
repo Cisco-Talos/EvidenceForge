@@ -340,6 +340,8 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         )
     if identity.audit_pid_version is not None:
         payload = (*payload, ("macos-audit-pid-version-v1", identity.audit_pid_version))
+    if identity.arguments is not None:
+        payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
     return payload
 
 

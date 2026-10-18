@@ -14,6 +14,7 @@ from evidenceforge.events.identity import (
     MacosProcessAuditBinding,
     MacosProcessPrivilegeDrop,
     MacosProcessServiceDrop,
+    validate_process_arguments,
 )
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
@@ -446,6 +447,15 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        try:
+            validate_process_arguments(process.arguments, command_line=process.command_line)
+        except ValueError as error:
+            raise CheckpointCorruptionError("StateManager process argv is invalid") from error
+        if process.arguments is not None and fresh._pid_os.get(process.system) not in {
+            "macos",
+            "linux",
+        }:
+            raise CheckpointCorruptionError("StateManager process argv requires a POSIX host")
         outcome = process.exit_outcome
         if outcome is not None and (
             type(outcome) is not PosixProcessExit

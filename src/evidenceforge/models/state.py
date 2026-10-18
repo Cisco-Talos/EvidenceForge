@@ -39,6 +39,7 @@ from evidenceforge.events.identity import (
     MacosProcessPrivilegeDrop,
     MacosProcessServiceDrop,
     PosixIdentifier,
+    PosixProcessArguments,
     PosixProcessCredentials,
     ProcessIdentity,
 )
@@ -157,6 +158,7 @@ class RunningProcess:
     privilege_drop: MacosProcessPrivilegeDrop | None = None
     service_drop: MacosProcessServiceDrop | None = None
     exit_outcome: PosixProcessExit | None = None
+    arguments: PosixProcessArguments | None = None
 
 
 @dataclass

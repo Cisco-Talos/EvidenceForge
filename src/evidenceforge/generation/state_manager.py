@@ -52,6 +52,7 @@ from evidenceforge.events.identity import (
     ProcessIdentity,
     SessionIdentity,
     ThreadIdentity,
+    validate_process_arguments,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.network import (
@@ -1286,6 +1287,7 @@ class MaterializationBatchBuilder:
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -1312,6 +1314,7 @@ class MaterializationBatchBuilder:
             auth_session_id=auth_session_id,
             auth_logon_type=auth_logon_type,
             credentials=credentials,
+            arguments=arguments,
             parent_plan=parent_plan,
             session_plan=session_plan,
         )
@@ -2940,6 +2943,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
         parent_plan: ProcessMaterializationPlan | None = None,
         session_plan: SessionMaterializationPlan | None = None,
     ) -> ProcessMaterializationPlan:
@@ -2987,6 +2991,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 auth_session_id=auth_session_id,
                 auth_logon_type=auth_logon_type,
                 credentials=credentials,
+                arguments=arguments,
                 parent_plan=parent_plan,
                 session_plan=resolved_session,
             )
@@ -3338,6 +3343,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 auth_session_id=process.auth_session_id,
                 auth_logon_type=process.auth_logon_type,
                 credentials=parent.credentials,
+                arguments=parent.arguments,
             )
 
             payload = replace(plan._payload, forked=True)
@@ -3364,6 +3370,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         command_line: str,
         executed_at: datetime,
         credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3443,6 +3450,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             audit_pid_version=audit_pid_version,
             image=image,
             credentials=credentials if credentials is not None else normalized.credentials,
+            arguments=arguments,
             command_line=command_line,
             execution_ordinal=normalized.execution_ordinal + 1,
             lifetime_image=normalized.initial_image,
@@ -10087,11 +10095,15 @@ class StateManager:
         auth_session_id: int | None = None,
         auth_logon_type: int | None = None,
         credentials: PosixProcessCredentials | None = None,
+        arguments: tuple[str, ...] | None = None,
     ) -> ProcessMaterializationPlan:
         """Plan one exact process identity without consuming PID/thread allocators."""
 
         with self._capability_minting_guard("plan_process_materialization"):
             self._validate_process_credentials(credentials, os_category)
+            validate_process_arguments(arguments, command_line=command_line)
+            if arguments is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
@@ -10225,6 +10237,7 @@ class StateManager:
                 parent_pid=parent_pid,
                 image=image,
                 command_line=command_line,
+                arguments=arguments,
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(system, os_category),
@@ -10445,6 +10458,7 @@ class StateManager:
         auth_session_id: int | None,
         auth_logon_type: int | None,
         credentials: PosixProcessCredentials | None,
+        arguments: tuple[str, ...] | None,
         parent_plan: ProcessMaterializationPlan | None,
         session_plan: SessionMaterializationPlan | None,
     ) -> ProcessMaterializationPlan:
@@ -10460,6 +10474,9 @@ class StateManager:
             if self.state.current_time != builder._expected_state_time:
                 raise StateError("Materialization batch state-time fence changed during planning")
             self._validate_process_credentials(credentials, os_category)
+            validate_process_arguments(arguments, command_line=command_line)
+            if arguments is not None and os_category not in {"macos", "linux"}:
+                raise StateError("Explicit argv requires a modeled POSIX process")
             raw_start = start_time or self.state.current_time
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
@@ -10707,6 +10724,7 @@ class StateManager:
                 parent_pid=parent_pid,
                 image=image,
                 command_line=command_line,
+                arguments=arguments,
                 principal=username,
                 credentials=credentials,
                 audit_pid_version=self._preview_macos_audit_pid_version(
@@ -11696,6 +11714,7 @@ class StateManager:
                     primary_thread=after.primary_thread if is_macos else before.primary_thread,
                     image=after.image,
                     command_line=after.command_line,
+                    arguments=after.arguments,
                     credentials=after.credentials,
                     audit_pid_version=after.audit_pid_version,
                     execution_ordinal=before.execution_ordinal + 1,
@@ -12048,6 +12067,7 @@ class StateManager:
             concurrency_group_id=payload.concurrency_group_id,
             pid_logical_position=payload.pid_logical_position,
             credentials=identity.credentials,
+            arguments=identity.arguments,
             audit_pid_version=identity.audit_pid_version,
         )
         thread = RunningThread(
@@ -14181,6 +14201,7 @@ class StateManager:
             ]
             process.image = execution.after.image
             process.command_line = execution.after.command_line
+            process.arguments = execution.after.arguments
             process.credentials = execution.after.credentials
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
@@ -15595,6 +15616,7 @@ class StateManager:
             lifetime_image=process.lifetime_image,
             executed_at=process.executed_at,
             credentials=process.credentials,
+            arguments=process.arguments,
             audit_pid_version=process.audit_pid_version,
         )
 
@@ -15619,6 +15641,7 @@ class StateManager:
             identity.lifetime_image,
             identity.credentials,
             identity.audit_pid_version,
+            identity.arguments,
         )
 
     def _process_identity_active_at_locked(

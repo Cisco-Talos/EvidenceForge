@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Literal
@@ -31,6 +32,10 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 type PosixIdentifier = Annotated[int, Field(strict=True, ge=0, lt=2**32)]
+type PosixProcessArguments = Annotated[
+    tuple[Annotated[str, Field(strict=True)], ...],
+    Field(strict=True, min_length=1, max_length=256),
+]
 
 type EntityIdentityKind = Literal[
     "authentication_attempt",
@@ -295,6 +300,26 @@ class MacosProcessServiceDrop:
             )
 
 
+def validate_process_arguments(
+    arguments: tuple[str, ...] | None, *, command_line: str | None = None
+) -> None:
+    """Validate a bounded explicit argv; never parse a display command line."""
+    if arguments is None:
+        return
+    if (
+        type(arguments) is not tuple
+        or not 1 <= len(arguments) <= 256
+        or any(type(value) is not str or "\x00" in value for value in arguments)
+        or not arguments[0]
+        or sum(len(value.encode("utf-8")) + 1 for value in arguments) > 65536
+    ):
+        raise ValueError("Explicit process argv requires 1–256 NUL-free strings within 64 KiB")
+    if command_line is not None and (
+        type(command_line) is not str or command_line != shlex.join(arguments)
+    ):
+        raise ValueError("Explicit POSIX argv requires its canonical shell-quoted display line")
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessIdentity:
     """Immutable identity of one host- and process-start-scoped process object."""
@@ -316,6 +341,7 @@ class ProcessIdentity:
     lifetime_image: str = ""
     credentials: PosixProcessCredentials | None = None
     audit_pid_version: PosixIdentifier | None = None
+    arguments: PosixProcessArguments | None = None
 
     @property
     def initial_image(self) -> str:
@@ -337,6 +363,8 @@ class ProcessIdentity:
 
     def __post_init__(self) -> None:
         """Reject incomplete process object identity."""
+
+        validate_process_arguments(self.arguments, command_line=self.command_line)
 
         if not self.hostname or not self.object_id or not self.lifecycle_group_id:
             raise ValueError("Process identity requires host, object, and lifecycle group")

@@ -260,6 +260,7 @@ def macos_system_job_activation_plan(
         identity.hostname != snapshot.identity.hostname
         or identity.image != definition.program
         or identity.command_line != shlex.join(definition.arguments)
+        or identity.arguments != definition.arguments
         or identity.principal != definition.principal
         or identity.logon_id
         or identity.started_at < snapshot.identity.started_at

@@ -51,6 +51,7 @@ def process_exec_identities(
             after,
             image=before.image,
             command_line=before.command_line,
+            arguments=before.arguments,
             execution_ordinal=before.execution_ordinal,
             executed_at=before.executed_at,
             lifetime_image=before.lifetime_image,
@@ -219,6 +220,7 @@ def process_fork_identities(
         or child.started_at < parent.execution_started_at
         or child.image != parent.image
         or child.command_line != parent.command_line
+        or child.arguments != parent.arguments
         or child.principal != parent.principal
         or child.credentials != parent.credentials
         or child.logon_id != parent.logon_id

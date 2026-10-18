@@ -71,6 +71,7 @@ def _process(
         parent_pid=1,
         image=definition.program,
         command_line=shlex.join(definition.arguments),
+        arguments=definition.arguments,
         username=definition.principal,
         integrity_level="root",
         os_category="macos",
@@ -161,7 +162,7 @@ def test_second_activation_is_rejected_until_process_exits_then_job_can_run_agai
     "changes",
     [
         {"image": "/bin/sh"},
-        {"command_line": "different --arguments"},
+        {"command_line": "different --arguments", "arguments": ("different", "--arguments")},
         {"username": "alice"},
         {"credentials": PosixProcessCredentials(501, 501, 20, 20)},
         {"parent_pid": 4},

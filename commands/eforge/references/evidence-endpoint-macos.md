@@ -31,3 +31,5 @@ Internal POSIX exec publication now has an eCAR `PROCESS/MODIFY` extension (`ope
 Internal `process_fork` renders eCAR `PROCESS/CREATE` with `operation=fork` and explicit parent/child execution IDs. It requires a State-owned fork; generic launches do not imply this operation. Do not author `process_fork` or infer native ES support from it.
 
 Internal POSIX termination can retain an explicit exit code or termination signal/core indication. This is a terminal result, not proof inferred from a signal request, and it introduces no scenario field. Existing callers retain unknown outcomes. Bounded Darwin wait-status conversion does not enable native ES exit generation or validate a macOS 26 profile.
+
+Internal process planning can retain an exact POSIX argument vector. It is not reconstructed from scenario or catalog command text. Fork inherits known arguments; exec replaces them, and missing new arguments remain unknown. Launchd activation requires the existing loaded definition's vector. No new authoring field or native ES exec profile is enabled.

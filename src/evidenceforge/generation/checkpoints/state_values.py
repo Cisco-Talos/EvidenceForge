@@ -125,6 +125,7 @@ _RUNNING_PROCESS_FIELDS = (
     "privilege_drop",
     "service_drop",
     "exit_outcome",
+    "arguments",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -310,6 +311,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "lifetime_image",
     "credentials",
     "audit_pid_version",
+    "arguments",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -406,7 +408,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "network-tuple": (NetworkTuple, _NETWORK_TUPLE_FIELDS),
     "open-connection": (OpenConnection, _OPEN_CONNECTION_FIELDS),
     "public-identity-binding": (PublicIdentityBinding, _PUBLIC_IDENTITY_BINDING_FIELDS),
-    "running-process-v8": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v9": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -424,7 +426,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v4": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v5": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -584,6 +586,12 @@ def decode_state_value(value: object) -> object:
         if record_tag == "running-process-v7" and len(encoded_fields) == 30:
             record_tag = "running-process-v8"
             encoded_fields = [*encoded_fields, encode_state_value(None)]
+        if record_tag == "running-process-v8" and len(encoded_fields) == 31:
+            record_tag = "running-process-v9"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v4" and len(encoded_fields) == 17:
+            record_tag = "process-identity-v5"
+            encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:
             raise CheckpointCorruptionError("StateManager checkpoint record type is unsupported")
