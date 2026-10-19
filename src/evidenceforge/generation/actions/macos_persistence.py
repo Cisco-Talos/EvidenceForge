@@ -238,15 +238,37 @@ class MacosPersistenceActionBundle:
                 ),
                 storyline_origin=True,
             )
-            prepared = self.dispatcher.prepare_builder(
-                event,
-                state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
-                lifecycle_ticket=plan.process,
-            )
-            self.dispatcher.validate_prepared(prepared)
-            proof = self.authority.materialize_process_service_composite(
-                plan.process, self.services.prepare_service_publication(plan.activation)
-            )
+            retention = None
+            horizon = self.dispatcher.output_end_time
+            if type(binary) is LocalArtifactBinaryIdentity and horizon is not None:
+                retention = self.content.registry.prepare_version_retention(
+                    binary.artifact_version_id,
+                    observed_at=request.timestamp,
+                    retained_until=self.state.process_history_retained_until(horizon),
+                    lease_owner=identity.object_id,
+                )
+            try:
+                prepared = self.dispatcher.prepare_builder(
+                    event,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                    lifecycle_ticket=plan.process,
+                    artifact_publications=(retention,) if retention is not None else (),
+                )
+                self.dispatcher.validate_prepared(prepared)
+                if retention is None:
+                    proof = self.authority.materialize_process_service_composite(
+                        plan.process, self.services.prepare_service_publication(plan.activation)
+                    )
+                else:
+                    with self.content.registry.prepared_publication(retention) as publication:
+                        proof = self.authority.materialize_process_service_composite(
+                            plan.process,
+                            self.services.prepare_service_publication(plan.activation),
+                            finalize_external_no_fail=publication.commit_no_fail,
+                        )
+            finally:
+                if retention is not None:
+                    self.content.registry.cancel_prepared(retention)
             self.dispatcher.publish_prepared(
                 prepared, materialization_receipt=proof.receipt.process_receipt
             )

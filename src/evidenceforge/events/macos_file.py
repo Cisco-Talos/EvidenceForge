@@ -78,7 +78,7 @@ class _MacosStatMetadata(BaseModel):
 
     def canonical_json(self) -> str:
         """Validate primitive fields before serializing a publication integrity preimage."""
-        if type(self) not in {MacosFileMetadata, MacosDirectoryMetadata}:
+        if type(self) not in {MacosFileMetadata, MacosDirectoryMetadata, MacosTerminalMetadata}:
             raise ValueError("Mac file metadata requires its exact immutable type")
         values: dict[str, object] = {}
         for name in _MacosStatMetadata.model_fields:
@@ -119,6 +119,17 @@ class MacosDirectoryMetadata(_MacosStatMetadata):
         return self
 
 
+class MacosTerminalMetadata(_MacosStatMetadata):
+    """Explicit character-device stat for a modeled controlling terminal."""
+
+    @model_validator(mode="after")
+    def character_device(self) -> Self:
+        """Keep terminal devices distinct from regular files and directory content."""
+        if self.mode & 0o170000 != 0o020000:
+            raise ValueError("Mac terminal metadata requires a character device")
+        return self
+
+
 def detach_directory_metadata(value: MacosDirectoryMetadata) -> MacosDirectoryMetadata:
     """Detach exact primitive stat without invoking caller-provided model protocols.
 
@@ -137,9 +148,38 @@ def detach_directory_metadata(value: MacosDirectoryMetadata) -> MacosDirectoryMe
     return MacosDirectoryMetadata.model_validate_json(encoded)
 
 
+def detach_file_metadata(value: MacosFileMetadata) -> MacosFileMetadata:
+    """Detach regular-file stat before it joins an installed-file observation."""
+    if type(value) is not MacosFileMetadata:
+        raise ValueError("Mac file metadata requires its exact model type")
+    _validate_exact_model_storage(value, MacosFileMetadata)
+    for name in ("accessed", "modified", "changed", "born"):
+        timestamp = object.__getattribute__(value, name)
+        if type(timestamp) is not MacosFileTime:
+            raise ValueError("Mac file metadata requires exact file times")
+        _validate_exact_model_storage(timestamp, MacosFileTime)
+    return MacosFileMetadata.model_validate_json(MacosFileMetadata.canonical_json(value))
+
+
+def detach_terminal_metadata(value: MacosTerminalMetadata) -> MacosTerminalMetadata:
+    """Detach primitive device facts without consulting the generator host."""
+    if type(value) is not MacosTerminalMetadata:
+        raise ValueError("Mac terminal metadata requires its exact model type")
+    _validate_exact_model_storage(value, MacosTerminalMetadata)
+    for name in ("accessed", "modified", "changed", "born"):
+        timestamp = object.__getattribute__(value, name)
+        if type(timestamp) is not MacosFileTime:
+            raise ValueError("Mac terminal metadata requires exact file times")
+        _validate_exact_model_storage(timestamp, MacosFileTime)
+    return MacosTerminalMetadata.model_validate_json(MacosTerminalMetadata.canonical_json(value))
+
+
 def _validate_exact_model_storage(
-    value: MacosDirectoryMetadata | MacosFileTime,
-    expected: type[MacosDirectoryMetadata] | type[MacosFileTime],
+    value: MacosDirectoryMetadata | MacosFileMetadata | MacosTerminalMetadata | MacosFileTime,
+    expected: type[MacosDirectoryMetadata]
+    | type[MacosFileMetadata]
+    | type[MacosTerminalMetadata]
+    | type[MacosFileTime],
 ) -> None:
     contents = object.__getattribute__(value, "__dict__")
     if (

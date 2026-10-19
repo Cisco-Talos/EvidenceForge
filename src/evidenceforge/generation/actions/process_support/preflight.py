@@ -13,6 +13,7 @@ from typing import cast
 
 from evidenceforge.events.content_identity import (
     Architecture,
+    LocalArtifactBinaryIdentity,
     Platform,
     UnresolvedBinaryIdentity,
     canonical_native_path,
@@ -660,6 +661,12 @@ class ProcessPreflightPlanner:
                         platform,
                     ) == canonical_native_path(selection.actor.image, platform)
                     executable = same_as_actor_image and effective_architecture is not None
+                    observed_at = effect.spec.occurrence_times[0]
+                    deadline = (
+                        self._runtime_executable_deadline(observed_at, platform)
+                        if executable
+                        else None
+                    )
                     publication = runtime_content_manager.prepare_effect_publication(
                         root_action_id=anchor.action_id,
                         stable_source_id=(
@@ -672,7 +679,12 @@ class ProcessPreflightPlanner:
                         architecture=effective_architecture,
                         native_path=payload.path,
                         action=payload.action.value,
-                        observed_at=effect.spec.occurrence_times[0],
+                        observed_at=observed_at,
+                        retention=deadline - observed_at if deadline is not None else None,
+                        lease_owner=anchor.action_id if deadline is not None else "",
+                        lease_until=(
+                            deadline + timedelta(microseconds=1) if deadline is not None else None
+                        ),
                         owner_kind=_runtime_artifact_owner_kind(
                             platform,
                             selection.actor.username,
@@ -813,6 +825,26 @@ class ProcessPreflightPlanner:
                 selection.actor.image,
                 platform,
             )
+            deadline = self._runtime_executable_deadline(selection.actor.started_at, platform)
+            if (
+                not endpoint_has_binary
+                and type(resolved_binary) is LocalArtifactBinaryIdentity
+                and deadline is not None
+            ):
+                record = runtime_content_manager.registry.resolve_version(
+                    resolved_binary.artifact_version_id
+                )
+                if record is None or record.binary != resolved_binary:
+                    raise StateError("Loaded executable retention lost its exact runtime version")
+                root_binary_publication = runtime_content_manager.registry.prepare_publish_version(
+                    record,
+                    selection.actor.started_at,
+                    retention=deadline - selection.actor.started_at,
+                    lease_owner=anchor.action_id,
+                    lease_until=deadline + timedelta(microseconds=1),
+                    require_existing=True,
+                )
+                newly_reserved.append(root_binary_publication)
             if not endpoint_has_binary and isinstance(
                 resolved_binary,
                 UnresolvedBinaryIdentity,
@@ -832,6 +864,13 @@ class ProcessPreflightPlanner:
                     native_path=selection.actor.image,
                     action="create",
                     observed_at=selection.actor.started_at,
+                    retention=(
+                        deadline - selection.actor.started_at if deadline is not None else None
+                    ),
+                    lease_owner=anchor.action_id if deadline is not None else "",
+                    lease_until=(
+                        deadline + timedelta(microseconds=1) if deadline is not None else None
+                    ),
                     owner_kind=_runtime_artifact_owner_kind(
                         platform,
                         selection.actor.username,
@@ -848,6 +887,22 @@ class ProcessPreflightPlanner:
                     )
                 newly_reserved.append(root_binary_publication)
         return root_binary_publication
+
+    def _runtime_executable_deadline(self, started_at: datetime, platform: str) -> datetime | None:
+        """Protect Mac loaded content through an explicit finite generation and history window."""
+        if platform != "macos":
+            return None
+        boundaries = tuple(
+            ensure_utc(value)
+            for value in (self._scenario_end_time, self.dispatcher.output_end_time)
+            if isinstance(value, datetime) and value.replace(tzinfo=None) != datetime.max
+        )
+        if not boundaries:
+            return None
+        horizon = min(boundaries)
+        if horizon <= ensure_utc(started_at):
+            return None
+        return self.state_manager.process_history_retained_until(horizon)
 
     @staticmethod
     def _process_endpoint_effect_rng(

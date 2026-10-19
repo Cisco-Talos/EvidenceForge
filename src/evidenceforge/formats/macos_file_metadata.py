@@ -6,7 +6,13 @@
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
-from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileMetadata
+from evidenceforge.events.macos_file import (
+    MacosDirectoryMetadata,
+    MacosFileMetadata,
+    MacosTerminalMetadata,
+)
+from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.formats.macos_endpoint_security import ESFile, ESFileStat
 
 
@@ -37,7 +43,25 @@ def es_directory_at_execution(process: ProcessIdentity) -> ESFile:
     return _es_file(directory.native_path, metadata)
 
 
-def _es_file(path: str, metadata: MacosFileMetadata | MacosDirectoryMetadata) -> ESFile:
+def es_file_from_installed_observation(observation: MacosInstalledFileObservation) -> ESFile:
+    """Render explicitly observed installed-file facts through the shared stat projection."""
+    if type(observation) is not MacosInstalledFileObservation:
+        raise ValueError("Installed ES file requires an exact canonical observation")
+    observation.__post_init__()
+    return _es_file(observation.native_path, observation.metadata)
+
+
+def es_file_from_terminal_observation(observation: MacosTerminalObservation) -> ESFile:
+    """Project an explicitly associated character device; never infer a TTY from argv."""
+    if type(observation) is not MacosTerminalObservation:
+        raise ValueError("ES terminal requires its exact canonical observation")
+    observation.__post_init__()
+    return _es_file(observation.native_path, observation.metadata)
+
+
+def _es_file(
+    path: str, metadata: MacosFileMetadata | MacosDirectoryMetadata | MacosTerminalMetadata
+) -> ESFile:
     return ESFile(
         path=path,
         path_truncated=False,

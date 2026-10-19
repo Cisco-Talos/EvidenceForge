@@ -16221,31 +16221,49 @@ class StateManager:
             )
 
     def observe_planned_process_relationships(
-        self, cohort: ActionCohortMaterializationPlan
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        *,
+        process: ProcessIdentity | None = None,
     ) -> ProcessRelationshipObservation:
-        """Freeze birth relationships for an authenticated single-start Mac cohort.
+        """Freeze exact birth relationships from an authenticated Mac start cohort.
 
-        Parent, responsible and session owners must already be published. This
-        bounded preflight excludes concurrent relationship transitions; a future
-        cohort overlay must own their event-time effects. Commit must still
-        revalidate the original cohort, even after successful observation.
+        Staged parents, responsible owners and sessions are read from the sealed
+        cohort, never temporarily published. Concurrent execution/credential/close
+        transitions require a separate temporal overlay. Commit must still
+        revalidate the original cohort after successful observation.
         """
         with self._lock:
             self.validate_action_cohort_materialization(cohort)
-            if len(cohort.processes) != 1 or any(
+            if any(
                 (
-                    cohort.sessions,
                     cohort.process_executions,
                     cohort.process_terminations,
                     cohort.session_terminalizations,
                     cohort.session_metadata_patches,
                     cohort.live_session_process_role_patches,
                 )
+            ) or any(
+                patch.audit_binding is not None
+                or patch.privilege_drop is not None
+                or patch.service_drop is not None
+                or patch.job_control_change is not None
+                or patch.parentage_change is not None
+                for patch in cohort.process_activity_patches
             ):
                 raise StateError(
-                    "Planned observation requires a single-start cohort with live owners"
+                    "Planned birth observation excludes concurrent identity transitions"
                 )
-            plan = cohort.processes[0]
+            if process is None:
+                if len(cohort.processes) != 1:
+                    raise StateError("Planned observation requires an exact selected birth")
+                plan = cohort.processes[0]
+            else:
+                if type(process) is not ProcessIdentity:
+                    raise StateError("Planned observation requires an exact selected birth")
+                plan = next((item for item in cohort.processes if item.identity == process), None)
+                if plan is None:
+                    raise StateError("Planned birth observation is not a member of this cohort")
             identity = plan.identity
             platform = (
                 plan._allocator_patch.pid_os[1]
@@ -16254,9 +16272,29 @@ class StateManager:
             )
             if platform != "macos":
                 raise StateError("Planned process observation requires a modeled Mac start")
+            staged = {item.identity.object_id: item.identity for item in cohort.processes}
+            at = identity.started_at
+            if identity.parentage is None or identity.responsibility is None:
+                raise StateError("Planned observation requires known process facts for both owners")
+            parent_ref = identity.parentage.current
+            parent = staged.get(parent_ref.object_id) if parent_ref is not None else None
+            parent_observation = (
+                ProcessParentObservation(identity, parent, at)
+                if parent is not None
+                else self._observe_process_parent_locked(identity, at)
+            )
+            responsible_ref = identity.responsibility.responsible
+            responsible = (
+                staged.get(responsible_ref.object_id) if responsible_ref is not None else None
+            )
+            responsibility_observation = (
+                ProcessResponsibilityObservation(identity, responsible, at, "active")
+                if responsible is not None
+                else self._observe_process_responsibility_locked(identity, at)
+            )
             return ProcessRelationshipObservation(
-                self._observe_process_parent_locked(identity, identity.started_at),
-                self._observe_process_responsibility_locked(identity, identity.started_at),
+                parent_observation,
+                responsibility_observation,
             )
 
     def observe_process_parent(
@@ -16603,6 +16641,20 @@ class StateManager:
 
         with self._lock:
             return self._process_identity_active_at_locked(system, pid, event_time)
+
+    @staticmethod
+    def process_history_retained_until(end_time: datetime) -> datetime:
+        """Return the existing process-history boundary for an explicit lifecycle horizon.
+
+        Content owners use the same interval as retained process identities. A
+        generation end is a valid conservative horizon, not an inferred exit.
+        """
+        if type(end_time) is not datetime or end_time.utcoffset() is None:
+            raise StateError("Process history horizon requires an aware datetime")
+        try:
+            return ensure_utc(end_time) + _ENDED_IDENTITY_RETENTION
+        except OverflowError as exc:
+            raise StateError("Process history horizon lacks retention headroom") from exc
 
     def _validate_process_parent_identity_locked(
         self,

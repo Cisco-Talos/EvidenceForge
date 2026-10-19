@@ -78,6 +78,7 @@ from evidenceforge.events.es_collector import ESCollectorRegistry
 from evidenceforge.events.evidence_requirements import (
     PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
 )
+from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -86,6 +87,7 @@ from evidenceforge.events.observation import (
     ObservationSummary,
     source_family_for_format,
 )
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
 from evidenceforge.models.exceptions import EventContractError, StateError
 from evidenceforge.utils.rng import stable_uuid
@@ -5455,7 +5457,40 @@ class EventDispatcher:
         platform = cast(Platform, platform_name)
         principal = process.username or (event.auth.username if event.auth is not None else "")
         resolved = prepared_binary
-        if resolved is None:
+        loaded_identity = None
+        if platform == "macos":
+            identities = event.identity_plan
+            candidates = (identities.subject, identities.actor) if identities is not None else ()
+            loaded_identity = next(
+                (
+                    identity
+                    for identity in candidates
+                    if isinstance(identity, ProcessIdentity)
+                    and identity.hostname == host.hostname
+                    and identity.pid == process.pid
+                    and identity.image == process.image
+                    and identity.started_at == process.start_time
+                ),
+                None,
+            )
+            if loaded_identity is None and process.start_time is not None:
+                candidate = self.state_manager.get_process_identity_at(
+                    host.hostname, process.pid, event.timestamp
+                )
+                if (
+                    candidate is not None
+                    and candidate.started_at == process.start_time
+                    and candidate.image == process.image
+                ):
+                    loaded_identity = candidate
+        if loaded_identity is not None and loaded_identity.executable_version is not None:
+            version = loaded_identity.executable_version
+            if resolved is not None:
+                if ProcessExecutableVersion.from_binary(resolved) != version:
+                    raise EventContractError("Prepared binary conflicts with the loaded executable")
+            else:
+                resolved = self.resolve_loaded_process_binary_identity(loaded_identity)
+        elif resolved is None:
             resolved = self.resolve_process_binary_identity(
                 host.hostname,
                 principal,
@@ -5478,6 +5513,27 @@ class EventDispatcher:
                 f"{host.hostname!r} and {process.image!r}"
             )
         return resolved.identity_kind
+
+    def resolve_loaded_process_binary_identity(
+        self, identity: ProcessIdentity
+    ) -> ProcessBinaryIdentity:
+        """Resolve an execution's exact loaded version without current-path substitution."""
+        version = identity.executable_version
+        if version is None:
+            raise EventContractError("Loaded executable resolution requires an exact version")
+        resolved: ProcessBinaryIdentity | None = None
+        if version.identity_kind == "installed_release":
+            if self.deployment_registry is not None:
+                resolved = self.deployment_registry.binary_release_by_content_id(version.content_id)
+        elif self.local_artifact_registry is not None:
+            record = self.local_artifact_registry.resolve_version(version.artifact_version_id)
+            if record is not None:
+                if record.artifact.hostname.casefold() != identity.hostname.casefold():
+                    raise EventContractError("Loaded executable belongs to another host")
+                resolved = record.binary
+        if resolved is None or ProcessExecutableVersion.from_binary(resolved) != version:
+            raise EventContractError("Loaded executable has no exact retained content version")
+        return resolved
 
     def resolve_process_binary_identity(
         self,

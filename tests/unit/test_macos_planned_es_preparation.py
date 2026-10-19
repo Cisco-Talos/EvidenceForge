@@ -127,13 +127,32 @@ def test_preflight_rejects_incomplete_or_different_birth_without_child_allocatio
     assert state.materialization_digest() == before
 
 
-def test_staged_parent_cannot_be_treated_as_already_live() -> None:
-    state, _, parent, _ = _setup()
+@pytest.mark.parametrize("staged_session", [False, True])
+def test_staged_parent_and_responsible_owner_are_observed_without_publication(
+    staged_session: bool,
+) -> None:
+    from evidenceforge.events.responsibility import (
+        ProcessResponsibility,
+        ResponsibleProcessReference,
+    )
+
+    state, content, parent, _ = _setup()
     builder = state.begin_action_cohort_materialization()
     first = builder.fork_process(
         parent, forked_at=parent.execution_started_at + timedelta(seconds=1)
     )
-    builder.plan_process(
+    session = (
+        builder.plan_session(
+            username=parent.principal,
+            system=parent.hostname,
+            logon_type=2,
+            source_ip="127.0.0.1",
+            start_time=first.identity.started_at,
+        )
+        if staged_session
+        else None
+    )
+    child = builder.plan_process(
         system=parent.hostname,
         parent_pid=first.identity.pid,
         parent_plan=first,
@@ -144,12 +163,44 @@ def test_staged_parent_cannot_be_treated_as_already_live() -> None:
         os_category="macos",
         start_time=first.identity.started_at,
         credentials=parent.credentials,
-        responsibility=parent.responsibility,
+        responsibility=ProcessResponsibility(
+            ResponsibleProcessReference(
+                first.identity.hostname,
+                first.identity.object_id,
+                first.identity.pid,
+                first.identity.started_at,
+            )
+        ),
+        executable_version=parent.executable_version,
+        image_security=parent.image_security,
+        session_plan=session,
+        logon_id=session.identity.logon_id if session is not None else "",
     )
     before = state.materialization_digest()
-    with pytest.raises(StateError, match="single-start cohort"):
-        state.observe_planned_process_relationships(builder.seal())
+    cohort = builder.seal()
+    with pytest.raises(StateError, match="exact selected birth"):
+        state.observe_planned_process_relationships(cohort)
+    relationships = state.observe_planned_process_relationships(cohort, process=child.identity)
+    assert relationships.parent.parent == first.identity
+    assert relationships.responsibility.responsible == first.identity
+    collection = MacosProcessCollectionObservation(
+        child.identity, child.identity.started_at, False, "absent"
+    )
+    prepared = prepare_planned_runtime_es_process_snapshot(
+        state, content.registry, cohort=cohort, collection=collection, version=10
+    )
     assert state.materialization_digest() == before
+    state.materialize_action_cohort(cohort)
+    assert (
+        state.observe_process_relationships(child.identity, observed_at=child.identity.started_at)
+        == relationships
+    )
+    assert (
+        prepare_runtime_es_process_snapshot(
+            state, content.registry, process=child.identity, collection=collection, version=10
+        )
+        == prepared
+    )
 
 
 @pytest.mark.parametrize("responsibility", ["absent", "exited", "unknown"])

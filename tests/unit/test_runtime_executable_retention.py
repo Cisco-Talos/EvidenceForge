@@ -195,3 +195,51 @@ def test_retention_uses_elapsed_time_across_repeated_local_clock_hour() -> None:
     assert token.retained_until == deadline.astimezone(UTC)
     assert token.retained_until - token.observed_at == timedelta(hours=1)
     content.registry.cancel_prepared(token)
+
+
+def test_execution_lease_protects_loaded_version_from_capacity_eviction() -> None:
+    from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
+
+    content = RuntimeContentIdentityManager(LocalArtifactVersionRegistry(capacity=1))
+    descriptor = _executable()
+    _publish(content, descriptor, _START)
+    record = content.build_record(descriptor)
+    deadline = _START + timedelta(days=10)
+    token = content.registry.prepare_version_retention(
+        record.artifact.artifact_version_id,
+        observed_at=_START,
+        retained_until=deadline,
+        lease_owner="invented-execution",
+    )
+    with content.registry.prepared_publication(token) as prepared:
+        prepared.commit_no_fail()
+    with pytest.raises(StateError, match="capacity|free slot"):
+        _publish(content, replace(descriptor, artifact_version=2, content_version=2), _START)
+    assert content.registry.resolve_version(record.artifact.artifact_version_id) == record
+    del prepared
+    participant = LocalArtifactVersionRegistryParticipant(content.registry)
+    restored = RuntimeContentIdentityManager(LocalArtifactVersionRegistry(capacity=1))
+    LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
+        participant.prepare_checkpoint(1).head.payload, ()
+    )
+    restored.registry.advance_watermark(deadline)
+    assert restored.registry.resolve_version(record.artifact.artifact_version_id) == record
+    restored.registry.advance_watermark(deadline + timedelta(microseconds=1))
+    assert restored.registry.resolve_version(record.artifact.artifact_version_id) is None
+
+
+def test_cancelled_execution_lease_does_not_pin_a_version() -> None:
+    content = _manager()
+    _publish(content, _executable(), _START)
+    record = content.build_record(_executable())
+    token = content.registry.prepare_version_retention(
+        record.artifact.artifact_version_id,
+        observed_at=_START,
+        retained_until=_START + timedelta(days=10),
+        lease_owner="cancelled-execution",
+    )
+    with content.registry.prepared_publication(token):
+        pass
+    assert content.registry.census().active_leases == 0
+    content.registry.advance_watermark(_START + timedelta(days=3))
+    assert content.registry.resolve_version(record.artifact.artifact_version_id) is None

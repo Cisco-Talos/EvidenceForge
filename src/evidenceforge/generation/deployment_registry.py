@@ -8312,12 +8312,14 @@ class LocalArtifactVersionRegistry:
         *,
         observed_at: datetime,
         retained_until: datetime,
+        lease_owner: str = "",
     ) -> LocalArtifactPublishToken:
         """Prepare a retention floor for an existing version without changing placement.
 
         The lifecycle owner supplies the complete required interval, including
-        any late-observation window. This neither infers a process end nor owns
-        an indefinite lease. Use the existing artifact-first composite commit;
+        any late-observation window. An explicit owner also protects the version
+        from capacity eviction through that window. This never owns an indefinite
+        lease. Use the existing artifact-first composite commit;
         cancelling or a failed commit leaves the prior deadline unchanged.
         A version evicted between lookup and reservation must never be revived.
         """
@@ -8333,6 +8335,12 @@ class LocalArtifactVersionRegistry:
         deadline = ensure_utc(retained_until)
         if deadline <= event_time:
             raise StateError("artifact retention requires an ordered aware interval")
+        if type(lease_owner) is not str or (lease_owner and not lease_owner.strip()):
+            raise StateError("artifact retention lease requires an exact nonempty owner")
+        try:
+            lease_until = deadline + timedelta(microseconds=1) if lease_owner else None
+        except OverflowError as exc:
+            raise StateError("artifact retention lease lacks deadline headroom") from exc
         record = self.resolve_version(version_id)
         if record is None:
             raise StateError("artifact retention requires its exact existing version")
@@ -8340,6 +8348,8 @@ class LocalArtifactVersionRegistry:
             record,
             event_time,
             retention=deadline - event_time,
+            lease_owner=lease_owner,
+            lease_until=lease_until,
             require_existing=True,
         )
 

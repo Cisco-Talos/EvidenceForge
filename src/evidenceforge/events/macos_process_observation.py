@@ -9,13 +9,14 @@ from typing import Literal
 
 from evidenceforge.events.es_collector import ESCollectorState
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 
 
 @dataclass(frozen=True, slots=True)
 class MacosProcessCollectionObservation:
     """Known collection facts for one execution at one canonical instant.
 
-    This bounded projection supports explicitly known terminal absence only.
+    Terminal state is known absence or an exact session-owned device observation.
     Missing terminal/client knowledge cannot construct a snapshot. Producers
     must establish these facts; this value does not infer them from ancestry,
     installation, registry absence, or the generator host.
@@ -24,7 +25,7 @@ class MacosProcessCollectionObservation:
     process: ProcessIdentity
     observed_at: datetime
     is_es_client: bool
-    terminal: Literal["absent"]
+    terminal: Literal["absent"] | MacosTerminalObservation
 
     def __post_init__(self) -> None:
         if (
@@ -33,12 +34,22 @@ class MacosProcessCollectionObservation:
             or self.observed_at.utcoffset() is None
             or self.observed_at < self.process.execution_started_at
             or type(self.is_es_client) is not bool
-            or type(self.terminal) is not str
-            or self.terminal != "absent"
+            or not (
+                (type(self.terminal) is str and self.terminal == "absent")
+                or type(self.terminal) is MacosTerminalObservation
+            )
         ):
             raise ValueError(
                 "Mac collection observation requires exact timed client/terminal facts"
             )
+        if type(self.terminal) is MacosTerminalObservation:
+            self.terminal.__post_init__()
+            if (
+                self.process.job_control is None
+                or self.process.job_control.session != self.terminal.session
+                or self.observed_at != self.terminal.observed_at
+            ):
+                raise ValueError("Mac terminal observation belongs to another session or instant")
 
     @classmethod
     def from_attached_collector(
@@ -47,12 +58,12 @@ class MacosProcessCollectionObservation:
         connection: ESCollectorState,
         *,
         observed_at: datetime,
-        terminal: Literal["absent"],
+        terminal: Literal["absent"] | MacosTerminalObservation,
     ) -> "MacosProcessCollectionObservation":
         """Project positive attachment from an exact explicitly established connection.
 
         This is not a negative-membership query. A caller must separately supply
-        known terminal absence; connection ownership cannot establish a terminal.
+        known terminal facts; connection ownership cannot establish a terminal.
         """
         if type(connection) is not ESCollectorState or type(process) is not ProcessIdentity:
             raise ValueError("Collection observation requires an exact connection and process")

@@ -177,7 +177,12 @@ def test_production_process_launch_retains_the_exact_runtime_image_version(
     record = manager.build_record(descriptor)
     emitter = EcarEmitter(load_format("ecar"), tmp_path / "ecar.json")
     emitters = {"ecar": emitter} if collect else {}
-    dispatcher = EventDispatcher(state, emitters, local_artifact_registry=manager.registry)
+    dispatcher = EventDispatcher(
+        state,
+        emitters,
+        local_artifact_registry=manager.registry,
+        output_end_time=_TIME + timedelta(days=7),
+    )
     generator = ActivityGenerator(state, emitters, dispatcher=dispatcher)
     try:
         user, system = _user(), _system()
@@ -199,5 +204,68 @@ def test_production_process_launch_retains_the_exact_runtime_image_version(
             state.get_process_identity(system.hostname, pid).executable_version
             == identity.executable_version
         )
+        manager.registry.advance_watermark(_TIME + timedelta(days=5))
+        assert manager.registry.resolve_version(record.artifact.artifact_version_id) == record
+        assert manager.registry.census().active_leases == 1
     finally:
         emitter.close()
+
+
+@pytest.mark.parametrize("explicit_identity", [False, True])
+def test_delayed_generic_evidence_uses_loaded_version_after_path_replacement(
+    explicit_identity: bool,
+) -> None:
+    from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.events.contexts import HostContext, ProcessContext
+    from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.events.identity import EventIdentityPlan
+    from tests.unit.test_macos_runtime_es_preparation import _publish, _setup
+
+    state, manager, identity, collection = _setup()
+    original = manager.registry.resolve_version(identity.executable_version.artifact_version_id)
+    _publish(
+        manager,
+        replace(_executable(), hostname=identity.hostname, content_version=2, artifact_version=2),
+        collection.observed_at + timedelta(seconds=1),
+    )
+    dispatcher = EventDispatcher(state, {}, local_artifact_registry=manager.registry)
+    event = OccurrenceBuilder(
+        timestamp=collection.observed_at + timedelta(seconds=2),
+        event_type="process_terminate",
+        src_host=HostContext(identity.hostname, "192.0.2.10", "macOS 26", "macos", "workstation"),
+        process=ProcessContext(
+            identity.pid,
+            identity.parent_pid,
+            identity.image,
+            identity.command_line,
+            identity.principal,
+            start_time=identity.started_at,
+        ),
+        identity_plan=EventIdentityPlan(subject=identity) if explicit_identity else None,
+    )
+    dispatcher._attach_process_binary_identity(event)
+    assert event.process.binary_identity == original.binary
+    restored = StateManager()
+    _restore_head(restored, _capture_head(state))
+    replay = EventDispatcher(restored, {}, local_artifact_registry=manager.registry)
+    event.process.binary_identity = None
+    replay._attach_process_binary_identity(event)
+    assert event.process.binary_identity == original.binary
+
+
+def test_missing_loaded_content_rejects_instead_of_substituting_current_path() -> None:
+    from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.models.exceptions import EventContractError
+    from tests.unit.test_macos_runtime_es_preparation import _publish, _setup
+
+    state, manager, identity, collection = _setup()
+    at = collection.observed_at + timedelta(days=10)
+    manager.registry.advance_watermark(at)
+    _publish(
+        manager,
+        replace(_executable(), hostname=identity.hostname, content_version=2, artifact_version=2),
+        at,
+    )
+    dispatcher = EventDispatcher(state, {}, local_artifact_registry=manager.registry)
+    with pytest.raises(EventContractError, match="exact retained content"):
+        dispatcher.resolve_loaded_process_binary_identity(identity)

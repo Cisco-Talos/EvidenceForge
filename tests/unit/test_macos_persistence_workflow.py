@@ -161,7 +161,14 @@ def test_write_preflight_failure_releases_reserved_file_and_preserves_caller(
 def test_activation_precommit_failure_keeps_registration_dormant_and_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from dataclasses import replace
+
+    from tests.unit.test_macos_runtime_es_preparation import _publish
+    from tests.unit.test_macos_runtime_file_metadata import _executable
+
     bundle, plan, host, definition, path, emitter = _workflow()
+    bundle.dispatcher.output_end_time = _START + timedelta(days=7)
+    _publish(bundle.content, replace(_executable(), hostname=host.hostname), _START)
     for index, operation in enumerate(("write", "bootstrap"), 1):
         bundle.execute(_request(bundle, plan, host, definition, path, operation, index))
     before = tuple(bundle.state.list_running_processes())
@@ -173,9 +180,12 @@ def test_activation_precommit_failure_keeps_registration_dormant_and_retryable(
     with pytest.raises(StateError, match="injected"):
         bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
     assert tuple(bundle.state.list_running_processes()) == before
+    assert bundle.content.registry.census().active_leases == 0
+    assert bundle.content.registry.census().prepared_publications == 0
     monkeypatch.undo()
     process = bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
     assert process.process is not None
+    assert bundle.content.registry.census().active_leases == 1
     bundle.execute(_request(bundle, plan, host, definition, path, "unload", 4))
 
 
@@ -221,6 +231,7 @@ def test_job_activation_binds_the_current_image_but_retains_earlier_execution_ve
     from tests.unit.test_macos_runtime_file_metadata import _executable
 
     bundle, plan, host, definition, path, _ = _workflow(collect)
+    bundle.dispatcher.output_end_time = _START + timedelta(days=7)
     descriptor = replace(_executable(), hostname=host.hostname, principal="root")
     assert descriptor.native_path == definition.program
     _publish(bundle.content, descriptor, _START)
@@ -254,3 +265,6 @@ def test_job_activation_binds_the_current_image_but_retains_earlier_execution_ve
         == identity.executable_version
     )
     bundle.execute(_request(bundle, plan, host, definition, path, "unload", 7))
+    bundle.content.registry.advance_watermark(_START + timedelta(days=5))
+    assert bundle.content.registry.resolve_version(first.artifact.artifact_version_id) == first
+    assert bundle.content.registry.census().active_leases == 2

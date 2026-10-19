@@ -3,19 +3,90 @@
 
 """Read-only native process preparation for complete explicit runtime-file facts.
 
-This is not an ES event emitter or a sink transaction. Installed executable stat,
-cohort-staged owners and terminal devices require their own supported providers.
+This is not an ES event emitter or a sink transaction. Filesystem facts must be
+supplied explicitly; terminal devices require their own supported provider.
 """
 
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import ESProcess
 from evidenceforge.formats.macos_process_snapshot import es_process_from_observations
-from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactVersionRegistry,
+)
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
+
+
+def prepare_installed_es_process_snapshot(
+    state: StateManager,
+    deployments: DeploymentContentRegistry,
+    *,
+    process: ProcessIdentity,
+    collection: MacosProcessCollectionObservation,
+    metadata: MacosFileMetadata,
+    version: int,
+) -> ESProcess:
+    """Join a live installed execution to explicit occurrence-time filesystem stat.
+
+    The immutable deployment owner validates the installation and release; it
+    does not invent inode, allocation or times. A modeled filesystem caller must
+    provide those facts. No generator-host filesystem is consulted.
+    """
+    if (
+        type(state) is not StateManager
+        or type(deployments) is not DeploymentContentRegistry
+        or type(process) is not ProcessIdentity
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Installed ES preparation requires exact canonical owners")
+    collection.__post_init__()
+    at = collection.observed_at
+    with state._lock:
+        image = process.executable_version
+        if (
+            collection.process != process
+            or state._pid_os.get(process.hostname) != "macos"
+            or state.get_process(process.hostname, process.pid) is None
+            or not state.is_process_active_at(process.hostname, process.pid, at)
+            or state.get_process_identity(process.hostname, process.pid) != process
+            or image is None
+            or image.identity_kind != "installed_release"
+        ):
+            raise StateError("Installed ES preparation requires its exact live loaded execution")
+        installation = deployments.installation_for_image(
+            process.hostname, process.image, "macos", principal=process.principal
+        )
+        binary = deployments.resolve_binary(
+            process.hostname, process.image, "macos", principal=process.principal
+        )
+        if installation is None or binary is None or binary.content_id != image.content_id:
+            raise StateError("Installed ES preparation lost its exact deployed release")
+        relationships = state.observe_process_relationships(process, observed_at=at)
+        try:
+            executable = MacosInstalledFileObservation(
+                installation, binary, process.image, at, metadata
+            )
+            context = ProcessContext(
+                process.pid,
+                process.parent_pid,
+                process.image,
+                process.command_line,
+                process.principal,
+                logon_id=process.logon_id,
+                start_time=process.started_at,
+                binary_identity=binary,
+            )
+            return es_process_from_observations(
+                relationships, collection, context, executable, version=version
+            )
+        except ValueError as error:
+            raise StateError(f"Incomplete installed ES process facts: {error}") from error
 
 
 def prepare_runtime_es_process_snapshot(
@@ -67,7 +138,7 @@ def prepare_planned_runtime_es_process_snapshot(
     """Prepare a new Mac process before commit using authenticated State birth facts.
 
     The executable must already be retained. Parent/session/responsible owners
-    must already be published; this is not a multi-start cohort overlay. The
+    may be already published or explicit births in the same sealed cohort. The
     caller must still revalidate and atomically publish the process and source
     transaction. A successful projection is not a commit authorization.
     """
@@ -80,7 +151,9 @@ def prepare_planned_runtime_es_process_snapshot(
         raise StateError("Planned ES preparation requires exact canonical owners and observations")
     collection.__post_init__()
     with state._lock:
-        relationships = state.observe_planned_process_relationships(cohort)
+        relationships = state.observe_planned_process_relationships(
+            cohort, process=collection.process
+        )
         process = relationships.parent.process
         if collection.process != process or collection.observed_at != process.started_at:
             raise StateError("Planned ES preparation requires the exact process birth observation")
