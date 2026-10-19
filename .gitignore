@@ -82,6 +82,9 @@ scenarios/macos-workstation-example/*
 !scenarios/macos-workstation-example/smb-client.yaml
 !scenarios/macos-workstation-example/ssh-client.yaml
 !scenarios/macos-workstation-example/README.md
+!scenarios/macos-failed-exec-example/
+scenarios/macos-failed-exec-example/*
+!scenarios/macos-failed-exec-example/scenario.yaml
 !scenarios/spillage-full-matrix-test/
 scenarios/spillage-full-matrix-test/*
 !scenarios/spillage-full-matrix-test/scenario.yaml

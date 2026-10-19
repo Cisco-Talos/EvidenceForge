@@ -1,0 +1,84 @@
+version: '1.0'
+name: macos-failed-exec-example
+description: A returning exec failure preserves an invented caller; canonical outcome
+  only, with no native failure message or guessed errno.
+environment:
+  description: One invented development workstation on an observed network
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-01
+  systems:
+  - hostname: MAC-01
+    ip: 192.0.2.10
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-01
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 20m
+  warmup: 1h
+baseline_activity:
+  description: Low-volume developer activity; no attack storyline
+  intensity: low
+  variation: low
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: zsh_history
+  - format: bash_history
+  destination: ./output
+  compression: false
+storyline:
+- id: caller
+  time: +1m
+  actor: alex
+  system: MAC-01
+  activity: Create the caller retained across a returning exec failure
+  events:
+  - type: process
+    process_name: /bin/zsh
+    process_ref: caller
+- id: failed-exec
+  time: +2m
+  actor: alex
+  system: MAC-01
+  activity: An exec attempt returns failure; the caller keeps its original image and
+    lifetime
+  events:
+  - type: process
+    process_name: /usr/local/libexec/invented-helper
+    parent_ref: caller
+    outcome: exec_failed
+- id: caller-continues
+  time: +3m
+  actor: alex
+  system: MAC-01
+  activity: The same caller remains available to launch a later child
+  events:
+  - type: process
+    process_name: /usr/bin/id
+    command_line: /usr/bin/id
+    parent_ref: caller
