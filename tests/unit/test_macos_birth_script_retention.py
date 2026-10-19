@@ -97,6 +97,7 @@ def test_birth_retains_explicit_script_and_interpreter_through_replacement_and_r
         "script_commit_failure",
         "image_commit_failure",
         "image_only_commit_failure",
+        "legacy_image_commit_failure",
     ],
 )
 def test_birth_script_admission_failure_does_not_allocate_or_pin(
@@ -129,7 +130,12 @@ def test_birth_script_admission_failure_does_not_allocate_or_pin(
             raise StateError("injected process planning failure")
 
         monkeypatch.setattr(StateManager, "begin_action_cohort_materialization", fail)
-    if invalid in {"script_commit_failure", "image_commit_failure", "image_only_commit_failure"}:
+    if invalid in {
+        "script_commit_failure",
+        "image_commit_failure",
+        "image_only_commit_failure",
+        "legacy_image_commit_failure",
+    }:
         from evidenceforge.generation.deployment_registry import (
             LocalArtifactPublicationReceipt,
             LocalArtifactVersionRegistry,
@@ -154,6 +160,14 @@ def test_birth_script_admission_failure_does_not_allocate_or_pin(
             return result
 
         monkeypatch.setattr(LocalArtifactVersionRegistry, "_commit_prepared_locked", fail_script)
+    if invalid == "legacy_image_commit_failure":
+        from evidenceforge.generation.actions.process_support.actors import ProcessActorResolver
+
+        monkeypatch.setattr(
+            ProcessActorResolver,
+            "_process_endpoint_uses_action_cohort",
+            lambda *args, **kwargs: False,
+        )
     with pytest.raises((StateError, ValueError)):
         generator.generate_process(
             user,
@@ -165,7 +179,9 @@ def test_birth_script_admission_failure_does_not_allocate_or_pin(
             parent_pid=1,
             require_exact_parent=invalid != "parent",
             suppress_command_file_effect=True,
-            exec_script=None if invalid == "image_only_commit_failure" else reference,
+            exec_script=None
+            if invalid in {"image_only_commit_failure", "legacy_image_commit_failure"}
+            else reference,
         )
     assert state.get_state_summary() == before
     assert content.registry.census().active_leases == 0

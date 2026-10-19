@@ -273,7 +273,7 @@ class MacosPersistenceActionBundle:
                         proof = self.authority.materialize_process_service_composite(
                             plan.process,
                             self.services.prepare_service_publication(plan.activation),
-                            finalize_external_no_fail=publication.commit_no_fail,
+                            commit_external_first=publication.commit_no_fail,
                         )
             finally:
                 if retention is not None:

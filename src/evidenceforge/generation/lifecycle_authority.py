@@ -8374,15 +8374,18 @@ class GeneratorLifecycleAuthority:
         plan: ProcessMaterializationPlan,
         service_token: LifecycleServiceAdmissionToken,
         *,
-        finalize_external_no_fail: Callable[[], None] | None = None,
+        commit_external_first: Callable[[], object] | None = None,
     ) -> LifecycleProcessServiceCompositeResult:
         """Atomically publish one staged process, service, and exact binding.
 
         Passing ``service_token`` transfers its one-shot reservation to this
         authority. Any rejection before primitive commit releases that exact
         capability without consuming foreign or copied tokens. The optional
-        finalizer follows the same preclaimed, primitive-only contract as the
-        ordinary process materialization boundary.
+        preclaimed external transaction commits after all admission checks and
+        before canonical allocation. A failure cannot create a process/service
+        prefix. Successfully committed external retention may conservatively
+        survive a lost acknowledgement; it owns no process or service effects.
+        The remaining lifecycle/State tail uses validated primitive commits.
         """
 
         identity = plan.identity
@@ -8405,6 +8408,8 @@ class GeneratorLifecycleAuthority:
                             process_start,
                             service_token,
                         )
+                        if commit_external_first is not None:
+                            commit_external_first()
                         ticket.commit()
                         service_receipt = ticket.service_receipt
                         if service_receipt is None:
@@ -8414,8 +8419,6 @@ class GeneratorLifecycleAuthority:
                         process = self._state_manager._commit_prevalidated_process_materialization(
                             plan
                         )
-                        if finalize_external_no_fail is not None:
-                            finalize_external_no_fail()
         except BaseException:
             self._discard_service_admission(service_token)
             raise
@@ -8809,11 +8812,15 @@ class GeneratorLifecycleAuthority:
         plan: ProcessMaterializationPlan,
         *,
         finalize_external_no_fail: Callable[[], None] | None = None,
+        commit_external_first: Callable[[], object] | None = None,
     ) -> tuple[RunningProcess, LifecycleMaterializationReceipt]:
         """Atomically publish one planned process/thread and external token.
 
         ``finalize_external_no_fail`` has the same preclaimed, primitive-only
         contract and global lock ordering as :meth:`materialize_session`.
+        Fallible preclaimed artifact transactions use ``commit_external_first``
+        after validation and before canonical allocation. Committed conservative
+        retention may survive a lost acknowledgement without creating a process.
         """
 
         identity = plan.identity
@@ -8824,6 +8831,8 @@ class GeneratorLifecycleAuthority:
                 hook = self._materialization_precommit_hook
                 if hook is not None:
                     hook()
+                if commit_external_first is not None:
+                    commit_external_first()
                 ticket.commit()
                 process = self._state_manager._commit_prevalidated_process_materialization(plan)
                 if finalize_external_no_fail is not None:

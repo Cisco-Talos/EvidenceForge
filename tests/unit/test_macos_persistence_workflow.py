@@ -297,3 +297,79 @@ def test_activation_without_future_finite_window_does_not_overflow_retention(
     monkeypatch.setattr(LocalArtifactVersionRegistry, "prepare_version_retention", reject)
     result = bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
     assert result.process.executable_version is not None
+
+
+@pytest.mark.parametrize("failure", ["rollback", "lost_acknowledgement"])
+def test_activation_image_retention_failure_cannot_allocate_job_or_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from dataclasses import replace
+
+    from evidenceforge.generation.deployment_registry import (
+        LocalArtifactPreparedCommit,
+        LocalArtifactPublicationReceipt,
+        LocalArtifactVersionRegistry,
+        _LocalArtifactPreparedCommitPlan,
+        _LocalArtifactPreparedReservation,
+    )
+    from tests.unit.test_macos_runtime_es_preparation import _publish
+    from tests.unit.test_macos_runtime_file_metadata import _executable
+
+    bundle, caller, host, definition, path, emitter = _workflow()
+    bundle.dispatcher.output_end_time = _START + timedelta(days=7)
+    descriptor = replace(_executable(), hostname=host.hostname, principal="root")
+    _publish(bundle.content, descriptor, _START)
+    version = bundle.content.build_record(descriptor).artifact.artifact_version_id
+    for index, operation in enumerate(("write", "bootstrap"), 1):
+        bundle.execute(_request(bundle, caller, host, definition, path, operation, index))
+    state_before = bundle.state.materialization_digest()
+    processes_before = tuple(bundle.state.list_running_processes())
+    lifecycle_before = bundle.lifecycle.stats()
+    leases_before = bundle.content.registry.census().active_leases
+    emitted_before = emitter.emit.call_count
+    original = LocalArtifactVersionRegistry._commit_prepared_locked
+
+    def fail_image(
+        registry: LocalArtifactVersionRegistry,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+    ) -> LocalArtifactPublicationReceipt:
+        result = original(registry, reservation, plan)
+        if reservation.canonical_token.record.artifact.artifact_version_id == version:
+            raise StateError("injected job image retention failure")
+        return result
+
+    original_ack = LocalArtifactPreparedCommit.commit_no_fail
+
+    def lose_acknowledgement(
+        commit: LocalArtifactPreparedCommit,
+    ) -> LocalArtifactPublicationReceipt:
+        original_ack(commit)
+        raise StateError("injected job image retention acknowledgement failure")
+
+    with monkeypatch.context() as fault:
+        if failure == "rollback":
+            fault.setattr(LocalArtifactVersionRegistry, "_commit_prepared_locked", fail_image)
+        else:
+            fault.setattr(LocalArtifactPreparedCommit, "commit_no_fail", lose_acknowledgement)
+        with pytest.raises(StateError, match="job image retention"):
+            bundle.execute(_request(bundle, caller, host, definition, path, "activate", 3))
+    assert bundle.state.materialization_digest() == state_before
+    assert tuple(bundle.state.list_running_processes()) == processes_before
+    assert (
+        replace(
+            bundle.lifecycle.stats(),
+            lookup_candidates_inspected=lifecycle_before.lookup_candidates_inspected,
+        )
+        == lifecycle_before
+    )
+    assert bundle.content.registry.census().active_leases == leases_before + (
+        failure == "lost_acknowledgement"
+    )
+    assert bundle.content.registry.census().prepared_publications == 0
+    assert emitter.emit.call_count == emitted_before
+    result = bundle.execute(_request(bundle, caller, host, definition, path, "activate", 3))
+    assert result.process is not None
+    assert bundle.state.get_process_identity(host.hostname, result.process.pid) == result.process
+    bundle.execute(_request(bundle, caller, host, definition, path, "unload", 4))

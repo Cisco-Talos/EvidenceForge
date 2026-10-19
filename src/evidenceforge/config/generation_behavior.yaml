@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 271
+current_revision: 273
 history_start_revision: 1
-behavior_surface_sha256: b004dbf85a0ed19fb2b91912533b1ee59f67285dafdc2649009522d6a6c00703
+behavior_surface_sha256: 6b6b7603f7658788bed7751b84c0f879d4bc502485296d191150ee1a240447b4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2586,3 +2586,21 @@ changes:
     formats:
       - ecar
     summary: Routes cohort-compatible Mac runtime-image births through the existing artifact-first action transaction so a failed image commit cannot leave a partially allocated process or lifecycle.
+  - revision: 272
+    id: macos-job-artifact-first-activation
+    impact: localized
+    domains:
+      - macos-persistence
+      - process-service-lifecycle
+    formats:
+      - ecar
+    summary: Commits preclaimed job-image retention after validation but before canonical process/service allocation, preventing an artifact failure from leaving a partial activated launchd job.
+  - revision: 273
+    id: legacy-process-artifact-first-publication
+    impact: localized
+    domains:
+      - process-publication
+      - runtime-artifact-retention
+    formats:
+      - ecar
+    summary: Groups legacy process artifact commits before canonical process allocation while retaining post-materialization source-timing finalization, preventing artifact-failure prefixes outside action-cohort paths.

@@ -1438,22 +1438,23 @@ class ProcessExecutionService:
         else:
             with timing_preparation.claimed_commit():
                 with ExitStack() as artifact_stack:
-                    artifact_commits = tuple(
+                    artifacts = (
                         artifact_stack.enter_context(
-                            self.runtime_content_manager.registry.prepared_publication(publication)
+                            self.runtime_content_manager.registry.prepared_publication_group(
+                                publication.artifacts
+                            )
                         )
-                        for publication in publication.artifacts
+                        if publication.artifacts
+                        else None
                     )
-
-                    def finalize_prepared_capabilities() -> None:
-                        for artifact_commit in artifact_commits:
-                            artifact_commit.commit()
-                        timing_preparation.commit_no_fail()
 
                     running_proc, materialization_receipt = (
                         self.lifecycle_authority.materialize_process(
                             process_plan,
-                            finalize_external_no_fail=finalize_prepared_capabilities,
+                            commit_external_first=artifacts.commit_no_fail
+                            if artifacts is not None
+                            else None,
+                            finalize_external_no_fail=timing_preparation.commit_no_fail,
                         )
                     )
 
