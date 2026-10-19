@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 from datetime import timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock
+from weakref import finalize
 
 import pytest
 
@@ -10,17 +13,24 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import PosixProcessCredentials
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
+from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
 from evidenceforge.generation.actions.macos_persistence import (
     MacosPersistenceActionBundle,
     MacosPersistenceRequest,
 )
+from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.generation.state_manager import ProcessMaterializationPlan
 from evidenceforge.models.exceptions import StateError
 from tests.unit.test_macos_launch_activation import _setup
 from tests.unit.test_macos_launch_file import _manager
 from tests.unit.test_macos_launch_registration import _START, _deployments
+
+
+def _close_workflow_fixture(emitter: EcarEmitter, temporary: TemporaryDirectory) -> None:
+    emitter.close()
+    temporary.cleanup()
 
 
 def _workflow(
@@ -31,7 +41,7 @@ def _workflow(
     HostContext,
     LaunchdSystemJobSpec,
     str,
-    Mock,
+    EcarEmitter,
 ]:
     manager = _manager()
     state, registry, authority, _, _ = _setup(manager, known_boot_group=True)
@@ -47,7 +57,10 @@ def _workflow(
         start_time=_START,
     )
     authority.materialize_process(plan)
-    emitter = Mock()
+    temporary = TemporaryDirectory(prefix="eforge-macos-workflow-")
+    emitter = EcarEmitter(load_format("ecar"), Path(temporary.name), threaded=False)
+    emitter.emit = Mock(wraps=emitter.emit)
+    emitter.reset_mock = emitter.emit.reset_mock
     dispatcher = EventDispatcher(
         state,
         {"ecar": emitter} if collect else {},
@@ -65,6 +78,7 @@ def _workflow(
         deployments=_deployments(),
         content=manager,
     )
+    finalize(bundle, _close_workflow_fixture, emitter, temporary)
     host = HostContext(
         hostname="MAC-A",
         ip="192.0.2.25",

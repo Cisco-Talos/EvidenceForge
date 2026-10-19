@@ -20,6 +20,7 @@ from evidenceforge.events.contracts import (
     OwnedEffectOccurrencePlan,
 )
 from evidenceforge.events.dispatcher import (
+    ActionCohortServiceClosure,
     EventDispatcher,
     PreparedDispatch,
     PreparedDispatchStateIntent,
@@ -51,7 +52,6 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
-from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
 from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     runtime_executable_lease_owner,
@@ -345,55 +345,36 @@ class MacosPersistenceActionBundle:
                 event.storyline_origin = True
                 prepared = self.dispatcher.prepare_builder(
                     event,
-                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE,
-                    lifecycle_ticket=plan.target,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT,
+                    lifecycle_ticket=close.cohort,
                     source_timing_preparation=timing,
                 )
                 dispatches.append(prepared)
+        root_action_id = (
+            f"process-exit:{terminated[0].object_id}"
+            if len(terminated) == 1
+            else f"process-exit-group:{request.action_id}"
+        )
+        audit = ExecutionEffectPlan(
+            ActionAnchor("macos_launch_item", root_action_id, source="storyline"), ()
+        )
         try:
-            for prepared in dispatches:
-                self.dispatcher.validate_prepared(prepared)
-            token = self.services.prepare_service_process_closure(close.closure)
-            if request.operation == "exit":
-                proof = self.authority.materialize_process_group_leader_exit_composite(
-                    close.cohort,
-                    close.group,
-                    token,
-                    collectors=self.dispatcher.es_collectors,
-                    source_timing_preparation=timing,
-                )
-            else:
-                proof = self.authority.materialize_process_group_service_closure_composite(
-                    close.cohort,
-                    close.group,
-                    token,
-                    collectors=self.dispatcher.es_collectors,
-                    source_timing_preparation=timing,
-                )
-        except Exception as error:
-            # The canonical owner may finish every participant but lose its return.
-            # Adopt only its complete exact proof; never repeat the modeled close.
-            proof = getattr(error, "process_group_service_receipt", None)
-            if (
-                type(proof) is not PosixGroupServiceClosureReceipt
-                or not timing.committed
-                or proof.source_timing_receipt is not timing.receipt
-                or proof.group != close.group
-                or proof.process_plan_tokens
-                != tuple(plan.target.publication_token for plan in plans)
-                or not all(
-                    self.authority.authenticates_process_service_closure_composite_receipt(
-                        plan.target, proof
-                    )
-                    for plan in plans
-                )
-            ):
-                raise
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                root_action_id,
+                close.cohort,
+                tuple(dispatches),
+                (ExecutionEffectAuditCohortEntry(audit, audit.reconcile(())),),
+                (),
+                (),
+                exact_projection=True,
+                service_closure=ActionCohortServiceClosure(
+                    close.group, close.closure, request.operation == "unload"
+                ),
+            )
+            self.dispatcher.publish_prepared_action_cohort_batch(batch)
         finally:
             if not timing.committed:
                 timing.cancel()
-        for prepared in dispatches:
-            self.dispatcher.publish_prepared(prepared, materialization_receipt=proof)
         return MacosPersistenceResult(terminated=tuple(terminated))
 
     def _bootstrap(self, request: MacosPersistenceRequest) -> None:

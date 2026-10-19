@@ -928,6 +928,7 @@ class _PreparedActionCohortBatchRecord:
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
     service_closure: ActionCohortServiceClosure | None = None
+    canonical_interrupts: list[BaseException] = field(default_factory=list)
     exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     es_closure_requests: tuple[ESCollectorClosure, ...] = ()
     es_closure_processes: tuple[ProcessIdentity, ...] = ()
@@ -9447,18 +9448,30 @@ class EventDispatcher:
         expected: object,
         terminal_authenticates: Callable[[], bool],
         label: str,
+        deferred_interrupts: list[BaseException] | None = None,
+        retry_uncommitted: Callable[[], bool] | None = None,
     ) -> None:
-        """Adopt only an exact terminal receipt after a canonical lost return."""
+        """Adopt an exact terminal receipt, optionally deferring user interruption."""
 
         try:
             returned = operation()
-        except BaseException:
+        except BaseException as error:
             try:
                 adopted = terminal_authenticates()
             except BaseException:
                 adopted = False
             if not adopted:
-                raise
+                if retry_uncommitted is None or not retry_uncommitted():
+                    raise
+                EventDispatcher._commit_exact_expected_owner(
+                    operation,
+                    expected=expected,
+                    terminal_authenticates=terminal_authenticates,
+                    label=label,
+                    deferred_interrupts=deferred_interrupts,
+                )
+            if deferred_interrupts is not None and not isinstance(error, Exception):
+                deferred_interrupts.append(error)
             return
         try:
             authentic = terminal_authenticates()
@@ -11756,6 +11769,9 @@ class EventDispatcher:
                                     )
                                 ),
                                 label="Exact exec retained-image owner",
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
                             )
                             record.artifact_cleanup_status[:] = [True] * len(
                                 record.artifact_cleanup_status
@@ -11772,6 +11788,9 @@ class EventDispatcher:
                                 )
                             ),
                             label="Exact action-cohort lifecycle owner",
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         self._commit_exact_expected_owner(
                             audit_claimed.commit_no_fail,
@@ -11789,6 +11808,12 @@ class EventDispatcher:
                                 )
                             ),
                             label="Exact action-cohort audit owner",
+                            retry_uncommitted=(lambda: not audit_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         if record.intent_claimed is not None:
                             intent_claimed = record.intent_claimed
@@ -11809,6 +11834,12 @@ class EventDispatcher:
                                     )
                                 ),
                                 label="Exact action-cohort intent owner",
+                                retry_uncommitted=(lambda: not intent_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
                             )
                         self._commit_exact_expected_owner(
                             timing_claimed.commit_no_fail,
@@ -11821,12 +11852,22 @@ class EventDispatcher:
                                 )
                             ),
                             label="Exact action-cohort source-timing owner",
+                            retry_uncommitted=(lambda: not timing_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         try:
                             self._commit_action_cohort_dispatcher_ledgers_no_fail(record)
-                        except BaseException:
+                        except BaseException as error:
                             if not record.observation_committed:
                                 raise
+                            if record.service_closure is not None and not isinstance(
+                                error, Exception
+                            ):
+                                record.canonical_interrupts.append(error)
                         if not record.observation_committed:
                             raise EventContractError(
                                 "Exact action-cohort dispatcher ledgers did not commit"
@@ -11838,6 +11879,12 @@ class EventDispatcher:
                                 state_claimed.committed and state_claimed._result is state_result
                             ),
                             label="Exact action-cohort State owner",
+                            retry_uncommitted=(lambda: not state_claimed.committed)
+                            if record.service_closure is not None
+                            else None,
+                            deferred_interrupts=record.canonical_interrupts
+                            if record.service_closure is not None
+                            else None,
                         )
                         if record.es_claimed is not None:
                             self._commit_exact_expected_owner(
@@ -11847,6 +11894,12 @@ class EventDispatcher:
                                     self._completed_action_cohort_es_delivery(record)
                                 ),
                                 label="Exact action-cohort ES collector owner",
+                                retry_uncommitted=(lambda: not record.es_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
                             )
                             record.es_cleanup_complete = True
                         if record.es_closures_claimed is not None:
@@ -11859,6 +11912,12 @@ class EventDispatcher:
                                     is record.es_closures_result
                                 ),
                                 label="Exact action-cohort collector disconnects",
+                                retry_uncommitted=(lambda: not record.es_closures_claimed.committed)
+                                if record.service_closure is not None
+                                else None,
+                                deferred_interrupts=record.canonical_interrupts
+                                if record.service_closure is not None
+                                else None,
                             )
                     else:
                         # Runtime artifacts publish first through their reversible group owner.
@@ -11918,6 +11977,14 @@ class EventDispatcher:
                                 self._action_cohort_committed_receipts -= 1
                         self._action_cohort_committed_receipts += 1
 
+        if record.canonical_interrupts:
+            interruption = record.canonical_interrupts[0]
+            interruption.action_cohort_receipt = receipt
+            interruption.action_cohort_result = result
+            interruption.add_note(
+                "Service terminal cohort committed; exact source rows remain recoverable."
+            )
+            raise interruption
         if record.exact_recovery is not None:
             return cast(
                 ActionCohortPublicationResult,

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 304
+current_revision: 305
 history_start_revision: 1
-behavior_surface_sha256: 8c4b10b26e68a345ce5b8e17dcf12fa980275b50b7527bb2d4df869ba4cf17d4
+behavior_surface_sha256: 1b440a5a77272b7942bbb99c7ecee304f4d73b8a4a6d34c454b78d6fbf1e5cb0
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2859,3 +2859,12 @@ changes:
     formats:
       - ecar
     summary: Allows exact Mac terminal cohorts to retain the real service closure owner through canonical commit and recoverable source publication.
+  - revision: 305
+    id: authored-macos-exact-service-group-cleanup
+    impact: localized
+    domains:
+      - process-service-lifecycle
+      - exact-source-publication
+    formats:
+      - ecar
+    summary: Routes authored Mac leader exits and group unload through one exact recoverable publication, preserving canonical ownership and user interruption.
