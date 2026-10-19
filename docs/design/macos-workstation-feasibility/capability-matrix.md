@@ -87,3 +87,6 @@ Successful explicit directory changes and returning failed exec now have canonic
 
 ### Descriptor ownership update — revision 243
 Explicit complete Mac descriptor tables now participate in fork, successful exec, failed exec, event-time history and checkpoint recovery. Unknown state remains unknown, and native FD kinds/pipe IDs and open-object allocation are not inferred. This closes a canonical inheritance/close-on-exec slice; it does not enable an ES source or close native exec/exit evidence gates.
+
+### Execution image update — revision 244
+Explicit image subtype and pre-resolution exec-path metadata are execution-owned, fork-inherited, replaced by exec, authenticated and checkpointed. Historical field projection uses the retained Mach-O binary version, never the generator host or a normalized replacement path. Missing facts remain unavailable. This does not enable macOS 26 ES exec or supply automatic metadata producers.

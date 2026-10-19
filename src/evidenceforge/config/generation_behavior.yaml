@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 243
+current_revision: 244
 history_start_revision: 1
-behavior_surface_sha256: bbb80eca98f3d3e10e1b3e1b9a1f4bda40c42b456d51b3c192df2c07d99e36fe
+behavior_surface_sha256: a34b463df01df30249ef65c5df3e9cf5264edaa64647dcb53ed8e045f0c21ed3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2362,3 +2362,10 @@ changes:
       - macos-process-execution
     formats: []
     summary: Preserves explicit bounded descriptor tables through fork, close-on-exec, failed exec and checkpoint history without inferring unknown descriptors or enabling native exec output.
+  - revision: 244
+    id: canonical-macos-exec-image-facts
+    impact: localized
+    domains:
+      - macos-process-execution
+    formats: []
+    summary: Retains explicit arm64 image subtype and pre-resolution exec path through fork, replacement and checkpoints; historical projection does not enable native event output.

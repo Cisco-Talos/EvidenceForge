@@ -159,7 +159,7 @@ def test_directory_history_is_bounded_and_retired_observations_remain_unknown() 
 def test_old_running_process_record_does_not_invent_current_directory_history() -> None:
     state, identity = _create(_directory())
     fields = encode_state_value(state.get_process(identity.hostname, identity.pid))[2]
-    assert len(fields) == 43
+    assert len(fields) == 44
     prior = decode_state_value(["record", "running-process-v17", fields[:41]])
     assert prior.directory_history == ()
     assert prior.execution_directory == identity.execution_directory

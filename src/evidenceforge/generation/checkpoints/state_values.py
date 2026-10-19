@@ -31,6 +31,7 @@ from evidenceforge.events.job_control import (
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
+from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity
@@ -154,6 +155,7 @@ _RUNNING_PROCESS_FIELDS = (
     "executable_version",
     "directory_history",
     "descriptor_history",
+    "exec_image",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -347,6 +349,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "image_security",
     "execution_directory",
     "executable_version",
+    "exec_image",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -464,6 +467,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ResponsibleProcessReference,
         ("hostname", "object_id", "pid", "started_at"),
     ),
+    "macos-exec-image-v1": (MacosExecImage, ("cpu_subtype", "dyld_exec_path")),
     "macos-image-security-v1": (
         MacosImageSecurity,
         ("codesigning_flags", "is_platform_binary", "validation_category"),
@@ -479,7 +483,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ProcessExecutableVersion,
         ("platform", "identity_kind", "content_id", "artifact_version_id"),
     ),
-    "running-process-v19": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v20": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "macos-descriptor-binding-v1": (
         MacosDescriptorBinding,
         ("fd", "kind", "object_id", "close_on_exec"),
@@ -502,7 +506,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v12": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v13": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -728,6 +732,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, encode_state_value(())]
         if record_tag == "process-identity-v11" and len(encoded_fields) == 24:
             record_tag = "process-identity-v12"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v19" and len(encoded_fields) == 43:
+            record_tag = "running-process-v20"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v12" and len(encoded_fields) == 25:
+            record_tag = "process-identity-v13"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

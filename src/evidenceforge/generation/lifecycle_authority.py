@@ -359,6 +359,16 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
                 directory.metadata.canonical_json(),
             ),
         )
+    if identity.exec_image is not None:
+        identity.exec_image.__post_init__()
+        payload = (
+            *payload,
+            (
+                "macos-exec-image-v1",
+                identity.exec_image.cpu_subtype,
+                identity.exec_image.dyld_exec_path,
+            ),
+        )
     if identity.executable_version is not None:
         version = identity.executable_version
         version.__post_init__()

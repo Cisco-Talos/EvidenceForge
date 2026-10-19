@@ -18,6 +18,7 @@ from evidenceforge.events.identity import (
     validate_process_environment,
 )
 from evidenceforge.events.macos_descriptors import validate_macos_descriptors
+from evidenceforge.events.macos_exec_image import validate_macos_exec_image
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
 from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
@@ -578,6 +579,14 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
                 )
         except ValueError as error:
             raise CheckpointCorruptionError("StateManager executable version is invalid") from error
+        try:
+            for image in (
+                process.exec_image,
+                *(item.exec_image for item in process.prior_executions),
+            ):
+                validate_macos_exec_image(image, fresh._pid_os.get(process.system, "unknown"))
+        except ValueError as error:
+            raise CheckpointCorruptionError("StateManager execution image is invalid") from error
         try:
             for security in (
                 process.image_security,
