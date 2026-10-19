@@ -6,7 +6,11 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.identity import (
+    ProcessIdentity,
+    validate_process_arguments,
+    validate_process_environment,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -57,6 +61,60 @@ def record_denied_process_launch(
     result = DeniedProcessLaunch(actor, attempted_at, image, command_line)
     if state._pid_os.get(actor.hostname) != "macos":
         raise StateError("Denied process launch currently requires an exact Mac caller")
+    builder = state.begin_action_cohort_materialization()
+    builder.patch_process_activity(actor, attempted_at)
+    state.materialize_action_cohort(builder.seal())
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class FailedProcessExec:
+    """An image-replacement call that returned an explicit error to its caller.
+
+    This bounded result preserves the existing execution. It does not describe
+    a failure after the kernel's irreversible replacement point, a process exit,
+    or a named security product's decision. A later exit is a separate action.
+    """
+
+    actor: ProcessIdentity
+    attempted_at: datetime
+    image: str
+    command_line: str
+    error_number: int
+    arguments: tuple[str, ...] | None = None
+    environment: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        DeniedProcessLaunch(self.actor, self.attempted_at, self.image, self.command_line)
+        if type(self.error_number) is not int or not 0 < self.error_number < 2**31:
+            raise ValueError("Failed exec requires an explicit positive errno")
+        validate_process_arguments(self.arguments, command_line=self.command_line)
+        validate_process_environment(self.environment)
+
+
+def record_failed_process_exec(
+    state: StateManager,
+    *,
+    actor: ProcessIdentity,
+    attempted_at: datetime,
+    image: str,
+    command_line: str,
+    error_number: int,
+    arguments: tuple[str, ...] | None = None,
+    environment: tuple[str, ...] | None = None,
+) -> FailedProcessExec:
+    """Record a returning Mac exec failure without allocating or replacing an image.
+
+    Only the exact live caller's activity frontier changes. Attempted argv/envp,
+    executable metadata, threads and privilege effects are not installed into
+    the caller. The successful execution/effect bundle is never entered. No
+    native Gatekeeper or ES event is inferred from the supplied error number.
+    """
+    result = FailedProcessExec(
+        actor, attempted_at, image, command_line, error_number, arguments, environment
+    )
+    if state._pid_os.get(actor.hostname) != "macos":
+        raise StateError("Returning failed exec currently requires an exact Mac caller")
     builder = state.begin_action_cohort_materialization()
     builder.patch_process_activity(actor, attempted_at)
     state.materialize_action_cohort(builder.seal())

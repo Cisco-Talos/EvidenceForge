@@ -151,6 +151,7 @@ _RUNNING_PROCESS_FIELDS = (
     "image_security",
     "execution_directory",
     "executable_version",
+    "directory_history",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -476,7 +477,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ProcessExecutableVersion,
         ("platform", "identity_kind", "content_id", "artifact_version_id"),
     ),
-    "running-process-v17": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v18": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -712,6 +713,9 @@ def decode_state_value(value: object) -> object:
         if record_tag == "running-process-v16" and len(encoded_fields) == 40:
             record_tag = "running-process-v17"
             encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v17" and len(encoded_fields) == 41:
+            record_tag = "running-process-v18"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
         if record_tag == "process-identity-v11" and len(encoded_fields) == 24:
             record_tag = "process-identity-v12"
             encoded_fields = [*encoded_fields, None]

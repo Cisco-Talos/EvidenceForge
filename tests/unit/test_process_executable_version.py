@@ -198,6 +198,18 @@ def test_production_process_launch_retains_the_exact_runtime_image_version(
         )
         identity = state.get_process_identity(system.hostname, pid)
         assert identity.executable_version == ProcessExecutableVersion.from_binary(record.binary)
+        second_pid = generator.generate_process(
+            user,
+            system,
+            _TIME + timedelta(seconds=31),
+            logon,
+            descriptor.native_path,
+            "invented-worker --second",
+            parent_pid=1,
+            from_storyline=True,
+        )
+        assert second_pid != pid
+        assert manager.registry.census().active_leases == 1
         # Later placement replacement cannot rewrite the already loaded version.
         _publish(manager, replace(descriptor, content_version=2, artifact_version=2))
         assert (
@@ -211,9 +223,9 @@ def test_production_process_launch_retains_the_exact_runtime_image_version(
         emitter.close()
 
 
-@pytest.mark.parametrize("explicit_identity", [False, True])
+@pytest.mark.parametrize("explicit_identity", [False, True, "omitted_start"])
 def test_delayed_generic_evidence_uses_loaded_version_after_path_replacement(
-    explicit_identity: bool,
+    explicit_identity: bool | str,
 ) -> None:
     from evidenceforge.events.base import OccurrenceBuilder
     from evidenceforge.events.contexts import HostContext, ProcessContext
@@ -239,7 +251,7 @@ def test_delayed_generic_evidence_uses_loaded_version_after_path_replacement(
             identity.image,
             identity.command_line,
             identity.principal,
-            start_time=identity.started_at,
+            start_time=None if explicit_identity == "omitted_start" else identity.started_at,
         ),
         identity_plan=EventIdentityPlan(subject=identity) if explicit_identity else None,
     )

@@ -39,6 +39,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
 )
 from evidenceforge.utils.rng import stable_uuid
+from evidenceforge.utils.time import ensure_utc
 
 RuntimeArtifactOwnerKind = Literal["user", "system"]
 RuntimeFileEffectAction = Literal["create", "modify", "read", "delete"]
@@ -441,3 +442,25 @@ __all__ = [
     "RuntimeContentIdentityManager",
     "RuntimeFileEffectAction",
 ]
+
+
+def runtime_executable_lease_owner(hostname: str, retained_until: datetime) -> str:
+    """Share one finite run-window lease across executions of each retained version.
+
+    The registry keys leases by version and owner. Using a window owner bounds
+    lease count by retained file versions rather than historical process count.
+    This conservative owner must not be released when an individual process exits.
+    """
+    if (
+        type(hostname) is not str
+        or not hostname.strip()
+        or "\0" in hostname
+        or type(retained_until) is not datetime
+        or retained_until.utcoffset() is None
+    ):
+        raise ValueError("Executable window lease requires an exact host and aware deadline")
+    return stable_uuid(
+        "macos-runtime-executable-window",
+        hostname.casefold(),
+        ensure_utc(retained_until).isoformat(),
+    )

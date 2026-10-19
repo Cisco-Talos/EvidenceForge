@@ -27,7 +27,10 @@ from evidenceforge.generation.indexes import (
     GroupedTemporalIndex,
     TemporalAllocationIndex,
 )
-from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.state_manager import (
+    _MAX_RETAINED_PROCESS_DIRECTORIES,
+    StateManager,
+)
 
 from .errors import CheckpointCorruptionError
 from .owner_inventory import STATE_MANAGER_CHECKPOINT_FIELDS, assert_transient_owner_state_empty
@@ -493,6 +496,32 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        try:
+            history = process.directory_history
+            if type(history) is not tuple or len(history) > _MAX_RETAINED_PROCESS_DIRECTORIES:
+                raise ValueError("Invalid directory history container")
+            previous = None
+            frontier = max(
+                process.last_activity_time or process.start_time,
+                process.executed_at or process.start_time,
+            )
+            for directory in history:
+                validate_macos_execution_directory(
+                    directory,
+                    hostname=process.system,
+                    observed_at=directory.observed_at,
+                    platform=fresh._pid_os.get(process.system, "unknown"),
+                )
+                if (
+                    directory.observed_at < process.start_time
+                    or directory.observed_at > frontier
+                    or (process.end_time is not None and directory.observed_at > process.end_time)
+                    or (previous is not None and directory.observed_at <= previous)
+                ):
+                    raise ValueError("Invalid directory history ordering")
+                previous = directory.observed_at
+        except (AttributeError, TypeError, ValueError) as error:
+            raise CheckpointCorruptionError("StateManager directory history is invalid") from error
         try:
             for directory, observed_at in (
                 (process.execution_directory, process.executed_at or process.start_time),

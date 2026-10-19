@@ -5469,7 +5469,7 @@ class EventDispatcher:
                     and identity.hostname == host.hostname
                     and identity.pid == process.pid
                     and identity.image == process.image
-                    and identity.started_at == process.start_time
+                    and (process.start_time is None or identity.started_at == process.start_time)
                 ),
                 None,
             )

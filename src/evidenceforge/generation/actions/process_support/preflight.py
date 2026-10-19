@@ -73,6 +73,7 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     RuntimeContentOwnerError,
+    runtime_executable_lease_owner,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TimingRuntime, TimingSampler
@@ -681,7 +682,11 @@ class ProcessPreflightPlanner:
                         action=payload.action.value,
                         observed_at=observed_at,
                         retention=deadline - observed_at if deadline is not None else None,
-                        lease_owner=anchor.action_id if deadline is not None else "",
+                        lease_owner=(
+                            runtime_executable_lease_owner(request.system.hostname, deadline)
+                            if deadline is not None
+                            else ""
+                        ),
                         lease_until=(
                             deadline + timedelta(microseconds=1) if deadline is not None else None
                         ),
@@ -840,7 +845,7 @@ class ProcessPreflightPlanner:
                     record,
                     selection.actor.started_at,
                     retention=deadline - selection.actor.started_at,
-                    lease_owner=anchor.action_id,
+                    lease_owner=runtime_executable_lease_owner(request.system.hostname, deadline),
                     lease_until=deadline + timedelta(microseconds=1),
                     require_existing=True,
                 )
@@ -867,7 +872,11 @@ class ProcessPreflightPlanner:
                     retention=(
                         deadline - selection.actor.started_at if deadline is not None else None
                     ),
-                    lease_owner=anchor.action_id if deadline is not None else "",
+                    lease_owner=(
+                        runtime_executable_lease_owner(request.system.hostname, deadline)
+                        if deadline is not None
+                        else ""
+                    ),
                     lease_until=(
                         deadline + timedelta(microseconds=1) if deadline is not None else None
                     ),

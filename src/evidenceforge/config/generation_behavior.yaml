@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 240
+current_revision: 241
 history_start_revision: 1
-behavior_surface_sha256: e53411acaf0492aae0ec0641af85bfb24b72eda29f1478ad74a870de7ea3ee92
+behavior_surface_sha256: aaebd39419ba914aff71b165d0de889020a629e7c7d19a5a0834e47eef04cdc5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2339,3 +2339,12 @@ changes:
     formats:
       - ecar
     summary: Retains runtime executables through explicit generation/history windows, resolves exact loaded versions, and expands internal staged-owner, installed-file and terminal observation preparation without enabling ES generation.
+  - revision: 241
+    id: macos-directory-history-and-failed-exec
+    impact: localized
+    domains:
+      - runtime-artifact-retention
+      - macos-process-execution
+    formats:
+      - ecar
+    summary: Shares finite-window executable leases, preserves exact loaded versions for explicit process observations, and adds bounded directory state and returning failed-exec semantics without new native source admission.

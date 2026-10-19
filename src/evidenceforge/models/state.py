@@ -175,6 +175,7 @@ class RunningProcess:
     image_security: MacosImageSecurity | None = None
     execution_directory: MacosExecutionDirectory | None = None
     executable_version: ProcessExecutableVersion | None = None
+    directory_history: tuple[MacosExecutionDirectory, ...] = ()
 
 
 @dataclass

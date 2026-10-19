@@ -130,6 +130,7 @@ logger = logging.getLogger(__name__)
 
 # Retain a bounded historical execution window per live/retained process.
 _MAX_RETAINED_EXECUTIONS_PER_PROCESS = 64
+_MAX_RETAINED_PROCESS_DIRECTORIES = 64
 
 
 def _authority_values_match(left: object, right: object) -> bool:
@@ -2280,6 +2281,7 @@ class ActionCohortProcessActivityPatch:
     job_control_actor: ProcessIdentity | None = None
     parentage_change: ProcessParentageChange | None = None
     adopting_parent: ProcessIdentity | None = None
+    directory_change: MacosExecutionDirectory | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -3215,6 +3217,34 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 _capability=_ActionCohortCapability(),
             )
         )
+
+    def change_macos_process_directory(
+        self, target: ProcessIdentity, *, directory: MacosExecutionDirectory
+    ) -> None:
+        """Stage a successful explicit directory change for one live Mac process.
+
+        The supplied path/stat describes the resolved directory after success.
+        Failed chdir and descriptor-based fchdir are not inferred. The immutable
+        launch/exec directory remains unchanged; mutable lifetime state owns
+        subsequent observations. This transition requires its own cohort.
+        """
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if (
+            type(normalized) is not ProcessIdentity
+            or type(directory) is not MacosExecutionDirectory
+        ):
+            raise StateError("Directory change requires an exact live process and directory")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=directory.observed_at,
+            directory_change=directory,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_process_directory_patch(patch)
+        if self._process_activity_patches:
+            raise StateError("Directory change requires its own process cohort")
+        self._process_activity_patches.append(patch)
 
     def change_posix_job_control(
         self,
@@ -4424,6 +4454,13 @@ def _action_cohort_semantic_preimage(
                     patch.service_drop,
                 )
                 if patch.service_drop is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-directory-change-v1",
+                    patch.directory_change,
+                )
+                if patch.directory_change is not None
                 else (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
                 if patch.audit_binding is None
                 else (
@@ -11972,6 +12009,7 @@ class StateManager:
                             patch.service_drop,
                             patch.job_control_change,
                             patch.parentage_change,
+                            patch.directory_change,
                         )
                     )
                     > 1
@@ -12029,8 +12067,11 @@ class StateManager:
                         raise StateError(
                             "Process credential transitions require a separate cohort from receiver dependencies"
                         )
-                if patch.job_control_change is not None:
-                    self._validate_posix_job_control_patch(patch)
+                if patch.directory_change is not None:
+                    self._validate_macos_process_directory_patch(patch)
+                if patch.job_control_change is not None or patch.directory_change is not None:
+                    if patch.job_control_change is not None:
+                        self._validate_posix_job_control_patch(patch)
                     if (
                         any(
                             (
@@ -12048,7 +12089,9 @@ class StateManager:
                         )
                         or len(plan._process_activity) != 1
                     ):
-                        raise StateError("POSIX membership change requires its own process cohort")
+                        raise StateError(
+                            "Membership or directory change requires its own process cohort"
+                        )
                 elif patch.job_control_actor is not None:
                     raise StateError("POSIX membership actor requires a membership change")
                 if patch.parentage_change is not None:
@@ -12536,6 +12579,9 @@ class StateManager:
             image_security=identity.image_security,
             executable_version=identity.executable_version,
             execution_directory=identity.execution_directory,
+            directory_history=(
+                (identity.execution_directory,) if identity.execution_directory is not None else ()
+            ),
             responsibility=identity.responsibility,
             parentage=identity.parentage,
             job_control=identity.job_control,
@@ -14692,6 +14738,8 @@ class StateManager:
             process.image_security = execution.after.image_security
             process.executable_version = execution.after.executable_version
             process.execution_directory = execution.after.execution_directory
+            if execution.after.execution_directory is not None:
+                self._append_process_directory(process, execution.after.execution_directory)
             process.credentials = execution.after.credentials
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
@@ -14705,6 +14753,8 @@ class StateManager:
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
+            if patch.directory_change is not None:
+                self._append_process_directory(process, patch.directory_change)
             if patch.job_control_change is not None:
                 change = patch.job_control_change
                 self._commit_posix_membership(change.before, change.after, change.changed_at)
@@ -16160,6 +16210,72 @@ class StateManager:
             != reference
         ):
             raise StateError("Process responsibility requires an exact active lifetime")
+
+    def _validate_macos_process_directory_patch(
+        self, patch: ActionCohortProcessActivityPatch
+    ) -> None:
+        """Require an exact successful, chronologically ordered Mac directory fact."""
+        if type(patch.target) is not ProcessIdentity or patch.directory_change is None:
+            raise StateError("Directory change requires an existing process")
+        process = self._validate_action_live_process_identity(patch.target)
+        try:
+            validate_macos_execution_directory(
+                patch.directory_change,
+                hostname=patch.target.hostname,
+                observed_at=patch.activity_time,
+                platform=self._pid_os.get(patch.target.hostname, "unknown"),
+            )
+        except ValueError as error:
+            raise StateError("Directory change requires exact Mac host, time and stat") from error
+        frontier = process.last_activity_time or process.executed_at or process.start_time
+        if patch.activity_time < frontier or (
+            process.directory_history
+            and patch.activity_time <= process.directory_history[-1].observed_at
+        ):
+            raise StateError(
+                "Directory change must follow its process activity and directory history"
+            )
+
+    @staticmethod
+    def _append_process_directory(
+        process: RunningProcess, directory: MacosExecutionDirectory
+    ) -> None:
+        """Keep bounded observations without changing the immutable execution snapshot."""
+        history = process.directory_history
+        if history and history[-1].observed_at == directory.observed_at:
+            history = history[:-1]
+        process.directory_history = (*history, directory)[-_MAX_RETAINED_PROCESS_DIRECTORIES:]
+
+    def process_directory_at(
+        self, identity: ProcessIdentity, *, event_time: datetime
+    ) -> MacosExecutionDirectory | None:
+        """Return the latest retained directory fact, preserving its actual observation time.
+
+        None means unknown or retired history. This does not refresh filesystem
+        stat or create a new execution-time observation. Producers must supply
+        fresh explicit facts when an output contract requires them. The lookup
+        uses an exact event-time execution and lifetime, never a recycled PID.
+        """
+        if (
+            type(identity) is not ProcessIdentity
+            or type(event_time) is not datetime
+            or event_time.utcoffset() is None
+        ):
+            raise StateError("Directory lookup requires an exact process and aware time")
+        at = ensure_utc(event_time)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or self._pid_os.get(identity.hostname) != "macos":
+                raise StateError("Directory lookup has stale, inactive or non-Mac process facts")
+            process = self._processes_by_object_id.get(identity.object_id)
+            if process is None:
+                process = self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                raise StateError("Directory lookup lost its exact process lifetime")
+            return next(
+                (item for item in reversed(process.directory_history) if item.observed_at <= at),
+                None,
+            )
 
     def observe_process_responsibility(
         self, identity: ProcessIdentity, *, observed_at: datetime

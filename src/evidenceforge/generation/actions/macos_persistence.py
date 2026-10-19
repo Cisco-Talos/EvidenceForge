@@ -51,7 +51,10 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
-from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
+from evidenceforge.generation.runtime_content import (
+    RuntimeContentIdentityManager,
+    runtime_executable_lease_owner,
+)
 from evidenceforge.generation.source_timing import SourceTimingPreparation
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -241,11 +244,12 @@ class MacosPersistenceActionBundle:
             retention = None
             horizon = self.dispatcher.output_end_time
             if type(binary) is LocalArtifactBinaryIdentity and horizon is not None:
+                retained_until = self.state.process_history_retained_until(horizon)
                 retention = self.content.registry.prepare_version_retention(
                     binary.artifact_version_id,
                     observed_at=request.timestamp,
-                    retained_until=self.state.process_history_retained_until(horizon),
-                    lease_owner=identity.object_id,
+                    retained_until=retained_until,
+                    lease_owner=runtime_executable_lease_owner(identity.hostname, retained_until),
                 )
             try:
                 prepared = self.dispatcher.prepare_builder(
