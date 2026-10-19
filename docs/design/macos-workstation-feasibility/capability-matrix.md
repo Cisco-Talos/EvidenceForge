@@ -120,3 +120,6 @@ Explicit Mac file observations now own file object identity and logical size dur
 
 ### Pack and baseline platform values (revision 256)
 Custom process `platforms` and traffic `os` accept `macos`, sharing POSIX validation and existing configuration shape. Built-in Mac executable ownership participates in pack collision checks. DNS/TLS use the same configured OS tags, SMTP submission reuses STARTTLS policy, and Mac system file noise uses root ownership. Synthetic pack and generated transport tests pass; no published pack or native evidence-family gate changes.
+
+### Installed mail-client ownership (revision 257)
+Mac SMTP/mailbox access selects the modeled user's compiled Outlook/Thunderbird assignment; webmail uses the preferred installed browser. Unavailable assignments preserve transport evidence without inventing an endpoint process. Default mailer versions use the exact installed binary release, and app paths containing spaces retain correct command tokenization. Sender attachment reads use the modeled Mac Documents directory. Mac recipient cache/attachment-file projections are withheld until a supported application storage contract exists; Linux cache layouts are never substituted. This is log correlation scope, not a requirement to generate filesystem artifacts.

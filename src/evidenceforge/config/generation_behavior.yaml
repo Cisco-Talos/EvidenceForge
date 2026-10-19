@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 256
+current_revision: 257
 history_start_revision: 1
-behavior_surface_sha256: 60992b384150b309883ab65a00a7c5e7997fde964c6e38e36a6c6d5e366bfcc6
+behavior_surface_sha256: bfa61271f6cbe91e15f077b084000b3ad7e81eaaf380df619b610f3b36abfc9e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2461,3 +2461,12 @@ changes:
       - ecar
       - zeek
     summary: Admits Mac custom process and traffic platform values, protects built-in executable claims, shares configured DNS/TLS platform filters and SMTP STARTTLS policy, and uses root for unattributed Mac file churn.
+  - revision: 257
+    id: macos-mail-installed-client-attribution
+    impact: localized
+    domains:
+      - macos-mail-client
+    formats:
+      - ecar
+      - zeek
+    summary: Binds Mac mail clients and default fingerprints to compiled deployments, omits unavailable endpoint attribution and unsupported native caches, and preserves modeled Mac home paths.

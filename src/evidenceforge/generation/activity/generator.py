@@ -20273,6 +20273,7 @@ class ActivityGenerator:
             protocol,
             request.user_agent,
             rng,
+            username=request.user.username,
         )
         process_pid, resolved_process_image = self._ensure_email_client_process(
             user=request.user,
@@ -20396,16 +20397,53 @@ class ActivityGenerator:
         token = "".join(reversed(chars)).rjust(10, "A")
         return token[-11:]
 
+    def _macos_email_assignment(
+        self,
+        system: "System",
+        protocol: str,
+        user_agent: str,
+        *,
+        username: str | None = None,
+    ) -> UserApplicationAssignment | None:
+        """Select through the existing compiled user/deployment ownership contract."""
+        registry = getattr(self.dispatcher, "deployment_registry", None)
+        principal = username or system.assigned_user
+        if registry is None or not principal:
+            return None
+        profile = registry.user_profile_for(system.hostname, principal, "macos")
+        if profile is None:
+            return None
+        if protocol == "owa":
+            return registry.preferred_browser_assignment(profile.profile_id)
+        mailer = self._email_mailer_profile("", user_agent)
+        if mailer not in {"outlook", "thunderbird"}:
+            return None
+        return registry.select_user_application_assignment_for_applications(
+            profile.profile_id, (mailer,), unit_interval=0.0
+        )
+
     def _email_access_process_image(
         self,
         system: "System",
         protocol: str,
         user_agent: str,
         rng: random.Random,
-    ) -> str:
-        """Return lightweight client process attribution for mailbox reads."""
+        *,
+        username: str | None = None,
+    ) -> str | None:
+        """Return an eligible installed Mac client, or existing legacy attribution."""
         os_category = _get_os_category(system.os)
         ua = user_agent.lower()
+        if os_category == "macos":
+            assignment = self._macos_email_assignment(
+                system, protocol, user_agent, username=username
+            )
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            return (
+                registry.application_executable_for_assignment(assignment)
+                if assignment is not None and registry is not None
+                else None
+            )
         if protocol == "owa":
             if os_category == "windows":
                 return rng.choice(
@@ -20427,12 +20465,20 @@ class ActivityGenerator:
 
     def _email_access_process_command_line(
         self,
-        image: str,
+        image: str | None,
         *,
         protocol: str,
         server_hostname: str,
     ) -> str:
         """Return a source-plausible command line for mailbox access ownership."""
+        if image is None:
+            return ""
+        if ".app/Contents/MacOS/" in image:
+            # The installed image is authoritative; no shell parses its spaced path.
+            arguments = [image]
+            if protocol == "owa":
+                arguments.append(f"https://{server_hostname}/owa/")
+            return shlex.join(arguments)
         exe_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if exe_name in {"chrome.exe", "msedge.exe", "firefox", "firefox.exe", "chromium"}:
             scheme = "https"
@@ -20454,10 +20500,12 @@ class ActivityGenerator:
         user: "User",
         system: "System",
         time: datetime,
-        image: str,
+        image: str | None,
         command_line: str,
     ) -> tuple[int, str | None]:
         """Create or reuse a user mail client process for endpoint flow attribution."""
+        if image is None:
+            return -1, None
         os_category = _get_os_category(system.os)
         sessions = [
             session
@@ -20478,6 +20526,17 @@ class ActivityGenerator:
         image_lower = image.lower()
         image_exe = image_lower.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
         resident_mail_client = image_exe in {"outlook.exe", "thunderbird", "thunderbird.exe"}
+        if os_category == "macos":
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            assignment = self._macos_email_assignment(system, "smtp", image, username=user.username)
+            descriptor = (
+                registry.application_descriptor_for_assignment(assignment)
+                if assignment is not None
+                and registry is not None
+                and registry.application_executable_for_assignment(assignment) == image
+                else None
+            )
+            resident_mail_client = descriptor is not None and descriptor.singleton_per_session
         running_candidates = [
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
@@ -20608,7 +20667,9 @@ class ActivityGenerator:
             return -1, None
         if hop.get("submission"):
             self._ensure_email_submission_session(actor=actor, system=src_system, time=time)
-            image = self._email_access_process_image(src_system, "smtp", user_agent, _get_rng())
+            image = self._email_access_process_image(
+                src_system, "smtp", user_agent, _get_rng(), username=actor.username
+            )
             command_line = self._email_access_process_command_line(
                 image,
                 protocol="smtp",
@@ -21071,7 +21132,9 @@ class ActivityGenerator:
             corpus_entry.user_agent if corpus_entry is not None and request.storyline_id else ""
         )
         raw_user_agent = (
-            spec.user_agent or corpus_user_agent or self._email_user_agent(request.system, rng)
+            spec.user_agent
+            or corpus_user_agent
+            or self._email_user_agent(request.system, rng, username=request.actor.username)
         )
         user_agent = self._email_effective_user_agent(
             sender,
@@ -21886,7 +21949,9 @@ class ActivityGenerator:
         ]
         return body.rstrip() + "\n\n" + "\n".join(footer_lines) + "\n"
 
-    def _email_user_agent(self, system: "System", rng: random.Random) -> str:
+    def _email_user_agent(
+        self, system: "System", rng: random.Random, *, username: str | None = None
+    ) -> str:
         os_category = _get_os_category(system.os)
         client_rng = random.Random(
             _stable_seed(
@@ -21894,6 +21959,22 @@ class ActivityGenerator:
                 f"{system.hostname}:{getattr(system, 'assigned_user', '')}:{os_category}"
             )
         )
+        if os_category == "macos":
+            assignment = self._macos_email_assignment(system, "smtp", "", username=username)
+            registry = getattr(self.dispatcher, "deployment_registry", None)
+            image = (
+                registry.application_executable_for_assignment(assignment)
+                if assignment is not None and registry is not None
+                else None
+            )
+            release = (
+                registry.resolve_binary(system.hostname, image, "macos")
+                if image is not None
+                else None
+            )
+            return (
+                f"{release.key.artifact_name} {release.key.version}" if release is not None else ""
+            )
         if os_category == "windows":
             return client_rng.choice(
                 [
@@ -23930,7 +24011,11 @@ class ActivityGenerator:
             protocol,
             email_ctx.user_agent,
             access_rng,
+            username=user.username,
         )
+        # Native Mac mail caches require a separately supported application storage contract.
+        if _get_os_category(system.os) == "macos":
+            return
         command_line = self._email_access_process_command_line(
             process_image,
             protocol=protocol,
@@ -24035,7 +24120,8 @@ class ActivityGenerator:
         """Return a plausible sender-side attachment source path."""
         if _get_os_category(system.os) == "windows":
             return rf"{self._user_profile_directory(user.username)}\Documents\{filename}"
-        return f"/home/{user.username}/Documents/{filename}"
+        home = "/Users" if _get_os_category(system.os) == "macos" else "/home"
+        return f"{home}/{user.username}/Documents/{filename}"
 
     def _email_message_cache_path(
         self,
