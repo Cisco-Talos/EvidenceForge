@@ -486,7 +486,7 @@ class MacosSshReceiverStartup:
         registry = dispatcher.local_artifact_registry
         try:
             if (
-                event.event_type == "process_exec"
+                event.event_type in {"process_exec", "process_fork"}
                 and horizon is not None
                 and horizon.replace(tzinfo=None) != datetime.max
                 and horizon > event.timestamp
@@ -504,7 +504,7 @@ class MacosSshReceiverStartup:
                 if versions:
                     if registry is None:
                         raise StateError(
-                            "Mac SSH runtime exec requires its exact artifact registry"
+                            "Mac SSH runtime transition requires its exact artifact registry"
                         )
                     deadline = self._state.process_history_retained_until(horizon)
                     for version in versions:

@@ -132,6 +132,7 @@ class TestLogonIdSystemScoping:
 
         spec = Mock()
         spec.type = "process"
+        spec.outcome = "success"
         spec.process_name = r"C:\Windows\System32\cmd.exe"
         spec.command_line = "cmd.exe /c whoami"
         spec.supplementary = None
@@ -290,6 +291,7 @@ class TestLogonIdSystemScoping:
 
         spec = Mock()
         spec.type = "process"
+        spec.outcome = "success"
         spec.process_name = r"C:\Windows\System32\cmd.exe"
         spec.command_line = "cmd.exe"
         spec.supplementary = None

@@ -30,7 +30,7 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
-from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -253,7 +253,9 @@ class RuntimeContentIdentityManager:
         Production user ownership resolves the exact compiled user and actor
         application profile once. A typed system owner receives an explicit
         runtime system profile and never masquerades as a user installation.
-        Missing byte length is represented as zero (unknown modeled length),
+        An explicit Mac filesystem observation supplies object and length facts;
+        any independently authored values must agree. Otherwise missing byte
+        length is represented as zero (unknown modeled length),
         and executable MIME is derived only from the explicit platform flag.
         """
 
@@ -340,6 +342,27 @@ class RuntimeContentIdentityManager:
                 owner_kind,
             ).replace("-", "")[:32]
         )
+
+        if macos_file is not None:
+            if platform != "macos":
+                raise ValueError("Mac file metadata requires a Mac runtime file effect")
+            # The complete filesystem observation owns these facts. Do not require
+            # callers to restate them in parallel scalar fields, or replace known
+            # length with the legacy unknown-length sentinel.
+            macos_file = detach_file_metadata(macos_file)
+            if (
+                authored_file_object_id.strip()
+                and authored_file_object_id.strip() != macos_file.file_object_id
+            ):
+                raise ValueError(
+                    "Authored file object disagrees with its Mac filesystem observation"
+                )
+            if authored_size_bytes is not None and (
+                type(authored_size_bytes) is not int or authored_size_bytes != macos_file.size_bytes
+            ):
+                raise ValueError("Authored file size disagrees with its Mac filesystem observation")
+            authored_file_object_id = macos_file.file_object_id
+            authored_size_bytes = macos_file.size_bytes
 
         file_object_id = authored_file_object_id.strip() or stable_uuid(
             "runtime-file-content-object",

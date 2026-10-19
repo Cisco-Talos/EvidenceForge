@@ -5366,7 +5366,7 @@ class EventDispatcher:
             actor = event.identity_plan.actor if event.identity_plan is not None else None
             retained_exec_content = bool(
                 platform == "macos"
-                and event.event_type == "process_exec"
+                and event.event_type in {"process_exec", "process_fork"}
                 and registry is not None
                 and registry.authenticates_prepared_retention(token)
                 and any(
@@ -8790,24 +8790,30 @@ class EventDispatcher:
             )
         return False
 
-    def _validate_exact_exec_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
-        """Retain only the existing before/after images and explicit scripts of one Mac exec."""
-        from evidenceforge.events.process import process_exec_identities
+    def _validate_exact_process_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
+        """Retain only existing image/script content owned by one exact Mac exec or fork."""
+        from evidenceforge.events.process import process_exec_identities, process_fork_identities
 
         publications = record.artifact_publications
         occurrence = record.trusted_projections[0].occurrence
         registry = record.artifact_registry
         if (
-            record.exact_projection_kind != "posix_exec"
-            or not 1 <= len(publications) <= 4
+            record.exact_projection_kind not in {"posix_exec", "posix_fork"}
+            or not 1
+            <= len(publications)
+            <= (2 if record.exact_projection_kind == "posix_fork" else 4)
             or registry is None
             or occurrence.src_host is None
             or occurrence.src_host.os_category != "macos"
         ):
             raise EventContractError(
-                "Exact artifact participation requires bounded Mac exec content"
+                "Exact artifact participation requires bounded Mac exec or fork content"
             )
-        before, after = process_exec_identities(occurrence)
+        before, after = (
+            process_fork_identities(occurrence)
+            if record.exact_projection_kind == "posix_fork"
+            else process_exec_identities(occurrence)
+        )
         for token in publications:
             if (
                 not registry.authenticates_prepared_retention(token)
@@ -8818,7 +8824,7 @@ class EventDispatcher:
                 )
             ):
                 raise EventContractError(
-                    "Exact exec retention requires its authenticated existing image or script"
+                    "Exact process retention requires its authenticated existing image or script"
                 )
 
     def _initialize_action_cohort_exact_projection(
@@ -8865,7 +8871,7 @@ class EventDispatcher:
             )
         )
         if record.artifact_publications:
-            self._validate_exact_exec_retention(record)
+            self._validate_exact_process_retention(record)
         if (
             record.effect_member_bindings
             or record.external_effect_links

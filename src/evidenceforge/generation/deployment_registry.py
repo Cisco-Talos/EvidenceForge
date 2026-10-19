@@ -2588,6 +2588,7 @@ class _LocalArtifactPreparedCommitPlan:
     route: _ArtifactRouteShard | None
     route_key: bytes | None
     packed_route_locator: int | None
+    places_record: bool
     rollback: _LocalArtifactPreparedRollbackSavepoint
 
 
@@ -8459,6 +8460,10 @@ class LocalArtifactVersionRegistry:
                     else:
                         current = shard.store.get_by_handle(existing_handle)
                         current_record = shard.store.get_record_by_handle(existing_handle)
+                        if require_existing and current_record is None:
+                            raise StateError(
+                                "artifact retention requires its exact existing record"
+                            )
                         if current != canonical_record.artifact or (
                             current_record is not None and current_record != canonical_record
                         ):
@@ -8800,11 +8805,15 @@ class LocalArtifactVersionRegistry:
         if type(token) is not LocalArtifactPublishToken:
             return False
         with self._capacity_lock:
-            return bool(
-                self.authenticates_prepared_publication(token)
-                and token._existing_handle is not None
-                and not token.withdraw_placement
-            )
+            if (
+                not self.authenticates_prepared_publication(token)
+                or token._existing_handle is None
+                or token.withdraw_placement
+            ):
+                return False
+            shard = self._shards[token._shard_id]
+            with shard.lock:
+                return shard.store.get_record_by_handle(token._existing_handle) == token.record
 
     def authenticates_publication_receipt(
         self,
@@ -9522,7 +9531,13 @@ class LocalArtifactVersionRegistry:
             shard = self._shards[reservation.canonical_token._shard_id]
             with (
                 self._all_shards_locked()
-                if reservation.canonical_token.withdraw_placement
+                if (
+                    reservation.canonical_token.withdraw_placement
+                    or (
+                        reservation.commit_plan is not None
+                        and reservation.commit_plan.places_record
+                    )
+                )
                 else shard.lock
             ):
                 plan = reservation.commit_plan
@@ -9627,7 +9642,11 @@ class LocalArtifactVersionRegistry:
                 )
             shard_ids = (
                 tuple(range(len(self._shards)))
-                if any(item.canonical_token.withdraw_placement for item in reservations)
+                if any(
+                    item.canonical_token.withdraw_placement
+                    or (item.commit_plan is not None and item.commit_plan.places_record)
+                    for item in reservations
+                )
                 else tuple(sorted({shard.shard_id for _, _, shard in entries}))
             )
             touched = 0
@@ -9731,6 +9750,7 @@ class LocalArtifactVersionRegistry:
         if expected_handle is None:  # pragma: no cover - reservation invariant
             raise StateError("prepared local artifact reservation lost its exact handle")
         prior_payload: bytes | None = None
+        places_record = True
         route: _ArtifactRouteShard | None = None
         route_key: bytes | None = None
         packed_route_locator: int | None = None
@@ -9742,6 +9762,7 @@ class LocalArtifactVersionRegistry:
             ):
                 raise StateError("prepared local artifact version was invalidated")
             existing_record = shard.store.get_record_by_handle(existing_handle)
+            places_record = existing_record is None
             if existing_record is not None and existing_record != token.record:
                 raise StateError("prepared local artifact content changed before commit")
             prior_payload = shard.store._payload(existing_handle)
@@ -9797,6 +9818,7 @@ class LocalArtifactVersionRegistry:
             route=route,
             route_key=route_key,
             packed_route_locator=packed_route_locator,
+            places_record=places_record,
             rollback=_LocalArtifactPreparedRollbackSavepoint(lease=lease_savepoint),
         )
 
@@ -9851,6 +9873,8 @@ class LocalArtifactVersionRegistry:
             lease.prior_store_slots = len(lease_store._slot_values)
         if token.withdraw_placement:
             rollback.withdrawal_rows = self._prepare_withdrawal_rows_locked(reservation)
+        elif plan.places_record:
+            rollback.withdrawal_rows = self._prepare_superseded_rows_locked(reservation, plan)
         rollback.captured = True
 
     def _rollback_prepared_commit_locked(
@@ -10483,7 +10507,7 @@ class LocalArtifactVersionRegistry:
         native_path: str,
         platform: Platform,
     ) -> LocalArtifactVersionRecord | None:
-        """Resolve the newest retained record for one exact execution placement.
+        """Resolve the newest nonwithdrawn record for one exact execution placement.
 
         Runtime executable admission uses the host, principal, platform, and
         canonical native path together. The equality index returns only exact
@@ -10518,6 +10542,51 @@ class LocalArtifactVersionRegistry:
                     ):
                         resolved = candidate
         return resolved
+
+    def _prepare_superseded_rows_locked(
+        self,
+        reservation: _LocalArtifactPreparedReservation,
+        plan: _LocalArtifactPreparedCommitPlan,
+    ) -> tuple[tuple[int, int, int, int], ...]:
+        """Withdraw superseded placements while retaining their immutable content.
+
+        Every shard is locked by the publication owner. Preserve the established
+        version/semantic-ID ordering for out-of-order publication. Once superseded,
+        a retained version cannot reappear at the path when its replacement expires.
+        A later explicit new publication can establish a new placement; refreshing
+        an already retained record cannot restore a withdrawn one.
+        """
+        token = reservation.canonical_token
+        artifact = token.record.artifact
+        key = "\0".join(
+            (
+                artifact.hostname,
+                artifact.principal,
+                artifact.platform,
+                artifact.normalized_native_path,
+            )
+        )
+        incoming = (artifact.version, artifact.artifact_version_id)
+        rows: list[tuple[int, int, int, int]] = []
+        superseded = False
+        for shard in self._shards:
+            index, digest, digest_for_handle, equals_handle = shard.store._query(
+                "execution_path", key
+            )
+            for handle in index.iter_handles(digest, digest_for_handle, equals_handle):
+                if shard.store._withdrawn[handle]:
+                    continue
+                current = shard.store.get_record_by_handle(handle)
+                if current is None:
+                    continue
+                if (current.artifact.version, current.artifact.artifact_version_id) > incoming:
+                    superseded = True
+                else:
+                    rows.append((shard.shard_id, handle, 0, shard.mutation_version))
+        if superseded:
+            owner = self._shards[token._shard_id]
+            rows.append((owner.shard_id, plan.expected_handle, 0, owner.mutation_version))
+        return tuple(rows)
 
     def _prepare_withdrawal_rows_locked(
         self, reservation: _LocalArtifactPreparedReservation

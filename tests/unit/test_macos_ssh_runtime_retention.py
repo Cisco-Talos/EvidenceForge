@@ -163,3 +163,35 @@ def test_first_exec_retains_the_old_runtime_wrapper_even_without_known_target_co
     content.registry.advance_watermark(_START + timedelta(days=7))
     assert content.registry.resolve_version(record.artifact.artifact_version_id) == record
     emitter.close()
+
+
+@pytest.mark.parametrize("collected", [False, True])
+def test_ssh_fork_acquires_loaded_image_retention_without_requiring_an_exec_lease(
+    tmp_path: Path,
+    collected: bool,
+) -> None:
+    state, dispatcher, emitter, host, receiver = _bootstrap(tmp_path, collected)
+    content = _manager()
+    dispatcher.bind_local_artifact_registry(content.registry)
+    dispatcher.output_end_time = None
+    request = _request(receiver)
+    descriptor = replace(_executable(), native_path=request.daemon.image_path)
+    _publish(content, descriptor, _START)
+    record = content.build_record(descriptor)
+    startup = MacosSshReceiverStartup(request, state=state, dispatcher=dispatcher, host=host)
+    startup.advance()
+    assert startup.completed_phases == 1
+    assert content.registry.census().active_leases == 0
+    dispatcher.output_end_time = _START + timedelta(days=6)
+    startup.advance()
+    assert startup.completed_phases == 2
+    assert content.registry.census().active_leases == 1
+    _publish(
+        content,
+        replace(descriptor, artifact_version=2, content_version=2),
+        _START + timedelta(seconds=3),
+    )
+    content.registry.advance_watermark(_START + timedelta(days=7))
+    assert content.registry.resolve_version(record.artifact.artifact_version_id) == record
+    assert content.resolve_record(host.hostname, "root", descriptor.native_path, "macos") is None
+    emitter.close()

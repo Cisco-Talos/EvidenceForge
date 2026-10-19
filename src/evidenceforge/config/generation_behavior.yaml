@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 253
+current_revision: 255
 history_start_revision: 1
-behavior_surface_sha256: 549ac11c1e4c759331d1af1fd740520ac7d4a685cd0193f908ceae140c16f6ee
+behavior_surface_sha256: 847a3fda30fe3841331a4c3aa34fcb86cb36e160efff20f3c07f6c5695ba8114
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2436,3 +2436,18 @@ changes:
       - macos-native-source-preparation
     formats: []
     summary: Freezes explicit runtime fork NDJSON under exact State and collector ownership without source admission, automatic metadata or sink publication.
+  - revision: 254
+    id: runtime-placement-supersession-and-macos-fork-retention
+    impact: localized
+    domains:
+      - runtime-artifact-placement
+      - macos-process-lifecycle
+    formats: []
+    summary: Withdraws superseded runtime placements without losing historical content and retains inherited image/script versions atomically with Mac forks, including SSH startup.
+  - revision: 255
+    id: macos-file-observation-owned-content-facts
+    impact: none
+    domains:
+      - macos-runtime-file-metadata
+    formats: []
+    summary: Uses complete explicit Mac filesystem observations for canonical file object and length, rejects conflicting scalar inputs, and preserves legacy unknown metadata without new public fields.

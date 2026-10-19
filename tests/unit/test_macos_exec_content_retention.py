@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import EventDispatcher, PreparedActionCohortBatch
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_exec_script import MacosExecScript
@@ -19,6 +20,7 @@ from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectAuditCounter,
     ExecutionEffectPlan,
 )
+from evidenceforge.generation.actions.posix_process import process_fork_occurrence
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
     LocalArtifactVersionRegistry,
@@ -48,7 +50,9 @@ class _Fixture:
     batch: PreparedActionCohortBatch
 
 
-def _fixture(tmp_path: Path, *, scripts: bool = True, foreign: bool = False) -> _Fixture:
+def _fixture(
+    tmp_path: Path, *, scripts: bool = True, foreign: bool = False, fork: bool = False
+) -> _Fixture:
     content = _manager()
     image = replace(_executable(), hostname="HOST-01", principal="root")
     script = replace(
@@ -104,18 +108,37 @@ def _fixture(tmp_path: Path, *, scripts: bool = True, foreign: bool = False) -> 
         _publish(content, descriptor, _START + timedelta(seconds=1))
     new = tuple(content.build_record(descriptor) for descriptor in new_descriptors)
     builder = state.begin_action_cohort_materialization()
-    after = builder.execute_process(
-        initial.identity,
-        image=image.native_path,
-        command_line=image.native_path,
-        executed_at=_START + timedelta(seconds=2),
-        executable_version=ProcessExecutableVersion.from_binary(new[0].binary),
-        exec_script=MacosExecScript.from_runtime_record(new[1]) if scripts else None,
-    )
+    if fork:
+        after = builder.fork_process(
+            initial.identity, forked_at=_START + timedelta(seconds=2)
+        ).identity
+        event = process_fork_occurrence(
+            host=HostContext(
+                hostname="HOST-01",
+                ip="192.0.2.20",
+                os="macOS 26",
+                os_category="macos",
+                system_type="workstation",
+            ),
+            parent=initial.identity,
+            child=after,
+            integrity_level="Medium",
+        )
+        event.process.binary_identity = old[0].binary
+        records = old
+    else:
+        after = builder.execute_process(
+            initial.identity,
+            image=image.native_path,
+            command_line=image.native_path,
+            executed_at=_START + timedelta(seconds=2),
+            executable_version=ProcessExecutableVersion.from_binary(new[0].binary),
+            exec_script=MacosExecScript.from_runtime_record(new[1]) if scripts else None,
+        )
+        event = _exec_event(initial.identity, after)
+        event.process.binary_identity = new[0].binary
+        records = (*old, *new)
     plan = builder.seal()
-    event = _exec_event(initial.identity, after)
-    event.process.binary_identity = new[0].binary
-    records = (*old, *new)
     if foreign:
         descriptor = replace(
             script,
@@ -142,7 +165,7 @@ def _fixture(tmp_path: Path, *, scripts: bool = True, foreign: bool = False) -> 
         dispatch = dispatcher.bind_action_cohort_projection(
             carrier, state_plan=plan, artifact_publications=tokens
         )
-        root = f"process-exec:{after.execution_id}"
+        root = f"process-fork:{after.object_id}" if fork else f"process-exec:{after.execution_id}"
         effects = ExecutionEffectPlan(
             ActionAnchor("process_execution", root, source="unit_test"), ()
         )

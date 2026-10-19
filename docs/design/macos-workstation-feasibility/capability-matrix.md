@@ -113,3 +113,7 @@ Revision 252 extends the exact Mac exec transaction to retain existing before/af
 
 ### Fork record preparation — revision 253
 Complete explicit runtime fork facts now assemble into v6/v10 native NDJSON under an exact collector claim, with canonical time, initiating thread and unchanged precommit State/counters. This prepares source bytes for the future outer transaction; it does not enable ES output or close automatic metadata, retained-artifact, lifecycle/sink coupling or native exec/exit gates.
+
+### Retained content and explicit file facts (revisions 254–255)
+Exact standalone forks and production SSH forks retain inherited runtime images and explicitly known scripts through the existing artifact transaction. Replacing a current placement withdraws the older placement while retaining its content; expiration cannot resurrect that older path. Rollback and checkpoint tests cover the distinction. This does not normalize ambiguous legacy checkpoint placements retroactively or provide a native sink transaction.
+Explicit Mac file observations now own file object identity and logical size during effect publication. Redundant scalar inputs must agree; unknown stat remains unknown. These are canonical adapters with synthetic tests, not automatic filesystem measurement or native format validation. ES-R1 and GK-R1 remain open.
