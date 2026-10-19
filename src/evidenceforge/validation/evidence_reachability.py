@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from evidenceforge.events.evidence_requirements import (
     AUTHORED_EVENT_EVIDENCE_CONTRACTS,
+    MACOS_HISTORY_SPILLAGE_EVIDENCE,
     MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS,
     PERSISTENT_WINDOWS_SMB_EVIDENCE,
     BehaviorEvidenceContract,
@@ -28,6 +29,7 @@ from evidenceforge.generation.source_deployment_compiler import (
 from evidenceforge.generation.storage_world import StorageWorldModel
 from evidenceforge.generation.world_model import WorldModel
 from evidenceforge.models import Scenario
+from evidenceforge.utils.platforms import platform_for_os
 from evidenceforge.utils.time import resolve_time_window
 
 
@@ -119,7 +121,7 @@ def _activation_is_reachable(
 
 def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation, ...]:
     grouped: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    known_hosts = {system.hostname.casefold() for system in scenario.environment.systems}
+    known_hosts = {system.hostname.casefold(): system for system in scenario.environment.systems}
     for section_name, events in (
         ("storyline", scenario.storyline or ()),
         ("red_herrings", scenario.red_herrings or ()),
@@ -136,6 +138,12 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
                     if spec.type == "macos_launch_item"
                     else AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
                 )
+                if (
+                    spec.type == "spillage"
+                    and spec.surface == "shell_history"
+                    and platform_for_os(known_hosts[hostname].os) == "macos"
+                ):
+                    contract = MACOS_HISTORY_SPILLAGE_EVIDENCE
                 if contract is None:
                     continue
                 field_path = f"{section_name}.{event_index}.events.{spec_index}"
@@ -150,6 +158,7 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
         for contract in (
             *AUTHORED_EVENT_EVIDENCE_CONTRACTS.values(),
             *MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values(),
+            MACOS_HISTORY_SPILLAGE_EVIDENCE,
         )
     }
     for (behavior_id, hostname), occurrences in sorted(grouped.items()):

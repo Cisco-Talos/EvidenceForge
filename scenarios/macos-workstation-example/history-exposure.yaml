@@ -1,0 +1,78 @@
+# Independently invented identities and value; bounded ASCII zsh history.
+version: '1.0'
+name: macos-history-exposure-example
+description: Invented credential text submitted to an explicitly owned local zsh session
+environment:
+  description: One invented development workstation on an observed network
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-01
+  systems:
+  - hostname: MAC-01
+    ip: 192.0.2.10
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-01
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 3h
+  warmup: 1h
+baseline_activity:
+  description: Low-volume developer activity; no attack storyline
+  intensity: low
+  variation: low
+output:
+  logs:
+  - format: ecar
+  - format: zsh_history
+  destination: ./output
+  compression: false
+storyline:
+- id: workspace-login
+  time: +1m
+  actor: alex
+  system: MAC-01
+  activity: Request a local interactive workspace; native method-entry observation
+    only
+  events:
+  - type: logon
+    logon_type: 2
+- id: invented-history-exposure
+  time: +10m
+  actor: alex
+  system: MAC-01
+  activity: Record an invented value in interactive history; no command success or
+    network activity is implied
+  events:
+  - type: spillage
+    surface: shell_history
+    value: EvidenceForgeFake_HISTORY_ONLY
+- id: local-session-close
+  time: +12m
+  actor: alex
+  system: MAC-01
+  activity: Close the explicit local session
+  events:
+  - type: logoff

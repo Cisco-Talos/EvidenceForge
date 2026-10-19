@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 283
+current_revision: 284
 history_start_revision: 1
-behavior_surface_sha256: 94facb1336b1152aeb5a4e486c55975c58aa3ffeecee1fbf879b1406fc5f3800
+behavior_surface_sha256: e49613e8a5b74d0b3c0e70ca4e442826fddf785f4b0edcd175eb9204e27446af
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2687,3 +2687,12 @@ changes:
       - runtime-executable-retention
     formats: []
     summary: Atomically withdraws an exact current Mac file name and publishes its unchanged object/content at a new name in the same directory, rejecting replacement and preserving loaded historical versions.
+  - revision: 284
+    id: macos-authored-zsh-history-spillage
+    impact: localized
+    domains:
+      - macos-shell-history
+      - authored-exposures
+    formats:
+      - zsh_history
+    summary: Routes authored Mac shell-history exposures through an explicit live zsh session, preserves filtering-independent shell choice, and validates/evaluates their actual native history source.

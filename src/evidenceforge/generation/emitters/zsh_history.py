@@ -5,6 +5,7 @@
 
 from typing import Any
 
+from evidenceforge.config.shell_history_policy import validate_zsh_history_command
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 
@@ -31,17 +32,7 @@ class ZshHistoryEmitter(BashHistoryEmitter):
 
     def _render_history_entry(self, event_data: dict[str, Any]) -> str:
         """Validate before journal admission and preserve command whitespace."""
-        command = event_data.get("command")
-        if (
-            not isinstance(command, str)
-            or not command
-            or any(character in command for character in ("\n", "\r", "\x00"))
-        ):
-            raise ValueError("zsh_history requires one nonempty, single-line command")
-        if command.endswith("\\"):
-            raise ValueError("zsh_history multiline continuations are not implemented")
-        if any(ord(character) >= 128 for character in command):
-            raise ValueError("zsh_history metafied non-ASCII commands are not implemented")
+        command = validate_zsh_history_command(event_data.get("command"))
         return self._template.render(timestamp=event_data.get("timestamp"), command=command).rstrip(
             "\n"
         )

@@ -94,6 +94,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     failed_exec: bool = False,
     persistence: bool = False,
     persistence_active: bool = False,
+    history_spillage: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -196,6 +197,34 @@ def test_short_generation_checkpoint_suspension_and_resume(
         )
         for step, when in zip(scenario_data["storyline"], times, strict=True):
             step["time"] = when
+    if history_spillage:
+        scenario_data["storyline"] = [
+            {
+                "id": "history-login",
+                "time": "+2m",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Open the explicit local history owner",
+                "events": [{"type": "logon", "logon_type": 2}],
+            },
+            *[
+                {
+                    "id": f"history-{index}",
+                    "time": when,
+                    "actor": "alex",
+                    "system": "MAC-01",
+                    "activity": "Invented interactive submission across recovery",
+                    "events": [
+                        {
+                            "type": "spillage",
+                            "surface": "shell_history",
+                            "value": f"EvidenceForgeFake_CHECKPOINT_{index}",
+                        }
+                    ],
+                }
+                for index, when in enumerate(("+50m", "+1h30m"))
+            ],
+        ]
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
     if helpers:
@@ -360,6 +389,16 @@ def test_short_generation_checkpoint_suspension_and_resume(
         assert denied["skipped_reason"] == (
             "exec_failed_caller_preserved" if failed_exec else "execution_denied_before_spawn"
         )
+    if history_spillage:
+        history = b"\n".join(
+            value for name, value in resumed_files.items() if name.endswith(".zsh_history")
+        )
+        assert history.count(b"EvidenceForgeFake_CHECKPOINT_0") == 1
+        assert history.count(b"EvidenceForgeFake_CHECKPOINT_1") == 1
+        truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+        spills = [row for row in truth["events"] if row["kind"] == "spillage"]
+        assert len(spills) == 2 and all(row["emitted"] for row in spills)
+        assert all(row["attributes"]["expected_sources"] == ["zsh_history"] for row in spills)
     if native:
         from evidenceforge.formats.macos_unified_log import decode_unified_log_record
 
@@ -513,4 +552,20 @@ def test_macos_failed_exec_checkpoint_resume(tmp_path: Path, scenarios_dir: Path
         False,
         False,
         failed_exec=True,
+    )
+
+
+@pytest.mark.slow
+def test_macos_authored_history_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        history_spillage=True,
     )

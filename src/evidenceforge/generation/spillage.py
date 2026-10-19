@@ -69,9 +69,8 @@ VALID_SURFACES: tuple[str, ...] = (
 HTTP_SURFACES: frozenset[str] = frozenset({"http_request_url", "http_referrer"})
 HTTP_SCHEMES: frozenset[str] = frozenset({"http", "https"})
 
-# Surfaces that only model on Linux hosts (syslog/bash). process_command_line
-# and the http_* surfaces are cross-OS (process telemetry and web requests exist
-# on Windows and Linux).
+# Legacy Linux surface admission. The validator separately admits the bounded
+# Mac zsh shell_history profile; native syslog remains Linux-only.
 LINUX_ONLY_SURFACES: frozenset[str] = frozenset({"shell_history", "syslog_message"})
 
 # Unicode label separators that IDNA / UTS-46 map to ASCII '.' — a real resolver
@@ -216,9 +215,13 @@ def choose_web_spillage_scheme(system: object, requested_scheme: str | None) -> 
     return None
 
 
-def expected_sources_for_surface(surface: str) -> tuple[str, ...]:
+def expected_sources_for_surface(surface: str, *, os_category: str = "linux") -> tuple[str, ...]:
     """Return the log source(s) a surface is expected to produce."""
-    fmt = SURFACE_FORMATS.get(surface)
+    fmt = (
+        "zsh_history"
+        if surface == "shell_history" and os_category == "macos"
+        else SURFACE_FORMATS.get(surface)
+    )
     return (fmt,) if fmt else ()
 
 
@@ -681,7 +684,7 @@ def render_for_surface(
         raise SpillageSafetyError(f"unsupported spillage surface: {surface!r}")
 
     encoded = _encode_for_surface(value, surface, os_category)
-    expected_sources = expected_sources_for_surface(surface)
+    expected_sources = expected_sources_for_surface(surface, os_category=os_category)
     rng = random.Random(_stable_seed(f"{seed_key}:carrier:{surface}"))
     carrier = _choose_carrier(family, surface, rng, os_category)
     line = _expand_template(carrier, rng, keep_value=True).replace("{value}", encoded)

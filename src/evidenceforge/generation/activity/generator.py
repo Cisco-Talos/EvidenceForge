@@ -34702,18 +34702,42 @@ class ActivityGenerator:
         target_fqdn: str | None = None
         effective_scheme: str | None = None
         if surface == "shell_history":
-            # bash history dwell/session scheduling can shift the visible time;
-            # use the actual emitted time so ground truth matches the log line.
-            # This surface is the bash-history-FILE exposure (the credential left in
-            # history); v1 does not also emit correlated process/network telemetry
-            # for the carrier — use process_command_line for the EDR-correlated form.
-            result_time = self.generate_bash_command(
-                user=user,
-                system=system,
-                time=time,
-                activity_type_or_command=render.command,
-                emit_process_telemetry=False,
-            )
+            # Linux dwell scheduling can shift the visible time; Mac zsh uses
+            # explicit submission at this instant. Neither history carrier implies
+            # command success, child-process execution or network effects.
+            if os_category == "macos":
+                from evidenceforge.config.shell_history_policy import validate_zsh_history_command
+
+                command = validate_zsh_history_command(render.command)
+                shell_pid = (
+                    self.ensure_macos_session_shell(user, system, logon_id, time)
+                    if logon_id
+                    else None
+                )
+                shell = (
+                    self.state_manager.get_process(system.hostname, shell_pid)
+                    if shell_pid is not None
+                    else None
+                )
+                # This authored profile owns zsh explicitly. Output selection must
+                # not switch the modeled shell to Bash or manufacture a submission.
+                result_time = (
+                    time
+                    if shell is not None
+                    and shell.image == "/bin/zsh"
+                    and self.emit_macos_shell_history(
+                        user, system, time, command, logon_id=logon_id, shell_pid=shell_pid
+                    )
+                    else None
+                )
+            else:
+                result_time = self.generate_bash_command(
+                    user=user,
+                    system=system,
+                    time=time,
+                    activity_type_or_command=render.command,
+                    emit_process_telemetry=False,
+                )
             if result_time is None:
                 # The bash command was suppressed (dwell-shifted past the scenario
                 # window, or a non-interactive user) — nothing landed on disk, so

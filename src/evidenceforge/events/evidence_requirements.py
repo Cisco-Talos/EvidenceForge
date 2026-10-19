@@ -115,6 +115,20 @@ def _event_contract(
     )
 
 
+MACOS_HISTORY_SPILLAGE_EVIDENCE = BehaviorEvidenceContract(
+    behavior_id="macos_authored_history_spillage",
+    label="Mac zsh_history exposure",
+    alternatives=(
+        EvidenceProjectionAlternative(
+            formats=frozenset({"zsh_history"}), capabilities=CollectionCapability.PROCESS
+        ),
+    ),
+    source_scope=EvidenceSourceScope.TARGET_HOST,
+    unreachable_severity=EvidenceReachabilitySeverity.ERROR,
+    suggestion="Enable zsh_history collection on the authored Mac host; another host or Bash source cannot carry this exposure.",
+)
+
+
 PERSISTENT_WINDOWS_SMB_EVIDENCE = BehaviorEvidenceContract(
     behavior_id="persistent_windows_smb",
     label="persistent Windows SMB activity",

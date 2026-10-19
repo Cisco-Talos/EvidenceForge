@@ -13,7 +13,7 @@ storyline:
   - id: spill-aws-bash
     time: "+20m"
     actor: nina.kapoor
-    system: APP-SRV-01          # Linux host (v1 surfaces are Linux-modeled)
+    system: APP-SRV-01          # Linux example; Mac history uses zsh_history
     activity: "AWS access key leaked via bash history"
     events:
       - type: spillage
@@ -45,13 +45,13 @@ the corpus is not a single memorizable string.
 
 | Surface | Modeled path | Output (source) | Encoding applied |
 |---|---|---|---|
-| `shell_history` | bash command | `bash_history` (`…/bash_history/<user>.bash_history`) | shell-quoting (`shlex.quote`) |
+| `shell_history` | interactive shell submission | Linux `bash_history`; bounded Mac `zsh_history` | shell-quoting (`shlex.quote`) |
 | `process_command_line` | process execution (under the actor's session) | `ecar` (EDR process telemetry, **required**; on Windows the credential also lands in 4688, but eval keys on `ecar`) | shell-quoting (`shlex.quote`) |
 | `syslog_message` | syslog event | `syslog` (`…/syslog.log`) | control-character escaping (single-line) |
 | `http_request_url` | HTTP/S request to a web server | `web_access` (the server's combined access log; credential in the request URL/query string → `path` field) | percent-encoding (`urllib.parse.quote`) |
 | `http_referrer` | HTTP/S request to a web server | `web_access` (credential in the `Referer` header; the request path is benign) | percent-encoding (`urllib.parse.quote`) |
 
-`shell_history`/`syslog_message` are Linux-modeled; `process_command_line` and the
+`syslog_message` is Linux-modeled; `shell_history` uses Linux Bash or an explicitly owned Mac zsh session; `process_command_line` and the
 `http_*` surfaces are cross-OS. For `process_command_line` the carrier is OS-aware:
 a Windows host renders a `cmd`/PowerShell/`.exe` command line (from a family's
 `process_command_line_windows` carriers, or a generic Windows fallback), never a
@@ -115,8 +115,8 @@ labels unrealistic standalone evidence as fully correlated:
   — so the process record is self-consistent and never implies an outbound
   connection that isn't modeled. Network-tool credential leaks are covered by the
   other surfaces below.
-- **`shell_history`** — the bash-history-**file** exposure: the credential left in
-  a user's `~/.bash_history`. A history file legitimately records commands run at
+- **`shell_history`** — the history-file exposure: the credential left in
+  Linux Bash history or the bounded Mac zsh history source. A history file legitimately records commands run at
   any time (including network tools like `curl`/`scp`), so its carriers may be
   network commands — this is a *historical artifact*, not a claim of correlated
   in-window network/process telemetry, and v1 emits none for the carrier. Use
@@ -253,3 +253,6 @@ pillar confirms each labeled value actually landed in the logs (so a spillage
 dataset passes acceptance) — it does **not** re-run synthesis. Scrubber
 precision/recall scoring is out of scope for this PR; when added it will fold into
 `eforge eval` rather than a new top-level command.
+
+### Mac authored history boundary
+The Mac profile requires an ordinary local interactive user and `zsh_history` in `output.logs`. It reuses or starts the existing catalog-backed Terminal/login/zsh chain in the canonical session, then submits a single-line ASCII command. An earlier local `logon` provides shell readiness. The history record does not establish command success or imply carrier network/process effects. Output filtering cannot switch the shell to Bash. Missing or incompatible shell ownership suppresses emitted ground truth. Root/service accounts, SSH-session exposure and metafied non-ASCII commands are unavailable in this authored profile. Existing Mac Bash history support remains limited to explicitly modeled Bash submissions through its separate owner. The evaluator requires matching host, actor and rendered value. An executable example is `scenarios/macos-workstation-example/history-exposure.yaml`.

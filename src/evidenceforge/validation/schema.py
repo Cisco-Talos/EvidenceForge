@@ -3549,10 +3549,10 @@ class ScenarioValidator:
         from evidenceforge.generation.spillage import (
             HTTP_SURFACES,
             LINUX_ONLY_SURFACES,
-            SURFACE_FORMATS,
             SpillageSafetyError,
             check_spillage_safety,
             choose_web_spillage_scheme,
+            expected_sources_for_surface,
             web_server_supported_schemes,
         )
 
@@ -3572,13 +3572,10 @@ class ScenarioValidator:
                     continue
                 field_path = f"storyline.{idx}.events.{spec_idx}"
 
-                # shell_history/syslog are Linux-modeled; emitting them on any non-Linux
-                # host (Windows OR an unknown OS such as macOS/BSD/Solaris) would silently
-                # drop the credential while still labeling it in ground truth — a phantom
-                # positive — so this is a hard error. The emitter only handles linux, so
-                # gate on != "linux", not == "windows". (process_command_line is cross-OS,
-                # so it is exempt.)
-                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES:
+                # Native syslog remains Linux-only. Authored Mac history uses
+                # the existing explicitly owned zsh submission path.
+                mac_history = os_cat == "macos" and spec.surface == "shell_history"
+                if os_cat != "linux" and spec.surface in LINUX_ONLY_SURFACES and not mac_history:
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
@@ -3594,7 +3591,8 @@ class ScenarioValidator:
 
                 # The credential is lost (but still ground-truthed) if the
                 # surface's output format is not collected — phantom positive.
-                required_fmt = SURFACE_FORMATS.get(spec.surface)
+                sources = expected_sources_for_surface(spec.surface, os_category=os_cat)
+                required_fmt = sources[0] if sources else None
                 if required_fmt and required_fmt not in expanded_formats:
                     self.issues.append(
                         ValidationIssue(
@@ -3649,7 +3647,16 @@ class ScenarioValidator:
 
                 # Non-interactive service accounts get no bash history, so a
                 # shell_history spill for them would never land.
-                if spec.surface == "shell_history" and is_noninteractive_bash_user(event.actor):
+                if spec.surface == "shell_history" and (
+                    is_noninteractive_bash_user(event.actor)
+                    or (
+                        mac_history
+                        and (
+                            event.actor == "root"
+                            or event.actor in self.scenario.environment.service_accounts
+                        )
+                    )
+                ):
                     self.issues.append(
                         ValidationIssue(
                             severity="error",
@@ -3676,6 +3683,15 @@ class ScenarioValidator:
                         )
                     )
 
+                if mac_history and spec.value is not None and not spec.value.isascii():
+                    self.issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            field_path=field_path,
+                            message=f"[{event.id}] Mac shell_history requires the ASCII zsh_history profile",
+                            suggestion="Use an ASCII invented value or another supported surface",
+                        )
+                    )
                 if spec.value is not None:
                     try:
                         check_spillage_safety(spec.value, family=None)

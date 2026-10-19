@@ -79,6 +79,7 @@ scenarios/macos-workstation-example/*
 !scenarios/macos-workstation-example/scenario.yaml
 !scenarios/macos-workstation-example/mixed-fleet.yaml
 !scenarios/macos-workstation-example/native-workspace.yaml
+!scenarios/macos-workstation-example/history-exposure.yaml
 !scenarios/macos-workstation-example/smb-client.yaml
 !scenarios/macos-workstation-example/ssh-client.yaml
 !scenarios/macos-workstation-example/README.md

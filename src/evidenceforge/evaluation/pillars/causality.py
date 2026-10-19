@@ -1538,6 +1538,7 @@ class CausalityScorer(DimensionScorer):
     # carries the URL surface in `path` and the Referer surface in `referer`.
     _SPILLAGE_TEXT_FIELD = {
         "bash_history": ("command",),
+        "zsh_history": ("command",),
         "syslog": ("message",),
         "ecar": ("command_line",),
         "web_access": ("path", "referer"),
@@ -1565,7 +1566,7 @@ class CausalityScorer(DimensionScorer):
         if format_name not in self._SPILLAGE_HOST_AGNOSTIC:
             if not self._host_matches(f.get("hostname"), event.system):
                 return False
-            if format_name == "bash_history" and not self._user_matches(
+            if format_name in {"bash_history", "zsh_history"} and not self._user_matches(
                 f.get("username"), event.actor
             ):
                 return False

@@ -1228,7 +1228,10 @@ class TestSpillageValidation:
             }
         )
         msgs = _errors(scenario)
-        assert any("Linux-modeled" in m and "not Linux" in m for m in msgs), (actor_os, msgs)
+        if actor_os == "macOS 14" and surface == "shell_history":
+            assert any("needs output format 'zsh_history'" in m for m in msgs)
+        else:
+            assert any("Linux-modeled" in m and "not Linux" in m for m in msgs), (actor_os, msgs)
 
     def test_noninteractive_actor_is_error(self):
         errs = _errors(
