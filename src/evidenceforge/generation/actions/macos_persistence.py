@@ -243,7 +243,12 @@ class MacosPersistenceActionBundle:
             )
             retention = None
             horizon = self.dispatcher.output_end_time
-            if type(binary) is LocalArtifactBinaryIdentity and horizon is not None:
+            if (
+                type(binary) is LocalArtifactBinaryIdentity
+                and horizon is not None
+                and horizon.replace(tzinfo=None) != datetime.max
+                and horizon > request.timestamp
+            ):
                 retained_until = self.state.process_history_retained_until(horizon)
                 retention = self.content.registry.prepare_version_retention(
                     binary.artifact_version_id,

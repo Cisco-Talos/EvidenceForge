@@ -102,3 +102,5 @@ Runtime-backed terminal process snapshots can be frozen from an authenticated st
 
 ### Collector batch update — revision 248
 Bounded same-connection groups now reserve and preclaim sequence allocation together. Invalid later members leave no partial prefix; filtering/delay decisions preserve counter values, and authenticated completed retries do not allocate again. Existing single-delivery behavior and dispatcher checkpoint state remain compatible. Native source/sink coupling remains unfinished.
+
+Revision 249 integrates finite-window runtime-image retention into Mac SSH exec publication. The existing exact transaction admits only an authenticated already-present target version, preserving placements and independent file/execution principals. Rollback, lost artifact returns, sink retry, filtering and checkpoint retention have coverage. Initial wrapper birth retention, script retention, native stat producers and actual ES source coupling remain separate work; this does not broaden native event admission.

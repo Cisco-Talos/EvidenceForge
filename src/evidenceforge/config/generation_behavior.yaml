@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 248
+current_revision: 249
 history_start_revision: 1
-behavior_surface_sha256: 6ed8c245262013d728840db83e1628252dfcaa90aee9aabcb946bada4822f9de
+behavior_surface_sha256: 8bb751186077027e41081baea94b99a3f648358f842562affc537a89bb13f83a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2397,3 +2397,12 @@ changes:
       - macos-source-contracts
     formats: []
     summary: Reserves and preclaims bounded same-connection delivery groups atomically while preserving existing single-delivery counters and leaving native sink admission separate.
+  - revision: 249
+    id: macos-exact-exec-runtime-retention
+    impact: localized
+    domains:
+      - macos-process-lifecycle
+      - runtime-artifact-retention
+    formats:
+      - ecar
+    summary: Retains exact Mac SSH exec images through a finite generation/history window in the existing exact publication transaction, with lost-return recovery and unchanged artifact placements.

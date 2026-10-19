@@ -4458,6 +4458,7 @@ class EventDispatcher:
         carrier: PreparedActionCohortProjection,
         *,
         state_plan: ActionCohortMaterializationPlan,
+        artifact_publications: tuple[LocalArtifactPublishToken, ...] = (),
     ) -> PreparedDispatch:
         """Bind one frozen projection exactly once to one sealed State cohort plan."""
 
@@ -4489,6 +4490,11 @@ class EventDispatcher:
                 record.occurrence,
                 state_plan,
             )
+            artifact_publications = tuple(artifact_publications)
+            if artifact_publications:
+                self._bind_artifact_publications(
+                    record.occurrence, artifact_publications, attach=False
+                )
             prepared = PreparedDispatch(
                 occurrence=record.occurrence,
                 projection=record.projection,
@@ -4496,7 +4502,7 @@ class EventDispatcher:
                 state_intent=PreparedDispatchStateIntent.EXTERNAL_ACTION_COHORT,
                 lifecycle_ticket=state_plan,
                 binary_identity_kind=record.binary_identity_kind,
-                artifact_publications=(),
+                artifact_publications=artifact_publications,
                 source_timing_preparation=timing_preparation,
                 authored_intent_id=record.authored_intent_id,
                 integrity_token="",
@@ -5334,9 +5340,24 @@ class EventDispatcher:
         for token in publications:
             record = token.record
             artifact = record.artifact
+            subject = event.identity_plan.subject if event.identity_plan is not None else None
+            retained_exec_image = bool(
+                platform == "macos"
+                and event.event_type == "process_exec"
+                and registry is not None
+                and registry.authenticates_prepared_retention(token)
+                and type(subject) is ProcessIdentity
+                and subject.executable_version is not None
+                and subject.executable_version.artifact_version_id == artifact.artifact_version_id
+                and subject.executable_version.content_id == record.content.content_id
+                and record.binary is not None
+            )
             if (
                 artifact.hostname.casefold() != host.hostname.casefold()
-                or artifact.principal.casefold() != principal.casefold()
+                or (
+                    artifact.principal.casefold() != principal.casefold()
+                    and not retained_exec_image
+                )
                 or artifact.platform != platform
             ):
                 raise EventContractError(
@@ -8740,6 +8761,43 @@ class EventDispatcher:
             )
         return False
 
+    def _validate_exact_exec_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
+        """Limit exact publication's artifact participant to its loaded Mac exec image.
+
+        No new file, removal, script, or unrelated retention can enter this boundary.
+        An existing version extension leaves all path placements unchanged.
+        """
+        publications = record.artifact_publications
+        occurrence = record.trusted_projections[0].occurrence
+        subject = occurrence.identity_plan.subject if occurrence.identity_plan is not None else None
+        registry = record.artifact_registry
+        if (
+            record.exact_projection_kind != "posix_exec"
+            or len(publications) != 1
+            or registry is None
+            or occurrence.src_host is None
+            or occurrence.src_host.os_category != "macos"
+            or type(subject) is not ProcessIdentity
+            or subject.executable_version is None
+            or subject.executable_version.identity_kind != "local_artifact"
+        ):
+            raise EventContractError(
+                "Exact artifact participation requires one loaded Mac exec image"
+            )
+        token = publications[0]
+        if (
+            not registry.authenticates_prepared_retention(token)
+            or token.observed_at != occurrence.timestamp
+            or subject.executable_version.artifact_version_id
+            != token.record.artifact.artifact_version_id
+            or subject.executable_version.content_id != token.record.content.content_id
+            or occurrence.process is None
+            or occurrence.process.binary_identity != token.record.binary
+        ):
+            raise EventContractError(
+                "Exact exec retention requires its authenticated existing image"
+            )
+
     def _initialize_action_cohort_exact_projection(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -8783,9 +8841,10 @@ class EventDispatcher:
                 else self._rdp_terminal_projection_is_exact_omission(projection)
             )
         )
+        if record.artifact_publications:
+            self._validate_exact_exec_retention(record)
         if (
-            record.artifact_publications
-            or record.effect_member_bindings
+            record.effect_member_bindings
             or record.external_effect_links
             or record.owned_effect_plans
             or record.published_provenances
@@ -10923,13 +10982,6 @@ class EventDispatcher:
                         prepared._consumed = True
 
                     if record.exact_recovery is not None:
-                        if (
-                            record.artifact_claimed is not None
-                            or record.expected_artifact_receipt is not None
-                        ):
-                            raise EventContractError(
-                                "Exact Type-5 projection unexpectedly retained an artifact owner"
-                            )
                         state_claimed = cast(
                             "PreparedActionCohortMaterialization",
                             record.state_claimed,
@@ -10967,6 +11019,28 @@ class EventDispatcher:
                         # Provisional State remains reversible. An exception here exits every
                         # claim before another canonical owner commits, so State rolls back.
                         state_claimed.apply_provisional()
+                        if record.artifact_claimed is not None:
+                            artifact_claimed = record.artifact_claimed
+                            artifact_receipt = record.expected_artifact_receipt
+                            artifact_registry = record.artifact_registry
+                            assert artifact_receipt is not None and artifact_registry is not None
+                            self._commit_exact_expected_owner(
+                                artifact_claimed.commit_no_fail,
+                                expected=artifact_receipt,
+                                terminal_authenticates=lambda: bool(
+                                    artifact_claimed.committed
+                                    and artifact_claimed.receipt is artifact_receipt
+                                    and artifact_registry.authenticates_publication_group_receipt(
+                                        artifact_receipt,
+                                        publication_tokens=artifact_claimed.publication_tokens,
+                                    )
+                                ),
+                                label="Exact exec retained-image owner",
+                            )
+                            record.artifact_cleanup_status[:] = [True] * len(
+                                record.artifact_cleanup_status
+                            )
+                            record.artifact_cleanup_complete = True
                         self._commit_exact_expected_owner(
                             lifecycle_claimed.commit_no_fail,
                             expected=lifecycle_receipt,

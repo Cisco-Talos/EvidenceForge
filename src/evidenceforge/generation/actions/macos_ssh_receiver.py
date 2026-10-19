@@ -37,8 +37,10 @@ from evidenceforge.generation.actions.posix_process import (
 from evidenceforge.generation.deployment_registry import (
     CompiledApplicationDescriptor,
     DeploymentContentRegistry,
+    LocalArtifactPublishToken,
 )
 from evidenceforge.generation.identity import IdentityDirectory, MacAccount
+from evidenceforge.generation.runtime_content import runtime_executable_lease_owner
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -437,12 +439,51 @@ class MacosSshReceiverStartup:
         root: str,
     ) -> PreparedActionCohortBatch:
         dispatcher = self._dispatcher
+        retention: LocalArtifactPublishToken | None = None
+        horizon = dispatcher.output_end_time
+        binary = event.process.binary_identity if event.process is not None else None
+        registry = dispatcher.local_artifact_registry
+        if (
+            event.event_type == "process_exec"
+            and type(binary) is LocalArtifactBinaryIdentity
+            and horizon is not None
+            and horizon.replace(tzinfo=None) != datetime.max
+            and horizon > event.timestamp
+        ):
+            if registry is None:
+                raise StateError("Mac SSH runtime exec requires its exact artifact registry")
+            deadline = self._state.process_history_retained_until(horizon)
+            retention = registry.prepare_version_retention(
+                binary.artifact_version_id,
+                observed_at=event.timestamp,
+                retained_until=deadline,
+                lease_owner=runtime_executable_lease_owner(event.src_host.hostname, deadline),
+            )
+        try:
+            return self._prepare_retained_publication(plan, event, root, retention)
+        except BaseException:
+            if retention is not None and registry is not None:
+                registry.cancel_prepared(retention)
+            raise
+
+    def _prepare_retained_publication(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        event: OccurrenceBuilder,
+        root: str,
+        retention: LocalArtifactPublishToken | None,
+    ) -> PreparedActionCohortBatch:
+        dispatcher = self._dispatcher
         with dispatcher.source_timing_planner.prepared_planning() as timing:
             carrier = dispatcher.prepare_action_cohort_projection(
                 event,
                 source_timing_preparation=timing,
             )
-        dispatch = dispatcher.bind_action_cohort_projection(carrier, state_plan=plan)
+        dispatch = dispatcher.bind_action_cohort_projection(
+            carrier,
+            state_plan=plan,
+            artifact_publications=(retention,) if retention is not None else (),
+        )
         effects = ExecutionEffectPlan(
             ActionAnchor("process_execution", root, source="ssh_receiver"), ()
         )

@@ -8795,6 +8795,17 @@ class LocalArtifactVersionRegistry:
                 return False
             return True
 
+    def authenticates_prepared_retention(self, token: object) -> bool:
+        """Admit only an authenticated existing-version extension without path mutation."""
+        if type(token) is not LocalArtifactPublishToken:
+            return False
+        with self._capacity_lock:
+            return bool(
+                self.authenticates_prepared_publication(token)
+                and token._existing_handle is not None
+                and not token.withdraw_placement
+            )
+
     def authenticates_publication_receipt(
         self,
         receipt: object,
@@ -9698,6 +9709,10 @@ class LocalArtifactVersionRegistry:
                 for member in group_receipt.receipts:
                     self._publication_receipts[id(member)] = member
                 self._publication_group_receipts[id(group_receipt)] = group_receipt
+                # Retain terminal truth before returning through caller wrappers. An outer
+                # canonical transaction must recognize a committed group after a lost return.
+                transaction._receipt = group_receipt
+                transaction._committed = True
             return group_receipt
 
     def _prepare_claimed_commit_locked(

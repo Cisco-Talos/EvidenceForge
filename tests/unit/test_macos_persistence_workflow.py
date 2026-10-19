@@ -268,3 +268,32 @@ def test_job_activation_binds_the_current_image_but_retains_earlier_execution_ve
     bundle.content.registry.advance_watermark(_START + timedelta(days=5))
     assert bundle.content.registry.resolve_version(first.artifact.artifact_version_id) == first
     assert bundle.content.registry.census().active_leases == 2
+
+
+@pytest.mark.parametrize("finite", [False, True])
+def test_activation_without_future_finite_window_does_not_overflow_retention(
+    monkeypatch: pytest.MonkeyPatch, finite: bool
+) -> None:
+    from dataclasses import replace
+    from datetime import datetime
+
+    from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
+    from tests.unit.test_macos_runtime_es_preparation import _publish
+    from tests.unit.test_macos_runtime_file_metadata import _executable
+
+    bundle, plan, host, definition, path, _ = _workflow(False)
+    bundle.dispatcher.output_end_time = (
+        _START if finite else datetime.max.replace(tzinfo=_START.tzinfo)
+    )
+    _publish(
+        bundle.content, replace(_executable(), hostname=host.hostname, principal="root"), _START
+    )
+    for index, operation in enumerate(("write", "bootstrap"), 1):
+        bundle.execute(_request(bundle, plan, host, definition, path, operation, index))
+
+    def reject(*args: object, **kwargs: object) -> None:
+        raise AssertionError("No finite future retention window was supplied")
+
+    monkeypatch.setattr(LocalArtifactVersionRegistry, "prepare_version_retention", reject)
+    result = bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
+    assert result.process.executable_version is not None
