@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 235
+current_revision: 236
 history_start_revision: 1
-behavior_surface_sha256: 7f8bd5a4c603bb5a7711e30aab9bbb8a7ea3599a640da09da26e9de3a2b2c0ee
+behavior_surface_sha256: e56deeaa7a8189753b2bd2cfa0813b6a5908b136b9260637aa53fc035084dd29
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2298,3 +2298,10 @@ changes:
       - state-checkpoint
     formats: []
     summary: Retains resolved Mac executable versions at launch, inherits them across fork and requires exact backing content for complete native process projections.
+  - revision: 236
+    id: runtime-macos-es-process-metadata-provider
+    impact: none
+    domains:
+      - macos-source-contracts
+    formats: []
+    summary: Prepares complete explicit live-process snapshots from retained runtime executable versions without current-path fallback, source admission or sink publication.
