@@ -84,3 +84,6 @@ Native process preparation now supports multiple staged births with exact staged
 
 ### Directory/exec and retention update — revision 241
 Successful explicit directory changes and returning failed exec now have canonical owners with rollback/history/checkpoint coverage. Directory observations remain distinct from immutable launch metadata; unknown history and unmodeled descriptors remain explicit gaps. Failed exec preserves the existing execution and adds no native denial claim. Repeated launches share finite-window leases per retained version. These engineering contracts do not change macOS 26 ES exec/exit or terminal Gatekeeper evidence gates, and they introduce no public scenario/configuration fields.
+
+### Descriptor ownership update — revision 243
+Explicit complete Mac descriptor tables now participate in fork, successful exec, failed exec, event-time history and checkpoint recovery. Unknown state remains unknown, and native FD kinds/pipe IDs and open-object allocation are not inferred. This closes a canonical inheritance/close-on-exec slice; it does not enable an ES source or close native exec/exit evidence gates.

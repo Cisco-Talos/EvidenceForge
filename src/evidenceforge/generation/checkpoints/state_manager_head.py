@@ -17,6 +17,7 @@ from evidenceforge.events.identity import (
     validate_process_arguments,
     validate_process_environment,
 )
+from evidenceforge.events.macos_descriptors import validate_macos_descriptors
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
 from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
@@ -28,6 +29,7 @@ from evidenceforge.generation.indexes import (
     TemporalAllocationIndex,
 )
 from evidenceforge.generation.state_manager import (
+    _MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES,
     _MAX_RETAINED_PROCESS_DIRECTORIES,
     StateManager,
 )
@@ -496,6 +498,32 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        try:
+            history = process.descriptor_history
+            if type(history) is not tuple or len(history) > _MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES:
+                raise ValueError("Invalid descriptor history container")
+            previous = None
+            frontier = max(
+                process.last_activity_time or process.start_time,
+                process.executed_at or process.start_time,
+            )
+            for table in history:
+                validate_macos_descriptors(
+                    table,
+                    hostname=process.system,
+                    observed_at=table.observed_at,
+                    platform=fresh._pid_os.get(process.system, "unknown"),
+                )
+                if (
+                    table.observed_at < process.start_time
+                    or table.observed_at > frontier
+                    or (process.end_time is not None and table.observed_at > process.end_time)
+                    or (previous is not None and table.observed_at <= previous)
+                ):
+                    raise ValueError("Invalid descriptor history ordering")
+                previous = table.observed_at
+        except (AttributeError, TypeError, ValueError) as error:
+            raise CheckpointCorruptionError("StateManager descriptor history is invalid") from error
         try:
             history = process.directory_history
             if type(history) is not tuple or len(history) > _MAX_RETAINED_PROCESS_DIRECTORIES:

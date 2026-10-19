@@ -93,7 +93,7 @@ def test_missing_arguments_remain_unknown_and_legacy_records_upgrade_without_par
     )
     process = state.get_process(identity.hostname, identity.pid)
     row = encode_state_value(process)
-    assert row[1] == "running-process-v17"
+    assert row[1] == "running-process-v19"
     assert decode_state_value(["record", "running-process-v8", row[2][:31]]) == replace(
         process, parentage=None
     )

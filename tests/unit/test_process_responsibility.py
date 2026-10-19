@@ -195,7 +195,7 @@ def test_state_codec_preserves_explicit_absence_and_migrates_unknown_legacy() ->
     assert decode_state_value(legacy) == replace(subject, responsibility=None)
     running = state.get_process(subject.hostname, subject.pid)
     encoded = encode_state_value(running)
-    assert encoded[1] == "running-process-v17"
+    assert encoded[1] == "running-process-v19"
     legacy = [*encoded[:2], encoded[2][:37]]
     legacy[1] = "running-process-v13"
     assert decode_state_value(legacy).responsibility is None

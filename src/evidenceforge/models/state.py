@@ -46,6 +46,7 @@ from evidenceforge.events.identity import (
 )
 from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_descriptors import MacosDescriptorTable
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.network import NetworkTrafficLedger
@@ -176,6 +177,7 @@ class RunningProcess:
     execution_directory: MacosExecutionDirectory | None = None
     executable_version: ProcessExecutableVersion | None = None
     directory_history: tuple[MacosExecutionDirectory, ...] = ()
+    descriptor_history: tuple[MacosDescriptorTable, ...] = ()
 
 
 @dataclass

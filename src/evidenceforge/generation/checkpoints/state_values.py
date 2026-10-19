@@ -30,6 +30,7 @@ from evidenceforge.events.job_control import (
     PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity
@@ -152,6 +153,7 @@ _RUNNING_PROCESS_FIELDS = (
     "execution_directory",
     "executable_version",
     "directory_history",
+    "descriptor_history",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -477,7 +479,12 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ProcessExecutableVersion,
         ("platform", "identity_kind", "content_id", "artifact_version_id"),
     ),
-    "running-process-v18": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "running-process-v19": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "macos-descriptor-binding-v1": (
+        MacosDescriptorBinding,
+        ("fd", "kind", "object_id", "close_on_exec"),
+    ),
+    "macos-descriptor-table-v1": (MacosDescriptorTable, ("hostname", "observed_at", "bindings")),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -715,6 +722,9 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None]
         if record_tag == "running-process-v17" and len(encoded_fields) == 41:
             record_tag = "running-process-v18"
+            encoded_fields = [*encoded_fields, encode_state_value(())]
+        if record_tag == "running-process-v18" and len(encoded_fields) == 42:
+            record_tag = "running-process-v19"
             encoded_fields = [*encoded_fields, encode_state_value(())]
         if record_tag == "process-identity-v11" and len(encoded_fields) == 24:
             record_tag = "process-identity-v12"

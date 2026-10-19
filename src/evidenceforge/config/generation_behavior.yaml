@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 242
+current_revision: 243
 history_start_revision: 1
-behavior_surface_sha256: f3fe295b87e310d95a508e9c2faf2cf383140b7d33103c863e27b75961240f96
+behavior_surface_sha256: bbb80eca98f3d3e10e1b3e1b9a1f4bda40c42b456d51b3c192df2c07d99e36fe
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2355,3 +2355,10 @@ changes:
       - macos-collector-ownership
     formats: []
     summary: Exposes a State-fenced prevalidated collector commit component with exact same-thread handles and retry proofs, without native sink publication or source admission.
+  - revision: 243
+    id: canonical-macos-descriptor-tables
+    impact: localized
+    domains:
+      - macos-process-execution
+    formats: []
+    summary: Preserves explicit bounded descriptor tables through fork, close-on-exec, failed exec and checkpoint history without inferring unknown descriptors or enabling native exec output.

@@ -63,6 +63,11 @@ from evidenceforge.events.job_control import (
     PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_descriptors import (
+    MacosDescriptorBinding,
+    MacosDescriptorTable,
+    validate_macos_descriptors,
+)
 from evidenceforge.events.macos_execution_directory import (
     MacosExecutionDirectory,
     validate_macos_execution_directory,
@@ -131,6 +136,7 @@ logger = logging.getLogger(__name__)
 # Retain a bounded historical execution window per live/retained process.
 _MAX_RETAINED_EXECUTIONS_PER_PROCESS = 64
 _MAX_RETAINED_PROCESS_DIRECTORIES = 64
+_MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES = 64
 
 
 def _authority_values_match(left: object, right: object) -> bool:
@@ -2282,6 +2288,7 @@ class ActionCohortProcessActivityPatch:
     parentage_change: ProcessParentageChange | None = None
     adopting_parent: ProcessIdentity | None = None
     directory_change: MacosExecutionDirectory | None = None
+    descriptor_table: MacosDescriptorTable | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -2300,6 +2307,7 @@ class ActionCohortProcessExecution:
     retired_threads: tuple[ThreadIdentity, ...]
     thread_counter: tuple[str, int] | None
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
+    descriptors_after: MacosDescriptorTable | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -3218,6 +3226,37 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             )
         )
 
+    def record_macos_descriptors(
+        self,
+        target: ProcessMaterializationPlan | ProcessIdentity,
+        *,
+        table: MacosDescriptorTable,
+    ) -> None:
+        """Stage an explicitly known complete table for a live or newly staged process.
+
+        Ordinary file/socket activity does not infer a descriptor table. A live
+        update requires its own cohort; staged initialization may accompany its
+        exact process birth. Unknown state is not an empty table.
+        """
+        self._require_open()
+        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        if type(table) is not MacosDescriptorTable:
+            raise StateError("Descriptor observation requires an exact table")
+        key = self._manager._action_process_target_key(normalized)
+        if any(
+            self._manager._action_process_target_key(p.target) == key
+            for p in self._process_activity_patches
+        ):
+            raise StateError("Action cohort repeats a process activity patch")
+        patch = ActionCohortProcessActivityPatch(
+            target=normalized,
+            activity_time=table.observed_at,
+            descriptor_table=table,
+            _capability=_ActionCohortCapability(),
+        )
+        self._manager._validate_macos_descriptor_patch(patch)
+        self._process_activity_patches.append(patch)
+
     def change_macos_process_directory(
         self, target: ProcessIdentity, *, directory: MacosExecutionDirectory
     ) -> None:
@@ -3564,6 +3603,10 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 ),
             )
             self._processes[-1] = fork
+            if platform == "macos":
+                descriptors = self._manager.process_descriptors_at(parent, event_time=timestamp)
+                if descriptors is not None:
+                    self.record_macos_descriptors(fork, table=descriptors.inherited_at(timestamp))
             return fork
 
     def execute_process(
@@ -3681,6 +3724,11 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             lifetime_image=normalized.initial_image,
             executed_at=timestamp,
         )
+        descriptors = (
+            self._manager.process_descriptors_at(normalized, event_time=timestamp)
+            if self._manager._pid_os.get(normalized.hostname) == "macos"
+            else None
+        )
         if audit_pid_version is not None:
             self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
         if thread_counter is not None:
@@ -3694,6 +3742,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 retired_threads=retired_threads,
                 thread_counter=thread_counter,
                 _capability=_ActionCohortCapability(),
+                descriptors_after=(
+                    descriptors.after_exec(timestamp) if descriptors is not None else None
+                ),
             )
         )
         return after
@@ -4123,6 +4174,8 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         MacosImageSecurity,
         ProcessExecutableVersion,
         MacosExecutionDirectory,
+        MacosDescriptorBinding,
+        MacosDescriptorTable,
         ResponsibleProcessReference,
         PosixJobControlChange,
         SessionIdentity,
@@ -4461,6 +4514,13 @@ def _action_cohort_semantic_preimage(
                     patch.directory_change,
                 )
                 if patch.directory_change is not None
+                else (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-descriptor-table-v1",
+                    patch.descriptor_table,
+                )
+                if patch.descriptor_table is not None
                 else (_action_cohort_process_target_semantic(patch.target), patch.activity_time)
                 if patch.audit_binding is None
                 else (
@@ -4519,6 +4579,11 @@ def _action_cohort_semantic_preimage(
             "process-executions-v2",
             tuple(
                 (patch.target, patch.after, patch.retired_threads, patch.thread_counter)
+                + (
+                    (("macos-exec-descriptors-v1", patch.descriptors_after),)
+                    if patch.descriptors_after is not None
+                    else ()
+                )
                 for patch in process_executions
             ),
         ),
@@ -12010,6 +12075,7 @@ class StateManager:
                             patch.job_control_change,
                             patch.parentage_change,
                             patch.directory_change,
+                            patch.descriptor_table,
                         )
                     )
                     > 1
@@ -12067,9 +12133,17 @@ class StateManager:
                         raise StateError(
                             "Process credential transitions require a separate cohort from receiver dependencies"
                         )
+                if patch.descriptor_table is not None:
+                    self._validate_macos_descriptor_patch(patch)
                 if patch.directory_change is not None:
                     self._validate_macos_process_directory_patch(patch)
-                if patch.job_control_change is not None or patch.directory_change is not None:
+                if (
+                    patch.job_control_change is not None
+                    or patch.directory_change is not None
+                    or (
+                        patch.descriptor_table is not None and type(patch.target) is ProcessIdentity
+                    )
+                ):
                     if patch.job_control_change is not None:
                         self._validate_posix_job_control_patch(patch)
                     if (
@@ -12090,7 +12164,7 @@ class StateManager:
                         or len(plan._process_activity) != 1
                     ):
                         raise StateError(
-                            "Membership or directory change requires its own process cohort"
+                            "Membership, directory or descriptor change requires its own process cohort"
                         )
                 elif patch.job_control_actor is not None:
                     raise StateError("POSIX membership actor requires a membership change")
@@ -12125,6 +12199,18 @@ class StateManager:
                     raise StateError("Process image replacement requires a POSIX PID namespace")
                 threads = self._running_threads.find("process_object_id", before.object_id)
                 is_macos = self._pid_os.get(before.hostname) == "macos"
+                current_descriptors = (
+                    self._descriptor_table_from_history(process, after.execution_started_at)
+                    if is_macos
+                    else None
+                )
+                expected_descriptors = (
+                    current_descriptors.after_exec(after.execution_started_at)
+                    if current_descriptors is not None
+                    else None
+                )
+                if execution.descriptors_after != expected_descriptors:
+                    raise StateError("Process execution descriptor effect is stale or changed")
                 if is_macos:
                     actual_threads = tuple(
                         sorted(
@@ -14738,6 +14824,8 @@ class StateManager:
             process.image_security = execution.after.image_security
             process.executable_version = execution.after.executable_version
             process.execution_directory = execution.after.execution_directory
+            if execution.descriptors_after is not None:
+                self._append_process_descriptors(process, execution.descriptors_after)
             if execution.after.execution_directory is not None:
                 self._append_process_directory(process, execution.after.execution_directory)
             process.credentials = execution.after.credentials
@@ -14753,6 +14841,8 @@ class StateManager:
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
+            if patch.descriptor_table is not None:
+                self._append_process_descriptors(process, patch.descriptor_table)
             if patch.directory_change is not None:
                 self._append_process_directory(process, patch.directory_change)
             if patch.job_control_change is not None:
@@ -16210,6 +16300,76 @@ class StateManager:
             != reference
         ):
             raise StateError("Process responsibility requires an exact active lifetime")
+
+    def _validate_macos_descriptor_patch(self, patch: ActionCohortProcessActivityPatch) -> None:
+        identity = self._action_process_identity(patch.target)
+        process = None
+        if type(patch.target) is ProcessMaterializationPlan:
+            platform = (
+                patch.target._allocator_patch.pid_os[1]
+                if patch.target._allocator_patch.pid_os is not None
+                else self._pid_os.get(identity.hostname, "unknown")
+            )
+            if patch.activity_time != identity.started_at:
+                raise StateError("Staged descriptor initialization requires exact process birth")
+        else:
+            process = self._validate_action_live_process_identity(identity)
+            platform = self._pid_os.get(identity.hostname, "unknown")
+        try:
+            validate_macos_descriptors(
+                patch.descriptor_table,
+                hostname=identity.hostname,
+                observed_at=patch.activity_time,
+                platform=platform,
+            )
+        except ValueError as error:
+            raise StateError("Descriptor observation requires exact Mac process facts") from error
+        frontier = identity.execution_started_at
+        if process is not None:
+            frontier = max(frontier, process.last_activity_time or process.start_time)
+        if patch.activity_time < frontier or (
+            process is not None
+            and process.descriptor_history
+            and patch.activity_time <= process.descriptor_history[-1].observed_at
+        ):
+            raise StateError("Descriptor observation must follow process activity and prior table")
+
+    @staticmethod
+    def _append_process_descriptors(process: RunningProcess, table: MacosDescriptorTable) -> None:
+        history = process.descriptor_history
+        if history and history[-1].observed_at == table.observed_at:
+            history = history[:-1]
+        process.descriptor_history = (*history, table)[-_MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES:]
+
+    @staticmethod
+    def _descriptor_table_from_history(
+        process: RunningProcess, at: datetime
+    ) -> MacosDescriptorTable | None:
+        return next(
+            (item for item in reversed(process.descriptor_history) if item.observed_at <= at), None
+        )
+
+    def process_descriptors_at(
+        self, identity: ProcessIdentity, *, event_time: datetime
+    ) -> MacosDescriptorTable | None:
+        """Read exact event-time lifetime descriptor state; missing history remains unknown."""
+        if (
+            type(identity) is not ProcessIdentity
+            or type(event_time) is not datetime
+            or event_time.utcoffset() is None
+        ):
+            raise StateError("Descriptor lookup requires an exact process and aware time")
+        at = ensure_utc(event_time)
+        with self._lock:
+            current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
+            if current != identity or self._pid_os.get(identity.hostname) != "macos":
+                raise StateError("Descriptor lookup has stale, inactive or non-Mac process facts")
+            process = self._processes_by_object_id.get(identity.object_id)
+            if process is None:
+                process = self._ended_processes_by_object_id.get(identity.object_id)
+            if process is None:
+                raise StateError("Descriptor lookup lost its exact process lifetime")
+            return self._descriptor_table_from_history(process, at)
 
     def _validate_macos_process_directory_patch(
         self, patch: ActionCohortProcessActivityPatch
