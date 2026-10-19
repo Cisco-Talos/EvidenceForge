@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 270
+current_revision: 271
 history_start_revision: 1
-behavior_surface_sha256: a736a6efc43d57aba7668adaae5e29b7cb35a782474f12fb7bea71962faac1fb
+behavior_surface_sha256: b004dbf85a0ed19fb2b91912533b1ee59f67285dafdc2649009522d6a6c00703
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2577,3 +2577,12 @@ changes:
     formats:
       - ecar
     summary: Retains an explicitly supplied runtime shebang file alongside its interpreter through fresh Mac process publication and recovery without inferring script execution from command text.
+  - revision: 271
+    id: atomic-macos-runtime-image-birth
+    impact: localized
+    domains:
+      - macos-executable-retention
+      - process-publication
+    formats:
+      - ecar
+    summary: Routes cohort-compatible Mac runtime-image births through the existing artifact-first action transaction so a failed image commit cannot leave a partially allocated process or lifecycle.

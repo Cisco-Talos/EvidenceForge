@@ -88,7 +88,16 @@ def test_birth_retains_explicit_script_and_interpreter_through_replacement_and_r
 
 @pytest.mark.parametrize(
     "invalid",
-    ["missing", "content", "unbounded", "parent", "plan_failure", "script_commit_failure"],
+    [
+        "missing",
+        "content",
+        "unbounded",
+        "parent",
+        "plan_failure",
+        "script_commit_failure",
+        "image_commit_failure",
+        "image_only_commit_failure",
+    ],
 )
 def test_birth_script_admission_failure_does_not_allocate_or_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: str
@@ -120,7 +129,7 @@ def test_birth_script_admission_failure_does_not_allocate_or_pin(
             raise StateError("injected process planning failure")
 
         monkeypatch.setattr(StateManager, "begin_action_cohort_materialization", fail)
-    if invalid in {"script_commit_failure", "image_commit_failure"}:
+    if invalid in {"script_commit_failure", "image_commit_failure", "image_only_commit_failure"}:
         from evidenceforge.generation.deployment_registry import (
             LocalArtifactPublicationReceipt,
             LocalArtifactVersionRegistry,
@@ -156,7 +165,7 @@ def test_birth_script_admission_failure_does_not_allocate_or_pin(
             parent_pid=1,
             require_exact_parent=invalid != "parent",
             suppress_command_file_effect=True,
-            exec_script=reference,
+            exec_script=None if invalid == "image_only_commit_failure" else reference,
         )
     assert state.get_state_summary() == before
     assert content.registry.census().active_leases == 0

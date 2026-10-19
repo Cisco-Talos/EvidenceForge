@@ -441,6 +441,21 @@ class ProcessExecutionService:
             if prepared_endpoint is not None and not uses_action_cohort:
                 raise StateError("Mac script launch requires cohort-compatible endpoint effects")
             uses_action_cohort = True
+        if (
+            _get_os_category(request.system.os) == "macos"
+            and request.prepared_effects is not None
+            and request.prepared_effects.process_binary_publication is not None
+            and prepared_endpoint is None
+            and prepared_actor is not None
+            and request.effect_plan is not None
+            and not request.effect_plan.nodes
+            and self.actors._process_endpoint_uses_action_cohort(
+                actor=prepared_actor, admitted_effects=(), effect_plan=request.effect_plan
+            )
+        ):
+            # Runtime image retention is fallible. Its owner must commit before
+            # State/lifecycle allocation, even when no file-effect rows exist.
+            uses_action_cohort = True
         prepared_requires_new_root = bool(
             request.prepared_effects is not None
             and (
@@ -1342,13 +1357,16 @@ class ProcessExecutionService:
                     ),
                 )
                 root_action_id = admission.endpoint.root_anchor.action_id
-            elif (
-                request.prepared_effects is not None
-                and request.prepared_effects.root_script_publication is not None
+            elif request.prepared_effects is not None and (
+                request.prepared_effects.root_script_publication is not None
+                or (
+                    _get_os_category(request.system.os) == "macos"
+                    and request.prepared_effects.process_binary_publication is not None
+                )
             ):
                 root_effects = request.effect_plan
                 if root_effects is None or root_effects.nodes:
-                    raise StateError("Mac script-only cohort requires its empty root effect plan")
+                    raise StateError("Mac artifact-only cohort requires its empty root effect plan")
                 audit_entries = (
                     ExecutionEffectAuditCohortEntry(root_effects, root_effects.reconcile(())),
                 )
@@ -1356,7 +1374,7 @@ class ProcessExecutionService:
             else:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process action cohort lost its endpoint or explicit script owner",
+                    "process action cohort lost its endpoint or exact Mac artifact owner",
                 )
             effect_member_bindings = tuple(
                 ActionCohortEffectMemberBinding(
