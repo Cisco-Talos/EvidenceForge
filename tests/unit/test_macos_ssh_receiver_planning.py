@@ -86,6 +86,9 @@ def test_mac_receiver_preparation_transport_startup_and_close(
     prepared = bundle._prepare_deferred_open(transport)
     assert fixture.state.materialization_digest() == before
     assert not fixture.state._linux_logind_session_counters
+    assert prepared.close_continuation.startup_request.receiver.arguments == (
+        prepared.close_continuation.startup_request.wrapper.image_path,
+    )
     assert (
         prepared.close_continuation.startup_request.phase_times
         == prepared.authority.ssh_timing_intent.macos_startup_times
@@ -98,6 +101,7 @@ def test_mac_receiver_preparation_transport_startup_and_close(
     assert session.audit_origin.audit_uid == 501
     shell_process = fixture.state.get_process(fixture.target.hostname, session.session_shell_pid)
     assert shell_process.image == shell and shell_process.credentials.effective_uid == 501
+    assert shell_process.arguments == ("-bash" if shell == "/bin/bash" else "-zsh",)
     fixture.generator._finalize_exact_ssh_close_continuation(continuation)
     assert fixture.state.get_session(prepared.session_plan.identity.logon_id) is None
     assert fixture.state.get_process(fixture.target.hostname, 1) is not None

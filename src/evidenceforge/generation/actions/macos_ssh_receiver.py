@@ -8,6 +8,7 @@ remain the enclosing SSH bundle's responsibility. This coordinator does not enab
 receiver authoring or publish a native authentication message.
 """
 
+import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -20,7 +21,11 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortBatch,
     PreparedActionCohortCapability,
 )
-from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    validate_process_arguments,
+)
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
@@ -43,6 +48,38 @@ from evidenceforge.generation.identity import IdentityDirectory, MacAccount
 from evidenceforge.generation.runtime_content import runtime_executable_lease_owner
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
+
+
+def macos_ssh_command_arguments(descriptor: CompiledApplicationDescriptor) -> tuple[str, ...]:
+    """Decode a bounded direct-exec profile's canonical argv serialization.
+
+    These four internal SSH roles execute their catalog command directly, without
+    a shell. Require the existing canonical shell-quoted argv spelling so shell
+    expansion, redirection or a pipeline cannot silently become an argument.
+    General authored commands and arbitrary catalog entries do not use this rule.
+    """
+    if (
+        type(descriptor) is not CompiledApplicationDescriptor
+        or descriptor.platform != "macos"
+        or descriptor.application_id
+        not in {"macos-sshd-keygen-wrapper", "macos-sshd", "macos-sshd-session", "macos-sshd-auth"}
+        or len(descriptor.command_templates) != 1
+        or descriptor.command_parameter_pools
+    ):
+        raise StateError("Mac SSH argv requires its bounded direct-exec catalog role")
+    command = descriptor.command_templates[0]
+    if type(command) is not str or not command or "\0" in command or len(command) > 65536:
+        raise StateError("Mac SSH argv requires a bounded literal command template")
+    try:
+        arguments = tuple(shlex.split(command, posix=True))
+        validate_process_arguments(arguments, command_line=command)
+    except ValueError as error:
+        raise StateError(
+            "Mac SSH role requires a canonical literal argv command template"
+        ) from error
+    if arguments[0] != descriptor.image_path:
+        raise StateError("Mac SSH argv must name its exact compiled executable path")
+    return arguments
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +144,8 @@ def resolve_macos_ssh_receiver_environment(
         descriptor = deployment.application_descriptor(application, "macos")
         if descriptor is None or descriptor.platform != "macos":
             raise StateError(f"Mac SSH receiver requires compiled entry {application}")
+        if application != "macos-launchd":
+            macos_ssh_command_arguments(descriptor)
         applications.append(descriptor)
     launchd, wrapper, daemon, worker, authentication = applications
     parent = state.get_process_identity(hostname, 1)
@@ -161,6 +200,7 @@ class MacosSshReceiverStartupRequest:
                 or descriptor.command_parameter_pools
             ):
                 raise StateError("Mac receiver startup requires its compiled role executables")
+            macos_ssh_command_arguments(descriptor)
         if (
             type(self.shell) is not CompiledApplicationDescriptor
             or self.shell.platform != "macos"
@@ -348,14 +388,16 @@ class MacosSshReceiverStartup:
                 if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
                 else None
             )
+            arguments = (
+                (f"-{descriptor.executable}",)
+                if phase == shell_exec
+                else macos_ssh_command_arguments(descriptor)
+            )
             after = builder.execute_process(
                 before,
                 image=descriptor.image_path,
-                command_line=(
-                    f"-{descriptor.executable}"
-                    if phase == shell_exec
-                    else descriptor.command_templates[0]
-                ),
+                command_line=shlex.join(arguments),
+                arguments=arguments,
                 executed_at=timestamp,
                 executable_version=executable_version,
             )

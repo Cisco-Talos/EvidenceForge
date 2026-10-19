@@ -4186,6 +4186,7 @@ class SshSessionActionBundle:
 
         from evidenceforge.generation.actions.macos_ssh_receiver import (
             MacosSshReceiverStartupRequest,
+            macos_ssh_command_arguments,
             resolve_macos_ssh_receiver_environment,
         )
 
@@ -4333,6 +4334,7 @@ class SshSessionActionBundle:
             credentials=PosixProcessCredentials(0, 0, 0, 0) if environment else None,
             new_posix_session=environment is not None,
             executable_version=receiver_executable_version,
+            arguments=macos_ssh_command_arguments(environment.wrapper) if environment else None,
             logon_id=session_plan.identity.logon_id,
             lifecycle_group_id=stable_uuid(
                 "ssh-deferred-receiver-lifecycle",
