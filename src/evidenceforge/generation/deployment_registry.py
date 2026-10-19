@@ -8306,6 +8306,43 @@ class LocalArtifactVersionRegistry:
         reservation_id = self._prepared_versions.get(artifact_version_id)
         return reservation_id is not None and reservation_id in self._claimed_reservations
 
+    def prepare_version_retention(
+        self,
+        artifact_version_id: str,
+        *,
+        observed_at: datetime,
+        retained_until: datetime,
+    ) -> LocalArtifactPublishToken:
+        """Prepare a retention floor for an existing version without changing placement.
+
+        The lifecycle owner supplies the complete required interval, including
+        any late-observation window. This neither infers a process end nor owns
+        an indefinite lease. Use the existing artifact-first composite commit;
+        cancelling or a failed commit leaves the prior deadline unchanged.
+        A version evicted between lookup and reservation must never be revived.
+        """
+        version_id = _normalize_name(artifact_version_id, "artifact_version_id")
+        if (
+            type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+            or type(retained_until) is not datetime
+            or retained_until.utcoffset() is None
+        ):
+            raise StateError("artifact retention requires an ordered aware interval")
+        event_time = ensure_utc(observed_at)
+        deadline = ensure_utc(retained_until)
+        if deadline <= event_time:
+            raise StateError("artifact retention requires an ordered aware interval")
+        record = self.resolve_version(version_id)
+        if record is None:
+            raise StateError("artifact retention requires its exact existing version")
+        return self.prepare_publish_version(
+            record,
+            event_time,
+            retention=deadline - event_time,
+            require_existing=True,
+        )
+
     def prepare_publish_version(
         self,
         record: LocalArtifactVersionRecord,
@@ -8315,6 +8352,7 @@ class LocalArtifactVersionRegistry:
         lease_owner: str = "",
         lease_until: datetime | None = None,
         withdraw_placement: bool = False,
+        require_existing: bool = False,
     ) -> LocalArtifactPublishToken:
         """Reserve one exact record publication before external state allocation.
 
@@ -8325,6 +8363,8 @@ class LocalArtifactVersionRegistry:
         before mutating its coupled lifecycle/StateManager transaction.
         """
 
+        if type(require_existing) is not bool:
+            raise StateError("artifact existing-version guard requires an exact boolean")
         if type(withdraw_placement) is not bool:
             raise StateError("artifact placement operation requires an exact boolean")
         if not isinstance(record, LocalArtifactVersionRecord):
@@ -8431,6 +8471,8 @@ class LocalArtifactVersionRegistry:
                                     "artifact deadline"
                                 )
             if located is None:
+                if require_existing:
+                    raise StateError("artifact retention requires its exact existing version")
                 existing_handle = None
                 shard = self._reserve_prepared_capacity_slot_locked(
                     canonical_record.artifact.artifact_id

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 238
+current_revision: 239
 history_start_revision: 1
-behavior_surface_sha256: 19671987a6648262a5b2a6608a9c2e260679543941b22113b61b209131428ad9
+behavior_surface_sha256: a983d8916dd8f196cf873199d33d1481397b1009433cc0ee23dc7d0eb6281553
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2322,3 +2322,10 @@ changes:
       - state-checkpoint
     formats: []
     summary: Binds known executable versions in Mac boot, SSH startup and authored system-job activation while preserving unknown compatibility inputs and other platforms.
+  - revision: 239
+    id: exact-existing-artifact-retention-preparation
+    impact: none
+    domains:
+      - runtime-artifact-retention
+    formats: []
+    summary: Prepares a transactional retention floor for an exact existing artifact version without restoring removed placement or recreating an evicted version.
