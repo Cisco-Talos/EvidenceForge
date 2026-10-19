@@ -292,7 +292,7 @@ def test_controller_restores_legacy_artifact_head_then_checkpoints_withdrawal(
     )
     assert restored.registry.withdraw_execution_path(record, _START)
     manifest = controller.commit(cursor=_cursor(12), participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "4"
+    assert manifest.participant_heads[0].schema_version == "5"
     final = _manager()
     controller.restore_participants(
         recovery=store.recover(),

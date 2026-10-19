@@ -169,7 +169,7 @@ def test_job_file_metadata_roundtrips_artifact_checkpoint_without_external_sidec
     _publish(manager, _descriptor(_spec()))
     participant = LocalArtifactVersionRegistryParticipant(manager.registry)
     seal = participant.prepare_checkpoint(1)
-    assert seal.head.schema_version == "4"
+    assert seal.head.schema_version == "5"
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         seal.head.payload, ()

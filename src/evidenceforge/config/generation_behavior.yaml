@@ -1,5 +1,5 @@
 schema_version: "1.0"
-current_revision: 257
+current_revision: 258
 history_start_revision: 1
 behavior_surface_sha256: bfa61271f6cbe91e15f077b084000b3ad7e81eaaf380df619b610f3b36abfc9e
 changes:
@@ -2470,3 +2470,10 @@ changes:
       - ecar
       - zeek
     summary: Binds Mac mail clients and default fingerprints to compiled deployments, omits unavailable endpoint attribution and unsupported native caches, and preserves modeled Mac home paths.
+  - revision: 258
+    id: retained-file-placement-checkpoint-migration
+    impact: localized
+    domains:
+      - runtime-artifact-recovery
+    formats: []
+    summary: Migrates competing current file placements from legacy artifact checkpoint heads to one deterministic owner while retaining historical content and explicit removals; head 5 rejects ambiguous placement state.

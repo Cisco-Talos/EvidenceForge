@@ -96,7 +96,7 @@ def test_atomic_publication_and_checkpoint_retain_all_metadata(executable: bool)
     assert manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos") is None
     _publish(manager, descriptor)
     seal = LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1)
-    assert seal.head.schema_version == "4"
+    assert seal.head.schema_version == "5"
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         seal.head.payload, ()

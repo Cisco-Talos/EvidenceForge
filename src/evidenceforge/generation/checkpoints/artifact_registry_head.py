@@ -43,7 +43,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "4"
+_SCHEMA_VERSION = "5"
 _ROW_WIDTH = 10
 _ALLOCATOR_ROW_WIDTH = 3
 
@@ -158,11 +158,54 @@ def _decode_record(
         raise CheckpointCorruptionError("local artifact checkpoint record is invalid") from error
 
 
+def _placement_key(record: LocalArtifactVersionRecord) -> tuple[str, str, str, str]:
+    artifact = record.artifact
+    return (
+        artifact.hostname,
+        artifact.principal,
+        artifact.platform,
+        artifact.normalized_native_path,
+    )
+
+
+def _restore_current_placements(registry: LocalArtifactVersionRegistry, *, legacy: bool) -> None:
+    """Migrate old competing path versions without reviving explicitly removed files."""
+    current: dict[tuple[str, str, str, str], tuple[int, str, int, int]] = {}
+    for shard in registry._shards:
+        for handle in range(shard.store._next_handle):
+            if not shard.store.is_live_handle(handle) or shard.store._withdrawn[handle]:
+                continue
+            record = shard.store.get_record_by_handle(handle)
+            if record is None:
+                raise CheckpointCorruptionError("local artifact placement has no canonical record")
+            key = _placement_key(record)
+            candidate = (
+                record.artifact.version,
+                record.artifact.artifact_version_id,
+                shard.shard_id,
+                handle,
+            )
+            previous = current.get(key)
+            if previous is None:
+                current[key] = candidate
+                continue
+            if not legacy:
+                raise CheckpointCorruptionError(
+                    "local artifact checkpoint has competing current placements"
+                )
+            winner, loser = (
+                (candidate, previous) if candidate[:2] > previous[:2] else (previous, candidate)
+            )
+            current[key] = winner
+            registry._shards[loser[2]].store._withdrawn[loser[3]] = 1
+
+
 def _capture_rows(
     registry: LocalArtifactVersionRegistry,
 ) -> tuple[list[list[object]], list[list[object]]]:
     rows: list[list[object]] = []
     allocators: list[list[object]] = []
+    placements: set[tuple[str, str, str, str]] = set()
     for route in registry._routes:
         assert_complete_owner_inventory(
             route,
@@ -209,6 +252,11 @@ def _capture_rows(
             record = shard.store.get_record_by_handle(handle)
             if record is None or _pack_artifact_payload(record.artifact, record) != payload:
                 raise RuntimeError("local artifact checkpoint packed record diverged")
+            if not shard.store._withdrawn[handle]:
+                key = _placement_key(record)
+                if key in placements:
+                    raise RuntimeError("local artifact checkpoint has competing current placements")
+                placements.add(key)
             version_id = record.artifact.artifact_version_id
             shard_live_versions.add(version_id)
             live_handles.add(handle)
@@ -480,7 +528,7 @@ class LocalArtifactVersionRegistryParticipant:
         retention = decode_state_value(document.retention)
         watermark = None if document.watermark is None else decode_state_value(document.watermark)
         if (
-            document.schema_version not in {"1", "2", "3", self.checkpoint_schema_version}
+            document.schema_version not in {"1", "2", "3", "4", self.checkpoint_schema_version}
             or document.capacity != self.registry._capacity
             or type(retention) is not timedelta
             or retention != self.registry._retention
@@ -529,7 +577,7 @@ class LocalArtifactVersionRegistryParticipant:
                 row,
                 lease_rows,
                 legacy=document.schema_version == "1",
-                metadata=document.schema_version == "4",
+                metadata=document.schema_version in {"4", "5"},
             )
             if order and order in deadline_orders[shard_id]:
                 raise CheckpointCorruptionError(
@@ -553,6 +601,7 @@ class LocalArtifactVersionRegistryParticipant:
                 raise CheckpointCorruptionError(
                     "local artifact pending expiry has no retained lease"
                 )
+        _restore_current_placements(self.registry, legacy=document.schema_version != "5")
         self.registry._high_water_mark = self.registry._live_count
 
 

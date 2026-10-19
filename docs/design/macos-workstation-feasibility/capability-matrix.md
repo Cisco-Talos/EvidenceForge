@@ -123,3 +123,6 @@ Custom process `platforms` and traffic `os` accept `macos`, sharing POSIX valida
 
 ### Installed mail-client ownership (revision 257)
 Mac SMTP/mailbox access selects the modeled user's compiled Outlook/Thunderbird assignment; webmail uses the preferred installed browser. Unavailable assignments preserve transport evidence without inventing an endpoint process. Default mailer versions use the exact installed binary release, and app paths containing spaces retain correct command tokenization. Sender attachment reads use the modeled Mac Documents directory. Mac recipient cache/attachment-file projections are withheld until a supported application storage contract exists; Linux cache layouts are never substituted. This is log correlation scope, not a requirement to generate filesystem artifacts.
+
+### Legacy placement recovery (revision 258)
+Artifact checkpoint head 5 requires one current canonical version per execution placement. Compatible heads 1–4 migrate competing current versions with existing version/identity ordering; explicitly withdrawn paths stay removed. Historical content and retention leases survive. This closes the legacy-placement limitation recorded under revision 254, without changing scenario/configuration fields or the product version.

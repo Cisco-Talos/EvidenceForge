@@ -196,3 +196,71 @@ def test_require_existing_rejects_identity_only_rows_without_reservation() -> No
         manager.registry.prepare_publish_version(record, _START, require_existing=True)
     assert manager.registry.census().prepared_publications == 0
     assert manager.registry.resolve_version(record.artifact.artifact_version_id) is None
+
+
+@pytest.mark.parametrize("platform", ["macos", "windows", "linux"])
+@pytest.mark.parametrize("schema", ["2", "3", "4"])
+def test_legacy_checkpoint_migrates_competing_current_versions(platform: str, schema: str) -> None:
+    from evidenceforge.generation.checkpoints.packed import dumps, loads
+
+    manager = _manager()
+    old, new = _image(platform), _image(platform, 2)
+    _publish(manager, old, retain=True)
+    _publish(manager, new)
+    seal = LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1)
+    document = loads(seal.head.payload)
+    document["schema_version"] = schema
+    for row in document["records"]:
+        row[9] = False
+        if schema == "2":
+            row.pop()
+    restored = _manager()
+    LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
+        dumps(document), ()
+    )
+    assert _resolve(restored, old) == manager.build_record(new)
+    resealed = LocalArtifactVersionRegistryParticipant(restored.registry).prepare_checkpoint(2)
+    assert resealed.head.schema_version == "5"
+    restored.registry.advance_watermark(_START + timedelta(days=2))
+    assert _resolve(restored, old) is None
+    assert restored.registry.resolve_version(
+        manager.build_record(old).artifact.artifact_version_id
+    ) == manager.build_record(old)
+
+
+def test_current_checkpoint_rejects_competing_placements_instead_of_migrating_corruption() -> None:
+    from evidenceforge.generation.checkpoints.errors import CheckpointCorruptionError
+    from evidenceforge.generation.checkpoints.packed import dumps, loads
+
+    manager = _manager()
+    _publish(manager, _image(), retain=True)
+    _publish(manager, _image(version=2))
+    document = loads(
+        LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1).head.payload
+    )
+    for row in document["records"]:
+        row[9] = False
+    with pytest.raises(CheckpointCorruptionError, match="competing current placements"):
+        LocalArtifactVersionRegistryParticipant(_manager().registry).restore_checkpoint(
+            dumps(document), ()
+        )
+
+
+def test_legacy_checkpoint_never_revives_explicitly_withdrawn_placements() -> None:
+    from evidenceforge.generation.checkpoints.packed import dumps, loads
+
+    manager = _manager()
+    _publish(manager, _image(), retain=True)
+    _publish(manager, _image(version=2))
+    document = loads(
+        LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1).head.payload
+    )
+    document["schema_version"] = "4"
+    for row in document["records"]:
+        row[9] = True
+    restored = _manager()
+    LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
+        dumps(document), ()
+    )
+    assert _resolve(restored, _image()) is None
+    assert restored.registry.census().live_versions == 2
