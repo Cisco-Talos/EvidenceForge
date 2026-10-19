@@ -9852,7 +9852,9 @@ class BaselineMixin:
             if not eligible_processes:
                 continue
             process = rng.choice(eligible_processes)
-            process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
+            process_username = process.username or (
+                "root" if os_cat in {"linux", "macos"} else "SYSTEM"
+            )
             if is_service_account(os_cat, process_username):
                 username = process_username
             else:

@@ -23,12 +23,13 @@ valid_tags:
   background: "OS-level background HTTPS (updates, telemetry, CRL)"
   windows:    "Windows-specific background traffic"
   linux:      "Linux-specific background traffic"
+  macos:      "macOS-specific background traffic"
   internal:   "Internal infrastructure (DB servers, etc.)"
   storage:    "Cloud storage (potential exfiltration targets)"
   outlook:    "Microsoft Outlook/Exchange Online endpoints"
   teams:      "Microsoft Teams endpoints"
   onedrive:   "Microsoft OneDrive/SharePoint endpoints"
-  os_tags: [windows, linux]  # Tags that trigger OS-aware domain filtering in pick_domain_and_ip()
+  os_tags: [windows, linux, macos]  # Tags that trigger OS-aware domain filtering in pick_domain_and_ip()
   dev:        "Developer tool API endpoints"
   social:     "Social media sites"
 

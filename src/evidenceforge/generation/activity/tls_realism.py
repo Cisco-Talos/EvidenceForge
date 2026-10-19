@@ -576,7 +576,11 @@ def _tls_profile_domains(
     source_system_type: str = "",
 ) -> list[str]:
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
-    from evidenceforge.generation.activity.dns_registry import get_domain_tags, get_domains_by_tag
+    from evidenceforge.generation.activity.dns_registry import (
+        get_domain_tags,
+        get_domains_by_tag,
+        get_os_tags,
+    )
     from evidenceforge.generation.activity.proxy_uri import (
         get_proxy_domain_class,
         proxy_domain_allows_source_system_type,
@@ -607,12 +611,13 @@ def _tls_profile_domains(
             if domain:
                 domains.append(str(domain))
 
+    platform_tags = get_os_tags()
     seen: set[str] = set()
     unique_domains: list[str] = []
     for domain in domains:
         domain_tags = set(get_domain_tags(domain))
-        os_tags = domain_tags & {"windows", "linux"}
-        if source_os in {"windows", "linux"} and os_tags and source_os not in os_tags:
+        os_tags = domain_tags & platform_tags
+        if source_os in {"windows", "linux", "macos"} and os_tags and source_os not in os_tags:
             continue
         if not proxy_domain_allows_source_system_type(domain, source_system_type):
             continue

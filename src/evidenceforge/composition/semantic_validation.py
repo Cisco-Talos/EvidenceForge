@@ -103,7 +103,7 @@ def packaged_builtin_executable_claims() -> set[str]:
     claims: set[str] = set()
     for entry in _packaged_builtin_applications():
         for os_name, platform in entry.platforms.items():
-            if os_name not in {"windows", "linux"}:
+            if os_name not in {"windows", "linux", "macos"}:
                 continue
             claims.update(_executable_claims(os_name, platform.image_path))
             for child in platform.children or []:

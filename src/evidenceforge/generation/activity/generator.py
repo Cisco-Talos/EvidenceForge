@@ -21971,7 +21971,7 @@ class ActivityGenerator:
         if "external_mail_server" in (src_system.roles or []):
             return False
         os_category = _get_os_category(src_system.os)
-        if os_category not in {"windows", "linux"}:
+        if os_category not in {"windows", "linux", "macos"}:
             return False
         agent = user_agent.lower()
         if any(marker in agent for marker in ("outlook", "thunderbird", "apple mail")):

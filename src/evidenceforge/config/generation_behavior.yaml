@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 255
+current_revision: 256
 history_start_revision: 1
-behavior_surface_sha256: 847a3fda30fe3841331a4c3aa34fcb86cb36e160efff20f3c07f6c5695ba8114
+behavior_surface_sha256: 60992b384150b309883ab65a00a7c5e7997fde964c6e38e36a6c6d5e366bfcc6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2451,3 +2451,13 @@ changes:
       - macos-runtime-file-metadata
     formats: []
     summary: Uses complete explicit Mac filesystem observations for canonical file object and length, rejects conflicting scalar inputs, and preserves legacy unknown metadata without new public fields.
+  - revision: 256
+    id: macos-pack-platform-and-baseline-isolation
+    impact: localized
+    domains:
+      - pack-composition
+      - macos-baseline
+    formats:
+      - ecar
+      - zeek
+    summary: Admits Mac custom process and traffic platform values, protects built-in executable claims, shares configured DNS/TLS platform filters and SMTP STARTTLS policy, and uses root for unattributed Mac file churn.

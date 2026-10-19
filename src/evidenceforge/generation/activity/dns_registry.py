@@ -64,6 +64,12 @@ def load_dns_registry() -> dict[str, Any]:
     return _CACHED_DATA
 
 
+def get_os_tags() -> frozenset[str]:
+    """Return configured platform tags used to isolate OS-specific DNS/TLS pools."""
+    data = load_dns_registry()
+    return frozenset(data.get("valid_tags", {}).get("os_tags", ["windows", "linux"]))
+
+
 def get_reverse_dns() -> dict[str, str]:
     """Build IP → domain mapping (first domain wins for shared IPs).
 
@@ -174,7 +180,7 @@ def pick_domain_and_ip(
         rng: Random instance for domain selection.
         *tags: Tags to filter domains by (e.g., "web", or "background", "windows").
         src_host: Source hostname for deterministic IP selection.
-        include_os: Source host OS category ("windows" or "linux"). When set,
+        include_os: Source host OS category ("windows", "linux" or "macos"). When set,
             domains tagged for a different OS are excluded. Domains with no
             OS tag are always included.
         source_system_type: Optional source host type used to exclude domains
@@ -186,8 +192,7 @@ def pick_domain_and_ip(
     entries = get_domains_by_tag(*tags)
 
     if include_os and entries:
-        data = load_dns_registry()
-        os_tags = set(data.get("valid_tags", {}).get("os_tags", ["windows", "linux"]))
+        os_tags = get_os_tags()
         entries = [
             entry
             for entry in entries
