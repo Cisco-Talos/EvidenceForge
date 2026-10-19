@@ -481,31 +481,53 @@ class MacosSshReceiverStartup:
         root: str,
     ) -> PreparedActionCohortBatch:
         dispatcher = self._dispatcher
-        retention: LocalArtifactPublishToken | None = None
+        retentions: list[LocalArtifactPublishToken] = []
         horizon = dispatcher.output_end_time
-        binary = event.process.binary_identity if event.process is not None else None
         registry = dispatcher.local_artifact_registry
-        if (
-            event.event_type == "process_exec"
-            and type(binary) is LocalArtifactBinaryIdentity
-            and horizon is not None
-            and horizon.replace(tzinfo=None) != datetime.max
-            and horizon > event.timestamp
-        ):
-            if registry is None:
-                raise StateError("Mac SSH runtime exec requires its exact artifact registry")
-            deadline = self._state.process_history_retained_until(horizon)
-            retention = registry.prepare_version_retention(
-                binary.artifact_version_id,
-                observed_at=event.timestamp,
-                retained_until=deadline,
-                lease_owner=runtime_executable_lease_owner(event.src_host.hostname, deadline),
-            )
         try:
-            return self._prepare_retained_publication(plan, event, root, retention)
-        except BaseException:
-            if retention is not None and registry is not None:
-                registry.cancel_prepared(retention)
+            if (
+                event.event_type == "process_exec"
+                and horizon is not None
+                and horizon.replace(tzinfo=None) != datetime.max
+                and horizon > event.timestamp
+            ):
+                assert event.identity_plan is not None
+                versions: dict[str, None] = {}
+                for identity in (event.identity_plan.actor, event.identity_plan.subject):
+                    assert type(identity) is ProcessIdentity
+                    image = identity.executable_version
+                    if image is not None and image.artifact_version_id is not None:
+                        versions[image.artifact_version_id] = None
+                    script = identity.exec_script
+                    if script is not None and script.artifact_version_id is not None:
+                        versions[script.artifact_version_id] = None
+                if versions:
+                    if registry is None:
+                        raise StateError(
+                            "Mac SSH runtime exec requires its exact artifact registry"
+                        )
+                    deadline = self._state.process_history_retained_until(horizon)
+                    for version in versions:
+                        retentions.append(
+                            registry.prepare_version_retention(
+                                version,
+                                observed_at=event.timestamp,
+                                retained_until=deadline,
+                                lease_owner=runtime_executable_lease_owner(
+                                    event.src_host.hostname, deadline
+                                ),
+                            )
+                        )
+            return self._prepare_retained_publication(plan, event, root, tuple(retentions))
+        except BaseException as primary:
+            if registry is not None:
+                for retention in retentions:
+                    try:
+                        registry.cancel_prepared(retention)
+                    except BaseException as cleanup:
+                        primary.add_note(
+                            f"Mac SSH content reservation cleanup raised {type(cleanup).__name__}"
+                        )
             raise
 
     def _prepare_retained_publication(
@@ -513,7 +535,7 @@ class MacosSshReceiverStartup:
         plan: ActionCohortMaterializationPlan,
         event: OccurrenceBuilder,
         root: str,
-        retention: LocalArtifactPublishToken | None,
+        retentions: tuple[LocalArtifactPublishToken, ...],
     ) -> PreparedActionCohortBatch:
         dispatcher = self._dispatcher
         with dispatcher.source_timing_planner.prepared_planning() as timing:
@@ -524,7 +546,7 @@ class MacosSshReceiverStartup:
         dispatch = dispatcher.bind_action_cohort_projection(
             carrier,
             state_plan=plan,
-            artifact_publications=(retention,) if retention is not None else (),
+            artifact_publications=retentions,
         )
         effects = ExecutionEffectPlan(
             ActionAnchor("process_execution", root, source="ssh_receiver"), ()

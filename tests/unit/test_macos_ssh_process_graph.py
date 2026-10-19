@@ -12,6 +12,7 @@ from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.formats.loader import load_format
 from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
 from evidenceforge.generation.actions.posix_process import (
@@ -38,7 +39,11 @@ def _catalog_image(application: str) -> tuple[str, str]:
 
 
 def _bootstrap(
-    tmp_path: Path, collected: bool = True, *, session_ownership: bool = False
+    tmp_path: Path,
+    collected: bool = True,
+    *,
+    session_ownership: bool = False,
+    executable_version: ProcessExecutableVersion | None = None,
 ) -> tuple[StateManager, EventDispatcher, EcarEmitter, HostContext, ProcessIdentity]:
     state = StateManager()
     state.set_current_time(_START)
@@ -83,6 +88,7 @@ def _bootstrap(
         logon_id=session.identity.logon_id,
         session_plan=session,
         new_posix_session=session_ownership,
+        executable_version=executable_version,
         require_session=True,
         start_time=_START,
         credentials=PosixProcessCredentials(0, 0, 0, 0),

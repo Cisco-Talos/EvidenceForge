@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 251
+current_revision: 252
 history_start_revision: 1
-behavior_surface_sha256: 05e488b3ef87e121623bbdd99efa1e32fd309bc19f9f4a95516dea9ff0a76a1d
+behavior_surface_sha256: cdc5622fd2ec1e0d4e5660763ddb084c6f903940a4ad96eabc2d427c9dc7a627
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2420,3 +2420,12 @@ changes:
       - macos-process-metadata
     formats: []
     summary: Binds bounded direct-exec SSH catalog commands and login-shell argv to canonical wrapper/fork/exec ownership without interpreting general authored commands or inferring environment data.
+  - revision: 252
+    id: macos-exact-exec-content-history-retention
+    impact: localized
+    domains:
+      - macos-process-lifecycle
+      - runtime-artifact-retention
+    formats:
+      - ecar
+    summary: Retains up to four exact existing before/after executable and shebang-script versions in one Mac exec transaction, including SSH wrapper history, without rebinding current paths or inventing script execution.

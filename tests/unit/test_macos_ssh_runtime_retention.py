@@ -133,3 +133,33 @@ def test_ssh_without_future_finite_horizon_does_not_invent_retention(
     startup = MacosSshReceiverStartup(request, state=state, dispatcher=dispatcher, host=host)
     startup.advance()
     emitter.close()
+
+
+@pytest.mark.parametrize("collected", [False, True])
+def test_first_exec_retains_the_old_runtime_wrapper_even_without_known_target_content(
+    tmp_path: Path, collected: bool
+) -> None:
+    from evidenceforge.events.process_executable import ProcessExecutableVersion
+    from tests.unit.test_macos_ssh_startup import _descriptor
+
+    content = _manager()
+    descriptor = replace(
+        _executable(), native_path=_descriptor("macos-sshd-keygen-wrapper").image_path
+    )
+    _publish(content, descriptor, _START)
+    record = content.build_record(descriptor)
+    state, dispatcher, emitter, host, receiver = _bootstrap(
+        tmp_path, collected, executable_version=ProcessExecutableVersion.from_binary(record.binary)
+    )
+    dispatcher.bind_local_artifact_registry(content.registry)
+    dispatcher.output_end_time = _START + timedelta(days=6)
+    startup = MacosSshReceiverStartup(
+        _request(receiver), state=state, dispatcher=dispatcher, host=host
+    )
+    startup.advance()
+    assert state.get_process_identity(host.hostname, receiver.pid).executable_version is None
+    while startup.result is None:
+        startup.advance()
+    content.registry.advance_watermark(_START + timedelta(days=7))
+    assert content.registry.resolve_version(record.artifact.artifact_version_id) == record
+    emitter.close()

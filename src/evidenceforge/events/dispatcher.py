@@ -56,6 +56,7 @@ from evidenceforge.events.collection_policy import (
     ProjectionRole,
 )
 from evidenceforge.events.content_identity import (
+    LocalArtifactVersionRecord,
     Platform,
     ProcessBinaryIdentity,
     UnresolvedBinaryIdentity,
@@ -5297,6 +5298,27 @@ class EventDispatcher:
             raise RuntimeError("event dispatcher local artifact registry is already bound")
         self.local_artifact_registry = registry
 
+    @staticmethod
+    def _process_owns_runtime_exec_content(
+        identity: object, record: LocalArtifactVersionRecord
+    ) -> bool:
+        """Match an exact loaded image or explicit shebang script, never a current path."""
+        if type(identity) is not ProcessIdentity:
+            return False
+        if record.artifact.hostname.casefold() != identity.hostname.casefold():
+            return False
+        if record.binary is not None:
+            return identity.executable_version == ProcessExecutableVersion.from_binary(
+                record.binary
+            )
+        script = identity.exec_script
+        return bool(
+            script is not None
+            and script.artifact_version_id == record.artifact.artifact_version_id
+            and script.content_id == record.content.content_id
+            and script.native_path == record.artifact.native_path
+        )
+
     def _bind_artifact_publications(
         self,
         event: OccurrenceBuilder | CanonicalOccurrence,
@@ -5341,22 +5363,22 @@ class EventDispatcher:
             record = token.record
             artifact = record.artifact
             subject = event.identity_plan.subject if event.identity_plan is not None else None
-            retained_exec_image = bool(
+            actor = event.identity_plan.actor if event.identity_plan is not None else None
+            retained_exec_content = bool(
                 platform == "macos"
                 and event.event_type == "process_exec"
                 and registry is not None
                 and registry.authenticates_prepared_retention(token)
-                and type(subject) is ProcessIdentity
-                and subject.executable_version is not None
-                and subject.executable_version.artifact_version_id == artifact.artifact_version_id
-                and subject.executable_version.content_id == record.content.content_id
-                and record.binary is not None
+                and any(
+                    self._process_owns_runtime_exec_content(identity, record)
+                    for identity in (actor, subject)
+                )
             )
             if (
                 artifact.hostname.casefold() != host.hostname.casefold()
                 or (
                     artifact.principal.casefold() != principal.casefold()
-                    and not retained_exec_image
+                    and not retained_exec_content
                 )
                 or artifact.platform != platform
             ):
@@ -5379,7 +5401,14 @@ class EventDispatcher:
                 and canonical_native_path(event.process.image, platform)
                 == canonical_native_path(artifact.native_path, platform)
             )
-            if not file_match and not binary_match:
+            if retained_exec_content:
+                # Prior images and scripts retain content only. Even when before/after
+                # images share a path, only the target version can bind ProcessContext.
+                binary_match = bool(
+                    record.binary is not None
+                    and self._process_owns_runtime_exec_content(subject, record)
+                )
+            if not file_match and not binary_match and not retained_exec_content:
                 raise EventContractError(
                     "Prepared artifact publication path is unrelated to its canonical occurrence"
                 )
@@ -8762,41 +8791,35 @@ class EventDispatcher:
         return False
 
     def _validate_exact_exec_retention(self, record: _PreparedActionCohortBatchRecord) -> None:
-        """Limit exact publication's artifact participant to its loaded Mac exec image.
+        """Retain only the existing before/after images and explicit scripts of one Mac exec."""
+        from evidenceforge.events.process import process_exec_identities
 
-        No new file, removal, script, or unrelated retention can enter this boundary.
-        An existing version extension leaves all path placements unchanged.
-        """
         publications = record.artifact_publications
         occurrence = record.trusted_projections[0].occurrence
-        subject = occurrence.identity_plan.subject if occurrence.identity_plan is not None else None
         registry = record.artifact_registry
         if (
             record.exact_projection_kind != "posix_exec"
-            or len(publications) != 1
+            or not 1 <= len(publications) <= 4
             or registry is None
             or occurrence.src_host is None
             or occurrence.src_host.os_category != "macos"
-            or type(subject) is not ProcessIdentity
-            or subject.executable_version is None
-            or subject.executable_version.identity_kind != "local_artifact"
         ):
             raise EventContractError(
-                "Exact artifact participation requires one loaded Mac exec image"
+                "Exact artifact participation requires bounded Mac exec content"
             )
-        token = publications[0]
-        if (
-            not registry.authenticates_prepared_retention(token)
-            or token.observed_at != occurrence.timestamp
-            or subject.executable_version.artifact_version_id
-            != token.record.artifact.artifact_version_id
-            or subject.executable_version.content_id != token.record.content.content_id
-            or occurrence.process is None
-            or occurrence.process.binary_identity != token.record.binary
-        ):
-            raise EventContractError(
-                "Exact exec retention requires its authenticated existing image"
-            )
+        before, after = process_exec_identities(occurrence)
+        for token in publications:
+            if (
+                not registry.authenticates_prepared_retention(token)
+                or token.observed_at != occurrence.timestamp
+                or not any(
+                    self._process_owns_runtime_exec_content(identity, token.record)
+                    for identity in (before, after)
+                )
+            ):
+                raise EventContractError(
+                    "Exact exec retention requires its authenticated existing image or script"
+                )
 
     def _initialize_action_cohort_exact_projection(
         self,
