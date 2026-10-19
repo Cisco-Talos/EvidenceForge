@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 278
+current_revision: 279
 history_start_revision: 1
-behavior_surface_sha256: 32d62a4582f03f546fc88667d84c5ca28cf3812f3d864c01ee15827579b50ab6
+behavior_surface_sha256: 0b747a35c5754dcdc2687719616c567bc7f983c632e06a0c7bf419b487878dd6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2644,3 +2644,13 @@ changes:
       - native-publication-recovery
     formats: []
     summary: Authenticates bounded frozen native bytes and their canonical cohort token against one reserved collector delivery, rejects changed retries, and retains caller-held bytes across counter completion without adding a sink or unbounded ledger.
+  - revision: 279
+    id: macos-web-visitor-platform-isolation
+    impact: localized
+    domains:
+      - macos-web-activity
+      - authored-http-exposures
+    formats:
+      - web_access
+      - zeek_http
+    summary: Uses the existing Mac browser presentation values for internal web visitors and authored HTTP referrers without changing Windows/Linux selection.
