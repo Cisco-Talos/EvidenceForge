@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from evidenceforge.events.es_collector import (
+    ESCollectorClosure,
     ESCollectorObservation,
     ESCollectorProcess,
     ESCollectorRegistry,
@@ -20,6 +21,7 @@ from evidenceforge.events.es_collector import (
     ESDeliveryPreparation,
     ESDeliveryRequest,
     ESKernelLoss,
+    PreparedESCollectorClosures,
     PreparedESDeliveryBatchCommit,
     PreparedESDeliveryCommit,
 )
@@ -108,6 +110,32 @@ class ESCollectionActionOwner:
             self._live_process(process, closed_at)
             self.collectors.close(expected, closed_at)
             return after
+
+    @contextmanager
+    def prepared_closures(
+        self,
+        requests: tuple[ESCollectorClosure, ...],
+        processes: tuple[ProcessIdentity, ...],
+    ) -> Iterator[PreparedESCollectorClosures]:
+        """Fence exact live executions and reversible connection disconnects.
+
+        The outer canonical transaction owns process lifecycle; this scope closes
+        only explicit connections and supplies no automatic native observation.
+        """
+        if (
+            type(requests) is not tuple
+            or type(processes) is not tuple
+            or not 1 <= len(requests) == len(processes) <= 128
+            or any(type(item) is not ESCollectorClosure for item in requests)
+        ):
+            raise StateError("Bound collector closures require matching exact requests and owners")
+        with self.state._lock:
+            for request, process in zip(requests, processes, strict=True):
+                owner = self._live_process(process, request.closed_at)
+                if request.before.hostname != process.hostname or request.before.process != owner:
+                    raise StateError("Collector closure disagrees with its exact live execution")
+            with self.collectors.prepared_closures(requests) as prepared:
+                yield prepared
 
     def validate_client_observation(self, observation: MacosProcessCollectionObservation) -> None:
         """Reject negative client claims contradicted by an exact retained attachment.

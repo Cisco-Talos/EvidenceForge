@@ -93,6 +93,19 @@ class ESCollectorState(_Value):
         return self
 
 
+class ESCollectorClosure(_Value):
+    """Exact idle connection and canonical time for an explicit disconnect."""
+
+    before: ESCollectorState
+    closed_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if self.before.closed_at is not None or self.closed_at < self.before.last_delivery_at:
+            raise ValueError("Collector closure requires an open connection after its deliveries")
+        return self
+
+
 class ESCollectorObservation(_Value):
     """Frozen counters and export decision, safe for later parallel rendering."""
 
@@ -285,6 +298,55 @@ class _BatchClaim:
     applied: bool = False
 
 
+class PreparedESCollectorClosures:
+    """Claim-scoped reversible disconnects for an outer canonical transaction."""
+
+    __slots__ = ("_registry",)
+
+    def __init__(self, registry: ESCollectorRegistry) -> None:
+        self._registry = registry
+
+    @property
+    def expected_result(self) -> tuple[ESCollectorState, ...]:
+        """Return the exact detached terminal result retained by this claim."""
+        return self._registry._closure_claim(self).result
+
+    @property
+    def publication_token(self) -> str:
+        """Return the authenticated terminal connection proof."""
+        return self._registry._closure_claim(self).proof.hex()
+
+    @property
+    def committed(self) -> bool:
+        """Whether the owning transaction finalized every disconnect."""
+        return self._registry._closure_claim(self).committed
+
+    def apply_provisional(self) -> None:
+        """Install terminal snapshots while retaining rollback ownership."""
+        self._registry._apply_closures(self)
+
+    def finalize_no_fail(self) -> None:
+        """Make the provisional disconnects permanent without allocating counters."""
+        self._registry._finalize_closures(self)
+
+    def commit_no_fail(self) -> None:
+        """Apply and finalize all claimed disconnects for standalone callers."""
+        self.apply_provisional()
+        self.finalize_no_fail()
+
+
+@dataclass(slots=True)
+class _ClosureClaim:
+    handle: PreparedESCollectorClosures
+    before: tuple[ESCollectorState, ...]
+    after: tuple[ESCollectorState, ...]
+    result: tuple[ESCollectorState, ...]
+    proof: bytes
+    thread_id: int
+    applied: bool = False
+    committed: bool = False
+
+
 def _advance_delivery(
     before: ESCollectorState,
     *,
@@ -379,6 +441,7 @@ class ESCollectorRegistry:
         self._states: dict[str, ESCollectorState] = {}
         self._pending: dict[str, _Pending | _PendingBatch] = {}
         self._claimed: dict[str, _DeliveryClaim | _BatchClaim] = {}
+        self._closing: dict[str, _ClosureClaim] = {}
         self._secret = secrets.token_bytes(32)
 
     def open(self, state: ESCollectorState) -> None:
@@ -394,7 +457,11 @@ class ESCollectorRegistry:
             raise StateError("New ES client connection cannot contain delivered history")
         with self._lock:
             previous = self._states.get(state.source_instance)
-            if state.source_instance in self._pending or state.source_instance in self._claimed:
+            if (
+                state.source_instance in self._pending
+                or state.source_instance in self._claimed
+                or state.source_instance in self._closing
+            ):
                 raise StateError("ES client restart requires completed publication")
             if previous is None:
                 if len(self._states) >= 128 or state.generation != 1:
@@ -461,6 +528,7 @@ class ESCollectorRegistry:
                 current != expected
                 or expected.source_instance in self._pending
                 or expected.source_instance in self._claimed
+                or expected.source_instance in self._closing
             ):
                 raise StateError("Collector closure requires the unchanged idle connection")
             if current.closed_at is not None:
@@ -468,6 +536,100 @@ class ESCollectorRegistry:
                     return
                 raise StateError("Collector closure cannot rewrite its terminal time")
             self._states[expected.source_instance] = after
+
+    def _closure_proof(self, states: tuple[ESCollectorState, ...]) -> bytes:
+        payload = bytearray(b"es-collector-closures\0")
+        for state in states:
+            if type(state) is not ESCollectorState:
+                raise StateError("Collector closure result lost its exact terminal shape")
+            encoded = state.model_dump_json().encode("utf-8")
+            payload.extend(len(encoded).to_bytes(8, "big"))
+            payload.extend(encoded)
+        return hmac.digest(self._secret, payload, "sha256")
+
+    @contextmanager
+    def prepared_closures(
+        self, requests: tuple[ESCollectorClosure, ...]
+    ) -> Iterator[PreparedESCollectorClosures]:
+        """Fence a bounded idle-client set; unfinalized scope exit restores all clients.
+
+        Acquire the canonical State owner before entering this scope. This method
+        supplies no process-exit inference or native evidence. Each request must
+        come from the caller's exact connection and lifecycle ownership.
+        """
+        if (
+            type(requests) is not tuple
+            or not 1 <= len(requests) <= 128
+            or any(type(item) is not ESCollectorClosure for item in requests)
+        ):
+            raise StateError("Collector closure requires 1 to 128 exact requests")
+        requests = tuple(
+            ESCollectorClosure.model_validate_json(item.model_dump_json()) for item in requests
+        )
+        keys = tuple(item.before.source_instance for item in requests)
+        if len(set(keys)) != len(keys):
+            raise StateError("Collector closure requires distinct connection owners")
+        before = tuple(item.before for item in requests)
+        after = tuple(
+            ESCollectorState.model_validate_json(
+                item.before.model_copy(update={"closed_at": item.closed_at}).model_dump_json()
+            )
+            for item in requests
+        )
+        result = tuple(
+            ESCollectorState.model_validate_json(item.model_dump_json()) for item in after
+        )
+        handle = PreparedESCollectorClosures(self)
+        claim = _ClosureClaim(
+            handle, before, after, result, self._closure_proof(result), get_ident()
+        )
+        with self._lock:
+            if any(
+                self._states.get(key) != previous
+                or key in self._pending
+                or key in self._claimed
+                or key in self._closing
+                for key, previous in zip(keys, before, strict=True)
+            ):
+                raise StateError("Collector closure requires unchanged idle connections")
+            try:
+                for key in keys:
+                    self._closing[key] = claim
+                yield handle
+            finally:
+                if claim.applied and not claim.committed:
+                    for key, previous in zip(keys, before, strict=True):
+                        self._states[key] = previous
+                for key in keys:
+                    if self._closing.get(key) is claim:
+                        del self._closing[key]
+
+    def _closure_claim(self, handle: PreparedESCollectorClosures) -> _ClosureClaim:
+        if type(handle) is not PreparedESCollectorClosures or handle._registry is not self:
+            raise StateError("Collector closure requires its exact active claim")
+        claim = next((item for item in self._closing.values() if item.handle is handle), None)
+        if claim is None or claim.thread_id != get_ident():
+            raise StateError("Collector closure requires its same-thread active claim")
+        if self._closure_proof(claim.result) != claim.proof:
+            raise StateError("Collector closure terminal result changed")
+        expected = claim.after if claim.applied else claim.before
+        if any(self._states.get(item.source_instance) != item for item in expected):
+            raise StateError("Collector closure lost its exact connection snapshots")
+        return claim
+
+    def _apply_closures(self, handle: PreparedESCollectorClosures) -> None:
+        claim = self._closure_claim(handle)
+        if claim.applied:
+            return
+        claim.applied = True
+        for state in claim.after:
+            self._states[state.source_instance] = state
+
+    def _finalize_closures(self, handle: PreparedESCollectorClosures) -> None:
+        claim = self._closure_claim(handle)
+        if not claim.applied:
+            raise StateError("Collector closure finalization requires provisional application")
+        claim.committed = True
 
     def prepare(
         self,
@@ -489,6 +651,7 @@ class ESCollectorRegistry:
                 or before.closed_at is not None
                 or source_instance in self._pending
                 or source_instance in self._claimed
+                or source_instance in self._closing
             ):
                 raise StateError("ES delivery requires an open idle client")
             observation, after = _advance_delivery(
@@ -533,6 +696,7 @@ class ESCollectorRegistry:
                 or before.closed_at is not None
                 or source_instance in self._pending
                 or source_instance in self._claimed
+                or source_instance in self._closing
             ):
                 raise StateError("ES batch requires an open idle client")
             current = before
@@ -607,7 +771,7 @@ class ESCollectorRegistry:
         self._validate_batch_capability(capability)
         with self._lock:
             key = capability.observations[0].source_instance
-            if key in self._claimed:
+            if key in self._claimed or key in self._closing:
                 raise StateError("ES batch already has an active commit scope")
             completed = self.completed_batch(capability)
             handle = PreparedESDeliveryBatchCommit(self, key)
@@ -744,7 +908,7 @@ class ESCollectorRegistry:
             )
             if key is None:
                 raise StateError("ES batch cancellation capability is stale")
-            if key in self._claimed:
+            if key in self._claimed or key in self._closing:
                 raise StateError("ES batch cancellation requires an unclaimed reservation")
             del self._pending[key]
 
@@ -1060,7 +1224,7 @@ class ESCollectorRegistry:
             raise StateError("ES publication requires its exact capability")
         with self._lock:
             key = capability.observation.source_instance
-            if key in self._claimed:
+            if key in self._claimed or key in self._closing:
                 raise StateError("ES delivery already has an active commit scope")
             completed = self.completed_observation(capability)
             prepared = PreparedESDeliveryCommit(self, key)
@@ -1166,14 +1330,14 @@ class ESCollectorRegistry:
             )
             if key is None:
                 raise StateError("ES cancellation capability is stale")
-            if key in self._claimed:
+            if key in self._claimed or key in self._closing:
                 raise StateError("ES cancellation requires an unclaimed reservation")
             del self._pending[key]
 
     def snapshot(self) -> tuple[ESCollectorState, ...]:
         """Capture quiescent source state in deterministic instance order."""
         with self._lock:
-            if self._pending or self._claimed:
+            if self._pending or self._claimed or self._closing:
                 raise StateError("ES checkpoint requires completed or cancelled publication")
             return tuple(
                 ESCollectorState.model_validate_json(self._states[key].model_dump_json())
@@ -1195,6 +1359,6 @@ class ESCollectorRegistry:
         if keys != tuple(sorted(set(keys))):
             raise StateError("ES checkpoint clients must be unique and sorted")
         with self._lock:
-            if self._states or self._pending or self._claimed:
+            if self._states or self._pending or self._claimed or self._closing:
                 raise StateError("ES checkpoint requires a fresh collector registry")
             self._states = {state.source_instance: state for state in restored}

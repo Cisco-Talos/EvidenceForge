@@ -181,3 +181,6 @@ Bounded same-host Mac exit cohorts now use the existing canonical transaction an
 
 ### Joint terminal-group counters — revision 293
 Authenticated historical ES exit batches now compose with exact canonical State/lifecycle group publication. Rollback, lost acknowledgements, cancellation, source retry, filtering and checkpoint restoration preserve ordered counters and frozen bytes. Native sink integration, service-closure composites, observing-client shutdown and target-build evidence gates remain open; no ES source admission is implied.
+
+### Reversible collector disconnect component — revision 294
+Explicit bounded connection sets can close provisionally under exact live process ownership and roll back with an outer transaction. Finalization preserves counters and uses the existing checkpoint profile. Automatic process-exit composition, service-group integration and native source publication remain engineering work; native self-exit evidence is not enabled.

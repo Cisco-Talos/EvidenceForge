@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 293
+current_revision: 294
 history_start_revision: 1
-behavior_surface_sha256: 569fe91beb462a88b0d55d3cb2c9372e7a21f289430d6241573d43eb1bb0df7e
+behavior_surface_sha256: d5f0c8bc0140af299c4bc66b5242f3210f859b8e9b70261243964f71539811af
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2769,3 +2769,10 @@ changes:
       - macos-process-lifecycle
     formats: []
     summary: Joins authenticated frozen ES terminal batches to canonical group transactions with reversible counters and retained completion proofs.
+  - revision: 294
+    id: reversible-macos-collector-disconnects
+    impact: localized
+    domains:
+      - macos-collector-ownership
+    formats: []
+    summary: Adds bounded exact connection-closure scopes with provisional rollback, live execution checks and authenticated terminal results.
