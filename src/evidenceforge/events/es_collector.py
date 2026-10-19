@@ -25,6 +25,7 @@ from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.models.exceptions import StateError
 
 _MAX_NATIVE_ROW_BYTES = 1024 * 1024
+_MAX_NATIVE_BATCH_BYTES = 16 * _MAX_NATIVE_ROW_BYTES
 
 type _Counter = Annotated[int, Field(ge=0, lt=2**64)]
 type _Name = Annotated[str, Field(min_length=1, max_length=256)]
@@ -111,7 +112,7 @@ class ESCollectorObservation(_Value):
 
 @dataclass(frozen=True, slots=True)
 class _NativeProjection:
-    """Caller-retained bytes authenticated for one exact delivery capability."""
+    """Caller-retained bytes authenticated for one exact delivery or batch capability."""
 
     ndjson: str
     canonical_token: str | None
@@ -194,6 +195,7 @@ class ESDeliveryBatchPreparation:
 
     observations: tuple[ESCollectorObservation, ...]
     _proof: bytes = b""
+    _native_projection: _NativeProjection | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +203,7 @@ class _PendingBatch:
     capability: ESDeliveryBatchPreparation
     after: ESCollectorState
     observations: tuple[ESCollectorObservation, ...]
+    native_projection: _NativeProjection | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +217,14 @@ class PreparedESDeliveryBatchCommit:
     def observations(self) -> tuple[ESCollectorObservation, ...]:
         """Return the retained immutable observations while the exact claim is active."""
         return self._registry._batch_claim(self).observations
+
+    def freeze_native_projections(
+        self, rows: tuple[str, ...], *, canonical_token: str | None = None
+    ) -> tuple[str, ...]:
+        """Bind one ordered native row per reserved observation before publication."""
+        return self._registry._freeze_native_batch_projection(
+            self, rows, canonical_token=canonical_token
+        )
 
     def commit_no_fail(self) -> None:
         """Publish only the precomputed final counters and completion proof."""
@@ -229,6 +240,7 @@ class _BatchClaim:
     proof: bytes
     thread_id: int
     committed: bool = False
+    native_projection: _NativeProjection | None = None
 
 
 def _advance_delivery(
@@ -516,13 +528,20 @@ class ESCollectorRegistry:
         ):
             raise StateError("ES batch publication requires its exact bounded capability")
 
-    def _batch_proof(self, capability: ESDeliveryBatchPreparation) -> bytes:
+    def _batch_proof_for(
+        self, capability: ESDeliveryBatchPreparation, native: _NativeProjection | None
+    ) -> bytes:
         # A distinct domain separates this proof from the single-delivery contract.
         material = b"es-delivery-batch-v1:" + str(id(capability)).encode()
         for item in capability.observations:
             encoded = item.model_dump_json().encode()
             material += len(encoded).to_bytes(8, "big") + encoded
+        if native is not None:
+            material += b":native-projection:" + native.proof
         return hmac.digest(self._secret, material, hashlib.sha256)
+
+    def _batch_proof(self, capability: ESDeliveryBatchPreparation) -> bytes:
+        return self._batch_proof_for(capability, capability._native_projection)
 
     def completed_batch(
         self, capability: ESDeliveryBatchPreparation
@@ -530,8 +549,10 @@ class ESCollectorRegistry:
         """Authenticate a completed group without replaying any member allocation."""
         self._validate_batch_capability(capability)
         with self._lock:
-            if capability._proof and hmac.compare_digest(
-                capability._proof, self._batch_proof(capability)
+            if (
+                self._native_authenticates(capability)
+                and capability._proof
+                and hmac.compare_digest(capability._proof, self._batch_proof(capability))
             ):
                 return capability.observations
             return None
@@ -550,7 +571,13 @@ class ESCollectorRegistry:
             handle = PreparedESDeliveryBatchCommit(self, key)
             if completed is not None:
                 claim = _BatchClaim(
-                    handle, capability, completed, None, capability._proof, get_ident()
+                    handle,
+                    capability,
+                    completed,
+                    None,
+                    capability._proof,
+                    get_ident(),
+                    native_projection=capability._native_projection,
                 )
             else:
                 pending = self._pending.get(key)
@@ -558,6 +585,8 @@ class ESCollectorRegistry:
                     type(pending) is not _PendingBatch
                     or pending.capability is not capability
                     or pending.observations != capability.observations
+                    or pending.native_projection is not capability._native_projection
+                    or not self._native_authenticates(capability)
                 ):
                     raise StateError("ES batch capability is stale or changed")
                 claim = _BatchClaim(
@@ -567,6 +596,7 @@ class ESCollectorRegistry:
                     pending.after,
                     self._batch_proof(capability),
                     get_ident(),
+                    native_projection=pending.native_projection,
                 )
             self._claimed[key] = claim
             try:
@@ -595,6 +625,7 @@ class ESCollectorRegistry:
         if claim.after is not None:
             key = claim.observations[0].source_instance
             self._states[key] = claim.after
+            object.__setattr__(claim.capability, "_native_projection", claim.native_projection)
             object.__setattr__(claim.capability, "_proof", claim.proof)
             del self._pending[key]
         claim.committed = True
@@ -631,13 +662,22 @@ class ESCollectorRegistry:
         return self._proof_for(capability, capability._native_projection)
 
     def _native_proof(
-        self, capability: ESDeliveryPreparation, ndjson: str, canonical_token: str | None
+        self,
+        capability: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+        ndjson: str,
+        canonical_token: str | None,
     ) -> bytes:
-        observation = capability.observation.model_dump_json().encode()
+        domain = b"es-native-projection-v1:"
+        if type(capability) is ESDeliveryPreparation:
+            observation = capability.observation.model_dump_json().encode()
+        else:
+            domain = b"es-native-projection-batch-v1:"
+            fields = tuple(item.model_dump_json().encode() for item in capability.observations)
+            observation = b"".join(len(item).to_bytes(8, "big") + item for item in fields)
         payload = ndjson.encode("utf-8")
         canonical = b"" if canonical_token is None else canonical_token.encode("ascii")
         material = (
-            b"es-native-projection-v1:"
+            domain
             + str(id(capability)).encode()
             + b":"
             + len(observation).to_bytes(8, "big")
@@ -657,14 +697,21 @@ class ESCollectorRegistry:
             and all(character in "0123456789abcdef" for character in token)
         )
 
-    def _native_authenticates(self, capability: ESDeliveryPreparation) -> bool:
+    def _native_authenticates(
+        self, capability: ESDeliveryPreparation | ESDeliveryBatchPreparation
+    ) -> bool:
         native = capability._native_projection
+        budget = (
+            _MAX_NATIVE_ROW_BYTES
+            if type(capability) is ESDeliveryPreparation
+            else _MAX_NATIVE_BATCH_BYTES
+        )
         if native is None:
             return True
         if (
             type(native) is not _NativeProjection
             or type(native.ndjson) is not str
-            or len(native.ndjson) > _MAX_NATIVE_ROW_BYTES
+            or len(native.ndjson) > budget
             or type(native.proof) is not bytes
             or not self._valid_native_canonical_token(native.canonical_token)
         ):
@@ -676,12 +723,9 @@ class ESCollectorRegistry:
         except UnicodeEncodeError:
             return False
 
-    def _freeze_native_projection(
-        self, handle: PreparedESDeliveryCommit, ndjson: str, *, canonical_token: str | None
-    ) -> str:
-        claim = self._delivery_claim(handle)
-        if not self._valid_native_canonical_token(canonical_token):
-            raise StateError("ES native projection requires an exact canonical publication token")
+    @staticmethod
+    def _validate_native_line(ndjson: str) -> int:
+        """Validate one source-owned line and return its bounded UTF-8 size."""
         if (
             type(ndjson) is not str
             or not ndjson.endswith("\n")
@@ -697,6 +741,15 @@ class ESCollectorRegistry:
             raise StateError("ES native projection requires valid UTF-8") from error
         if not 2 <= size <= _MAX_NATIVE_ROW_BYTES:
             raise StateError("ES native projection exceeds its 1 MiB modeled row budget")
+        return size
+
+    def _freeze_native_projection(
+        self, handle: PreparedESDeliveryCommit, ndjson: str, *, canonical_token: str | None
+    ) -> str:
+        claim = self._delivery_claim(handle)
+        if not self._valid_native_canonical_token(canonical_token):
+            raise StateError("ES native projection requires an exact canonical publication token")
+        self._validate_native_line(ndjson)
         capability = claim.capability
         if (
             type(capability.observation) is not ESCollectorObservation
@@ -728,6 +781,86 @@ class ESCollectorRegistry:
         claim.native_projection = native
         claim.proof = proof
         return native.ndjson
+
+    def _freeze_native_batch_projection(
+        self,
+        handle: PreparedESDeliveryBatchCommit,
+        rows: tuple[str, ...],
+        *,
+        canonical_token: str | None,
+    ) -> tuple[str, ...]:
+        claim = self._batch_claim(handle)
+        if not self._valid_native_canonical_token(canonical_token):
+            raise StateError("ES native batch requires an exact canonical publication token")
+        if type(rows) is not tuple or len(rows) != len(claim.observations):
+            raise StateError("ES native batch requires one exact row per reserved observation")
+        total = 0
+        for row in rows:
+            total += self._validate_native_line(row)
+            if total > _MAX_NATIVE_BATCH_BYTES:
+                raise StateError("ES native batch exceeds its 16 MiB modeled budget")
+        capability = claim.capability
+        self._validate_batch_capability(capability)
+        if (
+            capability.observations != claim.observations
+            or capability._native_projection is not claim.native_projection
+            or not self._native_authenticates(capability)
+            or not hmac.compare_digest(
+                claim.proof, self._batch_proof_for(capability, claim.native_projection)
+            )
+        ):
+            raise StateError("ES native batch lost its exact counter observations")
+        rendered = "".join(rows)
+        native = claim.native_projection
+        if native is not None:
+            if native.ndjson != rendered or native.canonical_token != canonical_token:
+                raise StateError("ES native batch changed for the same reserved deliveries")
+            return rows
+        if claim.committed or claim.after is None:
+            raise StateError("ES native batch must freeze before counter publication")
+        key = claim.observations[0].source_instance
+        pending = self._pending.get(key)
+        if type(pending) is not _PendingBatch or pending.capability is not capability:
+            raise StateError("ES native batch lost its reserved deliveries")
+        native = _NativeProjection(
+            rendered, canonical_token, self._native_proof(capability, rendered, canonical_token)
+        )
+        replacement = replace(pending, native_projection=native)
+        proof = self._batch_proof_for(capability, native)
+        self._pending[key] = replacement
+        object.__setattr__(capability, "_native_projection", native)
+        claim.native_projection = native
+        claim.proof = proof
+        return rows
+
+    def retained_native_batch_projection(
+        self, capability: ESDeliveryBatchPreparation, *, canonical_token: str | None = None
+    ) -> tuple[str, ...] | None:
+        """Recover the exact ordered row group without replaying or observing State."""
+        self._validate_batch_capability(capability)
+        if not self._valid_native_canonical_token(canonical_token):
+            raise StateError("ES native batch requires an exact canonical publication token")
+        with self._lock:
+            pending = self._pending.get(capability.observations[0].source_instance)
+            if type(pending) is _PendingBatch and pending.capability is capability:
+                if (
+                    pending.observations != capability.observations
+                    or pending.native_projection is not capability._native_projection
+                    or not self._native_authenticates(capability)
+                ):
+                    raise StateError("ES native batch capability changed")
+            elif self.completed_batch(capability) is None:
+                raise StateError("ES native batch capability is stale or foreign")
+            native = capability._native_projection
+            if canonical_token is not None and (
+                native is None or native.canonical_token != canonical_token
+            ):
+                raise StateError("ES native batch belongs to another canonical publication")
+            if native is None:
+                return None
+            # Only LF delimits NDJSON. Unicode line separators inside JSON strings
+            # are valid payload and must not be split by str.splitlines().
+            return tuple(row + "\n" for row in native.ndjson.split("\n")[:-1])
 
     def retained_native_projection(
         self, capability: ESDeliveryPreparation, *, canonical_token: str | None = None

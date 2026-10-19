@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 279
+current_revision: 282
 history_start_revision: 1
-behavior_surface_sha256: 0b747a35c5754dcdc2687719616c567bc7f983c632e06a0c7bf419b487878dd6
+behavior_surface_sha256: fe1e5240f65f8e68aad72fde0856fb141a803717637726b0cceafdab42aec658
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2654,3 +2654,28 @@ changes:
       - web_access
       - zeek_http
     summary: Uses the existing Mac browser presentation values for internal web visitors and authored HTTP referrers without changing Windows/Linux selection.
+  - revision: 280
+    id: macos-terminal-cohort-observations
+    impact: localized
+    domains:
+      - macos-process-observation
+      - native-publication-preparation
+    formats: []
+    summary: Freezes selected process snapshots in termination-only cohorts with explicit pre-close timing, earlier responsible-owner exits and no live State mutation.
+  - revision: 281
+    id: frozen-native-es-batch-binding
+    impact: localized
+    domains:
+      - es-collector-ownership
+      - native-publication-recovery
+    formats: []
+    summary: Authenticates an ordered native row group and canonical plan against one atomic collector counter batch, preserving bytes through retries and connection restart.
+  - revision: 282
+    id: macos-native-terminal-group-preparation
+    impact: localized
+    domains:
+      - macos-process-observation
+      - native-publication-preparation
+      - es-collector-ownership
+    formats: []
+    summary: Builds every historical v9 exit row for an exact same-host terminal cohort under one collector batch claim, freezing no partial prefix on validation failure.

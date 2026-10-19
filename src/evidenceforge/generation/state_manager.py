@@ -16667,18 +16667,22 @@ class StateManager:
             return ProcessRelationshipObservation(parent, responsibility)
 
     def observe_planned_termination_relationships(
-        self, cohort: ActionCohortMaterializationPlan
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        *,
+        process: ProcessIdentity | None = None,
     ) -> ProcessRelationshipObservation:
-        """Freeze a standalone terminating Mac process at its exact terminal instant.
+        """Freeze a selected Mac exit in a sealed termination-only cohort.
 
-        Capture before closure while the execution and its exact relationships
-        are retained. The snapshot cannot authorize native publication or be
-        reconstructed from an inactive/reused PID after commit. Mixed lifecycle
-        and identity changes require an explicitly ordered temporal overlay.
+        Each observation is immediately before its canonical terminal instant.
+        Strictly earlier planned closes affect responsibility; equal-time closes
+        share the pre-close boundary, independent of tuple order. A previously
+        closed parent requires an explicit adoption overlay, which this bounded
+        profile does not supply. No State mutation or commit authority is granted.
         """
         with self._lock:
             self.validate_action_cohort_materialization(cohort)
-            if len(cohort.process_terminations) != 1 or any(
+            if not cohort.process_terminations or any(
                 (
                     cohort.sessions,
                     cohort.processes,
@@ -16692,15 +16696,45 @@ class StateManager:
                     cohort._smb_file_mutation_terminalization,
                 )
             ):
-                raise StateError("Planned terminal observation requires a standalone termination")
-            terminal = cohort.process_terminations[0]
+                raise StateError("Planned terminal observation requires a termination-only cohort")
+            if process is None:
+                if len(cohort.process_terminations) != 1:
+                    raise StateError(
+                        "Planned terminal observation requires an exact selected termination"
+                    )
+                terminal = cohort.process_terminations[0]
+            else:
+                if type(process) is not ProcessIdentity:
+                    raise StateError(
+                        "Planned terminal observation requires an exact selected termination"
+                    )
+                terminal = next(
+                    (item for item in cohort.process_terminations if item.identity == process), None
+                )
+                if terminal is None:
+                    raise StateError("Planned terminal observation is not a member of this cohort")
             identity = terminal.identity
             if self._pid_os.get(identity.hostname) != "macos":
                 raise StateError("Planned terminal observation requires a modeled Mac execution")
-            return ProcessRelationshipObservation(
-                self._observe_process_parent_locked(identity, terminal.end_time),
-                self._observe_process_responsibility_locked(identity, terminal.end_time),
-            )
+            at = terminal.end_time
+            earlier = {
+                item.identity.object_id: item
+                for item in cohort.process_terminations
+                if item.end_time < at
+            }
+            parent = self._observe_process_parent_locked(identity, at)
+            if parent.parent is not None and parent.parent.object_id in earlier:
+                raise StateError(
+                    "Planned terminal parent closed earlier and requires an adoption overlay"
+                )
+            responsibility = self._observe_process_responsibility_locked(identity, at)
+            if responsibility.reason == "active":
+                closed = earlier.get(responsibility.responsible.object_id)
+                if closed is not None:
+                    responsibility = ProcessResponsibilityObservation(
+                        identity, identity, at, "exited", closed.end_time
+                    )
+            return ProcessRelationshipObservation(parent, responsibility)
 
     def observe_process_parent(
         self, identity: ProcessIdentity, *, observed_at: datetime

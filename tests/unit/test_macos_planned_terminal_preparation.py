@@ -115,7 +115,7 @@ def test_reexec_after_preparation_invalidates_commit_without_changing_frozen_sna
     assert prepared.model_dump_json() == encoded
 
 
-def test_mixed_termination_cohort_requires_an_explicit_temporal_overlay() -> None:
+def test_multiple_terminations_require_an_explicit_selected_member() -> None:
     from tests.unit.test_macos_process_relationship_projection import _family
 
     state, _, owner, actor = _family()
@@ -123,7 +123,7 @@ def test_mixed_termination_cohort_requires_an_explicit_temporal_overlay() -> Non
     at = actor.execution_started_at + timedelta(seconds=1)
     builder.terminate_process(actor, end_time=at)
     builder.terminate_process(owner, end_time=at)
-    with pytest.raises(StateError, match="standalone"):
+    with pytest.raises(StateError, match="exact selected termination"):
         state.observe_planned_termination_relationships(builder.seal())
 
 

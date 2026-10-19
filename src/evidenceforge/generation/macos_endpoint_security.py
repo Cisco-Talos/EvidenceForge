@@ -306,7 +306,9 @@ def prepare_planned_runtime_es_terminal_process(
         raise StateError("Planned ES terminal process requires exact canonical owners")
     collection.__post_init__()
     with state._lock:
-        relationships = state.observe_planned_termination_relationships(cohort)
+        relationships = state.observe_planned_termination_relationships(
+            cohort, process=collection.process
+        )
         if (
             collection.process != relationships.parent.process
             or collection.observed_at != relationships.parent.observed_at
@@ -350,7 +352,9 @@ def prepare_planned_installed_es_process_snapshot(
         elif phase == "exec":
             relationships = state.observe_planned_execution_relationships(cohort)
         else:
-            relationships = state.observe_planned_termination_relationships(cohort)
+            relationships = state.observe_planned_termination_relationships(
+                cohort, process=collection.process
+            )
         if (
             collection.process != relationships.parent.process
             or collection.observed_at != relationships.parent.observed_at
