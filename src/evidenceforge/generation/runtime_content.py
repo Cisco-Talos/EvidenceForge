@@ -14,7 +14,7 @@ from __future__ import annotations
 import ntpath
 import posixpath
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
@@ -258,11 +258,13 @@ class RuntimeContentIdentityManager:
         metadata: MacosFileMetadata,
         observed_at: datetime,
         retention: timedelta | None = None,
+        replacement: LocalArtifactVersionRecord | None = None,
     ) -> Iterator[PreparedMacosFileRename]:
         """Prepare an explicit same-directory rename without inventing file facts.
 
-        The initial profile excludes replacement, hard links, cross-directory or
-        cross-volume moves and alias resolution. Only the supplied change time
+        Replacement requires the exact currently placed destination record.
+        Hard links, cross-directory/cross-volume moves and aliases are excluded.
+        Only the supplied change time
         may differ in stat. Historical loaded-image references keep their exact
         version and leases; this operation does not rewrite process observations.
         """
@@ -279,21 +281,25 @@ class RuntimeContentIdentityManager:
         target = replace(
             source, artifact=artifact, binary=binary, macos_file=detach_file_metadata(metadata)
         )
-        self._registry.validate_macos_file_rename(source, target)
-        removal = self._registry.prepare_publish_version(
-            source, observed_at, retention=retention, withdraw_placement=True, require_existing=True
-        )
-        try:
+        self._registry.validate_macos_file_rename(source, target, replacement=replacement)
+        with ExitStack() as cleanup:
+            removals: list[LocalArtifactPublishToken] = []
+            for record in (source,) if replacement is None else (source, replacement):
+                removal = self._registry.prepare_publish_version(
+                    record,
+                    observed_at,
+                    retention=retention,
+                    withdraw_placement=True,
+                    require_existing=True,
+                )
+                cleanup.callback(self._registry.cancel_prepared, removal)
+                removals.append(removal)
             publication = self._registry.prepare_publish_version(
                 target, observed_at, retention=retention
             )
-            try:
-                with self._registry.prepared_publication_group((removal, publication)) as group:
-                    yield PreparedMacosFileRename(self._registry, group)
-            finally:
-                self._registry.cancel_prepared(publication)
-        finally:
-            self._registry.cancel_prepared(removal)
+            cleanup.callback(self._registry.cancel_prepared, publication)
+            with self._registry.prepared_publication_group((*removals, publication)) as group:
+                yield PreparedMacosFileRename(self._registry, group)
 
     def prepare_effect_publication(
         self,

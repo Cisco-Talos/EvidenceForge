@@ -297,3 +297,6 @@ Prepared single and grouped counters can apply provisionally and roll back with 
 
 ### Exact dispatcher collector participation — revision 287
 Authenticated frozen single fork/exec/exit deliveries now join the existing exact canonical State/lifecycle/artifact publication transaction. Counter rollback, nested completion proofs, cancellation ownership, filtering, existing-source fault recovery and checkpoint reconstruction are tested. Native bytes use the existing retained-byte budget. This still does not attach a native sink, admit ES generation or validate macOS 26 exec/exit. Grouped delivery integration, production metadata and native sink publication remain engineering gates; ES-R1/GK-R1 are unchanged.
+
+### Explicit rename replacement — revision 288
+Same-directory rename can now replace an exact distinct same-volume single-link destination through the existing atomic artifact group. Both historical loaded files survive; cancellation, stage failures, stale destinations and expiry cannot resurrect old names. No configuration/checkpoint schema is added. Hard links, directory metadata effects, aliases, authored orchestration and event-time native path observations remain unavailable.

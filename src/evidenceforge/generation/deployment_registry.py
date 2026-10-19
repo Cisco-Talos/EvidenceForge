@@ -9025,7 +9025,10 @@ class LocalArtifactVersionRegistry:
 
     @staticmethod
     def validate_macos_file_rename(
-        source: LocalArtifactVersionRecord, target: LocalArtifactVersionRecord
+        source: LocalArtifactVersionRecord,
+        target: LocalArtifactVersionRecord,
+        *,
+        replacement: LocalArtifactVersionRecord | None = None,
     ) -> None:
         """Validate the bounded unchanged-object rename before any reservation."""
         source = _canonical_local_artifact_record(source)
@@ -9063,38 +9066,71 @@ class LocalArtifactVersionRegistry:
         )
         if target.binary != expected_binary:
             raise StateError("Mac rename must preserve executable content and signing facts")
+        if replacement is not None:
+            replacement = _canonical_local_artifact_record(replacement)
+            replaced = replacement.artifact
+            replaced_stat = replacement.macos_file
+            if (
+                replaced.hostname != after.hostname
+                or replaced.principal != after.principal
+                or replaced.platform != "macos"
+                or replaced.native_path != after.native_path
+                or replaced.object_key == before.object_key
+                or replaced_stat is None
+                or replaced_stat.link_count != 1
+                or replaced_stat.volume_id != old_stat.volume_id
+                or replaced_stat.device != old_stat.device
+                or replaced_stat.file_object_id == old_stat.file_object_id
+                or replaced_stat.inode == old_stat.inode
+            ):
+                raise StateError(
+                    "Mac rename replacement requires a distinct same-volume single-link destination"
+                )
 
     def commit_macos_file_rename(
         self,
         transaction: LocalArtifactPreparedGroupCommit,
     ) -> LocalArtifactPublicationGroupReceipt:
-        """Commit one same-directory, non-replacing regular-file rename.
+        """Commit a same-directory rename with an optional exact replacement.
 
-        The two authenticated group members withdraw the exact old placement and
-        publish a new artifact version of the same file object/content. Validate
-        destination vacancy under the same locks as publication, so a concurrent
-        write cannot turn this bounded operation into replacement. The existing
-        group owns rollback, retention and completed-receipt authentication.
-        This commits file state only, not process state or source evidence.
+        Ordered authenticated members withdraw the source and optional destination,
+        then publish the same source object/content at its new placement. Existing
+        group rollback retains both loaded versions and their leases. This commits
+        file state only, not process state, directory stat or source evidence.
         """
         with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
             members = self._active_claimed_group_locked(transaction)
-            if len(members) != 2:
-                raise StateError("Mac rename requires exactly two artifact publications")
-            removal, publication = (item.canonical_token for item in members)
+            if len(members) not in {2, 3}:
+                raise StateError("Mac rename requires two or three artifact publications")
+            removal = members[0].canonical_token
+            publication = members[-1].canonical_token
+            replaced = members[1].canonical_token if len(members) == 3 else None
             source, target = removal.record, publication.record
             if (
                 not removal.withdraw_placement
                 or publication.withdraw_placement
                 or publication._existing_handle is not None
                 or removal.observed_at != publication.observed_at
+                or (
+                    replaced is not None
+                    and (
+                        not replaced.withdraw_placement
+                        or replaced.observed_at != publication.observed_at
+                    )
+                )
             ):
                 raise StateError("Mac rename requires an exact removal and new placement group")
-            self.validate_macos_file_rename(source, target)
+            replacement = None if replaced is None else replaced.record
+            self.validate_macos_file_rename(source, target, replacement=replacement)
             after = target.artifact
             destination_key = (after.hostname, after.principal, after.native_path, after.platform)
-            if self.resolve_record_for_execution_path(*destination_key) is not None:
-                raise StateError("Mac rename destination is occupied; replacement is unsupported")
+            destination = self.resolve_record_for_execution_path(*destination_key)
+            if replacement is None and destination is not None:
+                raise StateError(
+                    "Mac rename destination is occupied; explicit replacement is required"
+                )
+            if replacement is not None and destination != replacement:
+                raise StateError("Mac rename replacement no longer names the current destination")
             for other in self._prepared_reservations.values():
                 if any(other is member for member in members):
                     continue
@@ -10685,6 +10721,7 @@ class LocalArtifactVersionRegistry:
             artifact.platform,
             artifact.normalized_native_path,
         )
+        successor_count = 0
         for other in self._prepared_reservations.values():
             if other is reservation:
                 continue
@@ -10695,6 +10732,26 @@ class LocalArtifactVersionRegistry:
                 staged.platform,
                 staged.normalized_native_path,
             ):
+                # An ordered atomic group may explicitly replace the withdrawn
+                # placement. Unrelated reservations still prevent the removal.
+                group_ids = self._prepared_commit_locators.get(reservation.commit_id, ())
+                successor = other.canonical_token
+                if (
+                    reservation.committing
+                    and other.committing
+                    and reservation.commit_id is not None
+                    and other.commit_id == reservation.commit_id
+                    and reservation.reservation_id in group_ids
+                    and other.reservation_id in group_ids
+                    and group_ids.index(reservation.reservation_id)
+                    < group_ids.index(other.reservation_id)
+                    and not successor.withdraw_placement
+                    and successor._existing_handle is None
+                    and successor.observed_at == reservation.canonical_token.observed_at
+                ):
+                    successor_count += 1
+                    if successor_count == 1:
+                        continue
                 raise StateError("artifact removal conflicts with a prepared placement publication")
         current = self.resolve_record_for_execution_path(
             artifact.hostname, artifact.principal, artifact.native_path, artifact.platform

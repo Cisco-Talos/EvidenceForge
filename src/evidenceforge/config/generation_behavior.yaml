@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 287
+current_revision: 288
 history_start_revision: 1
-behavior_surface_sha256: 6fbcd89ca999b4959e5a9596c04343230430e7b48d4e61a71c1203551479e330
+behavior_surface_sha256: 319c5b756eaed229714bc65963aaf896de71a981dcb0ab7bcfa180c277ae7465
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2720,3 +2720,11 @@ changes:
       - canonical-action-publication
     formats: []
     summary: Binds an authenticated frozen single Mac fork/exec/exit delivery to the existing exact canonical dispatcher transaction, with reversible counters, bounded retention, cancellation ownership and source-retry proofs.
+  - revision: 288
+    id: macos-explicit-file-rename-replacement
+    impact: localized
+    domains:
+      - macos-file-placement
+      - runtime-executable-retention
+    formats: []
+    summary: Supports atomic same-directory rename over an exact distinct destination, preserves both historical loaded versions, and limits grouped placement replacement to one later same-time publication.
