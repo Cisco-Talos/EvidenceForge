@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from evidenceforge.events.content_identity import UnresolvedBinaryIdentity
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.generation.actions.network_connection import PersistentSmbRootIntent
+from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.state_manager import MaterializationBatchPlan, StateManager
 from evidenceforge.utils.rng import generation_seed_scope, reset_thread_rng
 from tests.support.macos_smb import macos_smb_scenario
 
@@ -18,10 +24,40 @@ from tests.support.macos_smb import macos_smb_scenario
 @pytest.mark.parametrize("server_platform", ["windows", "linux"])
 @pytest.mark.parametrize("explicit_actor", [False, True])
 def test_mac_mounted_read_correlates_client_network_and_server(
-    scenarios_dir: Path, tmp_path: Path, server_platform: str, explicit_actor: bool
+    scenarios_dir: Path,
+    tmp_path: Path,
+    server_platform: str,
+    explicit_actor: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scenario = macos_smb_scenario(scenarios_dir, server_platform=server_platform)
     engine = GenerationEngine(scenario, tmp_path)
+    observed: list[ProcessIdentity] = []
+    original = PersistentSmbRootIntent.client_process_identity
+
+    def inspect(
+        owner: PersistentSmbRootIntent, state: StateManager, batch: MaterializationBatchPlan
+    ) -> ProcessIdentity | None:
+        identity = original(owner, state, batch)
+        assert identity is not None
+        assert identity.credentials is not None
+        assert identity.credentials.effective_uid >= 501
+        assert identity.credentials.effective_gid == 20
+        binary = engine.activity_generator.dispatcher.resolve_process_binary_identity(
+            identity.hostname, identity.principal, identity.image, "macos"
+        )
+        if explicit_actor:
+            assert identity.executable_version == ProcessExecutableVersion.from_binary(binary)
+        else:
+            # The existing cat profile has no compiled release; unknown stays unknown.
+            assert type(binary) is UnresolvedBinaryIdentity
+            assert identity.executable_version is None
+        snapshot = owner.client_process.identity_snapshot()
+        assert type(owner.client_process).from_identity_snapshot(snapshot) == owner.client_process
+        observed.append(identity)
+        return identity
+
+    monkeypatch.setattr(PersistentSmbRootIntent, "client_process_identity", inspect)
     try:
         engine._initialize()
         generator = engine.activity_generator
@@ -40,8 +76,9 @@ def test_mac_mounted_read_correlates_client_network_and_server(
                     system=client,
                     time=engine.start_time + timedelta(minutes=3),
                     logon_id=logon,
-                    process_name="/usr/bin/head",
-                    command_line='head -c 4096 "/Volumes/team/Reports/plan.txt"',
+                    process_name="/bin/zsh",
+                    command_line="zsh -c 'read line < /Volumes/team/Reports/plan.txt'",
+                    suppress_command_file_effect=True,
                     parent_pid=shell_pid,
                 )
                 assert process_pid > 0
@@ -55,6 +92,29 @@ def test_mac_mounted_read_correlates_client_network_and_server(
                 client_logon_id=logon if explicit_actor else "",
             )
             assert len(result.transport_uids) == 1
+            if server_platform == "windows":
+                assert observed
+            if explicit_actor:
+                explicit = generator.state_manager.get_process_identity(
+                    client.hostname, process_pid
+                )
+                assert explicit is not None and explicit.credentials is not None
+                assert explicit.executable_version is not None
+                observed.append(explicit)
+            recovered = StateManager()
+            _restore_head(recovered, _capture_head(generator.state_manager))
+            for identity in observed:
+                current = generator.state_manager.get_process_identity(
+                    identity.hostname, identity.pid
+                )
+                restored = recovered.get_process_identity(identity.hostname, identity.pid)
+                assert current is not None and restored is not None
+                assert current.credentials == restored.credentials == identity.credentials
+                assert (
+                    current.executable_version
+                    == restored.executable_version
+                    == identity.executable_version
+                )
     finally:
         engine._close_emitters()
     rows = {

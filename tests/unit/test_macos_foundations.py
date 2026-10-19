@@ -338,6 +338,14 @@ def test_mac_ssh_client_binds_catalog_terminal_history_and_transport_hold(tmp_pa
     assert shell.image == "/bin/zsh" and shell.command_line == "-zsh"
     assert shell.start_time < client.start_time < opened
     assert "alex@SSH-TEST" in client.command_line
+    identity = state.get_process_identity(system.hostname, pid)
+    assert identity.arguments == ("/usr/bin/ssh", "alex@SSH-TEST")
+    assert identity.environment is None
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+
+    recovered = StateManager()
+    _restore_head(recovered, _capture_head(state))
+    assert recovered.get_process_identity(system.hostname, pid) == identity
     assert generator.process_source_create_time(system.hostname, pid) < opened
     assert state.get_process_identity(system.hostname, pid).principal == "alex"
     history.close()
@@ -761,3 +769,46 @@ def test_mac_reused_pid_and_tid_preserve_distinct_retained_lifetime_snapshots(
     assert threads[0].object_id != threads[1].object_id
     assert state.get_thread("MAC-TEST", first.object_id, 7777) is None
     assert state.get_thread("MAC-TEST", second.object_id, 7777) == threads[1]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "/usr/bin/ssh {username}@{ssh_target} | cat",
+        "/usr/bin/ssh $HOME {ssh_target}",
+        "/another/ssh {ssh_target}",
+    ],
+)
+def test_mac_ssh_invalid_direct_template_cannot_allocate_its_terminal_chain(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    from copy import deepcopy
+
+    from evidenceforge.generation.activity import application_catalog
+    from evidenceforge.models.exceptions import StateError
+
+    state = StateManager()
+    _seed_launchd(state)
+    generator = ActivityGenerator(state, {}, dispatcher=EventDispatcher(state, {}))
+    user, system = _user(), _system()
+    target = System(hostname="SSH-TEST", ip="192.0.2.20", os="Ubuntu 24.04", type="server")
+    generator.generate_logon(user, system, _TIME)
+    original = application_catalog.application_descriptor
+    descriptor = deepcopy(original("macos-ssh"))
+    descriptor["platforms"]["macos"]["command_templates"] = [command]
+    monkeypatch.setattr(
+        application_catalog,
+        "application_descriptor",
+        lambda name: descriptor if name == "macos-ssh" else original(name),
+    )
+    before = state.materialization_digest()
+    with pytest.raises(StateError):
+        generator.ensure_ssh_client_process(
+            user=user,
+            source_system=system,
+            target_system=target,
+            time=_TIME + timedelta(minutes=2),
+            process_image="",
+            source_port=50001,
+        )
+    assert state.materialization_digest() == before

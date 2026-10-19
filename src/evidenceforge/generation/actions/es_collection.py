@@ -74,6 +74,40 @@ class ESCollectionActionOwner:
             self.collectors.open(bound)
             return bound
 
+    def close(
+        self,
+        expected: ESCollectorState,
+        process: ProcessIdentity,
+        closed_at: datetime,
+    ) -> ESCollectorState:
+        """Close an explicitly bound idle connection while its execution is live.
+
+        A matching current terminal snapshot can be replayed after process exit
+        or exec without mutating counters or moving the closure time. A newer
+        connection epoch cannot satisfy that retry. This is an explicit client
+        disconnect, not automatic process-exit or native sink publication.
+        """
+        if (
+            type(expected) is not ESCollectorState
+            or type(process) is not ProcessIdentity
+            or type(closed_at) is not datetime
+            or closed_at.utcoffset() is None
+            or expected.hostname != process.hostname
+            or expected.process != _process(process)
+            or (expected.closed_at is not None and expected.closed_at != closed_at)
+        ):
+            raise StateError("Bound collector closure requires its exact execution and time")
+        after = ESCollectorState.model_validate_json(
+            expected.model_copy(update={"closed_at": closed_at}).model_dump_json()
+        )
+        with self.state._lock:
+            current = self.collectors.connection(expected.source_instance)
+            if current == after:
+                return current
+            self._live_process(process, closed_at)
+            self.collectors.close(expected, closed_at)
+            return after
+
     def prepare(
         self,
         *,

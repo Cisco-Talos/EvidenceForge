@@ -20,10 +20,15 @@ from evidenceforge.events.dispatcher import (
     PreparedDispatch,
     PreparedPersistentSmbSourcePublication,
 )
+from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.network import (
     NetworkSensorObservation,
     NetworkTrafficLedger,
     NetworkTransactionPlan,
+)
+from evidenceforge.events.process_executable import (
+    ProcessExecutableVersion,
+    validate_process_executable_version,
 )
 from evidenceforge.generation.lifecycle_authority import (
     LifecycleDetachedNetworkReceiptBinding,
@@ -218,10 +223,23 @@ class PersistentSmbClientProcessPreparation:
     path_style: str
     transport_attribution: Literal["kernel", "process", "none"]
     lifecycle: str
+    credentials: PosixProcessCredentials | None = None
+    executable_version: ProcessExecutableVersion | None = None
 
     def __post_init__(self) -> None:
         """Reject ambiguous recipes before any State or source owner is reserved."""
 
+        if self.credentials is not None:
+            if type(self.credentials) is not PosixProcessCredentials or self.os_category != "macos":
+                raise ValueError("Persistent SMB credentials require an exact Mac snapshot")
+            self.credentials.__post_init__()
+        validate_process_executable_version(self.executable_version, self.os_category)
+        if self.executable_version is not None and self.os_category != "macos":
+            raise ValueError("Persistent SMB executable metadata is bounded to Mac actors")
+        if self.disposition == "none" and (
+            self.credentials is not None or self.executable_version is not None
+        ):
+            raise ValueError("Empty persistent SMB client recipe cannot own process metadata")
         if self.disposition == "none":
             if any(
                 (
@@ -303,7 +321,7 @@ class PersistentSmbClientProcessPreparation:
     def identity_snapshot(self) -> tuple[object, ...]:
         """Return the exact scalar identity safe for network-request hashing."""
 
-        return (
+        base = (
             self.disposition,
             self.hostname,
             self.process_object_id,
@@ -327,15 +345,62 @@ class PersistentSmbClientProcessPreparation:
             self.lifecycle,
         )
 
+        if self.credentials is None and self.executable_version is None:
+            return base
+        credentials = self.credentials
+        version = self.executable_version
+        return base + (
+            (
+                credentials.real_uid,
+                credentials.effective_uid,
+                credentials.real_gid,
+                credentials.effective_gid,
+                credentials.audit_uid,
+                credentials.audit_session_id,
+            )
+            if credentials is not None
+            else None,
+            (
+                version.platform,
+                version.identity_kind,
+                version.content_id,
+                version.artifact_version_id,
+            )
+            if version is not None
+            else None,
+        )
+
+    def matches_process_metadata(self, identity: ProcessIdentity) -> bool:
+        """Check supplied facts without inventing metadata for legacy recipes."""
+        return (self.credentials is None or identity.credentials == self.credentials) and (
+            self.executable_version is None
+            or identity.executable_version == self.executable_version
+        )
+
     @classmethod
     def from_identity_snapshot(cls, snapshot: object) -> PersistentSmbClientProcessPreparation:
         """Reconstruct one validated recipe without accepting callback-capable values."""
 
-        if type(snapshot) is not tuple or len(snapshot) != 21:
-            raise TypeError("Persistent SMB client process snapshot requires 21 scalar fields")
+        if type(snapshot) is not tuple or len(snapshot) not in {21, 23}:
+            raise TypeError(
+                "Persistent SMB client process snapshot requires 21 legacy or 23 metadata fields"
+            )
         if snapshot[13] is not None and type(snapshot[13]) is not datetime:
             raise TypeError("Persistent SMB client process snapshot has an invalid start time")
-        return cls(*snapshot)  # type: ignore[arg-type]
+        if len(snapshot) == 21:
+            return cls(*snapshot)  # type: ignore[arg-type]
+        credentials, version = snapshot[21:]
+        if credentials is not None and (type(credentials) is not tuple or len(credentials) != 6):
+            raise TypeError("Persistent SMB credentials require six primitive fields")
+        if version is not None and (type(version) is not tuple or len(version) != 4):
+            raise TypeError("Persistent SMB executable requires four primitive fields")
+        if credentials is None and version is None:
+            raise ValueError("Empty process metadata must use the legacy SMB snapshot shape")
+        return cls(
+            *snapshot[:21],
+            credentials=PosixProcessCredentials(*credentials) if credentials is not None else None,
+            executable_version=ProcessExecutableVersion(*version) if version is not None else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)

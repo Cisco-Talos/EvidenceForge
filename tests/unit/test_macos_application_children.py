@@ -5,6 +5,7 @@
 
 import json
 import random
+import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -113,7 +114,20 @@ def test_helpers_have_real_browser_parent_and_close_with_session(
             assert child.logon_id == context.logon
             assert child.credentials == parent.credentials
             assert child.started_at > parent.started_at
+            assert child.arguments[0] == child.image
+            assert child.arguments[1].startswith("--type=")
+            assert child.command_line == shlex.join(child.arguments)
+            assert child.environment is None
             assert child.image.startswith("/Applications/Google Chrome.app/Contents/Frameworks/")
+        from evidenceforge.generation.checkpoints.state_manager_head import (
+            _capture_head,
+            _restore_head,
+        )
+
+        restored = StateManager()
+        _restore_head(restored, _capture_head(state))
+        for child in identities:
+            assert restored.get_process_identity(system.hostname, child.pid) == child
         generator.generate_logoff(
             context.user, system, context.time + timedelta(minutes=3), context.logon
         )
@@ -290,3 +304,33 @@ def test_baseline_logon_reuses_live_mac_gui_session(
     context.generator.execute_baseline_activity(context.user, context.system, at, "logon")
     assert tuple(state.get_sessions_on_system(context.system.hostname)) == sessions
     assert state.get_session(context.logon).last_activity_time == at
+
+
+def test_invalid_later_helper_template_allocates_none_of_the_selected_children(
+    tmp_path: Path, scenarios_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evidenceforge.models.exceptions import StateError
+
+    class AllHelpersRng(random.Random):
+        def randint(self, a: int, b: int) -> int:
+            return b
+
+    context = _setup(tmp_path, scenarios_dir, False)
+    registry = context.generator.dispatcher.deployment_registry
+    original = type(registry).materialize_application_child_command
+    calls = 0
+
+    def damage(owner: object, *args: object, **kwargs: object) -> tuple[str, str] | None:
+        nonlocal calls
+        result = original(owner, *args, **kwargs)
+        calls += 1
+        if calls == 2:
+            return result[0], result[1] + " | cat"
+        return result
+
+    monkeypatch.setattr(type(registry), "materialize_application_child_command", damage)
+    before = context.generator.state_manager.materialization_digest()
+    with pytest.raises(StateError, match="canonical literal argv"):
+        context.spawn(rng=AllHelpersRng(41))
+    assert calls == 2
+    assert context.generator.state_manager.materialization_digest() == before

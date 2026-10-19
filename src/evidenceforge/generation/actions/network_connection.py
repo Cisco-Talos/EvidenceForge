@@ -273,6 +273,8 @@ class PersistentSmbRootIntent:
                     require_session=True,
                     auth_session_id=process.session_id,
                     auth_logon_type=process.logon_type,
+                    credentials=process.credentials,
+                    executable_version=process.executable_version,
                 )
             elif process.disposition == "reuse":
                 identity = state_manager.get_process_identity(process.hostname, process.pid)
@@ -285,6 +287,7 @@ class PersistentSmbRootIntent:
                     or identity.principal != process.username
                     or identity.logon_id != process.logon_id
                     or identity.started_at != process.started_at
+                    or not process.matches_process_metadata(identity)
                     or identity.lifecycle_group_id != process.lifecycle_group_id
                 ):
                     raise StateError("Persistent SMB client process reuse changed exact identity")
@@ -316,6 +319,7 @@ class PersistentSmbRootIntent:
             or identity.principal != process.username
             or identity.logon_id != process.logon_id
             or identity.started_at != process.started_at
+            or not process.matches_process_metadata(identity)
             or (process.disposition == "reuse" and identity.object_id != process.process_object_id)
         ):
             raise StateError("Persistent SMB root changed its frozen client actor")

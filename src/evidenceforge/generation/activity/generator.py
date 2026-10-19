@@ -274,6 +274,7 @@ from evidenceforge.generation.actions.process_execution import (
 )
 from evidenceforge.generation.actions.scanner_probe import NmapCommandProbePlanningProfile
 from evidenceforge.generation.actions.tls_certificate import TlsCertificatePlanner
+from evidenceforge.generation.activity.direct_exec import catalog_direct_exec_arguments
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
@@ -18750,7 +18751,15 @@ class ActivityGenerator:
         if template is None:
             return None
         target = self._build_host_context(target_system).fqdn or target_system.hostname
-        command = template.replace("{username}", user.username).replace("{ssh_target}", target)
+        # This catalog role launches SSH directly. Preserve a combined user@host
+        # operand as one literal argv entry before rendering its history display.
+        command = (
+            template.replace("{username}@{ssh_target}", shlex.quote(f"{user.username}@{target}"))
+            .replace("{username}", shlex.quote(user.username))
+            .replace("{ssh_target}", shlex.quote(target))
+        )
+        arguments = catalog_direct_exec_arguments(image, command)
+        command = shlex.join(arguments)
         gap = self._freeze_profile_activity_gap(
             "macos.ssh_client_before_transport",
             stable_id=(
@@ -18783,6 +18792,7 @@ class ActivityGenerator:
             suppress_command_file_effect=True,
             source_visible_by=requested_time,
             require_exact_parent=True,
+            arguments=arguments,
         )
         if pid <= 0:
             return None
@@ -25113,7 +25123,6 @@ class ActivityGenerator:
         Timing is a modeled readiness budget, not measured terminal startup latency.
         Each stage uses the canonical process bundle and existing session close owner.
         """
-        from evidenceforge.events.identity import validate_process_arguments
         from evidenceforge.generation.activity.application_catalog import application_descriptor
 
         if _get_os_category(target_system.os) != "macos":
@@ -25163,18 +25172,8 @@ class ActivityGenerator:
                 command = shlex.join(arguments)
             else:
                 command = command.replace("{username}", shlex.quote(user.username))
-                quoted_image = f'"{image}"'
-                if '"' not in image and command.startswith(quoted_image):
-                    command = shlex.quote(image) + command[len(quoted_image) :]
-                try:
-                    arguments = tuple(shlex.split(command, posix=True))
-                    validate_process_arguments(arguments, command_line=command)
-                except ValueError as error:
-                    raise StateError(
-                        "Mac terminal requires canonical literal catalog argv"
-                    ) from error
-                if arguments[0] != image:
-                    raise StateError("Mac terminal argv must name its exact executable")
+                arguments = catalog_direct_exec_arguments(image, command)
+                command = shlex.join(arguments)
             launches.append((image, command, arguments))
 
         gap = self._freeze_profile_activity_gap(
@@ -28069,7 +28068,7 @@ class ActivityGenerator:
         )
         selected = rng.sample(eligible, rng.randint(1, min(maximum, len(eligible))))
         starts = sorted(floor + timedelta(seconds=rng.uniform(*delay)) for _ in selected)
-        created: list[int] = []
+        launches: list[tuple[datetime, str, str, tuple[str, ...]]] = []
         for index, child_time in zip(selected, starts, strict=True):
             visible_bound = (
                 child_time
@@ -28088,6 +28087,10 @@ class ActivityGenerator:
             command = self._parameterize_command_for_system(
                 rng, command, username=user.username, system=system
             )
+            arguments = catalog_direct_exec_arguments(image, command)
+            launches.append((child_time, image, shlex.join(arguments), arguments))
+        created: list[int] = []
+        for child_time, image, command, arguments in launches:
             pid = self.generate_process(
                 user,
                 system,
@@ -28099,6 +28102,7 @@ class ActivityGenerator:
                 require_exact_parent=True,
                 allow_existing_browser_reuse=False,
                 allow_browser_launch_spacing=False,
+                arguments=arguments,
             )
             if pid > 0:
                 created.append(pid)

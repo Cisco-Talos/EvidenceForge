@@ -21,7 +21,7 @@ from evidenceforge.events.authentication import (
     RemoteAuthenticationTransportPlan,
 )
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.content_identity import FileContentIdentity
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, FileContentIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     FileContext,
@@ -40,7 +40,12 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortProjection,
     PreparedPersistentSmbSourcePublication,
 )
-from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity, SessionIdentity
+from evidenceforge.events.identity import (
+    EventIdentityPlan,
+    PosixProcessCredentials,
+    ProcessIdentity,
+    SessionIdentity,
+)
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -48,6 +53,7 @@ from evidenceforge.events.network import (
     NetworkTransactionPlan,
     NetworkTuple,
 )
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.network_connection import (
     NetworkConnectionIdentityCapture,
@@ -1647,6 +1653,8 @@ class SmbActivityActionBundle:
                 parent_object_id=(parent_identity.object_id if parent_identity is not None else ""),
                 image=identity.image,
                 command_line=identity.command_line,
+                credentials=identity.credentials if os_category == "macos" else None,
+                executable_version=identity.executable_version if os_category == "macos" else None,
                 username=identity.principal,
                 logon_id=identity.logon_id,
                 session_object_id=session_identity.object_id,
@@ -1758,6 +1766,8 @@ class SmbActivityActionBundle:
                 parent_object_id=(parent_identity.object_id if parent_identity is not None else ""),
                 image=identity.image,
                 command_line=identity.command_line,
+                credentials=identity.credentials if os_category == "macos" else None,
+                executable_version=identity.executable_version if os_category == "macos" else None,
                 username=identity.principal,
                 logon_id=identity.logon_id,
                 session_object_id=session_identity.object_id,
@@ -1808,6 +1818,19 @@ class SmbActivityActionBundle:
             if parent_pid > 0
             else None
         )
+        credentials: PosixProcessCredentials | None = None
+        executable_version: ProcessExecutableVersion | None = None
+        if os_category == "macos":
+            credentials = self.executor._process_credentials(
+                client_system, rendered.username, parent_pid, started_at
+            )
+            binary = self.executor.dispatcher.resolve_process_binary_identity(
+                client_system.hostname, rendered.username, rendered.image, "macos"
+            )
+            # Operation profiles select installed OS tools. New runtime-backed
+            # launches still need an artifact-retention participant of their own.
+            if type(binary) is BinaryReleaseIdentity:
+                executable_version = ProcessExecutableVersion.from_binary(binary)
         return PersistentSmbClientProcessPreparation(
             disposition="materialize",
             hostname=client_system.hostname,
@@ -1817,6 +1840,8 @@ class SmbActivityActionBundle:
             parent_object_id=parent_identity.object_id if parent_identity is not None else "",
             image=rendered.image,
             command_line=rendered.command_line,
+            credentials=credentials,
+            executable_version=executable_version,
             username=rendered.username,
             logon_id=session.logon_id,
             session_object_id=session_identity.object_id,
@@ -3043,6 +3068,7 @@ class SmbActivityActionBundle:
             or client_identity.principal != client_process_preparation.username
             or client_identity.logon_id != client_process_preparation.logon_id
             or client_identity.started_at != client_process_preparation.started_at
+            or not client_process_preparation.matches_process_metadata(client_identity)
             or (
                 client_process_preparation.disposition == "reuse"
                 and client_identity.object_id != client_process_preparation.process_object_id

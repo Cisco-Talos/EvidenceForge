@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 264
+current_revision: 269
 history_start_revision: 1
-behavior_surface_sha256: 7ac38aa2a7d7cc95ba04c149f2096c81f17d93a3a68b634233453625c8fe1bf7
+behavior_surface_sha256: c5c712d6dc26540fd3061bfa79003406a242a7f50643ecba5fd29d192ad3cb7e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2526,3 +2526,45 @@ changes:
       - ecar
       - zeek_conn
     summary: Authenticates Mac deferred-session transport against its retained loaded executable instead of a replacement at the current path, preserving exact interned binary and live-root checks.
+  - revision: 265
+    id: production-macos-helper-argument-ownership
+    impact: localized
+    domains:
+      - macos-process-metadata
+      - macos-application-helpers
+    formats:
+      - ecar
+    summary: Freezes exact literal argv for profiled Mac application helpers before creating any selected child, preserving unknown environment and existing session/deployment ownership.
+  - revision: 266
+    id: historical-es-terminal-record-preparation
+    impact: none
+    domains:
+      - macos-native-source-preparation
+    formats: []
+    summary: Prepares historical v9 exit bytes from exact State-owned termination outcomes, file observations, thread and collector counters without enabling a native source or admitting macOS 26 exit output.
+  - revision: 267
+    id: explicit-es-collector-disconnect-ownership
+    impact: none
+    domains:
+      - macos-collector-lifecycle
+    formats: []
+    summary: Revalidates live execution ownership for explicit collector disconnect and permits unchanged terminal-snapshot retries after exit or exec without rewriting times or counters.
+  - revision: 268
+    id: production-macos-ssh-client-argument-ownership
+    impact: localized
+    domains:
+      - macos-process-metadata
+      - ssh-client-lifecycle
+    formats:
+      - ecar
+      - zsh_history
+    summary: Retains literal argv for the direct Mac SSH client before terminal allocation and uses the same canonical serialization for process evidence and interactive history.
+  - revision: 269
+    id: macos-persistent-smb-process-metadata
+    impact: localized
+    domains:
+      - macos-process-metadata
+      - persistent-smb-runtime
+    formats:
+      - ecar
+    summary: Carries known Mac actor credentials and installed loaded-image versions through persistent SMB preparation, materialization, exact reuse and scalar retry snapshots; older recipes and Windows/Linux shapes retain their defaults.
