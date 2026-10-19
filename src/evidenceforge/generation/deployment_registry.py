@@ -2449,6 +2449,7 @@ class LocalArtifactPublishToken:
     retained_until: datetime
     lease_owner: str = ""
     lease_until: datetime | None = None
+    withdraw_placement: bool = False
     _registry_token: int = field(repr=False, default=0)
     _reservation_id: int = field(repr=False, default=0)
     _shard_id: int = field(repr=False, default=0)
@@ -2571,6 +2572,7 @@ class _LocalArtifactPreparedRollbackSavepoint:
     prior_deadline_high_water: int = 0
     prior_deadline_order_counter: int = 0
     prior_route_high_water: int = 0
+    withdrawal_rows: tuple[tuple[int, int, int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -3107,6 +3109,7 @@ def _local_artifact_publish_token_preimage(token: LocalArtifactPublishToken) -> 
             and (type(token.lease_until) is not datetime or token.lease_until.tzinfo is not UTC)
         )
         or type(token.lease_owner) is not str
+        or type(token.withdraw_placement) is not bool
         or type(token._registry_token) is not int
         or type(token._reservation_id) is not int
         or token._reservation_id <= 0
@@ -3131,7 +3134,8 @@ def _local_artifact_publish_token_preimage(token: LocalArtifactPublishToken) -> 
             token._reservation_id,
             token._shard_id,
             token._existing_handle,
-        ),
+        )
+        + (("withdraw-placement",) if token.withdraw_placement else ()),
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -8310,6 +8314,7 @@ class LocalArtifactVersionRegistry:
         retention: timedelta | None = None,
         lease_owner: str = "",
         lease_until: datetime | None = None,
+        withdraw_placement: bool = False,
     ) -> LocalArtifactPublishToken:
         """Reserve one exact record publication before external state allocation.
 
@@ -8320,6 +8325,8 @@ class LocalArtifactVersionRegistry:
         before mutating its coupled lifecycle/StateManager transaction.
         """
 
+        if type(withdraw_placement) is not bool:
+            raise StateError("artifact placement operation requires an exact boolean")
         if not isinstance(record, LocalArtifactVersionRecord):
             raise TypeError("record must be a LocalArtifactVersionRecord")
         normalized_event_time = ensure_utc(observed_at)
@@ -8372,6 +8379,13 @@ class LocalArtifactVersionRegistry:
                 "artifact observed_at",
                 allow_boundary=True,
             )
+            if withdraw_placement:
+                artifact = canonical_record.artifact
+                current = self.resolve_record_for_execution_path(
+                    artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+                )
+                if current != canonical_record:
+                    raise StateError("prepared removal requires the current file version")
             if len(self._prepared_reservations) >= self._capacity:
                 raise LocalArtifactCapacityError(
                     "artifact registry has no free slot: prepared-publication member capacity "
@@ -8429,6 +8443,7 @@ class LocalArtifactVersionRegistry:
                 retained_until=retained_until,
                 lease_owner=owner_id,
                 lease_until=normalized_lease_until,
+                withdraw_placement=withdraw_placement,
                 _registry_token=id(self),
                 _reservation_id=reservation_id,
                 _shard_id=shard.shard_id,
@@ -8532,6 +8547,11 @@ class LocalArtifactVersionRegistry:
         if active is None or active.token_ref() is not token:
             self._prepared_capability_locators.pop(id(token), None)
             raise StateError("local artifact publish token is stale or already consumed")
+        if (
+            type(token.withdraw_placement) is not bool
+            or token.withdraw_placement != active.canonical_token.withdraw_placement
+        ):
+            raise StateError("local artifact placement operation changed after preparation")
         return active
 
     def _release_prepared_locked(
@@ -9437,7 +9457,11 @@ class LocalArtifactVersionRegistry:
             if reservation.committing:
                 raise StateError("local artifact prepared publication is already committing")
             shard = self._shards[reservation.canonical_token._shard_id]
-            with shard.lock:
+            with (
+                self._all_shards_locked()
+                if reservation.canonical_token.withdraw_placement
+                else shard.lock
+            ):
                 plan = reservation.commit_plan
                 if plan is None:
                     raise StateError("local artifact prepared commit lost its sealed plan")
@@ -9538,7 +9562,11 @@ class LocalArtifactVersionRegistry:
                         self._shards[reservation.canonical_token._shard_id],
                     )
                 )
-            shard_ids = tuple(sorted({shard.shard_id for _, _, shard in entries}))
+            shard_ids = (
+                tuple(range(len(self._shards)))
+                if any(item.canonical_token.withdraw_placement for item in reservations)
+                else tuple(sorted({shard.shard_id for _, _, shard in entries}))
+            )
             touched = 0
             with ExitStack() as locks:
                 for shard_id in shard_ids:
@@ -9754,6 +9782,8 @@ class LocalArtifactVersionRegistry:
             lease.prior_store_high_water = lease_store._high_water_mark
             lease.prior_store_primary_peak = lease_store._primary_peak_entries
             lease.prior_store_slots = len(lease_store._slot_values)
+        if token.withdraw_placement:
+            rollback.withdrawal_rows = self._prepare_withdrawal_rows_locked(reservation)
         rollback.captured = True
 
     def _rollback_prepared_commit_locked(
@@ -9809,6 +9839,14 @@ class LocalArtifactVersionRegistry:
             else:
                 shard.pending_expiry.discard(version_id)
             shard.mutation_version = rollback.prior_mutation_version
+        except BaseException as error:
+            failures.append(error)
+
+        try:
+            for shard_id, handle, withdrawn, version in rollback.withdrawal_rows:
+                owner = self._shards[shard_id]
+                owner.store._withdrawn[handle] = withdrawn
+                owner.mutation_version = version
         except BaseException as error:
             failures.append(error)
 
@@ -9954,6 +9992,10 @@ class LocalArtifactVersionRegistry:
             )
         shard.pending_expiry.discard(token.record.artifact.artifact_version_id)
         shard.mutation_version += 1
+        for shard_id, handle, _, version in plan.rollback.withdrawal_rows:
+            owner = self._shards[shard_id]
+            owner.store._withdrawn[handle] = 1
+            owner.mutation_version = version + 1
         return plan.receipt
 
     def publish_version(
@@ -10409,6 +10451,46 @@ class LocalArtifactVersionRegistry:
                     ):
                         resolved = candidate
         return resolved
+
+    def _prepare_withdrawal_rows_locked(
+        self, reservation: _LocalArtifactPreparedReservation
+    ) -> tuple[tuple[int, int, int, int], ...]:
+        """Freeze exact placement withdrawal while every affected shard is locked."""
+        expected = reservation.canonical_token.record
+        artifact = expected.artifact
+        placement = (
+            artifact.hostname,
+            artifact.principal,
+            artifact.platform,
+            artifact.normalized_native_path,
+        )
+        for other in self._prepared_reservations.values():
+            if other is reservation:
+                continue
+            staged = other.canonical_token.record.artifact
+            if placement == (
+                staged.hostname,
+                staged.principal,
+                staged.platform,
+                staged.normalized_native_path,
+            ):
+                raise StateError("artifact removal conflicts with a prepared placement publication")
+        current = self.resolve_record_for_execution_path(
+            artifact.hostname, artifact.principal, artifact.native_path, artifact.platform
+        )
+        if current != expected:
+            raise StateError("prepared removal no longer names the current file version")
+        key = "\0".join(placement)
+        rows: list[tuple[int, int, int, int]] = []
+        for shard in self._shards:
+            index, digest, digest_for_handle, equals_handle = shard.store._query(
+                "execution_path", key
+            )
+            rows.extend(
+                (shard.shard_id, handle, shard.store._withdrawn[handle], shard.mutation_version)
+                for handle in index.iter_handles(digest, digest_for_handle, equals_handle)
+            )
+        return tuple(rows)
 
     def withdraw_execution_path(
         self,

@@ -5345,8 +5345,13 @@ class EventDispatcher:
                 and canonical_native_path(event.file.path, platform)
                 == canonical_native_path(artifact.native_path, platform)
             )
+            if token.withdraw_placement and (not file_match or event.event_type != "file_delete"):
+                raise EventContractError(
+                    "Prepared removal requires its exact file-delete occurrence"
+                )
             binary_match = bool(
-                event.process is not None
+                not token.withdraw_placement
+                and event.process is not None
                 and record.binary is not None
                 and canonical_native_path(event.process.image, platform)
                 == canonical_native_path(artifact.native_path, platform)

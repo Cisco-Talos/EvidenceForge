@@ -2182,6 +2182,10 @@ class StorylineMixin:
         os_category = _get_os_category(system.os)
         service_accounts = set(self.scenario.environment.service_accounts)
         is_local_account = actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
+        if os_category == "macos" and actor.username == "root":
+            # A modeled launchd/root process has no implicit authentication event.
+            # Its process credentials and POSIX ownership are resolved by State.
+            return ""
         is_interactive_linux_root = os_category == "linux" and actor.username == "root"
         if is_local_account and not is_interactive_linux_root:
             linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}

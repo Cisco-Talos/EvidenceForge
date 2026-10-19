@@ -154,6 +154,44 @@ def macos_system_job_write_effect(
     )
 
 
+def macos_system_job_remove_effect(
+    *,
+    publication: LocalArtifactPublishToken,
+    instance_key: str,
+    retention_deadline: datetime,
+) -> PreparedEndpointEffect:
+    """Remove a retained job file atomically with its process-owned delete occurrence.
+
+    This does not unload a registered definition or terminate its live group.
+    The normal artifact-first publication boundary retains historical content.
+    """
+    retention_deadline = ensure_utc(retention_deadline)
+    record = publication.record
+    if (
+        not publication.withdraw_placement
+        or record.artifact.platform != "macos"
+        or record.launchd_job is None
+        or retention_deadline > publication.retained_until
+    ):
+        raise ValueError("Launchd removal requires an exact retained job withdrawal")
+    return PreparedEndpointEffect(
+        spec=EndpointEffectSpec(
+            intent=FileEffectIntent(
+                action=FileEffectAction.DELETE, path=record.artifact.native_path
+            ),
+            occurrence_times=(publication.observed_at,),
+            instance_key=instance_key,
+            state_disposition=EndpointStateDisposition.NONE,
+        ),
+        event_type="file_delete",
+        payload=PreparedFileEffectPayload(
+            path=record.artifact.native_path,
+            action=FileEffectAction.DELETE,
+            artifact_publication=publication,
+        ),
+    )
+
+
 def macos_system_job_bootstrap_plan(
     *,
     deployment_registry: DeploymentContentRegistry,

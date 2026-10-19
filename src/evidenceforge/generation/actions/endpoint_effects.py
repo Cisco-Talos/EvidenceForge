@@ -126,10 +126,17 @@ class PreparedFileEffectPayload:
         publication = self.artifact_publication
         if publication is None:
             return
-        if self.action not in {FileEffectAction.CREATE, FileEffectAction.MODIFY}:
+        allowed = (
+            {FileEffectAction.DELETE}
+            if publication.withdraw_placement
+            else {FileEffectAction.CREATE, FileEffectAction.MODIFY}
+        )
+        if self.action not in allowed:
             raise ExecutionEffectPlanError(
                 ExecutionEffectPlanErrorCode.INVALID_INTENT,
-                "only file create/modify effects may publish a runtime artifact version",
+                "only file delete effects may withdraw a runtime artifact placement"
+                if publication.withdraw_placement
+                else "only file create/modify effects may publish a runtime artifact version",
             )
         artifact = publication.record.artifact
         expected_path = canonical_native_path(self.path, artifact.platform)

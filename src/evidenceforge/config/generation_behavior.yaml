@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 228
+current_revision: 229
 history_start_revision: 1
-behavior_surface_sha256: e3089a565d56d5060544defa5fbd097cbf526ce4da0f32dd2bfb1c75dfea8693
+behavior_surface_sha256: d3987353248f760a879e1636debd5d9ace9499704aa3186790f48035acaf83ac
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2237,3 +2237,13 @@ changes:
     formats:
       - ecar
     summary: Adds explicit authored Mac pre-spawn rejection with exact caller lifetime, suppresses successful execution and command effects, and records the canonical outcome without fabricating native policy messages.
+  - revision: 229
+    id: transactional-macos-launch-item-removal
+    impact: localized
+    domains:
+      - runtime-artifact-publication
+      - macos-launchd-lifecycle
+      - macos-storyline-process-ownership
+    formats:
+      - ecar
+    summary: Removes exact retained file placements through the existing artifact-first publication boundary and keeps root Mac process launches independent of Windows service authentication.
