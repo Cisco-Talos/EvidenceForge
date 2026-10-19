@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 290
+current_revision: 291
 history_start_revision: 1
-behavior_surface_sha256: 31acb3e9da20637b4296bda37167cc098e14302572f963febb444be0e393706d
+behavior_surface_sha256: 5b759253777af156885fddcfb6e3703b5b1ece4d3c3e51dc58e17e45d32529c6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2745,3 +2745,10 @@ changes:
     formats:
       - ecar
     summary: Publishes ordinary Mac process exits and surviving-child adoption through one exact State/lifecycle transaction.
+  - revision: 291
+    id: es-batch-cleanup-ownership
+    impact: localized
+    domains:
+      - macos-collector-ownership
+    formats: []
+    summary: Preserves exact ES batch cancellation ownership after damaged caller-held metadata and exposes authenticated batch completion tokens.

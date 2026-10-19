@@ -172,3 +172,6 @@ The authenticated rename claim exposes detached canonical before/after file vers
 
 ### Ordinary exits and production group cleanup — revision 290
 Ordinary Mac exits now commit State closure, lifecycle closure and surviving-child adoption through the existing exact dispatcher. Later actions retain immutable birth ancestry and validate current adoption separately. System-job unload projects each descendant's own integrity. The invented group workflow covers natural child exits and group-wide unload; recovery tests explicitly retain a three-process job across the saved checkpoint and verify unique terminal output. Canonical modeled exits do not enable native ES exit output or close ES-R1; GUI launch-agent domains, automatic activation/respawn and native group publication remain open.
+
+### Exact collector batch cleanup — revision 291
+Batch cancellation retains exact reservation ownership even when caller-held source metadata is damaged; publication continues to reject changed facts. Claim-scoped batch completion tokens now support outer transaction composition. This does not yet integrate group counters with canonical publication or native sinks, and does not change ES-R1/GK-R1 or source admission.

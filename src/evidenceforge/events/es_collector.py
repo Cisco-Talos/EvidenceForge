@@ -248,6 +248,11 @@ class PreparedESDeliveryBatchCommit:
         )
 
     @property
+    def publication_token(self) -> str:
+        """Return the all-member completion proof for an outer canonical receipt."""
+        return self._registry._batch_claim(self).proof.hex()
+
+    @property
     def committed(self) -> bool:
         """Whether this active claim finalized every reserved counter effect."""
         return self._registry._batch_claim(self).committed
@@ -691,16 +696,56 @@ class ESCollectorRegistry:
             prepared.commit_no_fail()
             return prepared.observations
 
-    def cancel_batch(self, capability: ESDeliveryBatchPreparation) -> None:
-        """Cancel the exact unclaimed group without advancing any member counters."""
-        self._validate_batch_capability(capability)
+    def owns_pending_batch(self, capability: object) -> bool:
+        """Locate exact group cleanup ownership independently of mutable facts.
+
+        At most 128 source slots are inspected. This establishes cancellation
+        ownership only, never event validity or permission to publish counters.
+        """
+        if type(capability) is not ESDeliveryBatchPreparation:
+            return False
         with self._lock:
-            key = capability.observations[0].source_instance
+            return any(
+                type(pending) is _PendingBatch and pending.capability is capability
+                for pending in self._pending.values()
+            )
+
+    def authenticates_pending_batch(self, capability: object) -> bool:
+        """Whether this exact uncompleted group retains its reserved ordered facts."""
+        try:
+            self._validate_batch_capability(capability)
+        except StateError:
+            return False
+        key = capability.observations[0].source_instance
+        if type(key) is not str:
+            return False
+        with self._lock:
+            pending = self._pending.get(key)
+            return bool(
+                type(pending) is _PendingBatch
+                and pending.capability is capability
+                and pending.observations == capability.observations
+                and pending.native_projection is capability._native_projection
+                and self._native_authenticates(capability)
+            )
+
+    def cancel_batch(self, capability: ESDeliveryBatchPreparation) -> None:
+        """Cancel the exact unclaimed group without trusting its observation locator."""
+        if type(capability) is not ESDeliveryBatchPreparation:
+            raise StateError("ES batch cancellation requires its exact capability")
+        with self._lock:
+            key = next(
+                (
+                    source_instance
+                    for source_instance, pending in self._pending.items()
+                    if type(pending) is _PendingBatch and pending.capability is capability
+                ),
+                None,
+            )
+            if key is None:
+                raise StateError("ES batch cancellation capability is stale")
             if key in self._claimed:
                 raise StateError("ES batch cancellation requires an unclaimed reservation")
-            pending = self._pending.get(key)
-            if type(pending) is not _PendingBatch or pending.capability is not capability:
-                raise StateError("ES batch cancellation capability is stale")
             del self._pending[key]
 
     def _proof_for(
