@@ -14,7 +14,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION = "3"
 
 
 class _DispatcherObservationHead(BaseModel):
@@ -101,7 +101,7 @@ class DispatcherObservationParticipant:
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint head is invalid"
             ) from error
-        if document.schema_version not in {"1", self.checkpoint_schema_version} or (
+        if document.schema_version not in {"1", "2", self.checkpoint_schema_version} or (
             document.schema_version == "1" and document.es_collectors
         ):
             raise CheckpointCorruptionError(
@@ -109,9 +109,14 @@ class DispatcherObservationParticipant:
             )
         collectors = ESCollectorRegistry()
         try:
-            collectors.restore(
-                tuple(ESCollectorState.model_validate_json(row) for row in document.es_collectors)
+            states = tuple(
+                ESCollectorState.model_validate_json(row) for row in document.es_collectors
             )
+            if document.schema_version != "3" and any(
+                state.process is not None or state.closed_at is not None for state in states
+            ):
+                raise ValueError("Older collector head cannot contain attachment or close metadata")
+            collectors.restore(states)
         except (StateError, TypeError, ValueError) as error:
             raise CheckpointCorruptionError("dispatcher ES collector state is invalid") from error
         restored: dict[str, dict[str, ObservationSummary]] = {}

@@ -570,6 +570,11 @@ class GroundTruthGenerator:
                 f"(MAC: {event.get('mac_address', 'N/A')})"
                 f"{self._format_ids_alert_totals(event)}"
             )
+        if event_type == "macos_launch_item":
+            return (
+                f"Mac system job {event.get('launchd_operation', 'N/A')}: "
+                f"`{event.get('launchd_label', 'N/A')}`"
+            )
         if event_type == "service_installed":
             return f"Service installed: {event.get('service_name', 'N/A')} ({event.get('service_file_name', 'N/A')})"
         if event_type == "scheduled_task_created":

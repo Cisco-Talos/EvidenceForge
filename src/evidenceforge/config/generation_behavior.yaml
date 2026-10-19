@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 229
+current_revision: 232
 history_start_revision: 1
-behavior_surface_sha256: d3987353248f760a879e1636debd5d9ace9499704aa3186790f48035acaf83ac
+behavior_surface_sha256: c763c127ad9725baa823a6cf3fb05c998628aecb95329176d437c0e7974dc545
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2247,3 +2247,30 @@ changes:
     formats:
       - ecar
     summary: Removes exact retained file placements through the existing artifact-first publication boundary and keeps root Mac process launches independent of Windows service authentication.
+  - revision: 230
+    id: authored-macos-system-job-stages
+    impact: localized
+    domains:
+      - macos-launchd-lifecycle
+      - scenario-authoring
+    formats:
+      - ecar
+    summary: Composes explicit root system-job file and service stages through existing canonical publication owners.
+  - revision: 231
+    id: exact-macos-collector-and-persistence-ownership
+    impact: localized
+    domains:
+      - macos-collector-ownership
+      - macos-launchd-caller-ownership
+      - dispatcher-checkpoint
+    formats: []
+    summary: Binds explicit ES client connections to modeled Mac executions and preserves closed connection state without enabling native output.
+  - revision: 232
+    id: shared-macos-runtime-artifact-ownership
+    impact: localized
+    domains:
+      - macos-process-runtime-content
+      - macos-launchd-lifecycle
+    formats:
+      - ecar
+    summary: Shares the runtime content owner across process and persistence producers, classifying Mac root artifacts as system-owned through existing semantics.

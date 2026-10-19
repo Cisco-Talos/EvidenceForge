@@ -44,6 +44,22 @@ class ESKernelLoss(_Value):
     count: _Counter
 
 
+class ESCollectorProcess(_Value):
+    """Exact execution owning an explicitly established ES connection."""
+
+    object_id: _Name
+    pid: int = Field(gt=0, lt=2**31)
+    started_at: AwareDatetime
+    execution_ordinal: int = Field(ge=0)
+    execution_started_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        if self.execution_started_at < self.started_at:
+            raise ValueError("Collector execution cannot precede its lifetime")
+        return self
+
+
 class ESCollectorState(_Value):
     """One source instance's current connection, not its executable installation."""
 
@@ -55,6 +71,8 @@ class ESCollectorState(_Value):
     next_delivery: int = Field(ge=0)
     next_global_sequence: _Counter
     event_counters: tuple[ESEventCounter, ...] = Field(min_length=1, max_length=256)
+    process: ESCollectorProcess | None = None
+    closed_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
@@ -63,6 +81,10 @@ class ESCollectorState(_Value):
             raise ValueError("ES subscriptions require sorted unique event types")
         if self.last_delivery_at < self.opened_at:
             raise ValueError("ES delivery cannot precede the client connection")
+        if self.process is not None and self.opened_at < self.process.execution_started_at:
+            raise ValueError("Collector connection cannot precede its owning execution")
+        if self.closed_at is not None and self.closed_at < self.last_delivery_at:
+            raise ValueError("Collector closure cannot precede delivery")
         return self
 
 
@@ -76,6 +98,7 @@ class ESCollectorObservation(_Value):
     occurrence_id: _Name
     event_type: int = Field(ge=0, lt=2**32)
     observed_at: AwareDatetime
+    collector_process: ESCollectorProcess | None = None
     seq_num: _Counter
     global_seq_num: _Counter
     status: Literal["visible", "delayed", "dropped", "filtered", "out_of_window"]
@@ -118,7 +141,11 @@ class ESCollectorRegistry:
         if type(state) is not ESCollectorState:
             raise StateError("ES client requires an exact connection profile")
         state = ESCollectorState.model_validate_json(state.model_dump_json())
-        if state.next_delivery != 0 or state.last_delivery_at != state.opened_at:
+        if (
+            state.closed_at is not None
+            or state.next_delivery != 0
+            or state.last_delivery_at != state.opened_at
+        ):
             raise StateError("New ES client connection cannot contain delivered history")
         with self._lock:
             previous = self._states.get(state.source_instance)
@@ -130,10 +157,37 @@ class ESCollectorRegistry:
             elif (
                 state.hostname != previous.hostname
                 or state.generation != previous.generation + 1
-                or state.opened_at <= previous.last_delivery_at
+                or state.opened_at <= (previous.closed_at or previous.last_delivery_at)
             ):
                 raise StateError("ES client restart requires the next same-host connection")
             self._states[state.source_instance] = state
+
+    def connection(self, source_instance: str) -> ESCollectorState | None:
+        """Return the immutable current connection, including its terminal state."""
+        with self._lock:
+            value = self._states.get(source_instance)
+            return ESCollectorState.model_validate_json(value.model_dump_json()) if value else None
+
+    def close(self, expected: ESCollectorState, closed_at: datetime) -> None:
+        """Close an exact idle connection without allocating a delivery or inferring exit."""
+        if (
+            type(expected) is not ESCollectorState
+            or type(closed_at) is not datetime
+            or closed_at.utcoffset() is None
+        ):
+            raise StateError("Collector closure requires an exact connection and aware time")
+        after = ESCollectorState.model_validate_json(
+            expected.model_copy(update={"closed_at": closed_at}).model_dump_json()
+        )
+        with self._lock:
+            current = self._states.get(expected.source_instance)
+            if current != expected or expected.source_instance in self._pending:
+                raise StateError("Collector closure requires the unchanged idle connection")
+            if current.closed_at is not None:
+                if current.closed_at == closed_at:
+                    return
+                raise StateError("Collector closure cannot rewrite its terminal time")
+            self._states[expected.source_instance] = after
 
     def prepare(
         self,
@@ -163,7 +217,7 @@ class ESCollectorRegistry:
         )
         with self._lock:
             before = self._states.get(source_instance)
-            if before is None or source_instance in self._pending:
+            if before is None or before.closed_at is not None or source_instance in self._pending:
                 raise StateError("ES delivery requires an open idle client")
             if (
                 type(generation) is not int
@@ -194,6 +248,7 @@ class ESCollectorRegistry:
                 occurrence_id=occurrence_id,
                 event_type=event_type,
                 observed_at=observed_at,
+                collector_process=before.process,
                 seq_num=counters[event_type],
                 global_seq_num=global_sequence,
                 status=decision.status,
@@ -223,6 +278,22 @@ class ESCollectorRegistry:
     def _proof(self, capability: ESDeliveryPreparation) -> bytes:
         material = str(id(capability)).encode() + capability.observation.model_dump_json().encode()
         return hmac.digest(self._secret, material, hashlib.sha256)
+
+    def completed_observation(
+        self, capability: ESDeliveryPreparation
+    ) -> ESCollectorObservation | None:
+        """Authenticate an already completed observation without advancing counters."""
+        if (
+            type(capability) is not ESDeliveryPreparation
+            or type(capability.observation) is not ESCollectorObservation
+        ):
+            raise StateError("ES completion lookup requires its exact capability")
+        with self._lock:
+            if capability._proof and hmac.compare_digest(
+                capability._proof, self._proof(capability)
+            ):
+                return capability.observation
+            return None
 
     def commit(self, capability: ESDeliveryPreparation) -> ESCollectorObservation:
         """Advance once; retry a proven completed publication without allocating again."""

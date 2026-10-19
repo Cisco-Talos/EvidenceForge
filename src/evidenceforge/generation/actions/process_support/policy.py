@@ -773,7 +773,7 @@ def _runtime_artifact_owner_kind(
     if (
         principal in _SYSTEM_ACCOUNTS
         or logon_id in _SYSTEM_ACCOUNT_LOGON_IDS.values()
-        or (platform == "linux" and principal == "root")
+        or (platform in {"linux", "macos"} and principal == "root")
     ):
         return "system"
     return "user"

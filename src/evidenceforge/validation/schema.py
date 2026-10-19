@@ -231,6 +231,7 @@ class ScenarioValidator:
         self._validate_uniqueness()
         self._validate_expanded_activities()
         self._validate_event_sequences()
+        self._validate_macos_persistence()
         self._validate_network_segments()
         self._validate_network_sensors()
         self._validate_output_formats()
@@ -2498,6 +2499,19 @@ class ScenarioValidator:
             seed % len(email_config.default_mailbox_servers)
         ]
 
+    def _validate_macos_persistence(self) -> None:
+        from evidenceforge.validation.macos_persistence import persistence_problems
+
+        for path, message in persistence_problems(self.scenario):
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path=path,
+                    message=message,
+                    suggestion="Use explicit write/bootstrap/activate/exit/unload/remove stages and an earlier root caller.",
+                )
+            )
+
     def _validate_event_sequences(self) -> None:
         """Validate typed event declarations (Phase 8.4).
 
@@ -2578,7 +2592,7 @@ class ScenarioValidator:
                             )
                         )
 
-                if getattr(spec, "type", "") == "process":
+                if getattr(spec, "type", "") in {"process", "macos_launch_item"}:
                     denied = getattr(spec, "outcome", "success") == "denied"
                     if denied:
                         target = next(

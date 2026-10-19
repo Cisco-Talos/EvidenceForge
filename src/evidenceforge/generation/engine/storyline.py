@@ -845,6 +845,16 @@ class StorylineMixin:
                     if candidate_ref is not None:
                         active_ref_by_actor_system[actor_system] = candidate_ref
                         release_indices.setdefault((*actor_system, candidate_ref), event_index)
+                elif candidate_type == "macos_launch_item":
+                    caller_key = (*actor_system, candidate.caller_ref)
+                    release_indices[caller_key] = max(
+                        event_index, release_indices.get(caller_key, event_index)
+                    )
+                    if candidate.process_ref is not None:
+                        active_ref_by_actor_system[actor_system] = candidate.process_ref
+                        release_indices.setdefault(
+                            (*actor_system, candidate.process_ref), event_index
+                        )
                 elif candidate_type in {"create_remote_thread", "process_access"}:
                     active_ref = active_ref_by_actor_system.get(actor_system)
                     if active_ref is not None:

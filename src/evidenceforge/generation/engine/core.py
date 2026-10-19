@@ -985,6 +985,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             lifecycle_shadow=self.lifecycle_shadow,
             collection_deployment=self.source_deployment_compilation.deployment,
         )
+        # All process/file producers share the existing runtime owner when the
+        # scenario explicitly needs retained launch-item definitions.
+        if self.dispatcher.local_artifact_registry is None and any(
+            spec.type == "macos_launch_item"
+            for step in self.scenario.storyline
+            for spec in step.events
+        ):
+            from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
+
+            self.dispatcher.bind_local_artifact_registry(LocalArtifactVersionRegistry())
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
             emitters=self.emitters,

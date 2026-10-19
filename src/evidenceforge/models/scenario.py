@@ -2163,6 +2163,68 @@ class EmailReadEventSpec(_EventSpecBase):
         return v.lower()
 
 
+class MacosLaunchItemEventSpec(_EventSpecBase):
+    """Experimental explicit system-domain job stages; no native plist is emitted."""
+
+    type: Literal["macos_launch_item"] = "macos_launch_item"
+    operation: Literal["write", "bootstrap", "activate", "exit", "unload", "remove"]
+    label: str = Field(min_length=1)
+    caller_ref: str = Field(min_length=1, description="Earlier exact root process reference")
+    path: str | None = None
+    program: str | None = None
+    arguments: list[str] | None = None
+    size_bytes: int | None = Field(default=None, gt=0)
+    version: int = Field(default=1, ge=1)
+    run_at_load: bool = False
+    process_ref: str | None = Field(default=None, min_length=1)
+    exit_code: int | None = Field(default=None, ge=0, le=255)
+
+    @model_validator(mode="after")
+    def consistent_stage(self) -> "MacosLaunchItemEventSpec":
+        """Require only the facts owned by this explicit stage."""
+        from evidenceforge.events.macos_launchd_spec import (
+            LaunchdSystemJobSpec,
+            validate_launchd_label,
+        )
+
+        validate_launchd_label(self.label)
+        if self.operation in {"write", "bootstrap", "remove"}:
+            if self.path is None:
+                raise ValueError("Launch-item file stages require an explicit plist path")
+            _validate_posix_absolute_path(self.path, "path")
+            if not self.path.startswith("/Library/LaunchDaemons/") or not self.path.endswith(
+                ".plist"
+            ):
+                raise ValueError("This launch-item profile requires /Library/LaunchDaemons/*.plist")
+        elif self.path is not None:
+            raise ValueError("Loaded-job stages use their retained definition, not a new path")
+        if self.operation == "write":
+            if self.program is None or self.arguments is None or self.size_bytes is None:
+                raise ValueError(
+                    "Launch-item write requires program, exact arguments and size_bytes"
+                )
+            LaunchdSystemJobSpec(
+                label=self.label,
+                program=self.program,
+                arguments=tuple(self.arguments),
+                principal="root",
+                run_at_load=self.run_at_load,
+            )
+        elif (
+            self.program is not None
+            or self.arguments is not None
+            or self.size_bytes is not None
+            or self.version != 1
+            or self.run_at_load
+        ):
+            raise ValueError("Only a write may supply new definition or file-version facts")
+        if self.process_ref is not None and self.operation != "activate":
+            raise ValueError("Only activation creates a process_ref")
+        if self.exit_code is not None and self.operation != "exit":
+            raise ValueError("Only completed leader exit may declare an exit code")
+        return self
+
+
 class RawEventSpec(_EventSpecBase):
     """Raw event targeting a specific emitter with arbitrary fields.
 
@@ -2209,6 +2271,7 @@ EventSpec = Annotated[
     | AdversarialPayloadEventSpec
     | EmailMessageEventSpec
     | EmailReadEventSpec
+    | MacosLaunchItemEventSpec
     | RawEventSpec,
     Discriminator("type"),
 ]

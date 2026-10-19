@@ -114,3 +114,7 @@ Fields: `type`, required `target_format`, `fields` (default `{}`), optional `tec
 optional `description`. `fields` is an arbitrary source-native mapping. Use this escape hatch only
 when no typed event owns the intended occurrence; raw rendered rows must not trigger correlated
 sibling evidence.
+
+## `macos_launch_item`
+Fields: `type`, `operation`, `label`, `caller_ref`, `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `process_ref`, `exit_code`, `technique`, and `description`.
+Experimental arm64 Mac root/system-domain persistence stages. Use `operation: write|bootstrap|activate|exit|unload|remove`, `label`, and `caller_ref` referencing an earlier root process on that host. File stages require `path` under `/Library/LaunchDaemons/` ending in `.plist`; write additionally requires `program`, `arguments`, and `size_bytes`. Optional write fields are increasing `version` (default 1) and retained `run_at_load` (default false). Only activate accepts `process_ref`; only exit accepts `exit_code` (0–255). Other stages use the retained loaded definition. Explicit unload is required by the bounded profile. See [Mac endpoint guidance](evidence-endpoint-macos.md) for collection boundaries and the distinction between file removal and job unload.

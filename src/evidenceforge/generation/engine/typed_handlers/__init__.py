@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from evidenceforge.models.scenario import EventSpec
 
-from . import administration, authentication, content, network, periodic, process
+from . import administration, authentication, content, macos, network, periodic, process
 from .context import TypedEventContext
 
 if TYPE_CHECKING:
@@ -22,6 +22,7 @@ _HANDLERS = {
     "email_message": content.handle_email_message,
     "email_read": content.handle_email_read,
     "process": process.handle_process,
+    "macos_launch_item": macos.handle_launch_item,
     "smb_activity": content.handle_smb_activity,
     "connection": network.handle_connection,
     "ssh_session": authentication.handle_ssh_session,

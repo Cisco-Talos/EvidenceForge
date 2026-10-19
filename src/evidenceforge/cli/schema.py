@@ -182,6 +182,12 @@ _SCALAR_SELECTORS: dict[str, tuple[Any, Any]] = {
 }
 
 _EVENT_EXAMPLES: dict[str, dict[str, Any]] = {
+    "macos_launch_item": {
+        "type": "macos_launch_item",
+        "operation": "activate",
+        "label": "org.example.worker",
+        "caller_ref": "provisioner",
+    },
     "process": {"type": "process", "process_name": "whoami.exe"},
     "logon": {"type": "logon"},
     "failed_logon": {"type": "failed_logon"},

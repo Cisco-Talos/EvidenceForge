@@ -109,6 +109,13 @@ class CausalityScorer(DimensionScorer):
         self._spillage_gt = context.spillage_ground_truth or {}
         self._email_gt = context.email_ground_truth or {}
         self._smb_gt: dict[str, dict[str, Any]] = {}
+        self._macos_launch_gt: dict[str, list[dict[str, Any]]] = {}
+        if context.ground_truth is not None:
+            for record in context.ground_truth.events:
+                if record.kind == "macos_launch_item" and record.storyline_id:
+                    self._macos_launch_gt.setdefault(record.storyline_id, []).append(
+                        record.attributes.model_dump(mode="python")
+                    )
         storage = scenario.environment.storage
         self._smb_mapping_principals = {
             mapping.id.casefold(): mapping.principal
@@ -916,6 +923,29 @@ class CausalityScorer(DimensionScorer):
                     and self._process_detail_matches(f, event)
                     and self._user_matches(f.get("principal"), event.actor)
                 )
+        elif event_type == "macos_launch_item":
+            if format_name != "ecar" or not self._host_matches(f.get("hostname"), event.system):
+                return False
+            for facts in getattr(self, "_macos_launch_gt", {}).get(event.storyline_id, []):
+                operation = facts["launchd_operation"]
+                if operation in {"write", "remove"}:
+                    if (
+                        f.get("object") == "FILE"
+                        and f.get("action", "").lower() == facts.get("action")
+                        and f.get("file_path") == facts.get("file_path")
+                        and facts.get("actor_object_id") is not None
+                        and f.get("actorID") == facts["actor_object_id"]
+                    ):
+                        return True
+                elif operation in {"activate", "exit", "unload"}:
+                    if (
+                        f.get("object") == "PROCESS"
+                        and f.get("objectID") in facts.get("process_object_ids", [])
+                        and f.get("action")
+                        == ("CREATE" if operation == "activate" else "TERMINATE")
+                    ):
+                        return True
+            return False
         elif event_type == "service_installed":
             if format_name == "windows_event_security":
                 return f.get("EventID") in (4697, 7045) and self._host_matches(

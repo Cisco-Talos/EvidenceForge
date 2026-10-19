@@ -1,0 +1,208 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+from datetime import timedelta
+from unittest.mock import Mock
+
+import pytest
+
+from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
+from evidenceforge.generation.actions.command_effects import ExecutionEffectAuditCounter
+from evidenceforge.generation.actions.macos_persistence import (
+    MacosPersistenceActionBundle,
+    MacosPersistenceRequest,
+)
+from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.state_manager import ProcessMaterializationPlan
+from evidenceforge.models.exceptions import StateError
+from tests.unit.test_macos_launch_activation import _setup
+from tests.unit.test_macos_launch_file import _manager
+from tests.unit.test_macos_launch_registration import _START, _deployments
+
+
+def _workflow(
+    collect: bool = True,
+) -> tuple[
+    MacosPersistenceActionBundle,
+    ProcessMaterializationPlan,
+    HostContext,
+    LaunchdSystemJobSpec,
+    str,
+    Mock,
+]:
+    manager = _manager()
+    state, registry, authority, _, _ = _setup(manager, known_boot_group=True)
+    plan = state.plan_process_materialization(
+        system="MAC-A",
+        parent_pid=1,
+        image="/usr/local/libexec/invented-provisioner",
+        command_line="invented-provisioner",
+        username="root",
+        integrity_level="System",
+        os_category="macos",
+        credentials=PosixProcessCredentials(0, 0, 0, 0),
+        start_time=_START,
+    )
+    authority.materialize_process(plan)
+    emitter = Mock()
+    dispatcher = EventDispatcher(
+        state,
+        {"ecar": emitter} if collect else {},
+        lifecycle_shadow=LifecycleShadow(state, registry),
+        enforce_lifecycle_authority=True,
+        local_artifact_registry=manager.registry,
+    )
+    dispatcher.bind_lifecycle_authority(authority)
+    dispatcher.bind_execution_effect_audit(ExecutionEffectAuditCounter())
+    bundle = MacosPersistenceActionBundle(
+        state=state,
+        lifecycle=registry,
+        authority=authority,
+        dispatcher=dispatcher,
+        deployments=_deployments(),
+        content=manager,
+    )
+    host = HostContext(
+        hostname="MAC-A",
+        ip="192.0.2.25",
+        os="macOS 26",
+        os_category="macos",
+        system_type="workstation",
+    )
+    definition = LaunchdSystemJobSpec(
+        label="org.example.workflow",
+        program="/usr/local/libexec/invented-worker",
+        arguments=("invented-worker",),
+        principal="root",
+    )
+    path = "/Library/LaunchDaemons/org.example.workflow.plist"
+    return bundle, plan, host, definition, path, emitter
+
+
+@pytest.mark.parametrize("collect", [True, False])
+def test_distinct_workflow_stages_preserve_loaded_definition_after_removal(collect: bool) -> None:
+    bundle, plan, host, definition, path, emitter = _workflow(collect)
+    for index, operation in enumerate(
+        ("write", "bootstrap", "remove", "activate", "exit", "activate", "unload"), 1
+    ):
+        result = bundle.execute(
+            MacosPersistenceRequest(
+                caller=plan.identity,
+                host=host,
+                timestamp=_START + timedelta(seconds=index),
+                action_id=f"workflow-{index}",
+                operation=operation,
+                label=definition.label,
+                path=path if operation in {"write", "bootstrap", "remove"} else None,
+                definition=definition if operation == "write" else None,
+                size_bytes=512 if operation == "write" else None,
+                exit_code=0 if operation == "exit" else None,
+            )
+        )
+        if operation == "activate":
+            assert result.process is not None
+            assert (
+                bundle.state.get_process_identity_by_object_id(result.process.object_id)
+                == result.process
+            )
+        if operation == "remove":
+            assert bundle.content.resolve_record("MAC-A", "root", path, "macos") is None
+    assert bundle.state.get_process_identity_by_object_id(plan.identity.object_id) == plan.identity
+    assert not any(
+        process.image == definition.program for process in bundle.state.list_running_processes()
+    )
+
+
+def _request(
+    bundle: MacosPersistenceActionBundle,
+    plan: ProcessMaterializationPlan,
+    host: HostContext,
+    definition: LaunchdSystemJobSpec,
+    path: str,
+    operation: str,
+    index: int,
+) -> MacosPersistenceRequest:
+    return MacosPersistenceRequest(
+        caller=plan.identity,
+        host=host,
+        timestamp=_START + timedelta(seconds=index),
+        action_id=f"stage-{index}",
+        operation=operation,
+        label=definition.label,
+        path=path if operation in {"write", "bootstrap", "remove"} else None,
+        definition=definition if operation == "write" else None,
+        size_bytes=512 if operation == "write" else None,
+    )
+
+
+def test_write_preflight_failure_releases_reserved_file_and_preserves_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, plan, host, definition, path, emitter = _workflow()
+    before = bundle.state.get_process_identity_by_object_id(plan.identity.object_id)
+
+    def reject(*args: object, **kwargs: object) -> None:
+        raise StateError("injected source preflight failure")
+
+    monkeypatch.setattr(bundle.dispatcher, "prepare_builder", reject)
+    with pytest.raises(StateError, match="injected"):
+        bundle.execute(_request(bundle, plan, host, definition, path, "write", 1))
+    assert bundle.content.resolve_record("MAC-A", "root", path, "macos") is None
+    assert bundle.state.get_process_identity_by_object_id(plan.identity.object_id) == before
+    emitter.emit.assert_not_called()
+    monkeypatch.undo()
+    bundle.execute(_request(bundle, plan, host, definition, path, "write", 1))
+    assert bundle.content.resolve_record("MAC-A", "root", path, "macos") is not None
+
+
+def test_activation_precommit_failure_keeps_registration_dormant_and_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, plan, host, definition, path, emitter = _workflow()
+    for index, operation in enumerate(("write", "bootstrap"), 1):
+        bundle.execute(_request(bundle, plan, host, definition, path, operation, index))
+    before = tuple(bundle.state.list_running_processes())
+
+    def reject() -> None:
+        raise StateError("injected lifecycle precommit failure")
+
+    monkeypatch.setattr(bundle.authority, "_materialization_precommit_hook", reject)
+    with pytest.raises(StateError, match="injected"):
+        bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
+    assert tuple(bundle.state.list_running_processes()) == before
+    monkeypatch.undo()
+    process = bundle.execute(_request(bundle, plan, host, definition, path, "activate", 3))
+    assert process.process is not None
+    bundle.execute(_request(bundle, plan, host, definition, path, "unload", 4))
+
+
+def test_dormant_unload_never_creates_a_job_process() -> None:
+    bundle, plan, host, definition, path, emitter = _workflow()
+    before = tuple(bundle.state.list_running_processes())
+    for index, operation in enumerate(("write", "bootstrap", "unload", "remove"), 1):
+        bundle.execute(_request(bundle, plan, host, definition, path, operation, index))
+    assert tuple(bundle.state.list_running_processes()) == before
+
+
+def test_foreign_or_stale_caller_rejected_before_file_publication() -> None:
+    bundle, plan, host, definition, path, emitter = _workflow()
+    host.hostname = "FOREIGN-MAC"
+    with pytest.raises(StateError, match="exact live Mac root"):
+        bundle.execute(_request(bundle, plan, host, definition, path, "write", 1))
+    assert bundle.content.resolve_record("MAC-A", "root", path, "macos") is None
+
+
+@pytest.mark.parametrize(
+    "operation", ["write", "bootstrap", "activate", "exit", "unload", "remove"]
+)
+def test_retained_exited_caller_cannot_authorize_any_stage(operation: str) -> None:
+    bundle, plan, host, definition, path, _ = _workflow()
+    builder = bundle.state.begin_action_cohort_materialization()
+    builder.terminate_process(plan.identity, end_time=_START + timedelta(seconds=1))
+    bundle.state.materialize_action_cohort(builder.seal())
+    assert bundle.state.get_process_identity(plan.identity.hostname, plan.identity.pid) is not None
+    with pytest.raises(StateError, match="exact live Mac root"):
+        bundle.execute(_request(bundle, plan, host, definition, path, operation, 2))

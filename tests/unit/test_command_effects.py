@@ -784,6 +784,7 @@ def test_owned_effect_occurrence_owner_contract_is_finite_and_exact() -> None:
         "smb_protocol_file_phase",
         "email_attachment_file_root",
         "http_multipart_local_read",
+        "macos_launch_item_file",
     }
 
 

@@ -555,6 +555,21 @@ class AdversarialPayloadGroundTruthEvent(GroundTruthEventBase):
         return self
 
 
+class MacosLaunchItemAttributes(GroundTruthAttributesBase):
+    """Completed system-job stage; registration does not imply execution."""
+
+    launchd_operation: Literal["write", "bootstrap", "activate", "exit", "unload", "remove"]
+    launchd_label: str
+    actor_object_id: str | None = None
+    process_object_ids: list[str] = Field(default_factory=list)
+    file_path: str | None = None
+
+
+class MacosLaunchItemGroundTruthEvent(GroundTruthEventBase):
+    kind: Literal["macos_launch_item"]
+    attributes: MacosLaunchItemAttributes
+
+
 class RawGroundTruthEvent(GroundTruthEventBase):
     kind: Literal["raw"]
     attributes: RawAttributes
@@ -592,6 +607,7 @@ GroundTruthEvent = Annotated[
     | WorkstationUnlockGroundTruthEvent
     | SpillageGroundTruthEvent
     | AdversarialPayloadGroundTruthEvent
+    | MacosLaunchItemGroundTruthEvent
     | RawGroundTruthEvent,
     Field(discriminator="kind"),
 ]

@@ -251,6 +251,7 @@ class EffectOccurrenceOwner(StrEnum):
     SMB_PROTOCOL_FILE_PHASE = "smb_protocol_file_phase"
     EMAIL_ATTACHMENT_FILE_ROOT = "email_attachment_file_root"
     HTTP_MULTIPART_LOCAL_READ = "http_multipart_local_read"
+    MACOS_LAUNCH_ITEM_FILE = "macos_launch_item_file"
 
 
 @dataclass(frozen=True, slots=True)

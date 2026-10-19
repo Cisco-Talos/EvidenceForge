@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from evidenceforge.events.evidence_requirements import (
     AUTHORED_EVENT_EVIDENCE_CONTRACTS,
+    MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS,
     PERSISTENT_WINDOWS_SMB_EVIDENCE,
     BehaviorEvidenceContract,
     EvidenceProjectionAlternative,
@@ -130,7 +131,11 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
             for spec_index, spec in enumerate(event.events):
                 if spec.type == "process" and getattr(spec, "outcome", "success") == "denied":
                     continue  # Canonical no-child outcome has no admitted native policy source.
-                contract = AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
+                contract = (
+                    MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.get(spec.operation)
+                    if spec.type == "macos_launch_item"
+                    else AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
+                )
                 if contract is None:
                     continue
                 field_path = f"{section_name}.{event_index}.events.{spec_index}"
@@ -141,7 +146,11 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
 
     activations: list[_BehaviorActivation] = []
     contracts_by_id = {
-        contract.behavior_id: contract for contract in AUTHORED_EVENT_EVIDENCE_CONTRACTS.values()
+        contract.behavior_id: contract
+        for contract in (
+            *AUTHORED_EVENT_EVIDENCE_CONTRACTS.values(),
+            *MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values(),
+        )
     }
     for (behavior_id, hostname), occurrences in sorted(grouped.items()):
         contract = contracts_by_id[behavior_id]

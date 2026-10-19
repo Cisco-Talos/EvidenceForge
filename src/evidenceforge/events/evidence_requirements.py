@@ -256,6 +256,25 @@ def _host_event_contracts() -> dict[str, BehaviorEvidenceContract]:
     }
 
 
+MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
+    {
+        operation: _event_contract(
+            behavior_id=f"authored_macos_job_{operation}",
+            label=f"authored Mac job {operation}",
+            event_kind=event_kind,
+            capabilities=capability,
+            suggestion="Enable ecar endpoint collection on the modeled Mac.",
+        )
+        for operation, event_kind, capability in (
+            ("write", EventKind.FILE_CREATE, CollectionCapability.FILE),
+            ("remove", EventKind.FILE_DELETE, CollectionCapability.FILE),
+            ("activate", EventKind.PROCESS_CREATE, CollectionCapability.PROCESS),
+            ("exit", EventKind.PROCESS_TERMINATE, CollectionCapability.PROCESS),
+        )
+    }
+)
+
+
 AUTHORED_EVENT_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
     _host_event_contracts()
 )
@@ -263,6 +282,10 @@ AUTHORED_EVENT_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = Mapp
 BEHAVIOR_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingProxyType(
     {
         PERSISTENT_WINDOWS_SMB_EVIDENCE.behavior_id: PERSISTENT_WINDOWS_SMB_EVIDENCE,
+        **{
+            contract.behavior_id: contract
+            for contract in MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values()
+        },
         **{
             contract.behavior_id: contract
             for contract in AUTHORED_EVENT_EVIDENCE_CONTRACTS.values()
@@ -273,6 +296,7 @@ BEHAVIOR_EVIDENCE_CONTRACTS: Mapping[str, BehaviorEvidenceContract] = MappingPro
 
 __all__ = [
     "AUTHORED_EVENT_EVIDENCE_CONTRACTS",
+    "MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS",
     "BEHAVIOR_EVIDENCE_CONTRACTS",
     "PERSISTENT_WINDOWS_SMB_EVIDENCE",
     "PERSISTENT_WINDOWS_SMB_TARGET_FORMATS",

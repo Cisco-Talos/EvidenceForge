@@ -91,6 +91,8 @@ def test_short_generation_checkpoint_suspension_and_resume(
     native: bool = False,
     helpers: bool = False,
     denied_launch: bool = False,
+    persistence: bool = False,
+    persistence_active: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -177,6 +179,18 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 ],
             },
         ]
+    if persistence:
+        scenario_data = yaml.safe_load(
+            Path("scenarios/macos-persistence-example/scenario.yaml").read_text()
+        )
+        # Retain the file and loaded job before recovery; remove and activate later.
+        times = (
+            ("+1m", "+2m", "+3m", "+4m", "+50m", "+1h10m", "+1h11m", "+1h12m")
+            if persistence_active
+            else ("+1m", "+2m", "+3m", "+1h10m", "+1h11m", "+1h12m", "+1h13m", "+1h14m")
+        )
+        for step, when in zip(scenario_data["storyline"], times, strict=True):
+            step["time"] = when
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
     if helpers:
@@ -403,7 +417,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
         assert len(reads) >= 2
     elif macos:
-        if not denied_launch:
+        if not denied_launch and not persistence:
             assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
     else:
@@ -455,4 +469,22 @@ def test_macos_denied_launch_checkpoint_resume(tmp_path: Path, scenarios_dir: Pa
         False,
         False,
         denied_launch=True,
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("active", [False, True])
+def test_macos_persistence_checkpoint(tmp_path: Path, scenarios_dir: Path, active: bool) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        persistence=True,
+        persistence_active=active,
     )

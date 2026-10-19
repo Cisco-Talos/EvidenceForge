@@ -1168,6 +1168,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
 | `group_member_added` | 4728/4732/4756 (on DC) | `group_name`, `member_name` | `scope` (global/local/universal) |
+| `macos_launch_item` | eCAR file/process stages; registration unobserved | `operation`, `label`, `caller_ref` | Stage-specific `path`, `program`, `arguments`, `size_bytes`, `version`, `run_at_load`, `process_ref`, `exit_code` |
 | `service_installed` | 4697, eCAR SERVICE/CREATE | `service_name`, `service_file_name` | `service_account`, `source_ip` (modeled remote-administration source) |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
@@ -1956,3 +1957,17 @@ The engine-only `process_audit_bind`, `process_privilege_drop` and `process_serv
 
 ### Bounded Mac process denial
 A `process` event defaults to `outcome: success`. Explicit `outcome: denied` on a modeled Mac rejects a launch before child allocation. Supply an absolute `process_name` and `parent_ref` naming an earlier process for the same host and storyline actor. Do not set `process_ref`: the rejected attempt creates no child. The canonical caller remains active; command-derived file/network effects and shell history are suppressed. Author legitimate precursor activities separately. Ground truth records the denial with `execution_denied_before_spawn` and no expected source; no native Gatekeeper or Endpoint Security denial message is generated. Prompting, failed exec in an allocated child, and complete persistence orchestration are outside this interface. See [executable example](../../scenarios/macos-denied-launch-example/scenario.yaml).
+
+### `macos_launch_item` — experimental system-domain persistence
+This typed event supports explicit root-owned stages on modeled macOS 26 arm64 workstations. It reuses the environment's deployment, collection and observation configuration. No native plist file is exported.
+| Field | Meaning |
+| --- | --- |
+| `operation` | Required: `write`, `bootstrap`, `activate`, `exit`, `unload`, or `remove`. |
+| `label` | Required launchd job label. |
+| `caller_ref` | Required earlier same-host/root `process_ref`; retains exact caller lifetime. |
+| `path` | Required only for write/bootstrap/remove; canonical `/Library/LaunchDaemons/*.plist` path. |
+| `program`, `arguments`, `size_bytes` | Required only for write: executable path, exact argument vector and positive modeled file size. |
+| `version`, `run_at_load` | Write-only definition metadata. Version defaults to 1 and increases on replacement. RunAtLoad does not implicitly activate the job. |
+| `process_ref` | Activate-only reference for the resulting process. |
+| `exit_code` | Optional normal completed exit status, 0–255; exit only. |
+A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. GUI agents, automatic activation/respawn, and native launchd/ES serialization are outside this profile. An executable example is in `scenarios/macos-persistence-example/scenario.yaml`.
