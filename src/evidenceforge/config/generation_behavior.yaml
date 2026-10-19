@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 252
+current_revision: 253
 history_start_revision: 1
-behavior_surface_sha256: cdc5622fd2ec1e0d4e5660763ddb084c6f903940a4ad96eabc2d427c9dc7a627
+behavior_surface_sha256: 549ac11c1e4c759331d1af1fd740520ac7d4a685cd0193f908ceae140c16f6ee
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2429,3 +2429,10 @@ changes:
     formats:
       - ecar
     summary: Retains up to four exact existing before/after executable and shebang-script versions in one Mac exec transaction, including SSH wrapper history, without rebinding current paths or inventing script execution.
+  - revision: 253
+    id: macos-native-fork-collector-preparation
+    impact: none
+    domains:
+      - macos-native-source-preparation
+    formats: []
+    summary: Freezes explicit runtime fork NDJSON under exact State and collector ownership without source admission, automatic metadata or sink publication.

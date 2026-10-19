@@ -110,3 +110,6 @@ Revision 250 exposes a returning exec failure through `process.outcome: exec_fai
 Revision 251 supplies exact argument vectors for bounded Mac SSH wrapper/worker execs and login shells using their existing literal command profiles. Fork inheritance, collection filtering and checkpoint recovery preserve the vectors. General authored commands, environment vectors and native ES event admission remain separate; no host environment is read.
 
 Revision 252 extends the exact Mac exec transaction to retain existing before/after image and explicit script versions together. Same-path replacement cannot rebind the historical image or restore an old placement. SSH startup also retains its prior runtime wrapper; standalone script producers and initial process-birth script retention remain open. Complete file/stat/device producers and native ES publication still require their own engineering gates.
+
+### Fork record preparation — revision 253
+Complete explicit runtime fork facts now assemble into v6/v10 native NDJSON under an exact collector claim, with canonical time, initiating thread and unchanged precommit State/counters. This prepares source bytes for the future outer transaction; it does not enable ES output or close automatic metadata, retained-artifact, lifecycle/sink coupling or native exec/exit gates.
