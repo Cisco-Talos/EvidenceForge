@@ -4,7 +4,9 @@
 """Native file projection from an exact canonical runtime version."""
 
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
-from evidenceforge.events.macos_file import MacosFileMetadata
+from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
+from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileMetadata
 from evidenceforge.formats.macos_endpoint_security import ESFile, ESFileStat
 
 
@@ -19,8 +21,25 @@ def es_file_from_runtime_record(record: LocalArtifactVersionRecord) -> ESFile:
         raise ValueError("ES file projection requires complete canonical Mac file metadata")
     record.__post_init__()
     metadata = MacosFileMetadata.model_validate_json(record.macos_file.canonical_json())
+    return _es_file(record.artifact.native_path, metadata)
+
+
+def es_directory_at_execution(process: ProcessIdentity) -> ESFile:
+    """Project explicit execution-time cwd; never use a launch path as a later cwd."""
+    if type(process) is not ProcessIdentity or process.execution_directory is None:
+        raise ValueError("Native exec cwd requires an explicit canonical directory observation")
+    process.__post_init__()
+    directory = process.execution_directory
+    validate_macos_execution_directory(
+        directory, hostname=process.hostname, observed_at=process.execution_started_at
+    )
+    metadata = MacosDirectoryMetadata.model_validate_json(directory.metadata.canonical_json())
+    return _es_file(directory.native_path, metadata)
+
+
+def _es_file(path: str, metadata: MacosFileMetadata | MacosDirectoryMetadata) -> ESFile:
     return ESFile(
-        path=record.artifact.native_path,
+        path=path,
         path_truncated=False,
         stat=ESFileStat(
             st_dev=metadata.device,

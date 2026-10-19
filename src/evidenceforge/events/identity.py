@@ -32,6 +32,10 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from evidenceforge.events.job_control import PosixGroupIdentity
+from evidenceforge.events.macos_execution_directory import (
+    MacosExecutionDirectory,
+    validate_macos_execution_directory,
+)
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.parentage import ProcessParentage, validate_process_parentage
 from evidenceforge.events.responsibility import (
@@ -380,6 +384,7 @@ class ProcessIdentity:
     parentage: ProcessParentage | None = None
     responsibility: ProcessResponsibility | None = None
     image_security: MacosImageSecurity | None = None
+    execution_directory: MacosExecutionDirectory | None = None
 
     @property
     def initial_image(self) -> str:
@@ -410,6 +415,9 @@ class ProcessIdentity:
         )
         validate_process_arguments(self.arguments, command_line=self.command_line)
         validate_process_environment(self.environment)
+        validate_macos_execution_directory(
+            self.execution_directory, hostname=self.hostname, observed_at=self.execution_started_at
+        )
         if self.image_security is not None:
             if type(self.image_security) is not MacosImageSecurity:
                 raise ValueError("Process image security requires its exact immutable type")

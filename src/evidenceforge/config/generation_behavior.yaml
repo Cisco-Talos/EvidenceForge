@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 233
+current_revision: 234
 history_start_revision: 1
-behavior_surface_sha256: 9f685e53f29ab8d638385066209d011efe010ea898c43e669177c3739cfbc752
+behavior_surface_sha256: 877acd47b4ad6a04c0a2c2694ce579e821eeb4b354f44935b2c7c9180f95ed12
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2281,3 +2281,11 @@ changes:
       - macos-source-contracts
     formats: []
     summary: Composes complete explicit non-terminal ES process snapshots without metadata defaults or native source admission.
+  - revision: 234
+    id: exact-macos-execution-directory-observations
+    impact: localized
+    domains:
+      - macos-process-execution
+      - state-checkpoint
+    formats: []
+    summary: Retains explicit occurrence-scoped directory stat through launch, fork, exec and recovery without inferring current cwd from a prior execution or enabling native output.

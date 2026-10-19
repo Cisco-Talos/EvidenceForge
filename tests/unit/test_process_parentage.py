@@ -76,7 +76,7 @@ def test_previous_record_restores_unknown_parentage_without_numeric_inference(re
     child = _fork(state, root, 1)
     value = child if record == "identity" else state.get_process(child.hostname, child.pid)
     encoded = encode_state_value(value)
-    assert encoded[1] == ("process-identity-v10" if record == "identity" else "running-process-v15")
+    assert encoded[1] == ("process-identity-v11" if record == "identity" else "running-process-v16")
     encoded[1] = "process-identity-v7" if record == "identity" else "running-process-v11"
     encoded[2] = encoded[2][: 20 if record == "identity" else 35]
     restored = decode_state_value(encoded)

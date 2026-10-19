@@ -17,6 +17,7 @@ from evidenceforge.events.identity import (
     validate_process_arguments,
     validate_process_environment,
 )
+from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
 from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -491,6 +492,24 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        try:
+            for directory, observed_at in (
+                (process.execution_directory, process.executed_at or process.start_time),
+                *(
+                    (identity.execution_directory, identity.execution_started_at)
+                    for identity in process.prior_executions
+                ),
+            ):
+                validate_macos_execution_directory(
+                    directory,
+                    hostname=process.system,
+                    observed_at=observed_at,
+                    platform=fresh._pid_os.get(process.system, "unknown"),
+                )
+        except ValueError as error:
+            raise CheckpointCorruptionError(
+                "StateManager execution directory is invalid"
+            ) from error
         try:
             for security in (
                 process.image_security,

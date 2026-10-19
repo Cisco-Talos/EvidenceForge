@@ -63,6 +63,11 @@ from evidenceforge.events.job_control import (
     PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_execution_directory import (
+    MacosExecutionDirectory,
+    validate_macos_execution_directory,
+)
+from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -1318,6 +1323,7 @@ class MaterializationBatchBuilder:
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -1350,6 +1356,7 @@ class MaterializationBatchBuilder:
             arguments=arguments,
             environment=environment,
             image_security=image_security,
+            execution_directory=execution_directory,
             new_posix_session=new_posix_session,
             new_posix_group=new_posix_group,
             responsibility=responsibility,
@@ -2988,6 +2995,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -3041,6 +3049,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 arguments=arguments,
                 environment=environment,
                 image_security=image_security,
+                execution_directory=execution_directory,
                 new_posix_session=new_posix_session,
                 new_posix_group=new_posix_group,
                 responsibility=responsibility,
@@ -3455,7 +3464,11 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         return replace(normalized, principal=drop.after_principal, credentials=drop.after)
 
     def fork_process(
-        self, parent: ProcessIdentity, *, forked_at: datetime
+        self,
+        parent: ProcessIdentity,
+        *,
+        forked_at: datetime,
+        execution_directory: MacosExecutionDirectory | None = None,
     ) -> ProcessMaterializationPlan:
         """Stage a POSIX child inheriting the exact current parent image and session."""
 
@@ -3494,6 +3507,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 arguments=parent.arguments,
                 environment=parent.environment,
                 image_security=parent.image_security,
+                execution_directory=execution_directory,
                 responsibility=parent.responsibility,
             )
 
@@ -3524,6 +3538,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3553,6 +3568,12 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
         validate_process_environment(environment)
+        validate_macos_execution_directory(
+            execution_directory,
+            hostname=normalized.hostname,
+            observed_at=timestamp,
+            platform=self._manager._pid_os.get(normalized.hostname, "unknown"),
+        )
         validate_macos_image_security(
             image_security, self._manager._pid_os.get(normalized.hostname, "unknown")
         )
@@ -3610,6 +3631,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             arguments=arguments,
             environment=environment,
             image_security=image_security,
+            execution_directory=execution_directory,
             command_line=command_line,
             execution_ordinal=normalized.execution_ordinal + 1,
             lifetime_image=normalized.initial_image,
@@ -4055,6 +4077,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ProcessParentReference,
         ProcessResponsibility,
         MacosImageSecurity,
+        MacosExecutionDirectory,
         ResponsibleProcessReference,
         PosixJobControlChange,
         SessionIdentity,
@@ -4100,6 +4123,8 @@ def _detach_materialization_batch_safe_value(
     value_type = type(value)
     if value is None or value_type in {bool, int, float, str, bytes, datetime}:
         return value
+    if value_type is MacosDirectoryMetadata:
+        return detach_directory_metadata(value)
     value_id = id(value)
     if value_id in active:
         raise StateError("Materialization batch capability contains a recursive value")
@@ -4160,6 +4185,9 @@ def _validate_action_cohort_safe_value(value: object, active: set[int]) -> None:
             raise StateError("Action cohort datetime must be an exact UTC value")
         return
     if type(value) is _ActionCohortCapability:
+        return
+    if type(value) is MacosDirectoryMetadata:
+        detach_directory_metadata(value)
         return
     if type(value) is tuple:
         object_id = id(value)
@@ -10359,6 +10387,7 @@ class StateManager:
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -10386,6 +10415,12 @@ class StateManager:
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
             effective_start = ensure_utc(raw_start)
+            validate_macos_execution_directory(
+                execution_directory,
+                hostname=system,
+                observed_at=effective_start,
+                platform=os_category,
+            )
             parent_identity = (
                 self._process_identity_active_at_locked(system, parent_pid, effective_start)
                 if parent_pid > 0
@@ -10518,6 +10553,7 @@ class StateManager:
                 arguments=arguments,
                 environment=environment,
                 image_security=image_security,
+                execution_directory=execution_directory,
                 responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, parent_identity),
                 job_control=self._initial_posix_membership(
@@ -10753,6 +10789,7 @@ class StateManager:
         arguments: tuple[str, ...] | None,
         environment: tuple[str, ...] | None,
         image_security: MacosImageSecurity | None,
+        execution_directory: MacosExecutionDirectory | None,
         new_posix_session: bool,
         new_posix_group: bool,
         responsibility: ProcessResponsibility | None,
@@ -10790,6 +10827,12 @@ class StateManager:
             if raw_start is None:
                 raise StateError("Cannot plan process: current_time not set")
             effective_start = ensure_utc(raw_start)
+            validate_macos_execution_directory(
+                execution_directory,
+                hostname=system,
+                observed_at=effective_start,
+                platform=os_category,
+            )
 
             planned_parent: ProcessIdentity | None = None
             virtual_parent_pid: int | None = None
@@ -11036,6 +11079,7 @@ class StateManager:
                 arguments=arguments,
                 environment=environment,
                 image_security=image_security,
+                execution_directory=execution_directory,
                 responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, planned_parent),
                 job_control=self._initial_posix_membership(
@@ -12093,6 +12137,7 @@ class StateManager:
                     arguments=after.arguments,
                     environment=after.environment,
                     image_security=after.image_security,
+                    execution_directory=after.execution_directory,
                     credentials=after.credentials,
                     audit_pid_version=after.audit_pid_version,
                     execution_ordinal=before.execution_ordinal + 1,
@@ -12467,6 +12512,7 @@ class StateManager:
             arguments=identity.arguments,
             environment=identity.environment,
             image_security=identity.image_security,
+            execution_directory=identity.execution_directory,
             responsibility=identity.responsibility,
             parentage=identity.parentage,
             job_control=identity.job_control,
@@ -14621,6 +14667,7 @@ class StateManager:
             process.arguments = execution.after.arguments
             process.environment = execution.after.environment
             process.image_security = execution.after.image_security
+            process.execution_directory = execution.after.execution_directory
             process.credentials = execution.after.credentials
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
@@ -16406,6 +16453,7 @@ class StateManager:
             arguments=process.arguments,
             environment=process.environment,
             image_security=process.image_security,
+            execution_directory=process.execution_directory,
             responsibility=process.responsibility,
             parentage=process.parentage,
             job_control=process.job_control,
@@ -16436,6 +16484,7 @@ class StateManager:
             identity.arguments,
             identity.environment,
             identity.image_security,
+            identity.execution_directory,
             identity.parentage,
             identity.responsibility,
             identity.job_control,

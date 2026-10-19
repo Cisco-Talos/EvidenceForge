@@ -55,6 +55,7 @@ def process_exec_identities(
             arguments=before.arguments,
             environment=before.environment,
             image_security=before.image_security,
+            execution_directory=before.execution_directory,
             execution_ordinal=before.execution_ordinal,
             executed_at=before.executed_at,
             lifetime_image=before.lifetime_image,

@@ -30,6 +30,8 @@ from evidenceforge.events.job_control import (
     PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
+from evidenceforge.events.macos_file import MacosDirectoryMetadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -146,6 +148,7 @@ _RUNNING_PROCESS_FIELDS = (
     "parentage_history",
     "responsibility",
     "image_security",
+    "execution_directory",
 )
 _RUNNING_THREAD_FIELDS = (
     "hostname",
@@ -337,6 +340,7 @@ _PROCESS_IDENTITY_FIELDS = (
     "parentage",
     "responsibility",
     "image_security",
+    "execution_directory",
 )
 _SESSION_IDENTITY_FIELDS = (
     "hostname",
@@ -461,7 +465,11 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
     "process-responsibility-v1": (ProcessResponsibility, ("responsible",)),
     "process-parentage-v1": (ProcessParentage, ("original", "current")),
     "process-parentage-change-v1": (ProcessParentageChange, ("before", "after", "changed_at")),
-    "running-process-v15": (RunningProcess, _RUNNING_PROCESS_FIELDS),
+    "macos-execution-directory-v1": (
+        MacosExecutionDirectory,
+        ("hostname", "native_path", "observed_at", "metadata"),
+    ),
+    "running-process-v16": (RunningProcess, _RUNNING_PROCESS_FIELDS),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -479,7 +487,7 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         RuntimeProcessBinding,
         _RUNTIME_PROCESS_BINDING_FIELDS,
     ),
-    "process-identity-v10": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
+    "process-identity-v11": (ProcessIdentity, _PROCESS_IDENTITY_FIELDS),
     "posix-process-credentials-v1": (
         PosixProcessCredentials,
         ("real_uid", "effective_uid", "real_gid", "effective_gid", "audit_uid", "audit_session_id"),
@@ -513,6 +521,8 @@ def encode_state_value(value: object) -> object:
     if type(value) is RdpSessionState:
         return ["rdp-session-state", value.value]
     value_type = type(value)
+    if value_type is MacosDirectoryMetadata:
+        return ["macos-directory-metadata-v1", value.canonical_json()]
     record_tag = _TAGS_BY_TYPE.get(value_type)
     if record_tag is not None:
         _schema_type, names = _SCHEMAS[record_tag]
@@ -586,6 +596,14 @@ def decode_state_value(value: object) -> object:
             return RdpSessionState(state)
         except ValueError as error:
             raise CheckpointCorruptionError("RDP checkpoint session state is invalid") from error
+    if tag == "macos-directory-metadata-v1":
+        _tag, encoded = _tagged(tagged, length=2)
+        if type(encoded) is not str:
+            raise CheckpointCorruptionError("Mac directory metadata encoding is invalid")
+        try:
+            return MacosDirectoryMetadata.model_validate_json(encoded)
+        except ValueError as error:
+            raise CheckpointCorruptionError("Mac directory metadata is invalid") from error
     if tag == "record":
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
@@ -677,6 +695,12 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None]
         if record_tag == "process-identity-v9" and len(encoded_fields) == 22:
             record_tag = "process-identity-v10"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "running-process-v15" and len(encoded_fields) == 39:
+            record_tag = "running-process-v16"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "process-identity-v10" and len(encoded_fields) == 23:
+            record_tag = "process-identity-v11"
             encoded_fields = [*encoded_fields, None]
         schema = _SCHEMAS.get(record_tag)
         if schema is None:

@@ -346,6 +346,19 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
     if identity.environment is not None:
         payload = (*payload, ("posix-process-environment-v1", identity.environment))
+    if identity.execution_directory is not None:
+        directory = identity.execution_directory
+        directory.__post_init__()
+        payload = (
+            *payload,
+            (
+                "macos-execution-directory-v1",
+                directory.hostname,
+                directory.native_path,
+                directory.observed_at,
+                directory.metadata.canonical_json(),
+            ),
+        )
     if identity.image_security is not None:
         security = identity.image_security
         payload = (

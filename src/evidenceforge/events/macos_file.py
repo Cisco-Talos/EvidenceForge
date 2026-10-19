@@ -38,11 +38,11 @@ class MacosFileTime(BaseModel):
         return f"{time.isoformat(timespec='seconds')[:19]}.{self.nanoseconds:09d}Z"
 
 
-class MacosFileMetadata(BaseModel):
-    """Complete regular-file stat facts supplied by the canonical file producer.
+class _MacosStatMetadata(BaseModel):
+    """Shared explicit stat facts supplied by a canonical file or directory producer.
 
     Volume and file-object IDs are modeled identities, never path hashes. This
-    value describes one published version; it does not infer timestamps, inode
+    value describes one observation; it does not infer timestamps, inode
     allocation, sparse/compressed allocation, or permissions from content.
     """
 
@@ -68,10 +68,8 @@ class MacosFileMetadata(BaseModel):
     generation: _Unsigned32
 
     @model_validator(mode="after")
-    def regular_file(self) -> Self:
-        """Keep this initial producer profile limited to explicit regular files."""
-        if self.mode & 0o170000 != 0o100000 or self.special_device != 0:
-            raise ValueError("Mac runtime file metadata requires a regular file")
+    def object_identity(self) -> Self:
+        """Reject incomplete modeled object identities independently of file kind."""
         if any(
             "\0" in value or not value.strip() for value in (self.volume_id, self.file_object_id)
         ):
@@ -80,10 +78,10 @@ class MacosFileMetadata(BaseModel):
 
     def canonical_json(self) -> str:
         """Validate primitive fields before serializing a publication integrity preimage."""
-        if type(self) is not MacosFileMetadata:
+        if type(self) not in {MacosFileMetadata, MacosDirectoryMetadata}:
             raise ValueError("Mac file metadata requires its exact immutable type")
         values: dict[str, object] = {}
-        for name in MacosFileMetadata.model_fields:
+        for name in _MacosStatMetadata.model_fields:
             value = getattr(self, name)
             if name in {"accessed", "modified", "changed", "born"}:
                 if type(value) is not MacosFileTime or any(
@@ -96,4 +94,59 @@ class MacosFileMetadata(BaseModel):
                 if type(value) is not expected:
                     raise ValueError("Mac file metadata contains a non-primitive field")
                 values[name] = value
-        return MacosFileMetadata.model_validate(values).model_dump_json()
+        return type(self).model_validate(values).model_dump_json()
+
+
+class MacosFileMetadata(_MacosStatMetadata):
+    """Complete explicit regular-file stat for one canonical runtime version."""
+
+    @model_validator(mode="after")
+    def regular_file(self) -> Self:
+        """Keep runtime content publications limited to regular files."""
+        if self.mode & 0o170000 != 0o100000 or self.special_device != 0:
+            raise ValueError("Mac runtime file metadata requires a regular file")
+        return self
+
+
+class MacosDirectoryMetadata(_MacosStatMetadata):
+    """Explicit directory stat; size and allocation are not regular-file content."""
+
+    @model_validator(mode="after")
+    def directory(self) -> Self:
+        """Require directory mode without inferring link count or allocation."""
+        if self.mode & 0o170000 != 0o040000 or self.special_device != 0:
+            raise ValueError("Mac directory metadata requires a directory")
+        return self
+
+
+def detach_directory_metadata(value: MacosDirectoryMetadata) -> MacosDirectoryMetadata:
+    """Detach exact primitive stat without invoking caller-provided model protocols.
+
+    State capability authentication admits this one model explicitly. Reject
+    shadow methods/extra objects before serialization or repr can reach them.
+    """
+    if type(value) is not MacosDirectoryMetadata:
+        raise ValueError("Mac directory metadata requires its exact model type")
+    _validate_exact_model_storage(value, MacosDirectoryMetadata)
+    for name in ("accessed", "modified", "changed", "born"):
+        timestamp = object.__getattribute__(value, name)
+        if type(timestamp) is not MacosFileTime:
+            raise ValueError("Mac directory metadata requires exact file times")
+        _validate_exact_model_storage(timestamp, MacosFileTime)
+    encoded = MacosDirectoryMetadata.canonical_json(value)
+    return MacosDirectoryMetadata.model_validate_json(encoded)
+
+
+def _validate_exact_model_storage(
+    value: MacosDirectoryMetadata | MacosFileTime,
+    expected: type[MacosDirectoryMetadata] | type[MacosFileTime],
+) -> None:
+    contents = object.__getattribute__(value, "__dict__")
+    if (
+        type(contents) is not dict
+        or any(type(key) is not str for key in contents)
+        or contents.keys() != expected.model_fields.keys()
+        or object.__getattribute__(value, "__pydantic_extra__") is not None
+        or object.__getattribute__(value, "__pydantic_private__") is not None
+    ):
+        raise ValueError("Mac directory metadata contains unsupported model state")
