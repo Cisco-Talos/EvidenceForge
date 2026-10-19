@@ -3,6 +3,7 @@
 
 """Boot and SSH owners compose POSIX lifetimes without using login/audit IDs."""
 
+import shlex
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -51,6 +52,9 @@ def test_boot_profiles_materialize_distinct_sessions_and_restore(direct: bool) -
     assert pids["launchd"] == 1 and len(pids) > 3
     for pid in pids.values():
         process = state.get_process_identity(system.hostname, pid)
+        assert process.arguments == (process.image,)
+        assert process.command_line == shlex.join(process.arguments)
+        assert process.environment is None
         group = process.job_control
         assert group.pgid == group.session.sid == pid
         assert group.leader_object_id == group.session.leader_object_id == process.object_id
@@ -222,3 +226,28 @@ def test_checkpoint_restoration_proves_new_ssh_session_membership(
         executor._finalize_exact_ssh_close_continuation(executor._pending_ssh_session_closures[0])
         assert fixture.state.get_session(session.logon_id) is None
     fixture.close_and_read()
+
+
+@pytest.mark.parametrize(
+    "command", ["/sbin/launchd $HOME", "/sbin/launchd | cat", "launchd", "/sbin/launchd '"]
+)
+def test_invalid_boot_argv_is_rejected_before_state_changes(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    from copy import deepcopy
+
+    from evidenceforge.generation.activity import application_catalog
+
+    catalog = deepcopy(application_catalog.load_catalog())
+    app = next(app for app in catalog["applications"] if app["id"] == "macos-launchd")
+    app["platforms"]["macos"]["command_templates"] = [command]
+    monkeypatch.setattr(application_catalog, "load_catalog", lambda: catalog)
+    state = StateManager()
+    state.set_current_time(_START)
+    engine = Mock(spec=EmitterSetupMixin)
+    engine.state_manager = state
+    system = System(hostname="MAC-BOOT", ip="192.0.2.44", os="macOS 26", type="workstation")
+    before = state.materialization_digest()
+    with pytest.raises(StateError, match="Mac boot"):
+        EmitterSetupMixin._build_macos_boot_host_spec(engine, system, _START)
+    assert state.materialization_digest() == before

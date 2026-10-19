@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 262
+current_revision: 263
 history_start_revision: 1
-behavior_surface_sha256: 23c47455fe4817be0874e7240a8cf5430bcc2a00889884b1a65e839a9182c495
+behavior_surface_sha256: 25f6b56057f129eaed509cadcacb4890718e9bdba4c45436b91042556c61c292
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2508,3 +2508,11 @@ changes:
       - ecar
       - zsh_history
     summary: Retains explicit literal argv through fresh exact-parent Mac process publication and Terminal/login/zsh startup, preserving unknown environment and existing omitted-input behavior.
+  - revision: 263
+    id: production-macos-boot-argument-ownership
+    impact: localized
+    domains:
+      - macos-process-metadata
+      - boot-lifecycle
+    formats: []
+    summary: Retains explicit canonical literal argv in Mac boot specifications and exact process materialization while preserving old Windows/Linux boot request payloads.

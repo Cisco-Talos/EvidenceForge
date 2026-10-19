@@ -34,13 +34,14 @@ Contains the EmitterSetupMixin with methods for:
 import hashlib
 import logging
 import random
+import shlex
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from evidenceforge.events.collection_policy import canonical_source_hostname
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
-from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.events.identity import PosixProcessCredentials, validate_process_arguments
 from evidenceforge.events.process_executable import (
     ProcessExecutableVersion,
     validate_process_executable_version,
@@ -128,6 +129,7 @@ class _BootProcessSpec:
     logon_id: str
     start_time: datetime | None
     executable_version: ProcessExecutableVersion | None = None
+    arguments: tuple[str, ...] | None = None
 
     def executable_payload(self) -> tuple[object, ...]:
         """Freeze optional loaded-image facts without changing old platform payloads."""
@@ -147,19 +149,28 @@ class _BootProcessSpec:
 
     def canonical_payload(self) -> tuple[object, ...]:
         """Return the exact immutable request projection used by planning."""
-
+        validate_process_arguments(self.arguments, command_line=self.command_line)
+        if self.arguments is not None and self.os_category != "macos":
+            raise StateError("Explicit boot argv is bounded to the Mac boot profile")
+        arguments = (
+            (("process-arguments-v1", self.arguments),) if self.arguments is not None else ()
+        )
         return (
-            self.alias,
-            self.parent_alias,
-            self.fixed_pid,
-            self.image,
-            self.command_line,
-            self.username,
-            self.integrity_level,
-            self.os_category,
-            self.logon_id,
-            self.start_time,
-        ) + self.executable_payload()
+            (
+                self.alias,
+                self.parent_alias,
+                self.fixed_pid,
+                self.image,
+                self.command_line,
+                self.username,
+                self.integrity_level,
+                self.os_category,
+                self.logon_id,
+                self.start_time,
+            )
+            + self.executable_payload()
+            + arguments
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1158,6 +1169,16 @@ class EmitterSetupMixin:
             if "macos_boot" not in app["categories"] or "macos" not in app["platforms"]:
                 continue
             platform = app["platforms"]["macos"]
+            if len(platform["command_templates"]) != 1 or platform.get("command_parameter_pools"):
+                raise StateError("Mac boot requires one literal command template per process")
+            command = platform["command_templates"][0]
+            try:
+                arguments = tuple(shlex.split(command, posix=True))
+                validate_process_arguments(arguments, command_line=command)
+            except ValueError as error:
+                raise StateError("Mac boot requires canonical literal catalog argv") from error
+            if arguments[0] != platform["image_path"]:
+                raise StateError("Mac boot argv must name its exact executable")
             alias = app["id"].removeprefix("macos-")
             is_init = alias == "launchd"
             if not is_init:
@@ -1180,7 +1201,8 @@ class EmitterSetupMixin:
                     parent_alias=None if is_init else "launchd",
                     fixed_pid=1 if is_init else None,
                     image=platform["image_path"],
-                    command_line=platform["command_templates"][0],
+                    command_line=command,
+                    arguments=arguments,
                     username="root",
                     integrity_level="System",
                     os_category="macos",
@@ -1219,6 +1241,7 @@ class EmitterSetupMixin:
                 credentials=PosixProcessCredentials(0, 0, 0, 0),
                 new_posix_session=True,
                 executable_version=member.executable_version,
+                arguments=member.arguments,
                 logon_id=member.logon_id,
             )
             with state.materialization_guard(plan.expected_version):
@@ -1478,6 +1501,7 @@ class EmitterSetupMixin:
                 logon_id=member.logon_id,
                 new_posix_session=member.os_category == "macos",
                 executable_version=member.executable_version,
+                arguments=member.arguments,
                 start_time=member.start_time,
                 parent_plan=parent_plan,
             )
