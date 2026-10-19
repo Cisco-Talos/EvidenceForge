@@ -46,6 +46,7 @@ from evidenceforge.events.identity import (
 )
 from evidenceforge.events.job_control import PosixGroupIdentity, PosixJobControlChange
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.network import NetworkTrafficLedger
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
 from evidenceforge.events.process_outcome import PosixProcessExit
@@ -169,6 +170,7 @@ class RunningProcess:
     parentage: ProcessParentage | None = None
     parentage_history: tuple[ProcessParentageChange, ...] = ()
     responsibility: ProcessResponsibility | None = None
+    image_security: MacosImageSecurity | None = None
 
 
 @dataclass

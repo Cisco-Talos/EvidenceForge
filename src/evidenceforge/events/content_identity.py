@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Literal, cast
 from uuid import UUID
 
+from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 
 type Platform = Literal["windows", "linux", "macos"]
@@ -977,6 +978,8 @@ class LocalArtifactBinaryIdentity:
     architecture: Architecture
     artifact_name: str
     pe_version_info: PeVersionInfo | None = None
+    code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
     identity_kind: Literal["local_artifact"] = field(init=False, default="local_artifact")
 
     def __post_init__(self) -> None:
@@ -984,6 +987,16 @@ class LocalArtifactBinaryIdentity:
 
         platform = _platform(self.platform)
         architecture = _text(self.architecture, "architecture", casefold=True)
+        if self.code_signature is not None and (
+            platform != "macos" or type(self.code_signature) is not MachOCodeSignature
+        ):
+            raise ValueError("Code signature metadata requires an exact macOS binary snapshot")
+        if self.mach_o_image is not None and (
+            type(self.mach_o_image) is not MachOImageIdentity
+            or platform != "macos"
+            or architecture != self.mach_o_image.architecture
+        ):
+            raise ValueError("Mach-O image metadata must match its native binary architecture")
         if architecture not in _ARCHITECTURES:
             raise ValueError(f"architecture must be one of {sorted(_ARCHITECTURES)}")
         artifact_name = _text(
@@ -1110,12 +1123,22 @@ class LocalArtifactVersionRecord:
     content: FileContentIdentity
     binary: LocalArtifactBinaryIdentity | None = None
     launchd_job: LaunchdSystemJobSpec | None = None
+    macos_file: MacosFileMetadata | None = None
 
     def __post_init__(self) -> None:
         """Reject contradictory artifact, content, or executable descriptors."""
 
         if self.artifact.content_id != self.content.content_id:
             raise ValueError("local artifact content_id must match its file content identity")
+        if self.macos_file is not None and (
+            type(self.macos_file) is not MacosFileMetadata
+            or self.artifact.platform != "macos"
+            or self.macos_file.file_object_id != self.content.file_object_id
+            or self.macos_file.size_bytes != self.content.size_bytes
+            or not self.artifact.native_path.startswith("/")
+            or "\0" in self.artifact.native_path
+        ):
+            raise ValueError("Mac file metadata must match its exact object, platform and size")
         if self.launchd_job is not None:
             if type(self.launchd_job) is not LaunchdSystemJobSpec:
                 raise ValueError("launchd file metadata requires an exact bounded spec")

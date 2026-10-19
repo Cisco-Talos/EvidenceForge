@@ -191,6 +191,11 @@ class ProcessEvidencePreparer:
                             if payload.artifact_publication is not None
                             else None
                         ),
+                        macos_metadata=(
+                            payload.artifact_publication.record.macos_file
+                            if payload.artifact_publication is not None
+                            else None
+                        ),
                     ),
                     storyline_origin=storyline_origin,
                 )

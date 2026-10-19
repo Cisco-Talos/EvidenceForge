@@ -63,6 +63,7 @@ from evidenceforge.events.job_control import (
     PosixSessionIdentity,
 )
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -1316,6 +1317,7 @@ class MaterializationBatchBuilder:
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -1347,6 +1349,7 @@ class MaterializationBatchBuilder:
             credentials=credentials,
             arguments=arguments,
             environment=environment,
+            image_security=image_security,
             new_posix_session=new_posix_session,
             new_posix_group=new_posix_group,
             responsibility=responsibility,
@@ -2984,6 +2987,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -3036,6 +3040,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 credentials=credentials,
                 arguments=arguments,
                 environment=environment,
+                image_security=image_security,
                 new_posix_session=new_posix_session,
                 new_posix_group=new_posix_group,
                 responsibility=responsibility,
@@ -3488,6 +3493,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 credentials=parent.credentials,
                 arguments=parent.arguments,
                 environment=parent.environment,
+                image_security=parent.image_security,
                 responsibility=parent.responsibility,
             )
 
@@ -3517,6 +3523,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3546,6 +3553,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
         validate_process_environment(environment)
+        validate_macos_image_security(
+            image_security, self._manager._pid_os.get(normalized.hostname, "unknown")
+        )
         audit_pid_version = self._manager._preview_macos_audit_pid_version(
             normalized.hostname,
             self._manager._pid_os.get(normalized.hostname, "unknown"),
@@ -3599,6 +3609,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             credentials=credentials if credentials is not None else normalized.credentials,
             arguments=arguments,
             environment=environment,
+            image_security=image_security,
             command_line=command_line,
             execution_ordinal=normalized.execution_ordinal + 1,
             lifetime_image=normalized.initial_image,
@@ -4043,6 +4054,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ProcessParentageChange,
         ProcessParentReference,
         ProcessResponsibility,
+        MacosImageSecurity,
         ResponsibleProcessReference,
         PosixJobControlChange,
         SessionIdentity,
@@ -10346,6 +10358,7 @@ class StateManager:
         credentials: PosixProcessCredentials | None = None,
         arguments: tuple[str, ...] | None = None,
         environment: tuple[str, ...] | None = None,
+        image_security: MacosImageSecurity | None = None,
         new_posix_session: bool = False,
         new_posix_group: bool = False,
         responsibility: ProcessResponsibility | None = None,
@@ -10364,6 +10377,7 @@ class StateManager:
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
+            validate_macos_image_security(image_security, os_category)
             if environment is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit process environment requires a POSIX host")
             if arguments is not None and os_category not in {"macos", "linux"}:
@@ -10503,6 +10517,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                image_security=image_security,
                 responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, parent_identity),
                 job_control=self._initial_posix_membership(
@@ -10737,6 +10752,7 @@ class StateManager:
         credentials: PosixProcessCredentials | None,
         arguments: tuple[str, ...] | None,
         environment: tuple[str, ...] | None,
+        image_security: MacosImageSecurity | None,
         new_posix_session: bool,
         new_posix_group: bool,
         responsibility: ProcessResponsibility | None,
@@ -10765,6 +10781,7 @@ class StateManager:
             self._validate_process_credentials(credentials, os_category)
             validate_process_arguments(arguments, command_line=command_line)
             validate_process_environment(environment)
+            validate_macos_image_security(image_security, os_category)
             if environment is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit process environment requires a POSIX host")
             if arguments is not None and os_category not in {"macos", "linux"}:
@@ -11018,6 +11035,7 @@ class StateManager:
                 command_line=command_line,
                 arguments=arguments,
                 environment=environment,
+                image_security=image_security,
                 responsibility=responsibility,
                 parentage=self._initial_process_parentage(os_category, parent_pid, planned_parent),
                 job_control=self._initial_posix_membership(
@@ -12074,6 +12092,7 @@ class StateManager:
                     command_line=after.command_line,
                     arguments=after.arguments,
                     environment=after.environment,
+                    image_security=after.image_security,
                     credentials=after.credentials,
                     audit_pid_version=after.audit_pid_version,
                     execution_ordinal=before.execution_ordinal + 1,
@@ -12447,6 +12466,7 @@ class StateManager:
             credentials=identity.credentials,
             arguments=identity.arguments,
             environment=identity.environment,
+            image_security=identity.image_security,
             responsibility=identity.responsibility,
             parentage=identity.parentage,
             job_control=identity.job_control,
@@ -14600,6 +14620,7 @@ class StateManager:
             process.command_line = execution.after.command_line
             process.arguments = execution.after.arguments
             process.environment = execution.after.environment
+            process.image_security = execution.after.image_security
             process.credentials = execution.after.credentials
             process.audit_pid_version = execution.after.audit_pid_version
             if process.audit_pid_version is not None:
@@ -16384,6 +16405,7 @@ class StateManager:
             credentials=process.credentials,
             arguments=process.arguments,
             environment=process.environment,
+            image_security=process.image_security,
             responsibility=process.responsibility,
             parentage=process.parentage,
             job_control=process.job_control,
@@ -16413,6 +16435,7 @@ class StateManager:
             identity.audit_pid_version,
             identity.arguments,
             identity.environment,
+            identity.image_security,
             identity.parentage,
             identity.responsibility,
             identity.job_control,

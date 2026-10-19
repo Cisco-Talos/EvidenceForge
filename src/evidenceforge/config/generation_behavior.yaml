@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 226
+current_revision: 227
 history_start_revision: 1
-behavior_surface_sha256: a90b1b906fcb8eab2d52f6343dc1a8f416cea74c5810ea8c0233715cf3ff9e6c
+behavior_surface_sha256: 78ea8978b4d75d5c1811d844549a37b1fb169c71bbed1fe194f066bb8abc2b07
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2218,3 +2218,13 @@ changes:
     formats:
       - ecar
     summary: Retains explicit Mac responsible-process lifetime facts through fork and exec, captures event-time identities with proven absent or exited self fallback, and migrates legacy records with unknown responsibility.
+  - revision: 227
+    id: macos-file-runtime-metadata-and-collector-state
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - checkpoint-state
+      - file-content-identity
+    formats:
+      - ecar
+    summary: Retains explicit Mac file/stat and runtime image-security facts through canonical publication and checkpoints, and adds bounded ES client sequencing without enabling unvalidated native output.

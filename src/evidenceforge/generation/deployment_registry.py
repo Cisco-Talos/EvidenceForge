@@ -84,6 +84,7 @@ from evidenceforge.events.content_identity import (
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.indexes import (
     CompactIndexedStore,
@@ -2832,6 +2833,16 @@ def _pack_artifact_payload(
                     version_info.original_filename,
                 ),
             )
+            if record.binary.code_signature is not None or record.binary.mach_o_image is not None:
+                signature = record.binary.code_signature
+                image = record.binary.mach_o_image
+                binary_fields = (
+                    *binary_fields,
+                    None
+                    if signature is None
+                    else (signature.signing_id, signature.team_id, signature.cdhash),
+                    None if image is None else (image.build_uuid, image.architecture),
+                )
     fields: tuple[object, ...] = (
         artifact.hostname,
         artifact.principal,
@@ -2847,8 +2858,13 @@ def _pack_artifact_payload(
         content_fields,
         binary_fields,
     )
-    if record is not None and record.launchd_job is not None:
-        fields = (*fields, record.launchd_job.model_dump_json())
+    if record is not None and (record.launchd_job is not None or record.macos_file is not None):
+        fields = (
+            *fields,
+            None if record.launchd_job is None else record.launchd_job.model_dump_json(),
+        )
+        if record.macos_file is not None:
+            fields = (*fields, record.macos_file.canonical_json())
     encoded = json.dumps(
         fields,
         ensure_ascii=False,
@@ -2950,6 +2966,20 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
                     "local artifact publication binary has malformed version-info text"
                 )
         binary_values = (*binary_text, version_info_values)
+        if binary.code_signature is not None or binary.mach_o_image is not None:
+            signature = binary.code_signature
+            image = binary.mach_o_image
+            if signature is not None and type(signature) is not MachOCodeSignature:
+                raise StateError("local artifact binary has malformed signing metadata")
+            if image is not None and type(image) is not MachOImageIdentity:
+                raise StateError("local artifact binary has malformed image metadata")
+            binary_values = (
+                *binary_values,
+                None
+                if signature is None
+                else (signature.signing_id, signature.team_id, signature.cdhash),
+                None if image is None else (image.build_uuid, image.architecture),
+            )
 
     values: tuple[object, ...] = (
         artifact_text,
@@ -2962,7 +2992,7 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
     )
 
     if record.launchd_job is None:
-        return values
+        return _with_macos_file_metadata(values, record)
     job = record.launchd_job
     if type(job) is not LaunchdSystemJobSpec:
         raise StateError("local artifact publication has malformed launchd metadata")
@@ -2977,10 +3007,35 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
         or type(job.run_at_load) is not bool
     ):
         raise StateError("local artifact publication has malformed launchd fields")
-    return (
-        *values,
-        (job.schema_version, job.label, job.program, job.arguments, job.principal, job.run_at_load),
+    return _with_macos_file_metadata(
+        (
+            *values,
+            (
+                job.schema_version,
+                job.label,
+                job.program,
+                job.arguments,
+                job.principal,
+                job.run_at_load,
+            ),
+        ),
+        record,
     )
+
+
+def _with_macos_file_metadata(
+    values: tuple[object, ...], record: LocalArtifactVersionRecord
+) -> tuple[object, ...]:
+    if record.macos_file is None:
+        return values
+    metadata = record.macos_file
+    if type(metadata) is not MacosFileMetadata:
+        raise StateError("local artifact has malformed Mac file metadata")
+    # Revalidation also protects publication from object.__setattr__ tampering.
+    encoded = metadata.canonical_json()
+    if MacosFileMetadata.model_validate_json(encoded) != metadata:
+        raise StateError("local artifact has inconsistent Mac file metadata")
+    return (*values, ("macos-file-v1", encoded))
 
 
 def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionRecord:
@@ -2997,6 +3052,12 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
             record.binary,
             digests=replace(record.binary.digests),
             pe_version_info=None if version_info is None else replace(version_info),
+            code_signature=None
+            if record.binary.code_signature is None
+            else replace(record.binary.code_signature),
+            mach_o_image=None
+            if record.binary.mach_o_image is None
+            else replace(record.binary.mach_o_image),
         )
     canonical = LocalArtifactVersionRecord(
         artifact=canonical_artifact,
@@ -3012,6 +3073,9 @@ def _canonical_local_artifact_record(record: object) -> LocalArtifactVersionReco
             principal=record.launchd_job.principal,
             run_at_load=record.launchd_job.run_at_load,
         ),
+        macos_file=None
+        if record.macos_file is None
+        else MacosFileMetadata.model_validate_json(record.macos_file.canonical_json()),
     )
     if _local_artifact_record_primitive(canonical) != primitive:
         raise StateError("local artifact publication record is not canonically self-consistent")
@@ -4214,7 +4278,7 @@ class _PackedArtifactStore:
         values = _unpack_artifact_payload(self._payload(handle))
         if len(values) < 13 or values[11] is None:
             return None
-        if len(values) not in {13, 14}:
+        if len(values) not in {13, 14, 15}:
             raise StateError("local artifact content row width is invalid")
         content_values = values[11]
         if not isinstance(content_values, list) or len(content_values) != 5:
@@ -4230,7 +4294,7 @@ class _PackedArtifactStore:
         binary_values = values[12]
         binary = None
         if binary_values is not None:
-            if not isinstance(binary_values, list) or len(binary_values) != 3:
+            if not isinstance(binary_values, list) or len(binary_values) not in {3, 5}:
                 raise StateError("local artifact binary descriptor is malformed")
             version_values = binary_values[2]
             version_info = None
@@ -4252,13 +4316,22 @@ class _PackedArtifactStore:
                 architecture=cast(Architecture, str(binary_values[0])),
                 artifact_name=str(binary_values[1]),
                 pe_version_info=version_info,
+                code_signature=MachOCodeSignature(*binary_values[3])
+                if len(binary_values) == 5 and binary_values[3] is not None
+                else None,
+                mach_o_image=MachOImageIdentity(*binary_values[4])
+                if len(binary_values) == 5 and binary_values[4] is not None
+                else None,
             )
         return LocalArtifactVersionRecord(
             artifact=artifact,
             content=content,
             binary=binary,
             launchd_job=LaunchdSystemJobSpec.model_validate_json(values[13])
-            if len(values) == 14
+            if len(values) >= 14 and values[13] is not None
+            else None,
+            macos_file=MacosFileMetadata.model_validate_json(values[14])
+            if len(values) == 15
             else None,
         )
 

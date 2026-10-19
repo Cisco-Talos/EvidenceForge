@@ -14,8 +14,11 @@ from evidenceforge.events.content_identity import (
     LocalArtifactBinaryIdentity,
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
+    MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
@@ -40,7 +43,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 _ROW_WIDTH = 10
 _ALLOCATOR_ROW_WIDTH = 3
 
@@ -63,11 +66,12 @@ class _ArtifactRegistryHead(BaseModel):
 
 
 def _decode_record(
-    platform: str, payload: bytes, *, legacy: bool = False
+    platform: str, payload: bytes, *, legacy: bool = False, metadata: bool = True
 ) -> LocalArtifactVersionRecord:
     try:
         values = _unpack_artifact_payload(payload)
-        if len(values) not in ({13} if legacy else {13, 14}):
+        widths = {13} if legacy else {13, 14, 15} if metadata else {13, 14}
+        if len(values) not in widths:
             raise ValueError("packed artifact row width changed")
         content_values = values[11]
         if type(content_values) is not list or len(content_values) != 5:
@@ -96,7 +100,9 @@ def _decode_record(
         binary_values = values[12]
         binary = None
         if binary_values is not None:
-            if type(binary_values) is not list or len(binary_values) != 3:
+            if type(binary_values) is not list or len(binary_values) not in (
+                {3, 5} if metadata else {3}
+            ):
                 raise ValueError("packed artifact binary row is invalid")
             version_values = binary_values[2]
             version_info = None
@@ -118,13 +124,22 @@ def _decode_record(
                 architecture=binary_values[0],
                 artifact_name=binary_values[1],
                 pe_version_info=version_info,
+                code_signature=MachOCodeSignature(*binary_values[3])
+                if len(binary_values) == 5 and binary_values[3] is not None
+                else None,
+                mach_o_image=MachOImageIdentity(*binary_values[4])
+                if len(binary_values) == 5 and binary_values[4] is not None
+                else None,
             )
         record = LocalArtifactVersionRecord(
             artifact=artifact,
             content=content,
             binary=binary,
             launchd_job=LaunchdSystemJobSpec.model_validate_json(values[13])
-            if len(values) == 14
+            if len(values) >= 14 and values[13] is not None
+            else None,
+            macos_file=MacosFileMetadata.model_validate_json(values[14])
+            if len(values) == 15
             else None,
         )
         if _pack_artifact_payload(artifact, record) != payload:
@@ -265,6 +280,7 @@ def _restore_row(
     lease_rows: dict[int, list[tuple[str, str, float, int]]],
     *,
     legacy: bool = False,
+    metadata: bool = True,
 ) -> tuple[int, int]:
     if (
         type(row) is not list
@@ -284,7 +300,7 @@ def _restore_row(
         raise CheckpointCorruptionError("local artifact checkpoint row is invalid")
     if type(row[9]) is not bool:
         raise CheckpointCorruptionError("local artifact placement flag is invalid")
-    record = _decode_record(row[3], row[4], legacy=legacy)
+    record = _decode_record(row[3], row[4], legacy=legacy, metadata=metadata)
     version_id = record.artifact.artifact_version_id
     deadline = None if row[5] is None else float(row[5])
     if (
@@ -464,7 +480,7 @@ class LocalArtifactVersionRegistryParticipant:
         retention = decode_state_value(document.retention)
         watermark = None if document.watermark is None else decode_state_value(document.watermark)
         if (
-            document.schema_version not in {"1", "2", self.checkpoint_schema_version}
+            document.schema_version not in {"1", "2", "3", self.checkpoint_schema_version}
             or document.capacity != self.registry._capacity
             or type(retention) is not timedelta
             or retention != self.registry._retention
@@ -509,7 +525,11 @@ class LocalArtifactVersionRegistryParticipant:
         )
         for row in document.records:
             shard_id, order = _restore_row(
-                self.registry, row, lease_rows, legacy=document.schema_version == "1"
+                self.registry,
+                row,
+                lease_rows,
+                legacy=document.schema_version == "1",
+                metadata=document.schema_version == "4",
             )
             if order and order in deadline_orders[shard_id]:
                 raise CheckpointCorruptionError(

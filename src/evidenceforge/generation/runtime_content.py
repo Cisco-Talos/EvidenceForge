@@ -23,11 +23,14 @@ from evidenceforge.events.content_identity import (
     LocalArtifactBinaryIdentity,
     LocalArtifactIdentity,
     LocalArtifactVersionRecord,
+    MachOCodeSignature,
+    MachOImageIdentity,
     PeVersionInfo,
     Platform,
     UserProfileIdentity,
     canonical_native_path,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -75,6 +78,9 @@ class RuntimeArtifactDescriptor:
     architecture: Architecture | None = None
     pe_version_info: PeVersionInfo | None = None
     launchd_job: LaunchdSystemJobSpec | None = None
+    macos_file: MacosFileMetadata | None = None
+    code_signature: MachOCodeSignature | None = None
+    mach_o_image: MachOImageIdentity | None = None
 
     def __post_init__(self) -> None:
         """Fail before registry admission on incomplete or contradictory metadata."""
@@ -114,6 +120,10 @@ class RuntimeArtifactDescriptor:
             )
         if self.pe_version_info is not None and self.platform != "windows":
             raise ValueError("PE metadata is valid only for Windows runtime artifacts")
+        if (self.code_signature is not None or self.mach_o_image is not None) and (
+            not self.executable or self.platform != "macos"
+        ):
+            raise ValueError("Mach-O metadata requires an executable Mac runtime artifact")
 
 
 class RuntimeContentIdentityManager:
@@ -170,12 +180,15 @@ class RuntimeContentIdentityManager:
                 architecture=architecture,
                 artifact_name=_artifact_name(descriptor.native_path, descriptor.platform),
                 pe_version_info=descriptor.pe_version_info,
+                code_signature=descriptor.code_signature,
+                mach_o_image=descriptor.mach_o_image,
             )
         return LocalArtifactVersionRecord(
             artifact=artifact,
             content=content,
             binary=binary,
             launchd_job=descriptor.launchd_job,
+            macos_file=descriptor.macos_file,
         )
 
     def prepare_publication(
@@ -221,6 +234,9 @@ class RuntimeContentIdentityManager:
         artifact_version: int = 1,
         pe_version_info: PeVersionInfo | None = None,
         launchd_job: LaunchdSystemJobSpec | None = None,
+        macos_file: MacosFileMetadata | None = None,
+        code_signature: MachOCodeSignature | None = None,
+        mach_o_image: MachOImageIdentity | None = None,
         retention: timedelta | None = None,
         lease_owner: str = "",
         lease_until: datetime | None = None,
@@ -248,6 +264,8 @@ class RuntimeContentIdentityManager:
                 raise ValueError("launchd file content seed must match its bounded job semantics")
             authored_content_seed_ref = launchd_job.content_seed
         if normalized_action in {"read", "delete"}:
+            if any(value is not None for value in (macos_file, code_signature, mach_o_image)):
+                raise ValueError("Runtime metadata publication requires a create/modify effect")
             return None
         if normalized_action not in {"create", "modify"}:
             raise ValueError("runtime file effect action must be create, modify, read, or delete")
@@ -353,6 +371,9 @@ class RuntimeContentIdentityManager:
             architecture=resolved_architecture if executable else None,
             pe_version_info=pe_version_info,
             launchd_job=launchd_job,
+            macos_file=macos_file,
+            code_signature=code_signature,
+            mach_o_image=mach_o_image,
         )
         return self.prepare_publication(
             descriptor,

@@ -1529,7 +1529,10 @@ class _CanonicalIdentityEncoder:
         semantic_fields = tuple(
             field_name for field_name, compare in data_fields if compare is True
         )
-        if type(value) is _content_identity.BinaryReleaseIdentity:
+        if type(value) in (
+            _content_identity.BinaryReleaseIdentity,
+            _content_identity.LocalArtifactBinaryIdentity,
+        ):
             for optional_name in ("code_signature", "mach_o_image"):
                 metadata = _identity_dataclass_field_value(
                     self._types, value, value_mro, optional_name, None, (*path, optional_name)

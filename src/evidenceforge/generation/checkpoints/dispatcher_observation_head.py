@@ -5,14 +5,16 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.es_collector import ESCollectorRegistry, ESCollectorState
 from evidenceforge.events.observation import ObservationSummary
+from evidenceforge.models.exceptions import StateError
 
 from .errors import CheckpointCorruptionError
 from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "1"
+_SCHEMA_VERSION = "2"
 
 
 class _DispatcherObservationHead(BaseModel):
@@ -23,6 +25,7 @@ class _DispatcherObservationHead(BaseModel):
     schema_version: str
     source_evidence_version: int = Field(ge=0)
     summaries: list[list[object]] = Field(default_factory=list)
+    es_collectors: list[str] = Field(default_factory=list)
 
 
 class DispatcherObservationParticipant:
@@ -35,6 +38,7 @@ class DispatcherObservationParticipant:
         OwnerStateField("_source_evidence_status", "bounded-live-head"),
         OwnerStateField("_source_evidence_version", "bounded-live-head"),
         OwnerStateField("_source_evidence_lock", "deterministically-rebuilt"),
+        OwnerStateField("es_collectors", "bounded-live-head"),
     )
 
     def __init__(self, dispatcher: EventDispatcher) -> None:
@@ -64,6 +68,9 @@ class DispatcherObservationParticipant:
                 schema_version=self.checkpoint_schema_version,
                 source_evidence_version=self.dispatcher._source_evidence_version,
                 summaries=rows,
+                es_collectors=[
+                    state.model_dump_json() for state in self.dispatcher.es_collectors.snapshot()
+                ],
             )
         return ParticipantSeal(
             head=HeadDraft(
@@ -94,10 +101,19 @@ class DispatcherObservationParticipant:
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint head is invalid"
             ) from error
-        if document.schema_version != self.checkpoint_schema_version:
+        if document.schema_version not in {"1", self.checkpoint_schema_version} or (
+            document.schema_version == "1" and document.es_collectors
+        ):
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint schema is unsupported"
             )
+        collectors = ESCollectorRegistry()
+        try:
+            collectors.restore(
+                tuple(ESCollectorState.model_validate_json(row) for row in document.es_collectors)
+            )
+        except (StateError, TypeError, ValueError) as error:
+            raise CheckpointCorruptionError("dispatcher ES collector state is invalid") from error
         restored: dict[str, dict[str, ObservationSummary]] = {}
         for row in document.summaries:
             if (
@@ -127,3 +143,4 @@ class DispatcherObservationParticipant:
         with self.dispatcher._source_evidence_lock:
             self.dispatcher._source_evidence_status = restored
             self.dispatcher._source_evidence_version = document.source_evidence_version
+            self.dispatcher.es_collectors = collectors

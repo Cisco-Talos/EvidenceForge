@@ -38,6 +38,7 @@ from evidenceforge.events.content_identity import (
     LocalArtifactIdentity,
     ProcessBinaryIdentity,
 )
+from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkTrafficLedger,
@@ -423,6 +424,7 @@ class FileContext:
     pid: int = 0
     artifact_identity: LocalArtifactIdentity | None = None
     content_identity: FileContentIdentity | None = None
+    macos_metadata: MacosFileMetadata | None = None
 
 
 @dataclass(slots=True)

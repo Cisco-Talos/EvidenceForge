@@ -346,6 +346,17 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
         payload = (*payload, ("posix-process-arguments-v1", identity.arguments))
     if identity.environment is not None:
         payload = (*payload, ("posix-process-environment-v1", identity.environment))
+    if identity.image_security is not None:
+        security = identity.image_security
+        payload = (
+            *payload,
+            (
+                "macos-image-security-v1",
+                security.codesigning_flags,
+                security.is_platform_binary,
+                security.validation_category,
+            ),
+        )
     if identity.parentage is not None:
         parentage = tuple(
             None

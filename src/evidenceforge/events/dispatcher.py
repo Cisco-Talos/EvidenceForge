@@ -74,6 +74,7 @@ from evidenceforge.events.contracts import (
     SemanticOccurrenceKey,
     shadow_seal,
 )
+from evidenceforge.events.es_collector import ESCollectorRegistry
 from evidenceforge.events.evidence_requirements import (
     PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
 )
@@ -1406,6 +1407,7 @@ class EventDispatcher:
         self._publication_ledger_lock = RLock()
         self._source_evidence_version = 0
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
+        self.es_collectors = ESCollectorRegistry()
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
         self._recent_network_identifiers: deque[tuple[str, dict[str, str]]] = deque(
@@ -5381,18 +5383,26 @@ class EventDispatcher:
                 raise EventContractError(
                     "File content identity conflicts with its exact retained publication"
                 )
+            if event.file.macos_metadata not in (None, file_record.macos_file):
+                raise EventContractError(
+                    "File stat metadata conflicts with its exact retained publication"
+                )
             if attach:
                 event.file.artifact_identity = file_record.artifact
                 event.file.content_identity = file_record.content
+                event.file.macos_metadata = file_record.macos_file
             elif (
                 event.file.artifact_identity != file_record.artifact
                 or event.file.content_identity != file_record.content
+                or event.file.macos_metadata != file_record.macos_file
             ):
                 raise EventContractError(
                     "Sealed file occurrence lacks its exact prepared artifact/content identity"
                 )
         elif event.file is not None and (
-            event.file.artifact_identity is not None or event.file.content_identity is not None
+            event.file.artifact_identity is not None
+            or event.file.content_identity is not None
+            or event.file.macos_metadata is not None
         ):
             raise EventContractError(
                 "File artifact/content identity has no exact retained or prepared version"

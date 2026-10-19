@@ -17,6 +17,7 @@ from evidenceforge.events.identity import (
     validate_process_arguments,
     validate_process_environment,
 )
+from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.indexes import (
@@ -490,6 +491,16 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     for process in chain(
         fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
     ):
+        try:
+            for security in (
+                process.image_security,
+                *(identity.image_security for identity in process.prior_executions),
+            ):
+                validate_macos_image_security(
+                    security, fresh._pid_os.get(process.system, "unknown")
+                )
+        except ValueError as error:
+            raise CheckpointCorruptionError("StateManager image security is invalid") from error
         try:
             validate_process_arguments(process.arguments, command_line=process.command_line)
         except ValueError as error:
