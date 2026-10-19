@@ -16654,6 +16654,42 @@ class StateManager:
             responsibility = self._observe_process_responsibility_locked(after, at)
             return ProcessRelationshipObservation(parent, responsibility)
 
+    def observe_planned_termination_relationships(
+        self, cohort: ActionCohortMaterializationPlan
+    ) -> ProcessRelationshipObservation:
+        """Freeze a standalone terminating Mac process at its exact terminal instant.
+
+        Capture before closure while the execution and its exact relationships
+        are retained. The snapshot cannot authorize native publication or be
+        reconstructed from an inactive/reused PID after commit. Mixed lifecycle
+        and identity changes require an explicitly ordered temporal overlay.
+        """
+        with self._lock:
+            self.validate_action_cohort_materialization(cohort)
+            if len(cohort.process_terminations) != 1 or any(
+                (
+                    cohort.sessions,
+                    cohort.processes,
+                    cohort.process_activity_patches,
+                    cohort.process_executions,
+                    cohort.session_terminalizations,
+                    cohort.session_metadata_patches,
+                    cohort.live_session_process_role_patches,
+                    cohort.session_activity_patches,
+                    cohort._smb_connection_finalization,
+                    cohort._smb_file_mutation_terminalization,
+                )
+            ):
+                raise StateError("Planned terminal observation requires a standalone termination")
+            terminal = cohort.process_terminations[0]
+            identity = terminal.identity
+            if self._pid_os.get(identity.hostname) != "macos":
+                raise StateError("Planned terminal observation requires a modeled Mac execution")
+            return ProcessRelationshipObservation(
+                self._observe_process_parent_locked(identity, terminal.end_time),
+                self._observe_process_responsibility_locked(identity, terminal.end_time),
+            )
+
     def observe_process_parent(
         self, identity: ProcessIdentity, *, observed_at: datetime
     ) -> ProcessParentObservation:

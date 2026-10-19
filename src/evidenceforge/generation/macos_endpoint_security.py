@@ -7,6 +7,8 @@ This is not an ES event emitter or a sink transaction. Filesystem facts must be
 supplied explicitly; terminal devices require their own supported provider.
 """
 
+from typing import Literal
+
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_file import MacosFileMetadata
@@ -60,34 +62,51 @@ def prepare_installed_es_process_snapshot(
             or image.identity_kind != "installed_release"
         ):
             raise StateError("Installed ES preparation requires its exact live loaded execution")
-        installation = deployments.installation_for_image(
-            process.hostname, process.image, "macos", principal=process.principal
-        )
-        binary = deployments.resolve_binary(
-            process.hostname, process.image, "macos", principal=process.principal
-        )
-        if installation is None or binary is None or binary.content_id != image.content_id:
-            raise StateError("Installed ES preparation lost its exact deployed release")
         relationships = state.observe_process_relationships(process, observed_at=at)
-        try:
-            executable = MacosInstalledFileObservation(
-                installation, binary, process.image, at, metadata
-            )
-            context = ProcessContext(
-                process.pid,
-                process.parent_pid,
-                process.image,
-                process.command_line,
-                process.principal,
-                logon_id=process.logon_id,
-                start_time=process.started_at,
-                binary_identity=binary,
-            )
-            return es_process_from_observations(
-                relationships, collection, context, executable, version=version
-            )
-        except ValueError as error:
-            raise StateError(f"Incomplete installed ES process facts: {error}") from error
+        return _project_installed_process(
+            deployments, relationships, collection, metadata=metadata, version=version
+        )
+
+
+def _project_installed_process(
+    deployments: DeploymentContentRegistry,
+    relationships: ProcessRelationshipObservation,
+    collection: MacosProcessCollectionObservation,
+    *,
+    metadata: MacosFileMetadata,
+    version: int,
+) -> ESProcess:
+    process = collection.process
+    image = process.executable_version
+    if image is None or image.identity_kind != "installed_release":
+        raise StateError("Installed ES preparation requires its exact loaded release")
+    installation = deployments.installation_for_image(
+        process.hostname, process.image, "macos", principal=process.principal
+    )
+    binary = deployments.resolve_binary(
+        process.hostname, process.image, "macos", principal=process.principal
+    )
+    if installation is None or binary is None or binary.content_id != image.content_id:
+        raise StateError("Installed ES preparation lost its exact deployed release")
+    try:
+        executable = MacosInstalledFileObservation(
+            installation, binary, process.image, collection.observed_at, metadata
+        )
+        context = ProcessContext(
+            process.pid,
+            process.parent_pid,
+            process.image,
+            process.command_line,
+            process.principal,
+            logon_id=process.logon_id,
+            start_time=process.started_at,
+            binary_identity=binary,
+        )
+        return es_process_from_observations(
+            relationships, collection, context, executable, version=version
+        )
+    except ValueError as error:
+        raise StateError(f"Incomplete installed ES process facts: {error}") from error
 
 
 def prepare_runtime_es_process_snapshot(
@@ -262,3 +281,81 @@ def prepare_planned_runtime_es_exec_target(
         if collection.process != target or collection.observed_at != target.execution_started_at:
             raise StateError("Planned ES exec target requires its exact execution observation")
         return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def prepare_planned_runtime_es_terminal_process(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Freeze one terminal process snapshot before the canonical lifetime closes.
+
+    A process snapshot is distinct from an exit event. Explicit outcome facts,
+    target-version wire admission and atomic sink publication remain required.
+    No unknown exit status, collector membership or file fact is synthesized.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Planned ES terminal process requires exact canonical owners")
+    collection.__post_init__()
+    with state._lock:
+        relationships = state.observe_planned_termination_relationships(cohort)
+        if (
+            collection.process != relationships.parent.process
+            or collection.observed_at != relationships.parent.observed_at
+        ):
+            raise StateError("Planned ES terminal process requires its exact terminal observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
+def prepare_planned_installed_es_process_snapshot(
+    state: StateManager,
+    deployments: DeploymentContentRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    metadata: MacosFileMetadata,
+    phase: Literal["birth", "exec", "terminal"],
+    version: int,
+) -> ESProcess:
+    """Prepare an installed process at an explicitly selected canonical transition.
+
+    Deployment resolves the retained release/placement; a modeled filesystem
+    owner must still supply exact stat. The selected sealed State boundary owns
+    birth/exec/terminal time and relationships, with its existing composition
+    limits. This helper grants no native event admission or commit authority.
+    """
+    if (
+        type(state) is not StateManager
+        or type(deployments) is not DeploymentContentRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+        or type(phase) is not str
+        or phase not in {"birth", "exec", "terminal"}
+    ):
+        raise StateError("Planned installed ES process requires exact canonical owners and phase")
+    collection.__post_init__()
+    with state._lock:
+        if phase == "birth":
+            relationships = state.observe_planned_process_relationships(
+                cohort, process=collection.process
+            )
+        elif phase == "exec":
+            relationships = state.observe_planned_execution_relationships(cohort)
+        else:
+            relationships = state.observe_planned_termination_relationships(cohort)
+        if (
+            collection.process != relationships.parent.process
+            or collection.observed_at != relationships.parent.observed_at
+        ):
+            raise StateError("Planned installed ES process requires its exact phase observation")
+        return _project_installed_process(
+            deployments, relationships, collection, metadata=metadata, version=version
+        )

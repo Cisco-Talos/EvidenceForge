@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 246
+current_revision: 247
 history_start_revision: 1
-behavior_surface_sha256: fc9ab731f814e670ecea458ab6eb25d680cd2baaadaf3d93c4ddf198bdebd3cf
+behavior_surface_sha256: d98f6cfc06f302d368eac73b8aec7042417b84fd94c5f4829b06dfb9ca339e4f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2383,3 +2383,10 @@ changes:
       - macos-process-execution
     formats: []
     summary: Prepares a standalone exec target without live State mutation and models exact dup2 and descriptor flag changes without enabling a native event family.
+  - revision: 247
+    id: macos-terminal-and-installed-process-preparation
+    impact: none
+    domains:
+      - macos-source-contracts
+    formats: []
+    summary: Freezes standalone terminal process facts and prepares installed birth, exec and terminal snapshots through shared explicit deployment/stat validation without admitting native events.
