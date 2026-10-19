@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 236
+current_revision: 237
 history_start_revision: 1
-behavior_surface_sha256: e56deeaa7a8189753b2bd2cfa0813b6a5908b136b9260637aa53fc035084dd29
+behavior_surface_sha256: 787ce7a8cc1834159b67ac2b7ff4256a0677652146d3cf50d43cb6c7be1cc98d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2305,3 +2305,10 @@ changes:
       - macos-source-contracts
     formats: []
     summary: Prepares complete explicit live-process snapshots from retained runtime executable versions without current-path fallback, source admission or sink publication.
+  - revision: 237
+    id: sealed-cohort-macos-process-preparation
+    impact: none
+    domains:
+      - macos-source-contracts
+    formats: []
+    summary: Prepares single-start runtime process snapshots from fully validated sealed cohorts before State publication without enabling a native source.

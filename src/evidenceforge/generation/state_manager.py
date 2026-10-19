@@ -16180,28 +16180,35 @@ class StateManager:
             current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
             if current != identity or identity.responsibility is None:
                 raise StateError("Responsibility observation has stale, inactive or unknown facts")
-            reference = identity.responsibility.responsible
-            if reference is None:
-                return ProcessResponsibilityObservation(identity, identity, at, "absent")
-            target = self._processes_by_object_id.get(reference.object_id) or (
-                self._ended_processes_by_object_id.get(reference.object_id)
+            return self._observe_process_responsibility_locked(identity, at)
+
+    def _observe_process_responsibility_locked(
+        self, identity: ProcessIdentity, at: datetime
+    ) -> ProcessResponsibilityObservation:
+        if identity.responsibility is None:
+            raise StateError("Responsibility observation requires known process facts")
+        reference = identity.responsibility.responsible
+        if reference is None:
+            return ProcessResponsibilityObservation(identity, identity, at, "absent")
+        target = self._processes_by_object_id.get(reference.object_id) or (
+            self._ended_processes_by_object_id.get(reference.object_id)
+        )
+        if (
+            target is None
+            or ResponsibleProcessReference(
+                target.system, target.ecar_object_id, target.pid, target.start_time
             )
-            if (
-                target is None
-                or ResponsibleProcessReference(
-                    target.system, target.ecar_object_id, target.pid, target.start_time
-                )
-                != reference
-            ):
-                raise StateError("Responsibility observation lost exact retained lifetime history")
-            if target.end_time is not None and at >= target.end_time:
-                return ProcessResponsibilityObservation(
-                    identity, identity, at, "exited", target.end_time
-                )
-            responsible = self._process_execution_active_at(target, at)
-            if responsible is None:
-                raise StateError("Responsibility observation lost active execution history")
-            return ProcessResponsibilityObservation(identity, responsible, at, "active")
+            != reference
+        ):
+            raise StateError("Responsibility observation lost exact retained lifetime history")
+        if target.end_time is not None and at >= target.end_time:
+            return ProcessResponsibilityObservation(
+                identity, identity, at, "exited", target.end_time
+            )
+        responsible = self._process_execution_active_at(target, at)
+        if responsible is None:
+            raise StateError("Responsibility observation lost active execution history")
+        return ProcessResponsibilityObservation(identity, responsible, at, "active")
 
     def observe_process_relationships(
         self, identity: ProcessIdentity, *, observed_at: datetime
@@ -16211,6 +16218,45 @@ class StateManager:
             return ProcessRelationshipObservation(
                 self.observe_process_parent(identity, observed_at=observed_at),
                 self.observe_process_responsibility(identity, observed_at=observed_at),
+            )
+
+    def observe_planned_process_relationships(
+        self, cohort: ActionCohortMaterializationPlan
+    ) -> ProcessRelationshipObservation:
+        """Freeze birth relationships for an authenticated single-start Mac cohort.
+
+        Parent, responsible and session owners must already be published. This
+        bounded preflight excludes concurrent relationship transitions; a future
+        cohort overlay must own their event-time effects. Commit must still
+        revalidate the original cohort, even after successful observation.
+        """
+        with self._lock:
+            self.validate_action_cohort_materialization(cohort)
+            if len(cohort.processes) != 1 or any(
+                (
+                    cohort.sessions,
+                    cohort.process_executions,
+                    cohort.process_terminations,
+                    cohort.session_terminalizations,
+                    cohort.session_metadata_patches,
+                    cohort.live_session_process_role_patches,
+                )
+            ):
+                raise StateError(
+                    "Planned observation requires a single-start cohort with live owners"
+                )
+            plan = cohort.processes[0]
+            identity = plan.identity
+            platform = (
+                plan._allocator_patch.pid_os[1]
+                if plan._allocator_patch.pid_os is not None
+                else self._pid_os.get(identity.hostname)
+            )
+            if platform != "macos":
+                raise StateError("Planned process observation requires a modeled Mac start")
+            return ProcessRelationshipObservation(
+                self._observe_process_parent_locked(identity, identity.started_at),
+                self._observe_process_responsibility_locked(identity, identity.started_at),
             )
 
     def observe_process_parent(
@@ -16234,18 +16280,25 @@ class StateManager:
             current = self.get_process_identity_by_object_id(identity.object_id, event_time=at)
             if current != identity or identity.parentage is None:
                 raise StateError("Parent observation has stale, inactive or unknown process facts")
-            reference = identity.parentage.current
-            parent = None
-            if reference is not None:
-                parent = self.get_process_identity_by_object_id(reference.object_id, event_time=at)
-                if parent is None:
-                    raise StateError("Parent observation lost its exact active parent history")
-            try:
-                return ProcessParentObservation(identity, parent, at)
-            except ValueError as error:
-                raise StateError(
-                    "Parent observation disagrees with canonical parent ownership"
-                ) from error
+            return self._observe_process_parent_locked(identity, at)
+
+    def _observe_process_parent_locked(
+        self, identity: ProcessIdentity, at: datetime
+    ) -> ProcessParentObservation:
+        if identity.parentage is None:
+            raise StateError("Parent observation requires known process facts")
+        reference = identity.parentage.current
+        parent = None
+        if reference is not None:
+            parent = self.get_process_identity_by_object_id(reference.object_id, event_time=at)
+            if parent is None:
+                raise StateError("Parent observation lost its exact active parent history")
+        try:
+            return ProcessParentObservation(identity, parent, at)
+        except ValueError as error:
+            raise StateError(
+                "Parent observation disagrees with canonical parent ownership"
+            ) from error
 
     def _validate_macos_process_service_drop(
         self, target: ProcessIdentity, drop: MacosProcessServiceDrop
