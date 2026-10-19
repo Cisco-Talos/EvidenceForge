@@ -922,6 +922,7 @@ def compile_deployment_registry(
     overrides = _deployment_overrides(scenario)
 
     release_by_key: dict[tuple[str, ...], BinaryReleaseIdentity] = {}
+    binary_available_from: dict[str, date] = {}
     profiles_by_owner: dict[tuple[str, str, Platform], UserProfileIdentity] = {}
     for user_world in sorted(
         world_model.users.values(),
@@ -1350,6 +1351,14 @@ def compile_deployment_registry(
                     )
                 )
             )
+            if platform == "macos" and platform_config.available_from is not None:
+                for _path, release, _is_module in shared_artifacts:
+                    known = binary_available_from.get(release.content_id)
+                    binary_available_from[release.content_id] = (
+                        platform_config.available_from
+                        if known is None
+                        else max(known, platform_config.available_from)
+                    )
             release_ids = {release.release_id for _path, release, _module in shared_artifacts}
             if len(release_ids) != 1:  # pragma: no cover - schema owns one deployment release
                 raise ValueError(f"application {application.id!r} artifacts span releases")
@@ -1708,6 +1717,7 @@ def compile_deployment_registry(
 
     return DeploymentContentRegistry(
         binary_releases=sorted(release_by_key.values(), key=lambda item: item.canonical_key),
+        binary_available_from=sorted(binary_available_from.items()),
         installed_software_releases=sorted(
             installed_software_releases,
             key=lambda item: item.canonical_key,

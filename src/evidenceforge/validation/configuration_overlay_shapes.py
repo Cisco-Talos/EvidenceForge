@@ -13,6 +13,24 @@
 # "string_dict_fields": mappings whose keys and values must be non-empty strings
 # "string_fields" / "number_fields": scalar root fields with explicit primitive types
 OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
+    "activity/macos_installed_files.yaml": {
+        "dict_fields": {
+            "volume_device",
+            "first_inode",
+            "logical_size_bytes",
+            "installation_age_seconds",
+            "build_lead_seconds",
+        },
+        "string_fields": {"schema_version", "profile", "volume_id", "allocation_policy"},
+        "scalar_fields": {
+            "allocation_unit_bytes": int,
+            "permissions": int,
+            "flags": int,
+            "generation": int,
+            "size_median_bytes": int,
+        },
+        "number_fields": {"size_log_sigma"},
+    },
     "activity/macos_unified_log_profiles.yaml": {
         "dict_fields": {"mach_timebase", "workspace_request"},
         "string_fields": {"schema_version", "profile"},

@@ -58,6 +58,12 @@ def _family(
 
 _FAMILIES = (
     _family(
+        "activity/macos_installed_files.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Synthetic installed Mac file sizes, allocation and pre-window provisioning policy.",
+    ),
+    _family(
         "activity/macos_unified_log_profiles.yaml",
         "deep-mapping",
         "config-host-activity.md",

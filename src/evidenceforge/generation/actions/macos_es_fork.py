@@ -34,6 +34,7 @@ from evidenceforge.generation.macos_endpoint_security import (
     prepare_planned_runtime_es_process_snapshot,
     prepare_runtime_es_process_snapshot,
 )
+from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 from evidenceforge.generation.timing.macos import MacosBootClock
 from evidenceforge.models.exceptions import StateError
@@ -63,6 +64,7 @@ def prepared_es_fork_record(
     action: ESAction,
     version: int,
     installed_file: MacosFileMetadata | None = None,
+    installed_filesystem: MacosInstalledFilesystem | None = None,
 ) -> Iterator[PreparedMacosForkRecord]:
     """Freeze one actual fork and its counter observation before any canonical commit.
 
@@ -90,6 +92,16 @@ def prepared_es_fork_record(
         or version not in {6, 10}
     ):
         raise StateError("Native fork preparation requires exact supported owners and profile")
+    if installed_filesystem is not None:
+        if (
+            type(installed_filesystem) is not MacosInstalledFilesystem
+            or type(executables) is not DeploymentContentRegistry
+            or installed_file is not None
+        ):
+            raise StateError("Installed fork requires one exact filesystem fact owner")
+        installed_file = installed_filesystem.observe(
+            executables, parent.process, observed_at=parent.observed_at
+        ).metadata
     if type(executables) is DeploymentContentRegistry:
         if type(installed_file) is not MacosFileMetadata:
             raise StateError("Installed fork preparation requires explicit executable stat")

@@ -3973,6 +3973,47 @@ class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
     workspace_request: MacosWorkspaceLogProfile
 
 
+class MacosProvisioningRange(BaseModel, extra="forbid", frozen=True):
+    """Positive bounded integer draws in the synthetic installed-file profile."""
+
+    min: int = Field(strict=True, gt=0, lt=2**31)
+    max: int = Field(strict=True, gt=0, lt=2**31)
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        """Reject inverted provisioning ranges before any file allocation."""
+        if self.min > self.max:
+            raise ValueError("Mac provisioning range min must not exceed max")
+        return self
+
+
+class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled provisioning policy, not native filesystem calibration."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["modeled-macos-installed-v1"]
+    volume_id: str = Field(min_length=1, max_length=96, pattern=r"^[a-z0-9-]+$")
+    volume_device: MacosProvisioningRange
+    first_inode: MacosProvisioningRange
+    logical_size_bytes: MacosProvisioningRange
+    size_median_bytes: int = Field(strict=True, gt=0, lt=2**31)
+    size_log_sigma: float = Field(strict=True, gt=0, le=3)
+    installation_age_seconds: MacosProvisioningRange
+    build_lead_seconds: MacosProvisioningRange
+    allocation_policy: Literal["dense-rounded"]
+    allocation_unit_bytes: int = Field(strict=True, gt=0, lt=2**31, multiple_of=512)
+    permissions: int = Field(strict=True, ge=0, le=0o7777)
+    flags: int = Field(strict=True, ge=0, lt=2**32)
+    generation: int = Field(strict=True, ge=0, lt=2**32)
+
+    @model_validator(mode="after")
+    def size_distribution(self) -> Self:
+        """Keep the modeled log-normal median inside its bounded support."""
+        if not self.logical_size_bytes.min <= self.size_median_bytes <= self.logical_size_bytes.max:
+            raise ValueError("Mac installed size median must lie inside logical_size_bytes")
+        return self
+
+
 # --- System Processes ---
 
 

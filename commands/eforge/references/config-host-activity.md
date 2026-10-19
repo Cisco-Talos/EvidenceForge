@@ -6,6 +6,7 @@ Inspect the matching packaged YAML and existing overlay before editing; validati
 
 - [Linux activity](#linux-activity)
 - [Mac native logging profile](#mac-native-logging-profile)
+- [Mac installed-file provisioning](#modeled-mac-installed-file-provisioning)
 - [SMB client and server profiles](#smb-client-and-server-profiles)
 - [Authentication and endpoint noise](#authentication-and-endpoint-noise)
 - [Volume and distribution](#volume-and-distribution)
@@ -20,26 +21,21 @@ Deep-merges command roles and models: `common`, persona/shared roles, `storyline
 
 Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names.
 
-Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths.
-Probabilities must be 0-1 and count/range bounds ordered.
+Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered.
 
 ### `systemd_schedules.yaml`
 
-`schedules` append. Each has a unique service identity, type/frequency/hour/jitter/distro, and
-optional role/service/probability/cron fields. Avoid fixed fleet-wide cadence.
+`schedules` append. Each has a unique service identity, type/frequency/hour/jitter/distro, and optional role/service/probability/cron fields. Avoid fixed fleet-wide cadence.
 
 ### `extra_syslog_messages.yaml`
 
-`programs` append with program, templates, parameter profiles, host filters, rarity, and window
-limits. Canonical activity bundles—not ambient messages—own lifecycle evidence.
+`programs` append with program, templates, parameter profiles, host filters, rarity, and window limits. Canonical activity bundles own lifecycle evidence.
 
 ## SMB client and server profiles
 
 ### `smb_profiles.yaml`
 
-Deep-merges reusable SMB provider defaults and source-native process morphology. Scenario or
-organization YAML—not this file—owns storage topology, share access and selected audit profile,
-mappings, credential mode/principal, and explicit `smb_activity.client_access` intent.
+Deep-merges reusable SMB provider defaults and source-native process morphology. Scenario or organization YAML owns storage topology, share access and selected audit profile, mappings, credential mode/principal, and explicit `smb_activity.client_access` intent.
 
 The strict `schema_version: 1` document has six mapping roots:
 
@@ -57,10 +53,8 @@ operands; `rename` uses remote source/destination; mounted `transfer` requires n
 `client_path`, `local_path`, `source_path`, `destination_path`, `username`, `smb_principal`,
 `auth_options`, `operation`, and `client_ip`; traversal, conversions, and format specs are invalid.
 
-Mounted CIFS uses kernel transport plus an explicit operation actor; `mount.cifs` does not own later
-I/O. Direct `smbclient` is operation/process-owned, Explorer is resident, and GVFS is background
-texture only. Samba uses a service listener plus a per-transport `smbd` worker. Audit `minimal` is
-lifecycle-only; operation/failure tiers permit only monotonic `standard`/`high` mappings.
+Mounted CIFS uses kernel transport plus an explicit operation actor; `mount.cifs` does not own later I/O. Direct `smbclient` is operation/process-owned, Explorer is resident, and GVFS is background texture only.
+Samba uses a service listener plus a per-transport `smbd` worker. Audit `minimal` is lifecycle-only; operation/failure tiers permit only monotonic `standard`/`high` mappings.
 
 An overlay supplies only changed nested fields:
 
@@ -148,3 +142,9 @@ Treat cadence, rate, role, missingness, or safety changes as semantic. Run `efor
 ## Mac native logging profile
 
 `macos_unified_log_profiles.yaml` deep-merges through existing activity overlays and immutable effective configuration. The packaged `macos26-workspace-entry-v1` profile contains the modeled Mach timebase and one static loginwindow callsite/message. Offsets and timing are synthetic profile choices; do not calibrate them from personal logs. Existing timing relationships `macos.workspace_request` and `source.macos_unified_log` own canonical gap and source delay. Collection uses the existing source family and observation policies. No Mac collector flag or top-level scenario block is required. Profile changes do not enable additional native event families.
+
+## Modeled Mac installed-file provisioning
+
+`macos_installed_files.yaml` uses the existing deep-mapping activity overlay and frozen effective-config snapshot. Its `modeled-macos-installed-v1` policy produces metadata only when native preparation requests the engine's installed-file owner. Logical sizes follow a bounded log-normal model and remain equal for identical binary content across hosts and workload seeds. Each host owns a separate modeled volume and distinct single-link file objects. Machine files use the resolved local root account; user files require their exact local owner. Unknown accounts remain unavailable.
+
+The profile explicitly selects dense block allocation, permissions, flags, generation and pre-window timestamp ranges. These are synthetic model choices, not discovered file sizes, installed inventories, APFS compression or native calibration. No generator-host file is inspected. Preserve range ordering, a size median within the logical-size range, positive sigma and allocation units divisible by 512. Older frozen inputs without this packaged profile keep native stat unavailable instead of reading newer defaults. Existing-source generation allocates no stat objects unless this owner is requested. Provisioning does not admit an ES source, terminal device or additional event family.

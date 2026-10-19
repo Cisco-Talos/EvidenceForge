@@ -27,6 +27,7 @@ from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -37,8 +38,9 @@ def prepare_installed_es_process_snapshot(
     *,
     process: ProcessIdentity,
     collection: MacosProcessCollectionObservation,
-    metadata: MacosFileMetadata,
     version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
 ) -> ESProcess:
     """Join a live installed execution to explicit occurrence-time filesystem stat.
 
@@ -69,7 +71,12 @@ def prepare_installed_es_process_snapshot(
             raise StateError("Installed ES preparation requires its exact live loaded execution")
         relationships = state.observe_process_relationships(process, observed_at=at)
         return _project_installed_process(
-            deployments, relationships, collection, metadata=metadata, version=version
+            deployments,
+            relationships,
+            collection,
+            metadata=metadata,
+            filesystem=filesystem,
+            version=version,
         )
 
 
@@ -78,8 +85,9 @@ def _project_installed_process(
     relationships: ProcessRelationshipObservation,
     collection: MacosProcessCollectionObservation,
     *,
-    metadata: MacosFileMetadata,
     version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
 ) -> ESProcess:
     process = collection.process
     image = process.executable_version
@@ -93,6 +101,12 @@ def _project_installed_process(
     )
     if installation is None or binary is None or binary.content_id != image.content_id:
         raise StateError("Installed ES preparation lost its exact deployed release")
+    if filesystem is not None:
+        if type(filesystem) is not MacosInstalledFilesystem or metadata is not None:
+            raise StateError("Installed ES preparation requires one exact filesystem fact owner")
+        metadata = filesystem.observe(
+            deployments, process, observed_at=collection.observed_at
+        ).metadata
     try:
         executable = MacosInstalledFileObservation(
             installation, binary, process.image, collection.observed_at, metadata
@@ -350,9 +364,10 @@ def prepare_planned_installed_es_process_snapshot(
     *,
     cohort: ActionCohortMaterializationPlan,
     collection: MacosProcessCollectionObservation,
-    metadata: MacosFileMetadata,
     phase: Literal["birth", "exec", "terminal"],
     version: int,
+    metadata: MacosFileMetadata | None = None,
+    filesystem: MacosInstalledFilesystem | None = None,
 ) -> ESProcess:
     """Prepare an installed process at an explicitly selected canonical transition.
 
@@ -388,7 +403,12 @@ def prepare_planned_installed_es_process_snapshot(
         ):
             raise StateError("Planned installed ES process requires its exact phase observation")
         return _project_installed_process(
-            deployments, relationships, collection, metadata=metadata, version=version
+            deployments,
+            relationships,
+            collection,
+            metadata=metadata,
+            filesystem=filesystem,
+            version=version,
         )
 
 

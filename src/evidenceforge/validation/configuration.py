@@ -1171,10 +1171,19 @@ def _validate_effective_configuration(
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = deepcopy(load_timing_profiles())
     web_session_profiles_data = load_web_session_profiles()
+    from evidenceforge.generation.activity.macos_installed_files import (
+        load_macos_installed_file_profile,
+    )
     from evidenceforge.generation.activity.macos_unified_log_profiles import (
         load_macos_unified_log_profiles,
     )
 
+    try:
+        load_macos_installed_file_profile()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue("ERROR", "macos_installed_files.yaml", f"invalid installed-file profile: {exc}")
+        )
     try:
         load_macos_unified_log_profiles()
     except ValidationError as exc:

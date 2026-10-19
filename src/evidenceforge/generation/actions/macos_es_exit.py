@@ -37,6 +37,7 @@ from evidenceforge.generation.macos_endpoint_security import (
     prepare_planned_installed_es_process_snapshot,
     prepare_planned_runtime_es_terminal_process,
 )
+from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 from evidenceforge.generation.timing.macos import MacosBootClock
 from evidenceforge.models.exceptions import StateError
@@ -65,6 +66,7 @@ def prepared_es_exit_record(
     action: ESAction,
     version: int,
     installed_file: MacosFileMetadata | None = None,
+    installed_filesystem: MacosInstalledFilesystem | None = None,
 ) -> Iterator[PreparedMacosExitRecord]:
     """Freeze a selected explicit termination before its process/thread closes.
 
@@ -106,6 +108,7 @@ def prepared_es_exit_record(
             action=action,
             version=version,
             installed_file=installed_file,
+            installed_filesystem=installed_filesystem,
         )
         yield PreparedMacosExitRecord(
             claimed.freeze_native_projection(
@@ -128,8 +131,19 @@ def _exit_record(
     action: ESAction,
     version: int,
     installed_file: MacosFileMetadata | None,
+    installed_filesystem: MacosInstalledFilesystem | None = None,
 ) -> EndpointSecurityRecord:
     """Project one fully supplied terminal record under retained owner claims."""
+    if installed_filesystem is not None:
+        if (
+            type(installed_filesystem) is not MacosInstalledFilesystem
+            or type(executables) is not DeploymentContentRegistry
+            or installed_file is not None
+        ):
+            raise StateError("Installed exit requires one exact filesystem fact owner")
+        installed_file = installed_filesystem.observe(
+            executables, process.process, observed_at=process.observed_at
+        ).metadata
     if type(executables) is DeploymentContentRegistry:
         if type(installed_file) is not MacosFileMetadata:
             raise StateError("Installed exit preparation requires explicit executable stat")
@@ -215,6 +229,7 @@ class MacosExitRecordInput:
     thread: ThreadIdentity
     action: ESAction
     installed_file: MacosFileMetadata | None = None
+    installed_filesystem: MacosInstalledFilesystem | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -225,6 +240,18 @@ class MacosExitRecordInput:
         ):
             raise StateError("Native exit batch requires exact per-record owners and observations")
         self.process.__post_init__()
+        if self.installed_filesystem is not None:
+            if (
+                type(self.installed_filesystem) is not MacosInstalledFilesystem
+                or type(self.executables) is not DeploymentContentRegistry
+                or self.installed_file is not None
+            ):
+                raise StateError("Installed exit requires one exact filesystem fact owner")
+            metadata = self.installed_filesystem.observe(
+                self.executables, self.process.process, observed_at=self.process.observed_at
+            ).metadata
+            object.__setattr__(self, "installed_file", metadata)
+            object.__setattr__(self, "installed_filesystem", None)
         object.__setattr__(
             self, "action", ESAction.model_validate_json(self.action.model_dump_json())
         )

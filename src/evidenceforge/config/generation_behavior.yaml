@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 314
+current_revision: 316
 history_start_revision: 1
-behavior_surface_sha256: 918ae05b7762ac65b9e05e449cd2b5858625e45c271f9bc5fe013748dbf2ba92
+behavior_surface_sha256: 8c9943aee58fdae3698f7a78b3fff69cc87020f0b8bb68559e3eeaca9b86f94d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2942,3 +2942,19 @@ changes:
       - exact-source-publication
     formats: []
     summary: Closes explicitly attached collector epochs with exact successful Mac exec publication while preserving failed-exec ownership, rollback and source retries.
+  - revision: 315
+    id: provisioned-macos-installed-file-objects
+    impact: localized
+    domains:
+      - installed-file-metadata
+      - endpoint-security-preparation
+    formats: []
+    summary: Allocates immutable host-volume file objects from explicit installed provisioning and reuses their exact stat in native process and fork/exec/exit preparation without admitting a source or consulting the generator filesystem.
+  - revision: 316
+    id: automatic-modeled-macos-installed-provisioning
+    impact: localized
+    domains:
+      - installed-file-metadata
+      - immutable-effective-config
+    formats: []
+    summary: Produces installed-file facts lazily from a frozen synthetic profile, exact local account ownership and per-release size while preserving old snapshots without the new policy and existing-source generation behavior.

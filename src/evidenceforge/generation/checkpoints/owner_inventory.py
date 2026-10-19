@@ -1015,6 +1015,9 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "red_herring_events",
     ),
     rebuilt=(
+        "_macos_installed_provisioning",
+        "_macos_installed_provisioning_lock",
+        "_macos_installed_provisioning_ready",
         "_ad_domain",
         "_boot_materialization_existing_system_pids",
         "_boot_materialization_state_time",

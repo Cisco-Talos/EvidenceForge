@@ -47,7 +47,7 @@ from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from copy import copy
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from threading import RLock, get_ident
 from typing import cast
@@ -5282,6 +5282,7 @@ class DeploymentContentRegistry:
     """Scenario-scoped immutable deployment and content identity registry."""
 
     __slots__ = (
+        "_binary_available_from",
         "_application_descriptor_ids_by_executable",
         "_application_descriptors",
         "_application_executable_links",
@@ -5320,6 +5321,7 @@ class DeploymentContentRegistry:
         self,
         *,
         binary_releases: Iterable[BinaryReleaseIdentity] = (),
+        binary_available_from: Iterable[tuple[str, date]] = (),
         installed_software_releases: Iterable[InstalledSoftwareReleaseIdentity] = (),
         user_profiles: Iterable[UserProfileIdentity] = (),
         installations: Iterable[SoftwareInstallationIdentity] = (),
@@ -5484,6 +5486,18 @@ class DeploymentContentRegistry:
         self._local_artifact_path_index = _PackedDigestGroupIndex()
 
         self._compile_releases(binary_releases)
+        self._binary_available_from: dict[str, date] = {}
+        for content_id, available_at in binary_available_from:
+            if (
+                type(content_id) is not str
+                or type(available_at) is not date
+                or self.binary_release_by_content_id(content_id) is None
+            ):
+                raise ValueError("Release availability requires an exact binary and calendar date")
+            previous = self._binary_available_from.get(content_id)
+            self._binary_available_from[content_id] = (
+                available_at if previous is None else max(previous, available_at)
+            )
         self._compile_installed_software_releases(installed_software_releases)
         self._installed_software_releases.seal()
         self._compile_user_profiles(user_profiles)
@@ -5542,6 +5556,7 @@ class DeploymentContentRegistry:
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
             + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
+            + _owned_graph_size(self._binary_available_from)
         )
 
     def _estimate_scale_index_bytes(self) -> int:
@@ -5567,6 +5582,7 @@ class DeploymentContentRegistry:
             + self.assignment_category_index_census(estimate_bytes=True).estimated_bytes
             + _owned_graph_size(self._application_descriptor_ids_by_executable)
             + self._local_artifact_path_index.estimated_bytes()
+            + _owned_graph_size(self._binary_available_from)
         )
 
     def _iter_group[K: Hashable, V](
@@ -6348,6 +6364,10 @@ class DeploymentContentRegistry:
         """Return the unique binary artifact for an exact content ID."""
 
         return self._releases.find_one("content_id", content_id.strip())
+
+    def binary_available_from(self, content_id: str) -> date | None:
+        """Return a declared release lower bound; missing dates remain unknown."""
+        return self._binary_available_from.get(content_id.strip())
 
     def binary_artifacts_for_release(self, release_id: str) -> tuple[BinaryReleaseIdentity, ...]:
         """Compatibility wrapper materializing one release's artifact group."""

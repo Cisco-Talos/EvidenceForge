@@ -55,6 +55,10 @@ from evidenceforge.generation.intent_ledger import AuthoredIntentLedger, IntentE
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.macos_installed_provisioning import (
+    MacosInstalledProvisioning,
+    compile_macos_installed_provisioning,
+)
 from evidenceforge.generation.network_identities import ScenarioNetworkResolver
 from evidenceforge.generation.rdp_sessions import RdpReconnectStateManager
 from evidenceforge.generation.resource_forecast import ResourceForecast, build_resource_forecast
@@ -68,6 +72,7 @@ from evidenceforge.generation.suspension import GenerationSuspendedError
 from evidenceforge.generation.timing import TimingRuntime
 from evidenceforge.generation.workload import WorkloadLimits, estimate_workload
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import Scenario, System, User
 from evidenceforge.output_targets import (
     OutputTarget,
@@ -279,6 +284,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._generation_complete = False
         self._ids_alert_summary_applied = False
         self._generate_owner = Lock()
+        self._macos_installed_provisioning: MacosInstalledProvisioning | None = None
+        self._macos_installed_provisioning_ready = False
+        self._macos_installed_provisioning_lock = Lock()
         self._expected_close_emitters: dict[str, object] | None = None
         self._closed_emitter_names: set[str] = set()
         self._source_coordinator_closed = False
@@ -290,6 +298,42 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
 
         reset_bash_command_memory()
+
+    @property
+    def macos_installed_provisioning(self) -> MacosInstalledProvisioning | None:
+        """Lazily compile native file facts once from this run's frozen inputs.
+
+        Ordinary source generation allocates no per-file stat objects. Native
+        preparation can request this owner after deployment initialization;
+        delayed callers retain the run's seed and compiled configuration.
+        """
+        from evidenceforge.config.provider import effective_config_scope
+
+        if (
+            self.start_time is None
+            or self.end_time is None
+            or not hasattr(self, "deployment_registry")
+        ):
+            raise StateError("Initialize engine deployment before requesting Mac installed files")
+        with self._macos_installed_provisioning_lock:
+            if self._macos_installed_provisioning_ready:
+                return self._macos_installed_provisioning
+        # Acquire the shared configuration scope before the instance lock:
+        # a running engine may already own that scope on another thread.
+        with effective_config_scope(self.compiled_scenario.effective_config):
+            with generation_seed_scope(self.generation_seed):
+                with self._macos_installed_provisioning_lock:
+                    if not self._macos_installed_provisioning_ready:
+                        result = compile_macos_installed_provisioning(
+                            self.scenario,
+                            self.deployment_registry,
+                            self._identity_directory,
+                            window_start=self.warmup_start_time,
+                            window_end=self.end_time,
+                        )
+                        self._macos_installed_provisioning = result
+                        self._macos_installed_provisioning_ready = True
+                    return self._macos_installed_provisioning
 
     def _report_progress(self, event_type: str, data: dict) -> None:
         """Report progress to callback if registered.

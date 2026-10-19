@@ -42,6 +42,7 @@ from evidenceforge.generation.macos_endpoint_security import (
     prepare_runtime_es_process_snapshot,
     project_runtime_es_exec_script,
 )
+from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 from evidenceforge.generation.timing.macos import MacosBootClock
 from evidenceforge.models.exceptions import StateError
@@ -74,6 +75,7 @@ def prepared_es_exec_record(
     deployments: DeploymentContentRegistry | None = None,
     before_installed_file: MacosFileMetadata | None = None,
     after_installed_file: MacosFileMetadata | None = None,
+    installed_filesystem: MacosInstalledFilesystem | None = None,
 ) -> Iterator[PreparedMacosExecRecord]:
     """Freeze historical v6/v9 runtime exec before replacing the live execution.
 
@@ -89,6 +91,10 @@ def prepared_es_exec_record(
         type(owner) is not ESCollectionActionOwner
         or type(executables) is not LocalArtifactVersionRegistry
         or (deployments is not None and type(deployments) is not DeploymentContentRegistry)
+        or (
+            installed_filesystem is not None
+            and type(installed_filesystem) is not MacosInstalledFilesystem
+        )
         or type(cohort) is not ActionCohortMaterializationPlan
         or type(delivery) is not ESDeliveryPreparation
         or type(before) is not MacosProcessCollectionObservation
@@ -101,6 +107,32 @@ def prepared_es_exec_record(
         or version not in {6, 9}
     ):
         raise StateError("Native exec preparation requires exact owners and a historical profile")
+    if installed_filesystem is not None:
+        if (
+            deployments is None
+            or before_installed_file is not None
+            or after_installed_file is not None
+        ):
+            raise StateError("Installed exec requires one exact filesystem fact owner")
+        has_installed = False
+        if (
+            before.process.executable_version is not None
+            and before.process.executable_version.identity_kind == "installed_release"
+        ):
+            before_installed_file = installed_filesystem.observe(
+                deployments, before.process, observed_at=before.observed_at
+            ).metadata
+            has_installed = True
+        if (
+            after.process.executable_version is not None
+            and after.process.executable_version.identity_kind == "installed_release"
+        ):
+            after_installed_file = installed_filesystem.observe(
+                deployments, after.process, observed_at=after.observed_at
+            ).metadata
+            has_installed = True
+        if not has_installed:
+            raise StateError("Runtime exec stat must come from its retained artifact")
     for identity, metadata in (
         (before.process, before_installed_file),
         (after.process, after_installed_file),

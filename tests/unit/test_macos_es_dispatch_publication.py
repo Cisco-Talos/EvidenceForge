@@ -33,6 +33,7 @@ def _setup(
     installed: bool = False,
     status: ObservationStatus = "visible",
     threaded: bool = True,
+    installed_filesystem: bool = False,
 ) -> tuple:
     native = _fixture(installed=installed)
     state = native.owner.state
@@ -98,7 +99,15 @@ def _setup(
         dispatcher.deployment_registry = native.executables
     else:
         dispatcher.local_artifact_registry = native.executables
-    with _prepare(native) as prepared:
+    preparation = {}
+    if installed_filesystem:
+        from tests.unit.test_macos_installed_filesystem import _provider
+
+        preparation = {
+            "installed_file": None,
+            "installed_filesystem": _provider(native.executables, native.process.process),
+        }
+    with _prepare(native, **preparation) as prepared:
         frozen = prepared.ndjson
     subject = native.process.process
     event = process_exit_occurrence(
