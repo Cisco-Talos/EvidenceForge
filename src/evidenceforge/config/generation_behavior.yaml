@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 308
+current_revision: 309
 history_start_revision: 1
-behavior_surface_sha256: 582adfd6cf5977660fc02313c59bb6217fd02b3e1d92742277b94899990ec5f3
+behavior_surface_sha256: a5aadcdace413300f36d57658c89692229211a9fa96b69ed5d03b341dad0bd67
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2892,3 +2892,11 @@ changes:
       - endpoint-security-preparation
     formats: []
     summary: Prepares runtime ES executable paths from known event-time placement while retaining the original loaded image and signing identity.
+  - revision: 309
+    id: pending-native-runtime-placement-validation
+    impact: localized
+    domains:
+      - process-file-observation
+      - exact-source-publication
+    formats: []
+    summary: Revalidates pending native executable placement against canonical event-time runtime records before binding and publication.

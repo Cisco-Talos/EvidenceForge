@@ -7,8 +7,10 @@ This is not an ES event emitter or a sink transaction. Filesystem facts must be
 supplied explicitly; terminal devices require their own supported provider.
 """
 
+from datetime import datetime
 from typing import Literal
 
+from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_file import MacosFileMetadata
@@ -16,7 +18,10 @@ from evidenceforge.events.macos_installed_file import MacosInstalledFileObservat
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import ESFile, ESProcess
-from evidenceforge.formats.macos_file_metadata import es_script_at_execution
+from evidenceforge.formats.macos_file_metadata import (
+    es_file_from_runtime_record,
+    es_script_at_execution,
+)
 from evidenceforge.formats.macos_process_snapshot import es_process_from_observations
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -370,3 +375,34 @@ def prepare_planned_installed_es_process_snapshot(
         return _project_installed_process(
             deployments, relationships, collection, metadata=metadata, version=version
         )
+
+
+def validate_runtime_es_executable_snapshot(
+    artifacts: LocalArtifactVersionRegistry | None,
+    process: ProcessIdentity,
+    observed_at: datetime,
+    snapshot: ESProcess,
+) -> None:
+    """Reject pending runtime native bytes after their canonical placement changes.
+
+    This is a validation contract, not an action trigger or a registry claim.
+    Installed stat remains an explicit observation owned by its separate producer.
+    Completed source bytes are historical and must not be revalidated here.
+    """
+    reference = process.executable_version
+    if reference is None:
+        raise StateError("Native executable placement requires a loaded reference")
+    if reference.identity_kind == "installed_release":
+        return
+    if type(artifacts) is not LocalArtifactVersionRegistry:
+        raise StateError("Native executable placement lost its runtime artifact owner")
+    assert reference.artifact_version_id is not None
+    placement = artifacts.observe_macos_file_placement(reference.artifact_version_id, observed_at)
+    if (
+        placement is None
+        or placement.reference.artifact.hostname != process.hostname.casefold()
+        or placement.reference.artifact.normalized_native_path
+        != canonical_native_path(process.image, "macos")
+        or es_file_from_runtime_record(placement.placed) != snapshot.executable
+    ):
+        raise StateError("Native executable placement changed after source preparation")

@@ -11131,6 +11131,7 @@ class EventDispatcher:
             raise EventContractError(
                 "ES binding requires frozen native bytes before canonical publication"
             )
+        self._validate_action_cohort_es_file_placements(record, (native,))
         return native
 
     def _validate_action_cohort_es_batch_values(
@@ -11176,7 +11177,55 @@ class EventDispatcher:
         )
         if native is None:
             raise EventContractError("ES batch binding requires every frozen native row")
+        self._validate_action_cohort_es_file_placements(record, native)
         return "".join(native)
+
+    def _validate_action_cohort_es_file_placements(
+        self, record: _PreparedActionCohortBatchRecord, native: tuple[str, ...]
+    ) -> None:
+        """Validate source-native file views against their canonical event-time owners.
+
+        Rendered rows do not trigger actions. Their authenticated projection is
+        checked before binding and again before canonical publication.
+        """
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.formats.macos_endpoint_security import (
+            ESExecEvent,
+            ESExitEvent,
+            ESForkEvent,
+            decode_endpoint_security_record,
+        )
+        from evidenceforge.generation.macos_endpoint_security import (
+            validate_runtime_es_executable_snapshot,
+        )
+
+        try:
+            for event, line in zip(record.member_occurrences, native, strict=True):
+                parsed = decode_endpoint_security_record(line)
+                if record.exact_projection_kind == "posix_fork":
+                    birth = record.state_plan.processes[0]
+                    parent = birth._payload.parent_identity
+                    if parent is None or type(parsed.event) is not ESForkEvent:
+                        raise ValueError("Native fork placement lacks its exact process owners")
+                    views = ((parent, parsed.process), (birth.identity, parsed.event.fork.child))
+                elif record.exact_projection_kind == "posix_exec":
+                    execution = record.state_plan.process_executions[0]
+                    if type(parsed.event) is not ESExecEvent:
+                        raise ValueError("Native exec placement lacks its exact process owners")
+                    views = (
+                        (execution.target, parsed.process),
+                        (execution.after, parsed.event.exec.target),
+                    )
+                else:
+                    if type(parsed.event) is not ESExitEvent:
+                        raise ValueError("Native exit placement lacks its exact process owner")
+                    views = ((process_exit_identity(event), parsed.process),)
+                for process, snapshot in views:
+                    validate_runtime_es_executable_snapshot(
+                        self.local_artifact_registry, process, event.timestamp, snapshot
+                    )
+        except (ValueError, StateError) as error:
+            raise EventContractError(f"Native file placement validation failed: {error}") from error
 
     @staticmethod
     def _es_delivery_result(

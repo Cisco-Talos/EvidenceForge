@@ -347,3 +347,5 @@ Canonical runtime file versions retain publication/removal times separately from
 Revision 307 adds bounded event-time lookup for a retained single-link Mac file object. It keeps loaded bytes and observed placement separate and rejects unknown, expired, changed-content or ambiguous history. Native projection, publication fencing and path-history retention beyond existing leases remain engineering work.
 
 Revision 308 projects known runtime executable placement at the observation time while preserving the loaded image identity. Renamed forks and historical snapshots are covered; unknown/expired path history is unavailable. Pending native metadata revalidation and publication fencing are still required before source admission.
+
+Revision 309 rejects pending runtime native executable views that no longer match canonical event-time placement, before binding and again before publication. Historical snapshots survive later removal. Keeping those facts stable through the complete canonical commit remains the next ownership step; native sink admission and reference gates remain open.
