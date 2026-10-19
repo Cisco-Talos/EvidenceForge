@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.generation.lifecycle_registry import LifecycleServiceProcessClosureReceipt
+from evidenceforge.generation.source_timing import SourceTimingPreparationReceipt
 from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
 
 
@@ -24,6 +25,7 @@ class PosixGroupServiceClosureReceipt:
     committed_version: int
     _integrity: str
     collector_publication_token: str = ""
+    source_timing_receipt: SourceTimingPreparationReceipt | None = None
 
     def _payload(self) -> bytes:
         return repr(
@@ -37,6 +39,11 @@ class PosixGroupServiceClosureReceipt:
                 self.committed_version,
             )
             + ((self.collector_publication_token,) if self.collector_publication_token else ())
+            + (
+                ("source-timing", self.source_timing_receipt)
+                if self.source_timing_receipt is not None
+                else ()
+            )
         ).encode("utf-8")
 
     @classmethod
@@ -50,6 +57,7 @@ class PosixGroupServiceClosureReceipt:
         prior_version: int,
         committed_version: int,
         collector_publication_token: str = "",
+        source_timing_receipt: SourceTimingPreparationReceipt | None = None,
     ) -> "PosixGroupServiceClosureReceipt":
         """Issue only after both owners have committed their admitted primitives."""
         from dataclasses import replace
@@ -62,6 +70,11 @@ class PosixGroupServiceClosureReceipt:
             )
         ):
             raise ValueError("Group closure requires an exact optional collector publication token")
+        if (
+            source_timing_receipt is not None
+            and type(source_timing_receipt) is not SourceTimingPreparationReceipt
+        ):
+            raise ValueError("Group closure requires an exact optional source timing receipt")
         receipt = cls(
             group,
             tuple(plan.identity for plan in plans),
@@ -71,12 +84,18 @@ class PosixGroupServiceClosureReceipt:
             committed_version,
             "",
             collector_publication_token,
+            source_timing_receipt,
         )
         return replace(receipt, _integrity=hmac.digest(secret, receipt._payload(), "sha256").hex())
 
     def authenticates(self, secret: bytes) -> bool:
         """Reject modified nested proof contents as well as another owner's receipt."""
         try:
+            if (
+                self.source_timing_receipt is not None
+                and type(self.source_timing_receipt) is not SourceTimingPreparationReceipt
+            ):
+                return False
             if type(self.collector_publication_token) is not str or (
                 self.collector_publication_token
                 and (

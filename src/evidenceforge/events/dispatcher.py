@@ -5810,6 +5810,13 @@ class EventDispatcher:
                     )
                 )
                 plan_version = plan.expected_version
+            from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
+
+            if type(materialization_receipt) is PosixGroupServiceClosureReceipt and (
+                materialization_receipt.source_timing_receipt
+                is not (timing_preparation.receipt if timing_preparation is not None else None)
+            ):
+                raise EventContractError("Group closure receipt does not own this source timing")
             if prepared._expected_state_version != plan_version or not receipt_authentic:
                 raise EventContractError(
                     "Authority receipt does not authenticate the prepared dispatch plan"

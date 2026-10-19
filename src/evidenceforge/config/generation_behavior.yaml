@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 297
+current_revision: 298
 history_start_revision: 1
-behavior_surface_sha256: 5b9a672bf393c389b8769c14282fdaa6b30be91738ea8d5027740d59e047e0d3
+behavior_surface_sha256: 1e270607096896735e852d432733de6cb66227f7e438ba143f07ce6560776512
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2800,3 +2800,12 @@ changes:
       - macos-service-lifecycle
     formats: []
     summary: Joins explicit collector disconnects to authored launchd leader and group closure with reversible preparation and authenticated composite recovery.
+  - revision: 298
+    id: macos-service-close-source-timing-ownership
+    impact: localized
+    domains:
+      - macos-service-lifecycle
+      - source-timing
+    formats:
+      - ecar
+    summary: Stages authored launchd close timing until the exact service composite commits and preserves rollback, lost acknowledgements and receipt ownership.

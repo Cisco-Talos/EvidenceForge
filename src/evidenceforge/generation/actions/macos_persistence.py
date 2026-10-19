@@ -173,6 +173,7 @@ class MacosPersistenceActionBundle:
         self.deployments = deployments
         self.content = content
         self.services = LifecycleProductionAdapter(lifecycle)
+        authority.bind_source_timing_planner(dispatcher.source_timing_planner)
 
     def execute(self, request: MacosPersistenceRequest) -> MacosPersistenceResult:
         """Complete one stage; successful file/process sources use canonical owners."""
@@ -314,40 +315,58 @@ class MacosPersistenceActionBundle:
             raise StateError("Unsupported launch-item operation")
         dispatches: list[PreparedDispatch] = []
         terminated: list[ProcessIdentity] = []
-        for plan in plans:
-            identity = self.state.get_process_identity_by_object_id(plan.target.identity.object_id)
-            live = (
-                self.state.get_process(identity.hostname, identity.pid)
-                if identity is not None
-                else None
-            )
-            if identity is None or live is None or live.ecar_object_id != identity.object_id:
-                raise StateError("Job closure lost its exact live process")
-            terminated.append(identity)
-            event = process_exit_occurrence(
-                host=request.host,
-                process=identity,
-                timestamp=plan.end_time,
-                integrity_level=live.integrity_level,
-            )
-            event.process.exit_outcome = plan.target.exit_outcome
-            event.storyline_origin = True
-            prepared = self.dispatcher.prepare_builder(
-                event,
-                state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE,
-                lifecycle_ticket=plan.target,
-            )
-            self.dispatcher.validate_prepared(prepared)
-            dispatches.append(prepared)
-        token = self.services.prepare_service_process_closure(close.closure)
-        if request.operation == "exit":
-            proof = self.authority.materialize_process_group_leader_exit_composite(
-                close.cohort, close.group, token, collectors=self.dispatcher.es_collectors
-            )
-        else:
-            proof = self.authority.materialize_process_group_service_closure_composite(
-                close.cohort, close.group, token, collectors=self.dispatcher.es_collectors
-            )
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            for plan in plans:
+                identity = self.state.get_process_identity_by_object_id(
+                    plan.target.identity.object_id
+                )
+                live = (
+                    self.state.get_process(identity.hostname, identity.pid)
+                    if identity is not None
+                    else None
+                )
+                if identity is None or live is None or live.ecar_object_id != identity.object_id:
+                    raise StateError("Job closure lost its exact live process")
+                terminated.append(identity)
+                event = process_exit_occurrence(
+                    host=request.host,
+                    process=identity,
+                    timestamp=plan.end_time,
+                    integrity_level=live.integrity_level,
+                )
+                event.process.exit_outcome = plan.target.exit_outcome
+                event.storyline_origin = True
+                prepared = self.dispatcher.prepare_builder(
+                    event,
+                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_CLOSE,
+                    lifecycle_ticket=plan.target,
+                    source_timing_preparation=timing,
+                )
+                dispatches.append(prepared)
+        try:
+            for prepared in dispatches:
+                self.dispatcher.validate_prepared(prepared)
+            token = self.services.prepare_service_process_closure(close.closure)
+            if request.operation == "exit":
+                proof = self.authority.materialize_process_group_leader_exit_composite(
+                    close.cohort,
+                    close.group,
+                    token,
+                    collectors=self.dispatcher.es_collectors,
+                    source_timing_preparation=timing,
+                )
+            else:
+                proof = self.authority.materialize_process_group_service_closure_composite(
+                    close.cohort,
+                    close.group,
+                    token,
+                    collectors=self.dispatcher.es_collectors,
+                    source_timing_preparation=timing,
+                )
+        except BaseException:
+            if not timing.committed:
+                timing.cancel()
+            raise
         for prepared in dispatches:
             self.dispatcher.publish_prepared(prepared, materialization_receipt=proof)
         return MacosPersistenceResult(terminated=tuple(terminated))

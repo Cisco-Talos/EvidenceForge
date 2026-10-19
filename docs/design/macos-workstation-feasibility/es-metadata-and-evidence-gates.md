@@ -328,3 +328,6 @@ Pending frozen native records authenticate the current same-host modeled client 
 
 ### Service-owned collector shutdown — revision 297
 Production system-job leader exit and group unload join explicitly attached collector disconnects to their State/lifecycle composite. Rollback, pending-delivery rejection and lost-acknowledgement recovery are tested. The composite receipt authenticates collector completion. It does not yet give the older per-member service source path whole-group exact recovery, close the observing client's own native exit stream, or define collector behavior across exec. Those remain engineering dependencies; no native source is enabled.
+
+### Authored close timing — revision 298
+Launchd leader/group close projections share one staged timing preparation. Rejection leaves timing unchanged; canonical completion authenticates its exact timing receipt, including lost-acknowledgement recovery. Existing generated evidence is unchanged. This closes preparation rollback and timing-ownership gaps; it does not yet make per-member source publication a recoverable whole-group writer transaction.

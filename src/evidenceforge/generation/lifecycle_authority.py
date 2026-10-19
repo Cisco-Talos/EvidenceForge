@@ -8594,15 +8594,24 @@ class GeneratorLifecycleAuthority:
         service_token: LifecycleServiceClosureAdmissionToken,
         *,
         collectors: ESCollectorRegistry | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
     ) -> PosixGroupServiceClosureReceipt:
         """Close one exact live group and its service relations in one State version.
 
         The caller supplies explicit completed outcomes and child-first order.
         No signal, escalation, group membership or termination success is inferred.
         This transfers the service token, including on precommit rejection.
+        An optional preparation from the bound timing planner is also transferred;
+        it is claimed before State, cancelled on rejection and committed with the
+        canonical owners. A foreign planner's preparation remains caller-owned.
         """
         return self._materialize_posix_service_closure_cohort(
-            plan, group, service_token, close_group=True, collectors=collectors
+            plan,
+            group,
+            service_token,
+            close_group=True,
+            collectors=collectors,
+            source_timing_preparation=source_timing_preparation,
         )
 
     def materialize_process_group_leader_exit_composite(
@@ -8612,10 +8621,16 @@ class GeneratorLifecycleAuthority:
         service_token: LifecycleServiceClosureAdmissionToken,
         *,
         collectors: ESCollectorRegistry | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
     ) -> PosixGroupServiceClosureReceipt:
         """Close one bound launchd leader and adopt its children, preserving its job/group."""
         return self._materialize_posix_service_closure_cohort(
-            plan, group, service_token, close_group=False, collectors=collectors
+            plan,
+            group,
+            service_token,
+            close_group=False,
+            collectors=collectors,
+            source_timing_preparation=source_timing_preparation,
         )
 
     def _materialize_posix_service_closure_cohort(
@@ -8626,11 +8641,22 @@ class GeneratorLifecycleAuthority:
         *,
         close_group: bool,
         collectors: ESCollectorRegistry | None,
+        source_timing_preparation: SourceTimingPreparation | None,
     ) -> PosixGroupServiceClosureReceipt:
         """Share the exact transaction boundary for group unload and bound leader exit."""
         state = self._state_manager
         collector_token = ""
+        timing_receipt = None
         try:
+            if source_timing_preparation is not None and (
+                type(source_timing_preparation) is not SourceTimingPreparation
+                or source_timing_preparation.owner is not self._source_timing_planner
+                or not self._source_timing_planner.authenticates_preparation(
+                    source_timing_preparation
+                )
+                or source_timing_preparation.committed
+            ):
+                raise StateError("Group closure requires its exact uncommitted source timing owner")
             if collectors is not None and type(collectors) is not ESCollectorRegistry:
                 raise StateError("Group closure requires its exact optional collector registry")
             if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
@@ -8718,16 +8744,19 @@ class GeneratorLifecycleAuthority:
                 )
                 if len(owned) != 1 or owned[0] is None or owned[0].process_group != group:
                     raise StateError("Leaderless group cleanup requires its retained service owner")
-            with self._registry.claimed_service_process_closure(service_token) as service:
+            with (
+                self._registry.claimed_service_process_closure(service_token) as service,
+                ExitStack() as external,
+            ):
+                if source_timing_preparation is not None:
+                    external.enter_context(source_timing_preparation.claimed_commit())
+                    timing_receipt = source_timing_preparation.expected_receipt
                 if any(effective != at for _, effective in service.effective_times):
                     raise StateError("Group closure cannot precede lifecycle holds or leases")
                 hook = self._materialization_precommit_hook
                 if hook is not None:
                     hook()
-                with (
-                    state.prepared_action_cohort_materialization(plan) as prepared,
-                    ExitStack() as external,
-                ):
+                with state.prepared_action_cohort_materialization(plan) as prepared:
                     collector_closure = None
                     if collectors is not None:
                         from evidenceforge.generation.actions.es_collection import (
@@ -8750,12 +8779,16 @@ class GeneratorLifecycleAuthority:
                         raise StateError("Group membership changed or the closure omits a member")
                     expected = prepared.expected_result
                     prepared.certify_composite_commit(expected)
+                    if source_timing_preparation is not None:
+                        source_timing_preparation.certify_composite_commit(timing_receipt)
                     # State remains rollback-owned until the registry's no-fail tail.
                     prepared.apply_provisional()
                     if collector_closure is not None:
                         collector_closure.apply_provisional()
                     try:
                         receipt = service.commit_no_fail()
+                        if source_timing_preparation is not None:
+                            self._commit_source_timing_recoverably(source_timing_preparation)
                         result = prepared.finalize_no_fail()
                         if collector_closure is not None:
                             collector_closure.finalize_no_fail()
@@ -8763,6 +8796,11 @@ class GeneratorLifecycleAuthority:
                         if service.committed:
                             receipt = service.receipt
                             assert receipt is not None
+                            if (
+                                source_timing_preparation is not None
+                                and not source_timing_preparation.committed
+                            ):
+                                self._commit_source_timing_recoverably(source_timing_preparation)
                             if not prepared.committed:
                                 prepared.finalize_no_fail()
                             if collector_closure is not None and not collector_closure.committed:
@@ -8775,6 +8813,7 @@ class GeneratorLifecycleAuthority:
                                 prior_version=expected.prior_version,
                                 committed_version=expected.committed_version,
                                 collector_publication_token=collector_token,
+                                source_timing_receipt=timing_receipt,
                             )
                             error.process_group_service_receipt = proof
                         raise
@@ -8786,9 +8825,16 @@ class GeneratorLifecycleAuthority:
                 prior_version=result.prior_version,
                 committed_version=result.committed_version,
                 collector_publication_token=collector_token,
+                source_timing_receipt=timing_receipt,
             )
         except BaseException:
             self._discard_service_closure_admission(service_token)
+            if (
+                type(source_timing_preparation) is SourceTimingPreparation
+                and source_timing_preparation.owner is self._source_timing_planner
+                and not source_timing_preparation.committed
+            ):
+                source_timing_preparation.cancel()
             raise
 
     def authenticates_process_service_closure_composite_receipt(
@@ -8801,6 +8847,15 @@ class GeneratorLifecycleAuthority:
         if type(receipt) is PosixGroupServiceClosureReceipt:
             if (
                 not receipt.authenticates(self._receipt_secret)
+                or (
+                    receipt.source_timing_receipt is not None
+                    and (
+                        self._source_timing_planner is None
+                        or not self._source_timing_planner.authenticates_preparation_receipt(
+                            receipt.source_timing_receipt
+                        )
+                    )
+                )
                 or not self._registry.authenticates_service_process_closure_receipt(
                     receipt.service_receipt
                 )
