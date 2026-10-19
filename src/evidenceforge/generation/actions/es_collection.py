@@ -24,6 +24,7 @@ from evidenceforge.events.es_collector import (
     PreparedESDeliveryCommit,
 )
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
@@ -107,6 +108,22 @@ class ESCollectionActionOwner:
             self._live_process(process, closed_at)
             self.collectors.close(expected, closed_at)
             return after
+
+    def validate_client_observation(self, observation: MacosProcessCollectionObservation) -> None:
+        """Reject negative client claims contradicted by an exact retained attachment.
+
+        Missing registry membership does not establish a negative fact: external
+        clients may be explicitly modeled without a delivery profile. Canonical
+        process authentication remains with the calling live/planned owner.
+        """
+        if type(observation) is not MacosProcessCollectionObservation:
+            raise StateError("ES client observation requires exact collection facts")
+        observation.__post_init__()
+        known = self.collectors.known_connection_for_process(
+            observation.process.hostname, _process(observation.process), observation.observed_at
+        )
+        if known is not None and not observation.is_es_client:
+            raise StateError("ES client observation contradicts an exact active attachment")
 
     def prepare(
         self,

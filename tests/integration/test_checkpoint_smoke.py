@@ -114,6 +114,10 @@ def test_short_generation_checkpoint_suspension_and_resume(
         second_session = dict(scenario_data["storyline"][1])
         second_session.update(id="ssh-after-resume", time="+2h30m" if authored_close else "+1h30m")
         scenario_data["storyline"].append(second_session)
+        if authored_close:
+            second_close = dict(scenario_data["storyline"][2])
+            second_close.update(id="close-after-resume", time="+2h45m")
+            scenario_data["storyline"].append(second_close)
     if smb_server is not None:
         scenario_data = macos_smb_scenario(scenarios_dir, server_platform=smb_server).model_dump(
             mode="json", exclude_none=True
@@ -197,6 +201,9 @@ def test_short_generation_checkpoint_suspension_and_resume(
     if helpers:
         # Cross the normal GUI session close, not only the collection cutoff.
         scenario_data["time_window"]["duration"] = "12h"
+        # Exercise helper retention with the established high-intensity seed;
+        # low-intensity baseline may legitimately start no browser before recovery.
+        scenario_data["baseline_activity"]["intensity"] = "high"
         scenario_data["environment"]["deployment_overrides"] = [
             {
                 "system": "MAC-01",
@@ -420,7 +427,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
         assert len(reads) >= 2
     elif macos:
-        if not denied_launch and not failed_exec and not persistence:
+        if not denied_launch and not failed_exec and not persistence and not native:
             assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
     else:

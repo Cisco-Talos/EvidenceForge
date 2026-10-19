@@ -98,6 +98,7 @@ def prepared_es_exit_record(
         raise StateError("Completed exit delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
+        owner.validate_client_observation(process)
         if len(cohort.process_terminations) != 1:
             raise StateError("Native exit preparation requires one exact termination")
         terminal = cohort.process_terminations[0]

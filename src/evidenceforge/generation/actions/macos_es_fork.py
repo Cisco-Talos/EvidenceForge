@@ -104,6 +104,8 @@ def prepared_es_fork_record(
         raise StateError("Completed fork delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
+        owner.validate_client_observation(parent)
+        owner.validate_client_observation(child)
         if len(cohort.processes) != 1 or cohort.sessions or cohort.session_activity_patches:
             raise StateError("Native fork preparation requires a standalone fork")
         birth = cohort.processes[0]

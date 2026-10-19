@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 273
+current_revision: 277
 history_start_revision: 1
-behavior_surface_sha256: 6b6b7603f7658788bed7751b84c0f879d4bc502485296d191150ee1a240447b4
+behavior_surface_sha256: fd61ff1a8d7f0f5ce855481e53504b65b4e00baef4af66a24ec1f04b075c4c0f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2604,3 +2604,35 @@ changes:
     formats:
       - ecar
     summary: Groups legacy process artifact commits before canonical process allocation while retaining post-materialization source-timing finalization, preventing artifact-failure prefixes outside action-cohort paths.
+  - revision: 274
+    id: historical-macos-exec-record-preparation
+    impact: localized
+    domains:
+      - macos-native-observation
+      - es-collector-ownership
+    formats: []
+    summary: Prepares historical v6/v9 exec bytes from one authenticated runtime transition, complete explicit execution metadata and bounded native descriptor observations without enabling a source or claiming target-version fidelity.
+  - revision: 275
+    id: installed-and-mixed-macos-exec-preparation
+    impact: localized
+    domains:
+      - macos-native-observation
+      - executable-version-ownership
+    formats: []
+    summary: Joins each historical exec image to its own installed or runtime provider with explicit installed stat, preserving script ownership and rejecting missing or borrowed executable facts.
+  - revision: 276
+    id: exact-positive-es-client-membership
+    impact: localized
+    domains:
+      - es-collector-ownership
+      - macos-native-observation
+    formats: []
+    summary: Exposes bounded positive attachment knowledge during prepared deliveries and rejects native process observations that contradict a known current collector epoch without inferring negative membership from missing profiles.
+  - revision: 277
+    id: successful-native-exec-authorization-consistency
+    impact: localized
+    domains:
+      - macos-native-observation
+      - process-outcome
+    formats: []
+    summary: Rejects a denied notification authorization result when preparing an authenticated successful exec transition, preserving the distinction between result metadata and an authorization-callback stream.

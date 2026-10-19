@@ -335,6 +335,37 @@ class ESCollectorRegistry:
             value = self._states.get(source_instance)
             return ESCollectorState.model_validate_json(value.model_dump_json()) if value else None
 
+    def known_connection_for_process(
+        self, hostname: str, process: ESCollectorProcess, observed_at: datetime
+    ) -> ESCollectorState | None:
+        """Return positive attachment knowledge from retained current epochs.
+
+        None means unknown, never proof of non-membership. Replaced epochs are
+        not an unbounded history. This bounded lookup works during a prepared
+        delivery, unlike checkpoint capture, and never changes counters. Several
+        clients may belong to one execution; source order makes selection stable.
+        """
+        if (
+            type(hostname) is not str
+            or not hostname.strip()
+            or type(process) is not ESCollectorProcess
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("ES attachment lookup requires exact host, execution and time")
+        process = ESCollectorProcess.model_validate_json(process.model_dump_json())
+        with self._lock:
+            for key in sorted(self._states):
+                value = self._states[key]
+                if (
+                    value.hostname == hostname
+                    and value.process == process
+                    and value.opened_at <= observed_at
+                    and (value.closed_at is None or observed_at < value.closed_at)
+                ):
+                    return ESCollectorState.model_validate_json(value.model_dump_json())
+        return None
+
     def close(self, expected: ESCollectorState, closed_at: datetime) -> None:
         """Close an exact idle connection without allocating a delivery or inferring exit."""
         if (
