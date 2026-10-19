@@ -910,6 +910,24 @@ class ProcessEventSpec(_EventSpecBase):
     parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
 
+    outcome: Literal["success", "denied"] = "success"
+
+    @model_validator(mode="after")
+    def bounded_denied_launch(self) -> "ProcessEventSpec":
+        """A denied pre-spawn attempt cannot define a process for later children."""
+        if self.outcome == "denied":
+            if not self.parent_ref or self.process_ref is not None:
+                raise ValueError(
+                    "Denied process launch requires parent_ref and forbids process_ref"
+                )
+            if (
+                not self.process_name.startswith("/")
+                or self.process_name == "/"
+                or "\0" in self.process_name
+            ):
+                raise ValueError("Denied process launch requires an absolute Mac executable path")
+        return self
+
 
 class LogonEventSpec(_EventSpecBase):
     """Authentication event (generates 4624, 4672, eCAR USER_SESSION/LOGIN).

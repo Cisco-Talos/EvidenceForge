@@ -15,7 +15,7 @@ explicit credentials · workstation state · raw escape hatch
 ## `process`
 
 Fields: `type`, required `process_name`, optional `command_line`, `process_ref`, `parent_ref`,
-`supplementary`, `technique`, and `description`. `command_line` defaults to the process name at
+`outcome`, `supplementary`, `technique`, and `description`. `command_line` defaults to the process name at
 generation time. Use unique `process_ref` values only when later children need exact lineage;
 `parent_ref` names an earlier durable reference. `supplementary` is `auto` (default) or `none`.
 
@@ -25,6 +25,15 @@ generation time. Use unique `process_ref` values only when later children need e
   command_line: curl -fsS https://updates.example/status
   process_ref: status-check
   supplementary: auto
+```
+
+`outcome` defaults to `success`. On a modeled Mac, `outcome: denied` records an explicit terminal rejection before child allocation. It requires an absolute executable path and `parent_ref` naming an earlier caller on the same host and actor; `process_ref` is forbidden because no child exists. The caller stays live, but this attempt creates no process, automatic command effects, or shell-history entry. Ground truth records the denial with no expected native source. This does not model prompting, a failed exec in an existing child, or validated Gatekeeper evidence. Keep legitimate downloads and other precursors as separate earlier activities.
+
+```yaml
+- type: process
+  process_name: /usr/local/libexec/invented-helper
+  parent_ref: existing-caller
+  outcome: denied
 ```
 
 ## `logon`

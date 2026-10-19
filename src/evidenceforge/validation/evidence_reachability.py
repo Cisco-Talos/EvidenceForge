@@ -128,6 +128,8 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
             if hostname not in known_hosts:
                 continue
             for spec_index, spec in enumerate(event.events):
+                if spec.type == "process" and getattr(spec, "outcome", "success") == "denied":
+                    continue  # Canonical no-child outcome has no admitted native policy source.
                 contract = AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
                 if contract is None:
                     continue

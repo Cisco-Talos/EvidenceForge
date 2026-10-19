@@ -38,6 +38,9 @@ def handle_process(
     self: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the process evidence path using the existing runtime owners."""
+    if getattr(spec, "outcome", "success") == "denied":
+        return _handle_denied_launch(self, spec, context)
+
     from evidenceforge.generation.engine.storyline_helpers.process import (
         _estimate_process_lifetime,
         _extract_schtasks_option,
@@ -1123,4 +1126,40 @@ def handle_process_access(
         if not evidence_emitted:
             malicious_event["skipped_reason"] = "no_live_target_process"
 
+    return context.malicious_event
+
+
+def _handle_denied_launch(
+    runtime: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
+) -> dict[str, Any]:
+    """Record a terminal pre-spawn rejection without entering successful execution."""
+    from evidenceforge.generation.actions.process_policy import record_denied_process_launch
+    from evidenceforge.models.exceptions import StateError
+
+    if _get_os_category(context.system.os) != "macos":
+        raise StateError("Authored denied process launch currently requires a Mac workstation")
+    reference = getattr(runtime, "_storyline_process_refs", {}).get(
+        (context.system.hostname, context.actor.username, spec.parent_ref)
+    )
+    if reference is None or len(reference) != 3:
+        raise StateError("Denied launch requires an earlier exact process_ref lifetime")
+    pid, image, object_id = reference
+    state = runtime.state_manager
+    parent = state.get_process_identity(context.system.hostname, pid)
+    if parent is None or parent.object_id != object_id or parent.image != image:
+        raise StateError("Denied launch parent_ref no longer names its original live process")
+    result = record_denied_process_launch(
+        state,
+        actor=parent,
+        attempted_at=context.time,
+        image=spec.process_name,
+        command_line=spec.command_line or spec.process_name,
+    )
+    context.malicious_event.update(
+        process_name=result.image,
+        command_line=result.command_line,
+        outcome="denied",
+        skipped_reason="execution_denied_before_spawn",
+        expected_sources=[],
+    )
     return context.malicious_event

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 227
+current_revision: 228
 history_start_revision: 1
-behavior_surface_sha256: 78ea8978b4d75d5c1811d844549a37b1fb169c71bbed1fe194f066bb8abc2b07
+behavior_surface_sha256: e3089a565d56d5060544defa5fbd097cbf526ce4da0f32dd2bfb1c75dfea8693
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2228,3 +2228,12 @@ changes:
     formats:
       - ecar
     summary: Retains explicit Mac file/stat and runtime image-security facts through canonical publication and checkpoints, and adds bounded ES client sequencing without enabling unvalidated native output.
+  - revision: 228
+    id: authored-macos-pre-spawn-denial
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - scenario-authoring
+    formats:
+      - ecar
+    summary: Adds explicit authored Mac pre-spawn rejection with exact caller lifetime, suppresses successful execution and command effects, and records the canonical outcome without fabricating native policy messages.

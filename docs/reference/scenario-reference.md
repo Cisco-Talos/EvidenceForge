@@ -1157,7 +1157,7 @@ minutes or hours. `explicit_offsets` accepts one offset per child event, such as
 
 | Type | Generates | Required Fields | Optional Fields |
 |------|-----------|-----------------|-----------------|
-| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `supplementary` (auto/none) |
+| `process` | 4688, Sysmon 1, eCAR PROCESS | `process_name` | `command_line`, `process_ref`, `parent_ref`, `outcome` (success/denied), `supplementary` (auto/none) |
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN; Type 9 uses the host's active/assigned desktop user as the local caller and the event actor as outbound credentials | | `logon_type` (default 3), `source_ip` (ignored for local Type 9) |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3), `target_username` |
 | `logoff` | 4634, eCAR LOGOUT | | |
@@ -1953,3 +1953,6 @@ The initial `zsh_history` format records only modeled interactive zsh submission
 The internal `process_fork` and `process_exec` canonical occurrences are not authored event types. Existing `process` authoring remains unchanged; bundles must own any image replacement, and native-source support must not be inferred from the eCAR exec extension.
 
 The engine-only `process_audit_bind`, `process_privilege_drop` and `process_service_drop` observations are likewise unavailable in authored `events`. Existing UID/GID, identity and session semantics supply their facts; they introduce no Mac configuration block. The SSH bundle owns these internal transitions; their eCAR extensions do not enable native Endpoint Security output.
+
+### Bounded Mac process denial
+A `process` event defaults to `outcome: success`. Explicit `outcome: denied` on a modeled Mac rejects a launch before child allocation. Supply an absolute `process_name` and `parent_ref` naming an earlier process for the same host and storyline actor. Do not set `process_ref`: the rejected attempt creates no child. The canonical caller remains active; command-derived file/network effects and shell history are suppressed. Author legitimate precursor activities separately. Ground truth records the denial with `execution_denied_before_spawn` and no expected source; no native Gatekeeper or Endpoint Security denial message is generated. Prompting, failed exec in an allocated child, and complete persistence orchestration are outside this interface. See [executable example](../../scenarios/macos-denied-launch-example/scenario.yaml).

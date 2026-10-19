@@ -770,8 +770,17 @@ class StorylineMixin:
     ) -> None:
         """Record an explicit storyline process reference for later parentage."""
         if not hasattr(self, "_storyline_process_refs"):
-            self._storyline_process_refs: dict[tuple[str, str, str], tuple[int, str]] = {}
-        self._storyline_process_refs[(system.hostname, actor.username, process_ref)] = (pid, image)
+            self._storyline_process_refs: dict[
+                tuple[str, str, str], tuple[int, str] | tuple[int, str, str]
+            ] = {}
+        state = getattr(self, "state_manager", None)
+        if state is None:
+            state = getattr(getattr(self, "activity_generator", None), "state_manager", None)
+        resolver = getattr(state, "get_process_identity", None)
+        identity = resolver(system.hostname, pid) if callable(resolver) else None
+        self._storyline_process_refs[(system.hostname, actor.username, process_ref)] = (
+            (pid, image, identity.object_id) if identity is not None else (pid, image)
+        )
 
     def _storyline_process_ref_for_parent(
         self,
@@ -788,18 +797,22 @@ class StorylineMixin:
         resolved = refs.get(key)
         if resolved is None:
             return None
-        pid, image = resolved
+        pid, image = resolved[:2]
         state_manager = getattr(self, "state_manager", None)
         if state_manager is None:
             activity_generator = getattr(self, "activity_generator", None)
             state_manager = getattr(activity_generator, "state_manager", None)
         if state_manager is None:
-            return resolved
+            return resolved[:2]
         process = state_manager.get_process(system.hostname, pid)
-        if process is None or process.image != image:
+        if (
+            process is None
+            or process.image != image
+            or (len(resolved) == 3 and process.ecar_object_id != resolved[2])
+        ):
             refs.pop(key, None)
             return None
-        return resolved
+        return resolved[:2]
 
     def _storyline_process_ref_release_index(
         self,
@@ -3134,14 +3147,19 @@ class StorylineMixin:
         """Return the newest live named process when an unreferenced process has ended."""
 
         refs = getattr(self, "_storyline_process_refs", {})
-        for key, (pid, image) in reversed(tuple(refs.items())):
+        for key, reference in reversed(tuple(refs.items())):
+            pid, image = reference[:2]
             hostname, _username, _process_ref = key
             if hostname != system.hostname or (
                 actor is not None and _username.casefold() != actor.username.casefold()
             ):
                 continue
             process = self.state_manager.get_process(system.hostname, pid)
-            if process is not None and process.image == image:
+            if (
+                process is not None
+                and process.image == image
+                and (len(reference) == 2 or process.ecar_object_id == reference[2])
+            ):
                 return pid, image
             refs.pop(key, None)
         return -1, None

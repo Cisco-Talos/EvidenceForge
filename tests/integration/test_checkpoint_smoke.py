@@ -90,6 +90,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     authored_close: bool,
     native: bool = False,
     helpers: bool = False,
+    denied_launch: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -147,6 +148,34 @@ def test_short_generation_checkpoint_suspension_and_resume(
                     ("+1h11m", "logon"),
                 ]
             )
+        ]
+    if denied_launch:
+        scenario_data["storyline"] = [
+            {
+                "id": "caller-before-checkpoint",
+                "time": "+1m",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Retain the caller across recovery",
+                "events": [
+                    {"type": "process", "process_name": "/bin/zsh", "process_ref": "caller"}
+                ],
+            },
+            {
+                "id": "denied-after-checkpoint",
+                "time": "+1h10m",
+                "actor": "alex",
+                "system": "MAC-01",
+                "activity": "Reject a launch before allocating a child",
+                "events": [
+                    {
+                        "type": "process",
+                        "process_name": "/usr/local/libexec/invented-blocked-helper",
+                        "parent_ref": "caller",
+                        "outcome": "denied",
+                    }
+                ],
+            },
         ]
     scenario_data["time_window"].update(warmup="1h", duration="3h")
     scenario_data["baseline_activity"]["intensity"] = "low"
@@ -296,6 +325,17 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
+    if denied_launch:
+        assert b"invented-blocked-helper" not in b"".join(
+            content for name, content in resumed_files.items() if name.startswith("data/")
+        )
+        truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+        denied = next(
+            row for row in truth["events"] if row["storyline_id"] == "denied-after-checkpoint"
+        )
+        assert denied["emitted"] is False
+        assert denied["attributes"]["outcome"] == "denied"
+        assert denied["skipped_reason"] == "execution_denied_before_spawn"
     if native:
         from evidenceforge.formats.macos_unified_log import decode_unified_log_record
 
@@ -363,7 +403,8 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
         assert len(reads) >= 2
     elif macos:
-        assert any(name.endswith(".zsh_history") for name in resumed_files)
+        if not denied_launch:
+            assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
     else:
         assert any(
@@ -398,4 +439,20 @@ def test_macos_browser_helper_checkpoint_resume(tmp_path: Path, scenarios_dir: P
         False,
         False,
         helpers=True,
+    )
+
+
+@pytest.mark.slow
+def test_macos_denied_launch_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        denied_launch=True,
     )
