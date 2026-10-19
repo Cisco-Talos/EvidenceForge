@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 288
+current_revision: 289
 history_start_revision: 1
-behavior_surface_sha256: 319c5b756eaed229714bc65963aaf896de71a981dcb0ab7bcfa180c277ae7465
+behavior_surface_sha256: a3302eaad4b3106f204d77ad3a98e3b732fc75edd352b3533fc068f219801fa3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2728,3 +2728,11 @@ changes:
       - runtime-executable-retention
     formats: []
     summary: Supports atomic same-directory rename over an exact distinct destination, preserves both historical loaded versions, and limits grouped placement replacement to one later same-time publication.
+  - revision: 289
+    id: macos-authenticated-file-rename-observation
+    impact: localized
+    domains:
+      - macos-file-observation
+      - native-publication-preparation
+    formats: []
+    summary: Freezes detached before/after rename facts from an exact live artifact claim, with shared fact validation, stale-placement checks and no mutation or native-stat timing assumptions.

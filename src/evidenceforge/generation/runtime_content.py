@@ -33,6 +33,7 @@ from evidenceforge.events.content_identity import (
     canonical_native_path,
 )
 from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metadata
+from evidenceforge.events.macos_file_operation import MacosFileRenameObservation
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -158,6 +159,10 @@ class PreparedMacosFileRename:
         ):
             return receipt
         return None
+
+    def observe(self) -> MacosFileRenameObservation:
+        """Freeze prepared before/after file facts without granting commit authority."""
+        return self._registry.observe_macos_file_rename(self._publication)
 
     def commit(self) -> LocalArtifactPublicationGroupReceipt:
         """Withdraw the old name and publish the new name atomically."""

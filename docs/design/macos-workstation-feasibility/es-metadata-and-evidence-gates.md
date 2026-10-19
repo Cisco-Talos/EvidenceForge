@@ -300,3 +300,6 @@ Authenticated frozen single fork/exec/exit deliveries now join the existing exac
 
 ### Explicit rename replacement — revision 288
 Same-directory rename can now replace an exact distinct same-volume single-link destination through the existing atomic artifact group. Both historical loaded files survive; cancellation, stage failures, stale destinations and expiry cannot resurrect old names. No configuration/checkpoint schema is added. Hard links, directory metadata effects, aliases, authored orchestration and event-time native path observations remain unavailable.
+
+### Prepared file-operation observations — revision 289
+The authenticated rename claim exposes detached canonical before/after file versions, optional replaced destination, operation time and exact publication token. Observation does not mutate placement or grant commit authority. Stale, foreign, expired and wrong-thread claims reject. This supplies source-preparation facts while leaving actor orchestration, directory updates, historical path lookup and native stat-time semantics explicit; no native ES output is enabled.
