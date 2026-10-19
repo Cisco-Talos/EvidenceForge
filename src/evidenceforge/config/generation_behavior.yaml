@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 303
+current_revision: 304
 history_start_revision: 1
-behavior_surface_sha256: 7aaa307679bdc5206fa782a0815371a4f320bbca209e2e029228c90604819415
+behavior_surface_sha256: 8c4b10b26e68a345ce5b8e17dcf12fa980275b50b7527bb2d4df869ba4cf17d4
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2850,3 +2850,12 @@ changes:
       - process-service-lifecycle
     formats: []
     summary: Reuses exact State and service group closure validation before source coordination and canonical admission.
+  - revision: 304
+    id: exact-service-terminal-cohort-publication
+    impact: none
+    domains:
+      - process-service-lifecycle
+      - exact-source-publication
+    formats:
+      - ecar
+    summary: Allows exact Mac terminal cohorts to retain the real service closure owner through canonical commit and recoverable source publication.

@@ -15409,6 +15409,36 @@ class LifecycleRegistry:
             ),
         )
 
+    def authenticates_expected_service_closure_receipt(
+        self,
+        receipt: object,
+        *,
+        preparation: object,
+    ) -> bool:
+        """Authenticate a preallocated service result within its exact active claim."""
+        if (
+            type(preparation) is not PreparedLifecycleServiceProcessClosure
+            or type(receipt) is not LifecycleServiceProcessClosureReceipt
+            or preparation._registry is not self
+            or not preparation._active
+            or preparation._thread_id != get_ident()
+        ):
+            return False
+        with self._closed_transport_preparation_lock:
+            try:
+                active = self._active_service_closure_reservation_locked(preparation._token)
+            except StateError:
+                return False
+            plan = preparation._plan
+            return bool(
+                active.claimed
+                and active.claim_thread_id == get_ident()
+                and active.commit_plan is plan
+                and plan.terminal_receipt is None
+                and plan.expected_receipt is receipt
+                and sha256(repr(receipt).encode()).hexdigest() == plan.expected_receipt_digest
+            )
+
     def _certify_service_closure(
         self,
         token: LifecycleServiceClosureAdmissionToken,

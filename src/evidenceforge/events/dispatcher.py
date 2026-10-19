@@ -91,6 +91,7 @@ from evidenceforge.events.evidence_requirements import (
     PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
 )
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.network import NetworkSensorObservation, NetworkTransactionPlan
 from evidenceforge.events.observation import (
     ObservationDecision,
@@ -136,7 +137,11 @@ if TYPE_CHECKING:
         LifecycleActionCohortAdmissionToken,
         LifecycleActionCohortReceipt,
         LifecycleActionCohortRequest,
+        LifecycleServiceClosureAdmissionToken,
+        LifecycleServiceProcessClosureReceipt,
+        LifecycleServiceProcessClosureRequest,
         PreparedLifecycleActionCohort,
+        PreparedLifecycleServiceProcessClosure,
     )
     from evidenceforge.generation.lifecycle_shadow import (
         LifecycleShadow,
@@ -518,7 +523,8 @@ class PreparedActionCohortBatch:
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
         source_timing_preparation: SourceTimingPreparation,
-        lifecycle_binding_token: LifecycleActionCohortAdmissionToken,
+        lifecycle_binding_token: LifecycleActionCohortAdmissionToken
+        | LifecycleServiceClosureAdmissionToken,
         audit_binding_token: object,
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
         intent_binding_token: IntentExecutionBatchToken | None,
@@ -605,7 +611,7 @@ class ActionCohortPublicationResult:
 
     receipt: ActionCohortPublicationReceipt
     state: ActionCohortMaterializationResult
-    lifecycle: LifecycleActionCohortReceipt
+    lifecycle: LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt
     audit: object
     artifacts: LocalArtifactPublicationGroupReceipt | None
     intent: IntentExecutionBatchReceipt | None
@@ -861,6 +867,15 @@ class _PersistentSmbSourcePublicationRecord:
     acknowledge_cursor: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class ActionCohortServiceClosure:
+    """Exact service owner for a Mac terminal cohort; not source publication authority."""
+
+    group: PosixGroupIdentity
+    request: LifecycleServiceProcessClosureRequest
+    close_group: bool
+
+
 @dataclass(slots=True)
 class _PreparedActionCohortBatchRecord:
     """Trusted canonical batch and nested reservations retained by the dispatcher."""
@@ -882,8 +897,8 @@ class _PreparedActionCohortBatchRecord:
     member_authored_intent_ids: tuple[str | None, ...]
     member_binary_identity_kinds: tuple[str, ...]
     source_timing_preparation: SourceTimingPreparation
-    lifecycle_request: LifecycleActionCohortRequest
-    lifecycle_token: LifecycleActionCohortAdmissionToken
+    lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest
+    lifecycle_token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken
     audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...]
     effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...]
     external_effect_links: tuple[ActionCohortExternalEffectLink, ...]
@@ -912,6 +927,7 @@ class _PreparedActionCohortBatchRecord:
     retained_bytes: int
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
+    service_closure: ActionCohortServiceClosure | None = None
     exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     es_closure_requests: tuple[ESCollectorClosure, ...] = ()
     es_closure_processes: tuple[ProcessIdentity, ...] = ()
@@ -941,13 +957,17 @@ class _PreparedActionCohortBatchRecord:
     audit_claimed: PreparedExecutionEffectAuditCommit | None = None
     artifact_claimed: LocalArtifactPreparedGroupCommit | None = None
     intent_claimed: PreparedIntentExecutionBatch | None = None
-    lifecycle_claimed: PreparedLifecycleActionCohort | None = None
+    lifecycle_claimed: (
+        PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure | None
+    ) = None
     state_claimed: PreparedActionCohortMaterialization | None = None
     expected_timing_receipt: SourceTimingPreparationReceipt | None = None
     expected_audit_receipt: ExecutionEffectAuditCommitReceipt | None = None
     expected_artifact_receipt: LocalArtifactPublicationGroupReceipt | None = None
     expected_intent_receipt: IntentExecutionBatchReceipt | None = None
-    expected_lifecycle_receipt: LifecycleActionCohortReceipt | None = None
+    expected_lifecycle_receipt: (
+        LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt | None
+    ) = None
     expected_state_result: ActionCohortMaterializationResult | None = None
     expected_state_result_publication_token: str = ""
     publication_receipt: ActionCohortPublicationReceipt | None = None
@@ -1028,8 +1048,10 @@ class _ActionCohortPreparationCleanupRecord:
     dispatches: tuple[PreparedDispatch, ...]
     source_timing_preparation: SourceTimingPreparation
     lifecycle_authority: GeneratorLifecycleAuthority
-    lifecycle_request: LifecycleActionCohortRequest
-    lifecycle_token: LifecycleActionCohortAdmissionToken | None
+    lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest
+    lifecycle_token: (
+        LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken | None
+    )
     execution_effect_audit: ExecutionEffectAuditCounter
     artifact_registry: LocalArtifactVersionRegistry | None
     artifact_publications: tuple[LocalArtifactPublishToken, ...]
@@ -7222,7 +7244,7 @@ class EventDispatcher:
         state_plan: ActionCohortMaterializationPlan,
         dispatches: tuple[PreparedDispatch, ...],
         artifact_publications: tuple[LocalArtifactPublishToken, ...],
-        lifecycle_request: LifecycleActionCohortRequest,
+        lifecycle_request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest,
         audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...],
         effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...],
         external_effect_links: tuple[ActionCohortExternalEffectLink, ...],
@@ -7283,7 +7305,8 @@ class EventDispatcher:
     def _action_cohort_nested_token_digest(
         *,
         timing_preparation: SourceTimingPreparation,
-        lifecycle_token: LifecycleActionCohortAdmissionToken,
+        lifecycle_token: LifecycleActionCohortAdmissionToken
+        | LifecycleServiceClosureAdmissionToken,
         audit_preparation: PreparedExecutionEffectAuditCommit,
         intent_token: IntentExecutionBatchToken | None,
     ) -> str:
@@ -7409,7 +7432,6 @@ class EventDispatcher:
             LocalArtifactPublicationGroupReceipt,
         )
         from evidenceforge.generation.intent_ledger import IntentExecutionBatchReceipt
-        from evidenceforge.generation.lifecycle_registry import LifecycleActionCohortReceipt
         from evidenceforge.generation.source_timing import SourceTimingPreparationReceipt
         from evidenceforge.generation.state_manager import ActionCohortMaterializationResult
 
@@ -7427,7 +7449,7 @@ class EventDispatcher:
             or audit_claimed is None
             or timing_claimed is not record.source_timing_preparation
             or type(state_result) is not ActionCohortMaterializationResult
-            or type(lifecycle_receipt) is not LifecycleActionCohortReceipt
+            or lifecycle_receipt is None
             or type(audit_receipt) is not ExecutionEffectAuditCommitReceipt
             or type(timing_receipt) is not SourceTimingPreparationReceipt
         ):
@@ -7471,12 +7493,7 @@ class EventDispatcher:
                     preparation=state_claimed,
                 )
                 or lifecycle_claimed.expected_receipt is not lifecycle_receipt
-                or not cast(
-                    "GeneratorLifecycleAuthority", self._lifecycle_authority
-                ).registry.authenticates_expected_action_cohort_receipt(
-                    lifecycle_receipt,
-                    state_publication_token=record.state_plan.publication_token,
-                )
+                or not self._action_cohort_lifecycle_result_authenticates(record, expected=True)
                 or audit_claimed.expected_receipt is not audit_receipt
                 or not record.execution_effect_audit.authenticates_expected_action_cohort_receipt(
                     audit_receipt,
@@ -7593,7 +7610,10 @@ class EventDispatcher:
         """Allocate and authenticate every nested and outer result before yielding."""
 
         state_claimed = cast("PreparedActionCohortMaterialization", record.state_claimed)
-        lifecycle_claimed = cast("PreparedLifecycleActionCohort", record.lifecycle_claimed)
+        lifecycle_claimed = cast(
+            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
+            record.lifecycle_claimed,
+        )
         audit_claimed = cast("PreparedExecutionEffectAuditCommit", record.audit_claimed)
         timing_claimed = cast("SourceTimingPreparation", record.timing_claimed)
         record.expected_state_result = state_claimed.expected_result
@@ -7715,8 +7735,14 @@ class EventDispatcher:
         cast("PreparedActionCohortMaterialization", record.state_claimed).certify_composite_commit(
             cast("ActionCohortMaterializationResult", record.expected_state_result)
         )
-        cast("PreparedLifecycleActionCohort", record.lifecycle_claimed).certify_composite_commit(
-            cast("LifecycleActionCohortReceipt", record.expected_lifecycle_receipt)
+        cast(
+            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
+            record.lifecycle_claimed,
+        ).certify_composite_commit(
+            cast(
+                "LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt",
+                record.expected_lifecycle_receipt,
+            )
         )
         cast("PreparedExecutionEffectAuditCommit", record.audit_claimed).certify_composite_commit(
             cast("ExecutionEffectAuditCommitReceipt", record.expected_audit_receipt)
@@ -9760,6 +9786,7 @@ class EventDispatcher:
         *,
         owned_effect_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
         exact_projection: bool = False,
+        service_closure: ActionCohortServiceClosure | None = None,
     ) -> PreparedActionCohortBatch:
         """Prepare one bounded all-owner action cohort without canonical mutation."""
 
@@ -10055,7 +10082,20 @@ class EventDispatcher:
                 )
             intent_request = IntentExecutionBatchRequest(tuple(intent_deltas))
 
-        lifecycle_request = authority.action_cohort_request(state_plan)
+        if service_closure is not None:
+            if type(service_closure) is not ActionCohortServiceClosure or not exact_projection:
+                raise EventContractError("Service closure requires an exact terminal publication")
+            authority.validate_process_group_service_closure(
+                state_plan,
+                service_closure.group,
+                service_closure.request,
+                close_group=service_closure.close_group,
+            )
+            if any(item._occurrence.src_host.os_category != "macos" for item in dispatches):
+                raise EventContractError("Service terminal publication requires Mac processes")
+            lifecycle_request = service_closure.request
+        else:
+            lifecycle_request = authority.action_cohort_request(state_plan)
         retained_bytes = self._action_cohort_batch_retained_size(
             state_plan,
             dispatches,
@@ -10127,14 +10167,20 @@ class EventDispatcher:
             self._action_cohort_retained_members += len(dispatches)
             self._action_cohort_retained_bytes += retained_bytes
 
-        lifecycle_token: LifecycleActionCohortAdmissionToken | None = None
+        lifecycle_token: (
+            LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken | None
+        ) = None
         audit_preparation: PreparedExecutionEffectAuditCommit | None = None
         intent_token: IntentExecutionBatchToken | None = None
         assigned_batch_id: int | None = None
         installed_record: _PreparedActionCohortBatchRecord | None = None
         carrier: PreparedActionCohortBatch | None = None
         try:
-            lifecycle_token = authority.prepare_action_cohort(state_plan)
+            lifecycle_token = (
+                authority.registry.prepare_service_process_closure(lifecycle_request)
+                if service_closure is not None
+                else authority.prepare_action_cohort(state_plan)
+            )
             cleanup_record.lifecycle_token = lifecycle_token
             if lifecycle_token.request != lifecycle_request:
                 raise EventContractError(
@@ -10243,6 +10289,7 @@ class EventDispatcher:
                     source_timing_preparation=timing_preparation,
                     lifecycle_request=lifecycle_request,
                     lifecycle_token=lifecycle_token,
+                    service_closure=service_closure,
                     audit_entries=audit_entries,
                     effect_member_bindings=effect_member_bindings,
                     external_effect_links=external_effect_links,
@@ -10442,13 +10489,13 @@ class EventDispatcher:
             record.lifecycle_cleanup_complete = True
         elif not record.lifecycle_cleanup_complete:
             try:
-                record.lifecycle_authority.registry.cancel_action_cohort(record.lifecycle_token)
+                self._cancel_action_cohort_lifecycle(
+                    record.lifecycle_authority, record.lifecycle_token
+                )
             except BaseException as exc:
                 try:
-                    still_active = record.lifecycle_authority.registry.authenticates_action_cohort_admission_token(
-                        record.lifecycle_token,
-                        request=record.lifecycle_request,
-                        state_publication_token=record.lifecycle_request.state_publication_token,
+                    still_active = self._action_cohort_lifecycle_admission_authenticates(
+                        record.lifecycle_authority, record.lifecycle_token, record.lifecycle_request
                     )
                 except BaseException:
                     still_active = True
@@ -10604,6 +10651,67 @@ class EventDispatcher:
             raise EventContractError("Action-cohort batch integrity validation failed")
         return record
 
+    @staticmethod
+    def _cancel_action_cohort_lifecycle(
+        authority: GeneratorLifecycleAuthority,
+        token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken,
+    ) -> None:
+        from evidenceforge.generation.lifecycle_registry import (
+            LifecycleServiceClosureAdmissionToken,
+        )
+
+        if type(token) is LifecycleServiceClosureAdmissionToken:
+            authority.registry.cancel_service_process_closure(token)
+        else:
+            authority.registry.cancel_action_cohort(token)
+
+    @staticmethod
+    def _action_cohort_lifecycle_admission_authenticates(
+        authority: GeneratorLifecycleAuthority,
+        token: LifecycleActionCohortAdmissionToken | LifecycleServiceClosureAdmissionToken,
+        request: LifecycleActionCohortRequest | LifecycleServiceProcessClosureRequest,
+    ) -> bool:
+        from evidenceforge.generation.lifecycle_registry import (
+            LifecycleServiceProcessClosureRequest,
+        )
+
+        if type(request) is LifecycleServiceProcessClosureRequest:
+            return authority.registry.authenticates_service_closure_admission_token(
+                token, request=request
+            )
+        return authority.registry.authenticates_action_cohort_admission_token(
+            token, request=request, state_publication_token=request.state_publication_token
+        )
+
+    def _action_cohort_lifecycle_result_authenticates(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        *,
+        expected: bool,
+    ) -> bool:
+        authority = self._lifecycle_authority
+        if authority is None:
+            return False
+        registry = authority.registry
+        receipt = record.expected_lifecycle_receipt
+        if record.service_closure is not None:
+            if expected:
+                return registry.authenticates_expected_service_closure_receipt(
+                    receipt, preparation=record.lifecycle_claimed
+                )
+            return registry.authenticates_service_process_closure_receipt(
+                receipt, request=record.lifecycle_request
+            )
+        if expected:
+            return registry.authenticates_expected_action_cohort_receipt(
+                receipt, state_publication_token=record.state_plan.publication_token
+            )
+        return registry.authenticates_action_cohort_receipt(
+            receipt,
+            request=record.lifecycle_request,
+            state_publication_token=record.state_plan.publication_token,
+        )
+
     def _action_cohort_batch_record_authenticates(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -10633,9 +10741,23 @@ class EventDispatcher:
         if not self.state_manager.authenticates_action_cohort_plan(record.state_plan):
             return False
         self.state_manager.validate_action_cohort_materialization(record.state_plan)
-        if authority.action_cohort_request(record.state_plan) != record.lifecycle_request:
-            return False
-        if not authority.authenticates_action_cohort_binding(
+        if record.service_closure is not None:
+            closure = record.service_closure
+            if (
+                type(closure) is not ActionCohortServiceClosure
+                or closure.request is not record.lifecycle_request
+            ):
+                return False
+            authority.validate_process_group_service_closure(
+                record.state_plan, closure.group, closure.request, close_group=closure.close_group
+            )
+            if not self._action_cohort_lifecycle_admission_authenticates(
+                authority, record.lifecycle_token, record.lifecycle_request
+            ):
+                return False
+        elif authority.action_cohort_request(
+            record.state_plan
+        ) != record.lifecycle_request or not authority.authenticates_action_cohort_binding(
             record.state_plan, record.lifecycle_token
         ):
             return False
@@ -11191,9 +11313,18 @@ class EventDispatcher:
                 )
                 state_claimed = state_context.__enter__()
                 entered.append(cast(AbstractContextManager[object], state_context))
-                lifecycle_context = authority.registry.claimed_action_cohort(record.lifecycle_token)
+                lifecycle_context = (
+                    authority.registry.claimed_service_process_closure(record.lifecycle_token)
+                    if record.service_closure is not None
+                    else authority.registry.claimed_action_cohort(record.lifecycle_token)
+                )
                 lifecycle_claimed = lifecycle_context.__enter__()
                 entered.append(cast(AbstractContextManager[object], lifecycle_context))
+                if record.service_closure is not None and any(
+                    effective != record.state_plan.process_terminations[0].end_time
+                    for _, effective in lifecycle_claimed.effective_times
+                ):
+                    raise EventContractError("Service terminal cohort precedes a lifecycle hold")
                 audit_context = record.execution_effect_audit.claimed_action_cohort(
                     record.audit_preparation
                 )
@@ -11573,7 +11704,7 @@ class EventDispatcher:
                             record.state_claimed,
                         )
                         lifecycle_claimed = cast(
-                            "PreparedLifecycleActionCohort",
+                            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
                             record.lifecycle_claimed,
                         )
                         audit_claimed = cast(
@@ -11581,7 +11712,7 @@ class EventDispatcher:
                             record.audit_claimed,
                         )
                         lifecycle_receipt = cast(
-                            "LifecycleActionCohortReceipt",
+                            "LifecycleActionCohortReceipt | LifecycleServiceProcessClosureReceipt",
                             record.expected_lifecycle_receipt,
                         )
                         audit_receipt = cast(
@@ -11600,7 +11731,6 @@ class EventDispatcher:
                             "ActionCohortMaterializationResult",
                             record.expected_state_result,
                         )
-                        authority = cast("GeneratorLifecycleAuthority", self._lifecycle_authority)
 
                         # Provisional State remains reversible. An exception here exits every
                         # claim before another canonical owner commits, so State rolls back.
@@ -11637,10 +11767,8 @@ class EventDispatcher:
                             terminal_authenticates=lambda: bool(
                                 lifecycle_claimed.committed
                                 and lifecycle_claimed.receipt is lifecycle_receipt
-                                and authority.registry.authenticates_action_cohort_receipt(
-                                    lifecycle_receipt,
-                                    request=record.lifecycle_request,
-                                    state_publication_token=record.state_plan.publication_token,
+                                and self._action_cohort_lifecycle_result_authenticates(
+                                    record, expected=False
                                 )
                             ),
                             label="Exact action-cohort lifecycle owner",
@@ -11752,7 +11880,7 @@ class EventDispatcher:
                             record.state_claimed,
                         ).apply_provisional()
                         cast(
-                            "PreparedLifecycleActionCohort",
+                            "PreparedLifecycleActionCohort | PreparedLifecycleServiceProcessClosure",
                             record.lifecycle_claimed,
                         ).commit_no_fail()
                         cast(
@@ -12561,13 +12689,11 @@ class EventDispatcher:
             record.lifecycle_cleanup_complete = True
         elif not record.lifecycle_cleanup_complete:
             try:
-                authority.registry.cancel_action_cohort(record.lifecycle_token)
+                self._cancel_action_cohort_lifecycle(authority, record.lifecycle_token)
             except BaseException as exc:
                 try:
-                    still_active = authority.registry.authenticates_action_cohort_admission_token(
-                        record.lifecycle_token,
-                        request=record.lifecycle_request,
-                        state_publication_token=record.state_plan.publication_token,
+                    still_active = self._action_cohort_lifecycle_admission_authenticates(
+                        authority, record.lifecycle_token, record.lifecycle_request
                     )
                 except BaseException:
                     still_active = True

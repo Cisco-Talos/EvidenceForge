@@ -206,3 +206,40 @@ def test_expected_retry_tracks_current_compacted_snapshots_without_reclosing() -
     assert [item.closed_at for item in expected.processes] == [
         item.closed_at for item in first.processes
     ]
+
+
+def test_expected_service_receipt_authentication_is_scoped_to_exact_active_claim() -> None:
+    from dataclasses import replace
+
+    registry, adapter, request = _tree()
+    with adapter.claimed_service_process_closure(
+        adapter.prepare_service_process_closure(request)
+    ) as claimed:
+        expected = claimed.expected_receipt
+        assert registry.authenticates_expected_service_closure_receipt(
+            expected, preparation=claimed
+        )
+        assert not registry.authenticates_expected_service_closure_receipt(
+            replace(expected), preparation=claimed
+        )
+        assert not registry.authenticates_expected_service_closure_receipt(
+            expected, preparation=object()
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert not executor.submit(
+                registry.authenticates_expected_service_closure_receipt,
+                expected,
+                preparation=claimed,
+            ).result()
+        claimed.certify_composite_commit(expected)
+        assert registry.authenticates_expected_service_closure_receipt(
+            expected, preparation=claimed
+        )
+        claimed.commit_no_fail()
+        assert not registry.authenticates_expected_service_closure_receipt(
+            expected, preparation=claimed
+        )
+    assert not registry.authenticates_expected_service_closure_receipt(
+        expected, preparation=claimed
+    )
+    assert registry.authenticates_service_process_closure_receipt(expected)
