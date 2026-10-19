@@ -154,6 +154,138 @@ class _DeliveryClaim:
     committed: bool = False
 
 
+class ESDeliveryRequest(_Value):
+    """One explicit ordered delivery in a bounded same-connection counter batch."""
+
+    occurrence_id: _Name
+    event_type: int = Field(ge=0, lt=2**32)
+    observed_at: AwareDatetime
+    decision: ObservationDecision
+    kernel_lost: tuple[ESKernelLoss, ...] = Field(default=(), max_length=256)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class ESDeliveryBatchPreparation:
+    """Caller-held batch capability with a registry-authenticated completion proof."""
+
+    observations: tuple[ESCollectorObservation, ...]
+    _proof: bytes = b""
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingBatch:
+    capability: ESDeliveryBatchPreparation
+    after: ESCollectorState
+    observations: tuple[ESCollectorObservation, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedESDeliveryBatchCommit:
+    """Opaque same-thread batch commit handle; counter truth stays registry-owned."""
+
+    _registry: ESCollectorRegistry
+    _source_instance: str
+
+    @property
+    def observations(self) -> tuple[ESCollectorObservation, ...]:
+        """Return the retained immutable observations while the exact claim is active."""
+        return self._registry._batch_claim(self).observations
+
+    def commit_no_fail(self) -> None:
+        """Publish only the precomputed final counters and completion proof."""
+        self._registry._commit_claimed_batch(self)
+
+
+@dataclass(slots=True)
+class _BatchClaim:
+    handle: PreparedESDeliveryBatchCommit
+    capability: ESDeliveryBatchPreparation
+    observations: tuple[ESCollectorObservation, ...]
+    after: ESCollectorState | None
+    proof: bytes
+    thread_id: int
+    committed: bool = False
+
+
+def _advance_delivery(
+    before: ESCollectorState,
+    *,
+    source_instance: str,
+    generation: int,
+    delivery: int,
+    occurrence_id: str,
+    event_type: int,
+    observed_at: datetime,
+    decision: ObservationDecision,
+    kernel_lost: tuple[ESKernelLoss, ...],
+) -> tuple[ESCollectorObservation, ESCollectorState]:
+    """Compute a detached counter transition without reserving or publishing anything."""
+    if (
+        type(decision) is not ObservationDecision
+        or type(decision.delay) is not timedelta
+        or decision.delay < timedelta(0)
+    ):
+        raise StateError("ES delivery requires an exact nonnegative observation decision")
+    if type(kernel_lost) is not tuple or any(
+        type(item) is not ESKernelLoss for item in kernel_lost
+    ):
+        raise StateError("ES loss requires exact per-event counts")
+    kernel_lost = tuple(
+        ESKernelLoss(event_type=item.event_type, count=item.count) for item in kernel_lost
+    )
+    if (
+        type(generation) is not int
+        or type(delivery) is not int
+        or (generation != before.generation or delivery != before.next_delivery)
+    ):
+        raise StateError("ES delivery requires the exact connection and next ordinal")
+    counters = {item.event_type: item.next_sequence for item in before.event_counters}
+    if type(event_type) is not int or event_type not in counters:
+        raise StateError("ES event is not subscribed by this client")
+    if (
+        type(observed_at) is not datetime
+        or observed_at.utcoffset() is None
+        or observed_at < before.last_delivery_at
+    ):
+        raise StateError("ES client deliveries require chronological aware times")
+    losses = {item.event_type: item.count for item in kernel_lost}
+    if len(losses) != len(kernel_lost) or not losses.keys() <= counters.keys():
+        raise StateError("ES loss must name distinct subscribed event types")
+    for kind, count in losses.items():
+        counters[kind] += count
+    global_sequence = before.next_global_sequence + sum(losses.values())
+    observation = ESCollectorObservation(
+        source_instance=source_instance,
+        hostname=before.hostname,
+        generation=generation,
+        delivery=delivery,
+        occurrence_id=occurrence_id,
+        event_type=event_type,
+        observed_at=observed_at,
+        collector_process=before.process,
+        seq_num=counters[event_type],
+        global_seq_num=global_sequence,
+        status=decision.status,
+        delay=decision.delay,
+    )
+    counters[event_type] += 1
+    after = ESCollectorState(
+        **(
+            before.model_dump()
+            | dict(
+                next_delivery=delivery + 1,
+                last_delivery_at=observed_at,
+                next_global_sequence=global_sequence + 1,
+                event_counters=tuple(
+                    ESEventCounter(event_type=kind, next_sequence=count)
+                    for kind, count in sorted(counters.items())
+                ),
+            )
+        )
+    )
+    return observation, after
+
+
 class ESCollectorRegistry:
     """Transactional source-local counters with bounded current-client state.
 
@@ -167,8 +299,8 @@ class ESCollectorRegistry:
     def __init__(self) -> None:
         self._lock = RLock()
         self._states: dict[str, ESCollectorState] = {}
-        self._pending: dict[str, _Pending] = {}
-        self._claimed: dict[str, _DeliveryClaim] = {}
+        self._pending: dict[str, _Pending | _PendingBatch] = {}
+        self._claimed: dict[str, _DeliveryClaim | _BatchClaim] = {}
         self._secret = secrets.token_bytes(32)
 
     def open(self, state: ESCollectorState) -> None:
@@ -241,19 +373,6 @@ class ESCollectorRegistry:
         kernel_lost: tuple[ESKernelLoss, ...] = (),
     ) -> ESDeliveryPreparation:
         """Reserve one canonical delivery and explicit preceding kernel losses."""
-        if (
-            type(decision) is not ObservationDecision
-            or type(decision.delay) is not timedelta
-            or decision.delay < timedelta(0)
-        ):
-            raise StateError("ES delivery requires an exact nonnegative observation decision")
-        if type(kernel_lost) is not tuple or any(
-            type(item) is not ESKernelLoss for item in kernel_lost
-        ):
-            raise StateError("ES loss requires exact per-event counts")
-        kernel_lost = tuple(
-            ESKernelLoss(event_type=item.event_type, count=item.count) for item in kernel_lost
-        )
         with self._lock:
             before = self._states.get(source_instance)
             if (
@@ -263,61 +382,187 @@ class ESCollectorRegistry:
                 or source_instance in self._claimed
             ):
                 raise StateError("ES delivery requires an open idle client")
-            if (
-                type(generation) is not int
-                or type(delivery) is not int
-                or (generation != before.generation or delivery != before.next_delivery)
-            ):
-                raise StateError("ES delivery requires the exact connection and next ordinal")
-            counters = {item.event_type: item.next_sequence for item in before.event_counters}
-            if type(event_type) is not int or event_type not in counters:
-                raise StateError("ES event is not subscribed by this client")
-            if (
-                type(observed_at) is not datetime
-                or observed_at.utcoffset() is None
-                or observed_at < before.last_delivery_at
-            ):
-                raise StateError("ES client deliveries require chronological aware times")
-            losses = {item.event_type: item.count for item in kernel_lost}
-            if len(losses) != len(kernel_lost) or not losses.keys() <= counters.keys():
-                raise StateError("ES loss must name distinct subscribed event types")
-            for kind, count in losses.items():
-                counters[kind] += count
-            global_sequence = before.next_global_sequence + sum(losses.values())
-            observation = ESCollectorObservation(
+            observation, after = _advance_delivery(
+                before,
                 source_instance=source_instance,
-                hostname=before.hostname,
                 generation=generation,
                 delivery=delivery,
                 occurrence_id=occurrence_id,
                 event_type=event_type,
                 observed_at=observed_at,
-                collector_process=before.process,
-                seq_num=counters[event_type],
-                global_seq_num=global_sequence,
-                status=decision.status,
-                delay=decision.delay,
-            )
-            counters[event_type] += 1
-            after = ESCollectorState(
-                **(
-                    before.model_dump()
-                    | dict(
-                        next_delivery=delivery + 1,
-                        last_delivery_at=observed_at,
-                        next_global_sequence=global_sequence + 1,
-                        event_counters=tuple(
-                            ESEventCounter(event_type=kind, next_sequence=count)
-                            for kind, count in sorted(counters.items())
-                        ),
-                    )
-                )
+                decision=decision,
+                kernel_lost=kernel_lost,
             )
             capability = ESDeliveryPreparation(
                 ESCollectorObservation.model_validate_json(observation.model_dump_json())
             )
             self._pending[source_instance] = _Pending(capability, after, observation)
             return capability
+
+    def prepare_batch(
+        self,
+        *,
+        source_instance: str,
+        generation: int,
+        delivery: int,
+        requests: tuple[ESDeliveryRequest, ...],
+    ) -> ESDeliveryBatchPreparation:
+        """Reserve an ordered bounded group without publishing a partial counter advance."""
+        if (
+            type(requests) is not tuple
+            or not 1 <= len(requests) <= 256
+            or any(type(item) is not ESDeliveryRequest for item in requests)
+        ):
+            raise StateError("ES batch requires 1 to 256 exact delivery requests")
+        requests = tuple(
+            ESDeliveryRequest.model_validate_json(item.model_dump_json()) for item in requests
+        )
+        with self._lock:
+            before = self._states.get(source_instance)
+            if (
+                before is None
+                or before.closed_at is not None
+                or source_instance in self._pending
+                or source_instance in self._claimed
+            ):
+                raise StateError("ES batch requires an open idle client")
+            current = before
+            observations: list[ESCollectorObservation] = []
+            for index, request in enumerate(requests):
+                observation, current = _advance_delivery(
+                    current,
+                    source_instance=source_instance,
+                    generation=generation,
+                    delivery=delivery if index == 0 else current.next_delivery,
+                    occurrence_id=request.occurrence_id,
+                    event_type=request.event_type,
+                    observed_at=request.observed_at,
+                    decision=request.decision,
+                    kernel_lost=request.kernel_lost,
+                )
+                observations.append(observation)
+            trusted = tuple(observations)
+            capability = ESDeliveryBatchPreparation(
+                tuple(
+                    ESCollectorObservation.model_validate_json(item.model_dump_json())
+                    for item in trusted
+                )
+            )
+            self._pending[source_instance] = _PendingBatch(capability, current, trusted)
+            return capability
+
+    @staticmethod
+    def _validate_batch_capability(capability: ESDeliveryBatchPreparation) -> None:
+        if (
+            type(capability) is not ESDeliveryBatchPreparation
+            or type(capability.observations) is not tuple
+            or not 1 <= len(capability.observations) <= 256
+            or any(type(item) is not ESCollectorObservation for item in capability.observations)
+        ):
+            raise StateError("ES batch publication requires its exact bounded capability")
+
+    def _batch_proof(self, capability: ESDeliveryBatchPreparation) -> bytes:
+        # A distinct domain separates this proof from the single-delivery contract.
+        material = b"es-delivery-batch-v1:" + str(id(capability)).encode()
+        for item in capability.observations:
+            encoded = item.model_dump_json().encode()
+            material += len(encoded).to_bytes(8, "big") + encoded
+        return hmac.digest(self._secret, material, hashlib.sha256)
+
+    def completed_batch(
+        self, capability: ESDeliveryBatchPreparation
+    ) -> tuple[ESCollectorObservation, ...] | None:
+        """Authenticate a completed group without replaying any member allocation."""
+        self._validate_batch_capability(capability)
+        with self._lock:
+            if capability._proof and hmac.compare_digest(
+                capability._proof, self._batch_proof(capability)
+            ):
+                return capability.observations
+            return None
+
+    @contextmanager
+    def prepared_batch(
+        self, capability: ESDeliveryBatchPreparation
+    ) -> Iterator[PreparedESDeliveryBatchCommit]:
+        """Hold a prevalidated batch claim for an outer State/native-source commit."""
+        self._validate_batch_capability(capability)
+        with self._lock:
+            key = capability.observations[0].source_instance
+            if key in self._claimed:
+                raise StateError("ES batch already has an active commit scope")
+            completed = self.completed_batch(capability)
+            handle = PreparedESDeliveryBatchCommit(self, key)
+            if completed is not None:
+                claim = _BatchClaim(
+                    handle, capability, completed, None, capability._proof, get_ident()
+                )
+            else:
+                pending = self._pending.get(key)
+                if (
+                    type(pending) is not _PendingBatch
+                    or pending.capability is not capability
+                    or pending.observations != capability.observations
+                ):
+                    raise StateError("ES batch capability is stale or changed")
+                claim = _BatchClaim(
+                    handle,
+                    capability,
+                    pending.observations,
+                    pending.after,
+                    self._batch_proof(capability),
+                    get_ident(),
+                )
+            self._claimed[key] = claim
+            try:
+                yield handle
+            finally:
+                del self._claimed[key]
+
+    def _batch_claim(self, handle: PreparedESDeliveryBatchCommit) -> _BatchClaim:
+        if type(handle) is not PreparedESDeliveryBatchCommit:
+            raise StateError("ES batch commit requires its active preparation scope")
+        key = object.__getattribute__(handle, "_source_instance")
+        claim = self._claimed.get(key) if type(key) is str else None
+        if (
+            type(claim) is not _BatchClaim
+            or claim.handle is not handle
+            or claim.thread_id != get_ident()
+            or object.__getattribute__(handle, "_registry") is not self
+        ):
+            raise StateError("ES batch commit requires its active preparation scope")
+        return claim
+
+    def _commit_claimed_batch(self, handle: PreparedESDeliveryBatchCommit) -> None:
+        claim = self._batch_claim(handle)
+        if claim.committed:
+            return
+        if claim.after is not None:
+            key = claim.observations[0].source_instance
+            self._states[key] = claim.after
+            object.__setattr__(claim.capability, "_proof", claim.proof)
+            del self._pending[key]
+        claim.committed = True
+
+    def commit_batch(
+        self, capability: ESDeliveryBatchPreparation
+    ) -> tuple[ESCollectorObservation, ...]:
+        """Commit all reserved counter effects once, including a lost-return retry."""
+        with self.prepared_batch(capability) as prepared:
+            prepared.commit_no_fail()
+            return prepared.observations
+
+    def cancel_batch(self, capability: ESDeliveryBatchPreparation) -> None:
+        """Cancel the exact unclaimed group without advancing any member counters."""
+        self._validate_batch_capability(capability)
+        with self._lock:
+            key = capability.observations[0].source_instance
+            if key in self._claimed:
+                raise StateError("ES batch cancellation requires an unclaimed reservation")
+            pending = self._pending.get(key)
+            if type(pending) is not _PendingBatch or pending.capability is not capability:
+                raise StateError("ES batch cancellation capability is stale")
+            del self._pending[key]
 
     def _proof(self, capability: ESDeliveryPreparation) -> bytes:
         material = str(id(capability)).encode() + capability.observation.model_dump_json().encode()

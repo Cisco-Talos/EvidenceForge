@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 247
+current_revision: 248
 history_start_revision: 1
-behavior_surface_sha256: d98f6cfc06f302d368eac73b8aec7042417b84fd94c5f4829b06dfb9ca339e4f
+behavior_surface_sha256: 6ed8c245262013d728840db83e1628252dfcaa90aee9aabcb946bada4822f9de
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2390,3 +2390,10 @@ changes:
       - macos-source-contracts
     formats: []
     summary: Freezes standalone terminal process facts and prepares installed birth, exec and terminal snapshots through shared explicit deployment/stat validation without admitting native events.
+  - revision: 248
+    id: bounded-es-collector-delivery-batches
+    impact: none
+    domains:
+      - macos-source-contracts
+    formats: []
+    summary: Reserves and preclaims bounded same-connection delivery groups atomically while preserving existing single-delivery counters and leaving native sink admission separate.

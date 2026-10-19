@@ -99,3 +99,6 @@ A bounded precommit helper now composes the runtime-backed ES process target for
 
 ### Terminal and installed preparation update — revision 247
 Runtime-backed terminal process snapshots can be frozen from an authenticated standalone close before State makes the process inactive. Installed-release snapshots now use shared deployment/stat validation for sealed births, standalone exec and standalone close. These are preparation contracts, not exit-event admission or native sink authority. Missing metadata and unsupported mixed transitions still reject.
+
+### Collector batch update — revision 248
+Bounded same-connection groups now reserve and preclaim sequence allocation together. Invalid later members leave no partial prefix; filtering/delay decisions preserve counter values, and authenticated completed retries do not allocate again. Existing single-delivery behavior and dispatcher checkpoint state remain compatible. Native source/sink coupling remains unfinished.

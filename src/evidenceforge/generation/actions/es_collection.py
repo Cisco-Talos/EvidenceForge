@@ -16,8 +16,11 @@ from evidenceforge.events.es_collector import (
     ESCollectorProcess,
     ESCollectorRegistry,
     ESCollectorState,
+    ESDeliveryBatchPreparation,
     ESDeliveryPreparation,
+    ESDeliveryRequest,
     ESKernelLoss,
+    PreparedESDeliveryBatchCommit,
     PreparedESDeliveryCommit,
 )
 from evidenceforge.events.identity import ProcessIdentity
@@ -136,3 +139,70 @@ class ESCollectionActionOwner:
         with self.prepared_commit(capability, process) as prepared:
             prepared.commit_no_fail()
             return prepared.observation
+
+    def prepare_batch(
+        self,
+        *,
+        source_instance: str,
+        process: ProcessIdentity,
+        generation: int,
+        delivery: int,
+        requests: tuple[ESDeliveryRequest, ...],
+    ) -> ESDeliveryBatchPreparation:
+        """Reserve one same-connection group after validating every delivery's live owner."""
+        if (
+            type(requests) is not tuple
+            or not 1 <= len(requests) <= 256
+            or any(type(item) is not ESDeliveryRequest for item in requests)
+        ):
+            raise StateError("Bound ES batch requires exact bounded requests")
+        requests = tuple(
+            ESDeliveryRequest.model_validate_json(item.model_dump_json()) for item in requests
+        )
+        with self.state._lock:
+            for request in requests:
+                owner = self._live_process(process, request.observed_at)
+            connection = self.collectors.connection(source_instance)
+            if (
+                connection is None
+                or connection.hostname != process.hostname
+                or connection.process != owner
+            ):
+                raise StateError("ES batch requires its exact established collector execution")
+            return self.collectors.prepare_batch(
+                source_instance=source_instance,
+                generation=generation,
+                delivery=delivery,
+                requests=requests,
+            )
+
+    @contextmanager
+    def prepared_batch_commit(
+        self, capability: ESDeliveryBatchPreparation, process: ProcessIdentity
+    ) -> Iterator[PreparedESDeliveryBatchCommit]:
+        """Hold State then collector ownership across an outer atomic batch publication."""
+        if (
+            type(capability) is not ESDeliveryBatchPreparation
+            or type(process) is not ProcessIdentity
+        ):
+            raise StateError("Bound ES batch commit requires exact owning facts")
+        self.collectors._validate_batch_capability(capability)
+        if any(
+            item.hostname != process.hostname or item.collector_process != _process(process)
+            for item in capability.observations
+        ):
+            raise StateError("Bound ES batch commit requires its exact owning execution")
+        with self.state._lock:
+            if self.collectors.completed_batch(capability) is None:
+                for observation in capability.observations:
+                    self._live_process(process, observation.observed_at)
+            with self.collectors.prepared_batch(capability) as prepared:
+                yield prepared
+
+    def commit_batch(
+        self, capability: ESDeliveryBatchPreparation, process: ProcessIdentity
+    ) -> tuple[ESCollectorObservation, ...]:
+        """Advance one exact group once; completed proof retries survive collector exit/exec."""
+        with self.prepared_batch_commit(capability, process) as prepared:
+            prepared.commit_no_fail()
+            return prepared.observations
