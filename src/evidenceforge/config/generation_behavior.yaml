@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 312
+current_revision: 313
 history_start_revision: 1
-behavior_surface_sha256: a1d83994eb67a907b7befa3980570d25493eb71977b2aff486659011bac0808d
+behavior_surface_sha256: 61027bb3a1d875e6fbf1ecdc5f072a6acc19fa9b4fd5f5012c40406510c01408
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2926,3 +2926,11 @@ changes:
       - process-file-observation
     formats: []
     summary: Retains a renamed placement through its source's existing lease and retention horizon, rejecting stale preparation when that horizon grows.
+  - revision: 313
+    id: nested-mutation-watermark-admission
+    impact: localized
+    domains:
+      - registry-synchronization
+      - runtime-content-identity
+    formats: []
+    summary: Lets already-admitted nested owner work finish ahead of a queued watermark while preserving writer priority over new readers.
