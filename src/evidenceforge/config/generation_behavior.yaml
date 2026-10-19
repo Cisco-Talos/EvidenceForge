@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 295
+current_revision: 296
 history_start_revision: 1
-behavior_surface_sha256: 068e6ebdeeebb3f0d8c7cd06d95ceb28738dc556e74db55541ecb20f1aa334c5
+behavior_surface_sha256: f1c9c3e9200dde45b23cb4839ef601d4a91594df7bf7c0863bbd3d0cadd2a1ff
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2784,3 +2784,11 @@ changes:
       - macos-process-lifecycle
     formats: []
     summary: Closes explicitly bound clients with exact Mac process exits while preserving canonical rollback, counter independence and source recovery.
+  - revision: 296
+    id: macos-native-client-membership-binding
+    impact: localized
+    domains:
+      - macos-collector-ownership
+      - native-projection-preparation
+    formats: []
+    summary: Rejects pending native projections after same-host modeled client ownership changes while preserving completed historical records and unrelated counters.

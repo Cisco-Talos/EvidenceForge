@@ -129,6 +129,7 @@ class _NativeProjection:
 
     ndjson: str
     canonical_token: str | None
+    membership: bytes = field(repr=False)
     proof: bytes = field(repr=False)
 
 
@@ -801,7 +802,7 @@ class ESCollectorRegistry:
                     or pending.capability is not capability
                     or pending.observations != capability.observations
                     or pending.native_projection is not capability._native_projection
-                    or not self._native_authenticates(capability)
+                    or not self._native_authenticates(capability, require_current=True)
                 ):
                     raise StateError("ES batch capability is stale or changed")
                 claim = _BatchClaim(
@@ -842,6 +843,11 @@ class ESCollectorRegistry:
         if claim.committed or claim.applied:
             return
         if claim.after is not None:
+            if (
+                claim.capability._native_projection is not claim.native_projection
+                or not self._native_authenticates(claim.capability, require_current=True)
+            ):
+                raise StateError("ES native client membership changed before publication")
             if claim.before is None:
                 raise StateError("ES provisional counters lost their exact connection savepoint")
             self._states[claim.observations[0].source_instance] = claim.after
@@ -899,7 +905,7 @@ class ESCollectorRegistry:
                 and pending.capability is capability
                 and pending.observations == capability.observations
                 and pending.native_projection is capability._native_projection
-                and self._native_authenticates(capability)
+                and self._native_authenticates(capability, require_current=True)
             )
 
     def cancel_batch(self, capability: ESDeliveryBatchPreparation) -> None:
@@ -937,12 +943,13 @@ class ESCollectorRegistry:
         capability: ESDeliveryPreparation | ESDeliveryBatchPreparation,
         ndjson: str,
         canonical_token: str | None,
+        membership: bytes,
     ) -> bytes:
-        domain = b"es-native-projection-v1:"
+        domain = b"es-native-projection-v2:"
         if type(capability) is ESDeliveryPreparation:
             observation = capability.observation.model_dump_json().encode()
         else:
-            domain = b"es-native-projection-batch-v1:"
+            domain = b"es-native-projection-batch-v2:"
             fields = tuple(item.model_dump_json().encode() for item in capability.observations)
             observation = b"".join(len(item).to_bytes(8, "big") + item for item in fields)
         payload = ndjson.encode("utf-8")
@@ -957,6 +964,7 @@ class ESCollectorRegistry:
             + payload
             + len(canonical).to_bytes(8, "big")
             + canonical
+            + membership
         )
         return hmac.digest(self._secret, material, hashlib.sha256)
 
@@ -968,8 +976,36 @@ class ESCollectorRegistry:
             and all(character in "0123456789abcdef" for character in token)
         )
 
-    def _native_authenticates(
+    def _native_membership(
         self, capability: ESDeliveryPreparation | ESDeliveryBatchPreparation
+    ) -> bytes:
+        """Fingerprint modeled same-host client ownership, independently of delivery counters.
+
+        A pending observation is conservative across any same-host ownership or
+        epoch change. Completed observations remain historical facts. Unbound
+        profiles cannot establish process membership and are excluded.
+        """
+        observation = (
+            capability.observation
+            if type(capability) is ESDeliveryPreparation
+            else capability.observations[0]
+        )
+        digest = hashlib.sha256(b"es-native-client-membership-v1\0")
+        excluded = {"last_delivery_at", "next_delivery", "next_global_sequence", "event_counters"}
+        for key in sorted(self._states):
+            state = self._states[key]
+            if state.hostname != observation.hostname or state.process is None:
+                continue
+            encoded = state.model_dump_json(exclude=excluded).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+        return digest.digest()
+
+    def _native_authenticates(
+        self,
+        capability: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+        *,
+        require_current: bool = False,
     ) -> bool:
         native = capability._native_projection
         budget = (
@@ -984,12 +1020,20 @@ class ESCollectorRegistry:
             or type(native.ndjson) is not str
             or len(native.ndjson) > budget
             or type(native.proof) is not bytes
+            or type(native.membership) is not bytes
+            or len(native.membership) != 32
             or not self._valid_native_canonical_token(native.canonical_token)
         ):
             return False
         try:
             return hmac.compare_digest(
-                native.proof, self._native_proof(capability, native.ndjson, native.canonical_token)
+                native.proof,
+                self._native_proof(
+                    capability, native.ndjson, native.canonical_token, native.membership
+                ),
+            ) and (
+                not require_current
+                or hmac.compare_digest(native.membership, self._native_membership(capability))
             )
         except UnicodeEncodeError:
             return False
@@ -1026,7 +1070,9 @@ class ESCollectorRegistry:
             type(capability.observation) is not ESCollectorObservation
             or capability.observation != claim.observation
             or capability._native_projection is not claim.native_projection
-            or not self._native_authenticates(capability)
+            or not self._native_authenticates(
+                capability, require_current=claim.after is not None and not claim.applied
+            )
             or not hmac.compare_digest(
                 claim.proof, self._proof_for(capability, claim.native_projection)
             )
@@ -1042,8 +1088,12 @@ class ESCollectorRegistry:
         pending = self._pending.get(claim.observation.source_instance)
         if type(pending) is not _Pending or pending.capability is not capability:
             raise StateError("ES native projection lost its reserved delivery")
+        membership = self._native_membership(capability)
         native = _NativeProjection(
-            ndjson, canonical_token, self._native_proof(capability, ndjson, canonical_token)
+            ndjson,
+            canonical_token,
+            membership,
+            self._native_proof(capability, ndjson, canonical_token, membership),
         )
         replacement = replace(pending, native_projection=native)
         proof = self._proof_for(capability, native)
@@ -1075,7 +1125,9 @@ class ESCollectorRegistry:
         if (
             capability.observations != claim.observations
             or capability._native_projection is not claim.native_projection
-            or not self._native_authenticates(capability)
+            or not self._native_authenticates(
+                capability, require_current=claim.after is not None and not claim.applied
+            )
             or not hmac.compare_digest(
                 claim.proof, self._batch_proof_for(capability, claim.native_projection)
             )
@@ -1093,8 +1145,12 @@ class ESCollectorRegistry:
         pending = self._pending.get(key)
         if type(pending) is not _PendingBatch or pending.capability is not capability:
             raise StateError("ES native batch lost its reserved deliveries")
+        membership = self._native_membership(capability)
         native = _NativeProjection(
-            rendered, canonical_token, self._native_proof(capability, rendered, canonical_token)
+            rendered,
+            canonical_token,
+            membership,
+            self._native_proof(capability, rendered, canonical_token, membership),
         )
         replacement = replace(pending, native_projection=native)
         proof = self._batch_proof_for(capability, native)
@@ -1117,7 +1173,7 @@ class ESCollectorRegistry:
                 if (
                     pending.observations != capability.observations
                     or pending.native_projection is not capability._native_projection
-                    or not self._native_authenticates(capability)
+                    or not self._native_authenticates(capability, require_current=True)
                 ):
                     raise StateError("ES native batch capability changed")
             elif self.completed_batch(capability) is None:
@@ -1155,7 +1211,7 @@ class ESCollectorRegistry:
                 if (
                     pending.observation != capability.observation
                     or pending.native_projection is not capability._native_projection
-                    or not self._native_authenticates(capability)
+                    or not self._native_authenticates(capability, require_current=True)
                 ):
                     raise StateError("ES native projection capability changed")
             elif self.completed_observation(capability) is None:
@@ -1195,7 +1251,7 @@ class ESCollectorRegistry:
                 and pending.capability is capability
                 and pending.observation == capability.observation
                 and pending.native_projection is capability._native_projection
-                and self._native_authenticates(capability)
+                and self._native_authenticates(capability, require_current=True)
             )
 
     def completed_observation(
@@ -1254,7 +1310,7 @@ class ESCollectorRegistry:
                     or pending.capability is not capability
                     or pending.observation != capability.observation
                     or pending.native_projection is not capability._native_projection
-                    or not self._native_authenticates(capability)
+                    or not self._native_authenticates(capability, require_current=True)
                 ):
                     raise StateError("ES publication capability is stale or changed")
                 proof = self._proof(capability)
@@ -1297,6 +1353,11 @@ class ESCollectorRegistry:
         if claim.committed or claim.applied:
             return
         if claim.after is not None:
+            if (
+                claim.capability._native_projection is not claim.native_projection
+                or not self._native_authenticates(claim.capability, require_current=True)
+            ):
+                raise StateError("ES native client membership changed before publication")
             if claim.before is None:
                 raise StateError("ES provisional counters lost their exact connection savepoint")
             self._states[claim.observation.source_instance] = claim.after
