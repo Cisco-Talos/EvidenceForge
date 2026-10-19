@@ -78,6 +78,7 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleServiceAdmissionToken,
     LifecycleServiceClosureAdmissionToken,
     LifecycleServiceProcessClosureReceipt,
+    LifecycleServiceProcessClosureRequest,
     LifecycleServicePublicationReceipt,
     LifecycleServiceStagedProcessBindingMember,
     LifecycleSessionStartRequest,
@@ -8707,36 +8708,33 @@ class GeneratorLifecycleAuthority:
             source_timing_preparation=source_timing_preparation,
         )
 
-    def _materialize_posix_service_closure_cohort(
+    def validate_process_group_service_closure(
         self,
         plan: ActionCohortMaterializationPlan,
         group: PosixGroupIdentity,
-        service_token: LifecycleServiceClosureAdmissionToken,
+        request: LifecycleServiceProcessClosureRequest,
         *,
         close_group: bool,
-        collectors: ESCollectorRegistry | None,
-        source_timing_preparation: SourceTimingPreparation | None,
-    ) -> PosixGroupServiceClosureReceipt:
-        """Share the exact transaction boundary for group unload and bound leader exit."""
+    ) -> tuple[ProcessTerminationMaterializationPlan, ...]:
+        """Validate one exact State/service terminal contract without reserving or committing.
+
+        Source coordinators may use this same contract before preparing their
+        owners. Passing validation is not publication authority: the caller must
+        retain and revalidate State and lifecycle claims before canonical commit.
+        """
+        if (
+            type(request) is not LifecycleServiceProcessClosureRequest
+            or type(close_group) is not bool
+        ):
+            raise StateError("Group closure requires its exact service request and closure mode")
+        request.__post_init__()
         state = self._state_manager
-        collector_token = ""
-        timing_receipt = None
-        try:
-            if source_timing_preparation is not None and (
-                type(source_timing_preparation) is not SourceTimingPreparation
-                or source_timing_preparation.owner is not self._source_timing_planner
-                or not self._source_timing_planner.authenticates_preparation(
-                    source_timing_preparation
-                )
-                or source_timing_preparation.committed
-            ):
-                raise StateError("Group closure requires its exact uncommitted source timing owner")
-            if collectors is not None and type(collectors) is not ESCollectorRegistry:
-                raise StateError("Group closure requires its exact optional collector registry")
+        with state._lock:
             if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
                 plan
             ):
                 raise StateError("Group closure requires exact group and State cohort identities")
+            state.validate_action_cohort_materialization(plan)
             if (
                 any(
                     (
@@ -8765,9 +8763,6 @@ class GeneratorLifecycleAuthority:
                 raise StateError("Group closure requires existing exact process close plans")
             if any(item.parent_activity is not None for item in plan.process_terminations):
                 raise StateError("Group closure cannot patch unrelated parent activity")
-            if not self._registry.authenticates_service_closure_admission_token(service_token):
-                raise StateError("Group closure requires an authentic service admission")
-            request = service_token.request
             if tuple(
                 (patch.target.object_id, patch.parentage_change)
                 for patch in plan.process_activity_patches
@@ -8818,6 +8813,45 @@ class GeneratorLifecycleAuthority:
                 )
                 if len(owned) != 1 or owned[0] is None or owned[0].process_group != group:
                     raise StateError("Leaderless group cleanup requires its retained service owner")
+            if close_group and set(state.get_posix_group_members(group, limit=256)) != set(
+                identities
+            ):
+                raise StateError("Group membership changed or the closure omits a member")
+            return closes
+
+    def _materialize_posix_service_closure_cohort(
+        self,
+        plan: ActionCohortMaterializationPlan,
+        group: PosixGroupIdentity,
+        service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        close_group: bool,
+        collectors: ESCollectorRegistry | None,
+        source_timing_preparation: SourceTimingPreparation | None,
+    ) -> PosixGroupServiceClosureReceipt:
+        """Share the exact transaction boundary for group unload and bound leader exit."""
+        state = self._state_manager
+        collector_token = ""
+        timing_receipt = None
+        try:
+            if source_timing_preparation is not None and (
+                type(source_timing_preparation) is not SourceTimingPreparation
+                or source_timing_preparation.owner is not self._source_timing_planner
+                or not self._source_timing_planner.authenticates_preparation(
+                    source_timing_preparation
+                )
+                or source_timing_preparation.committed
+            ):
+                raise StateError("Group closure requires its exact uncommitted source timing owner")
+            if collectors is not None and type(collectors) is not ESCollectorRegistry:
+                raise StateError("Group closure requires its exact optional collector registry")
+            if not self._registry.authenticates_service_closure_admission_token(service_token):
+                raise StateError("Group closure requires an authentic service admission")
+            closes = self.validate_process_group_service_closure(
+                plan, group, service_token.request, close_group=close_group
+            )
+            identities = tuple(item.identity for item in closes)
+            at = closes[0].end_time
             with (
                 self._registry.claimed_service_process_closure(service_token) as service,
                 ExitStack() as external,

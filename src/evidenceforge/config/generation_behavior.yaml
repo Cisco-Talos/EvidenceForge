@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 302
+current_revision: 303
 history_start_revision: 1
-behavior_surface_sha256: 30961281ea3fa2fb72ce1e2adc3db366a5ad5e1ad61e366955f7c22539ae0733
+behavior_surface_sha256: 7aaa307679bdc5206fa782a0815371a4f320bbca209e2e029228c90604819415
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2843,3 +2843,10 @@ changes:
       - canonical-publication
     formats: []
     summary: Certifies service closure operands before composite mutation and applies prevalidated binding, adoption and terminal primitives with exact preallocated results.
+  - revision: 303
+    id: shared-posix-service-closure-validation
+    impact: none
+    domains:
+      - process-service-lifecycle
+    formats: []
+    summary: Reuses exact State and service group closure validation before source coordination and canonical admission.
