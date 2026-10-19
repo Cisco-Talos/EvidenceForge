@@ -19,15 +19,22 @@ from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAutho
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
 from evidenceforge.models.exceptions import EventContractError, StateError
-from tests.unit.test_macos_es_exit_batch_preparation import _group
+from tests.unit.test_macos_es_exit_batch_preparation import _Group, _group
 from tests.unit.test_macos_es_exit_batch_preparation import _prepare as prepare_native
 from tests.unit.test_macos_exact_exit_group import _prepare, _rows
 
 
 def _setup(
-    tmp_path: Path, *, installed: bool = False, collected: bool = True, threaded: bool = False
+    tmp_path: Path,
+    *,
+    installed: bool = False,
+    collected: bool = True,
+    threaded: bool = False,
+    native_group: _Group | None = None,
 ) -> tuple:
-    group = _group(installed=installed, born_loaded=True)
+    group = (
+        native_group if native_group is not None else _group(installed=installed, born_loaded=True)
+    )
     state = group.owner.state
     registry = LifecycleRegistry(shard_count=4)
     shadow = LifecycleShadow(state, registry)

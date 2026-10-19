@@ -184,3 +184,6 @@ Authenticated historical ES exit batches now compose with exact canonical State/
 
 ### Reversible collector disconnect component — revision 294
 Explicit bounded connection sets can close provisionally under exact live process ownership and roll back with an outer transaction. Finalization preserves counters and uses the existing checkpoint profile. Automatic process-exit composition, service-group integration and native source publication remain engineering work; native self-exit evidence is not enabled.
+
+### Canonical process-owned disconnects — revision 295
+Ordinary exact Mac exits and exact terminal groups now close explicitly bound clients atomically with process State/lifecycle. Rollback, capacity limits, changed profiles, source retries, independent observing clients and existing checkpoint restoration are tested. Service-closure composites, exec-specific attachment semantics, native self-exit observations and native sink/source admission remain open. Pending native metadata must also reject changed client membership before publication; completed historical records retain their validity.

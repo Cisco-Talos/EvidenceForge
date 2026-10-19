@@ -474,6 +474,15 @@ class ESCollectorRegistry:
                 raise StateError("ES client restart requires the next same-host connection")
             self._states[state.source_instance] = state
 
+    def open_connections(self) -> tuple[ESCollectorState, ...]:
+        """Inspect explicit open profiles without inferring unmodeled client absence."""
+        with self._lock:
+            return tuple(
+                ESCollectorState.model_validate_json(self._states[key].model_dump_json())
+                for key in sorted(self._states)
+                if self._states[key].closed_at is None
+            )
+
     def connection(self, source_instance: str) -> ESCollectorState | None:
         """Return the immutable current connection, including its terminal state."""
         with self._lock:

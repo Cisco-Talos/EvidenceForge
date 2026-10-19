@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 294
+current_revision: 295
 history_start_revision: 1
-behavior_surface_sha256: d5f0c8bc0140af299c4bc66b5242f3210f859b8e9b70261243964f71539811af
+behavior_surface_sha256: 068e6ebdeeebb3f0d8c7cd06d95ceb28738dc556e74db55541ecb20f1aa334c5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2776,3 +2776,11 @@ changes:
       - macos-collector-ownership
     formats: []
     summary: Adds bounded exact connection-closure scopes with provisional rollback, live execution checks and authenticated terminal results.
+  - revision: 295
+    id: macos-process-owned-collector-disconnects
+    impact: localized
+    domains:
+      - macos-collector-ownership
+      - macos-process-lifecycle
+    formats: []
+    summary: Closes explicitly bound clients with exact Mac process exits while preserving canonical rollback, counter independence and source recovery.

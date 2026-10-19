@@ -77,10 +77,13 @@ from evidenceforge.events.contracts import (
     shadow_seal,
 )
 from evidenceforge.events.es_collector import (
+    ESCollectorClosure,
     ESCollectorObservation,
     ESCollectorRegistry,
+    ESCollectorState,
     ESDeliveryBatchPreparation,
     ESDeliveryPreparation,
+    PreparedESCollectorClosures,
     PreparedESDeliveryBatchCommit,
     PreparedESDeliveryCommit,
 )
@@ -910,6 +913,12 @@ class _PreparedActionCohortBatchRecord:
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
     exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
+    es_closure_requests: tuple[ESCollectorClosure, ...] = ()
+    es_closure_processes: tuple[ProcessIdentity, ...] = ()
+    es_closure_registry: ESCollectorRegistry | None = None
+    es_closures_claimed: PreparedESCollectorClosures | None = None
+    es_closures_result: tuple[ESCollectorState, ...] = ()
+    es_closures_token: str = ""
     es_registry: ESCollectorRegistry | None = None
     es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None
     es_collector_process: ProcessIdentity | None = None
@@ -7406,6 +7415,21 @@ class EventDispatcher:
         ):
             return False
         try:
+            self._validate_action_cohort_es_closures(record)
+            if record.es_closure_requests:
+                if (
+                    record.es_closures_claimed is None
+                    or record.es_closures_claimed.expected_result is not record.es_closures_result
+                    or record.es_closures_claimed.publication_token != record.es_closures_token
+                    or record.es_closures_claimed.committed
+                ):
+                    return False
+            elif (
+                record.es_closures_claimed is not None
+                or record.es_closures_result
+                or record.es_closures_token
+            ):
+                return False
             if record.es_delivery is not None:
                 self._validate_action_cohort_es_delivery(record)
                 if (
@@ -7606,6 +7630,8 @@ class EventDispatcher:
         )
         if record.es_delivery is not None:
             nested_publication_tokens += (("es_collector", record.es_publication_token),)
+        if record.es_closure_requests:
+            nested_publication_tokens += (("es_closures", record.es_closures_token),)
         receipt = ActionCohortPublicationReceipt(
             dispatcher_id=self._action_cohort_dispatcher_id,
             receipt_id=secrets.token_hex(16),
@@ -10228,6 +10254,10 @@ class EventDispatcher:
                 )
                 if exact_projection:
                     self._initialize_action_cohort_exact_projection(record, cleanup_record)
+                    if record.exact_projection_kind in {"posix_exit", "macos_exit_group"}:
+                        closure_bytes = self._prepare_action_cohort_es_closures(record)
+                        retained_bytes += closure_bytes
+                        cleanup_record.retained_bytes += closure_bytes
                 integrity = self._action_cohort_batch_integrity(carrier, record)
                 carrier._integrity_token = integrity
                 record.integrity_token = integrity
@@ -10562,6 +10592,7 @@ class EventDispatcher:
 
         if record.es_delivery is not None:
             self._validate_action_cohort_es_delivery(record)
+        self._validate_action_cohort_es_closures(record)
         authority = self._lifecycle_authority
         if authority is None or self._execution_effect_audit is not record.execution_effect_audit:
             return False
@@ -10763,6 +10794,62 @@ class EventDispatcher:
                 return self._active_action_cohort_batch_locked(batch) is record
         except BaseException:
             return False
+
+    def _prepare_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> int:
+        """Retain only explicit clients whose exact canonical execution will terminate."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        requests, processes = ESCollectionActionOwner(
+            self.state_manager, self.es_collectors
+        ).process_exit_closures(record.state_plan)
+        if not requests:
+            return 0
+        size = sum(len(item.model_dump_json().encode("utf-8")) for item in requests)
+        with self._action_cohort_lock:
+            if (
+                self._action_cohort_retained_bytes
+                + self._action_cohort_projection_retained_bytes
+                + size
+                > self._action_cohort_byte_capacity
+            ):
+                raise EventContractError(
+                    "Collector disconnects exceed action-cohort retained capacity"
+                )
+            self._action_cohort_retained_bytes += size
+        record.retained_bytes += size
+        record.es_closure_requests = requests
+        record.es_closure_processes = processes
+        record.es_closure_registry = self.es_collectors
+        return size
+
+    def _validate_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> None:
+        if record.exact_projection_kind not in {"posix_exit", "macos_exit_group"}:
+            if (
+                record.es_closure_requests
+                or record.es_closure_processes
+                or record.es_closure_registry is not None
+            ):
+                raise EventContractError("Collector disconnects require an exact process exit")
+            return
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        requests, processes = ESCollectionActionOwner(
+            self.state_manager, self.es_collectors
+        ).process_exit_closures(record.state_plan)
+        if (
+            requests != record.es_closure_requests
+            or processes != record.es_closure_processes
+            or (requests and record.es_closure_registry is not self.es_collectors)
+        ):
+            raise EventContractError("Process exit collector connections changed after preparation")
+
+    @staticmethod
+    def _finalize_action_cohort_es_closures(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> tuple[ESCollectorState, ...]:
+        assert record.es_closures_claimed is not None
+        record.es_closures_claimed.finalize_no_fail()
+        return record.es_closures_result
 
     def bind_es_delivery_to_action_cohort(
         self,
@@ -11124,6 +11211,19 @@ class EventDispatcher:
                     record.es_claimed = es_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], es_context))
                     record.es_publication_token = record.es_claimed.publication_token
+
+                if record.es_closure_requests:
+                    from evidenceforge.generation.actions.es_collection import (
+                        ESCollectionActionOwner,
+                    )
+
+                    es_closures = ESCollectionActionOwner(
+                        self.state_manager, self.es_collectors
+                    ).prepared_closures(record.es_closure_requests, record.es_closure_processes)
+                    record.es_closures_claimed = es_closures.__enter__()
+                    entered.append(cast(AbstractContextManager[object], es_closures))
+                    record.es_closures_result = record.es_closures_claimed.expected_result
+                    record.es_closures_token = record.es_closures_claimed.publication_token
 
                 record.claim_thread_id = get_ident()
                 record.timing_claimed = timing_claimed
@@ -11487,6 +11587,8 @@ class EventDispatcher:
                         state_claimed.apply_provisional()
                         if record.es_claimed is not None:
                             record.es_claimed.apply_provisional()
+                        if record.es_closures_claimed is not None:
+                            record.es_closures_claimed.apply_provisional()
                         if record.artifact_claimed is not None:
                             artifact_claimed = record.artifact_claimed
                             artifact_receipt = record.expected_artifact_receipt
@@ -11599,6 +11701,17 @@ class EventDispatcher:
                                 label="Exact action-cohort ES collector owner",
                             )
                             record.es_cleanup_complete = True
+                        if record.es_closures_claimed is not None:
+                            self._commit_exact_expected_owner(
+                                lambda: self._finalize_action_cohort_es_closures(record),
+                                expected=record.es_closures_result,
+                                terminal_authenticates=lambda: bool(
+                                    record.es_closures_claimed.committed
+                                    and record.es_closures_claimed.expected_result
+                                    is record.es_closures_result
+                                ),
+                                label="Exact action-cohort collector disconnects",
+                            )
                     else:
                         # Runtime artifacts publish first through their reversible group owner.
                         # Every later owner has crossed its composite certification fence, so a

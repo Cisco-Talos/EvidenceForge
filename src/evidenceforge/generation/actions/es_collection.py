@@ -28,7 +28,7 @@ from evidenceforge.events.es_collector import (
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.observation import ObservationDecision
-from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
 
 
@@ -110,6 +110,40 @@ class ESCollectionActionOwner:
             self._live_process(process, closed_at)
             self.collectors.close(expected, closed_at)
             return after
+
+    def process_exit_closures(
+        self, cohort: ActionCohortMaterializationPlan
+    ) -> tuple[tuple[ESCollectorClosure, ...], tuple[ProcessIdentity, ...]]:
+        """Plan disconnects for explicitly bound clients whose exact execution exits.
+
+        This reads only modeled profiles. Unknown owners remain unknown. Exec
+        handling and implicit subscription or connection discovery are excluded.
+        """
+        if type(cohort) is not ActionCohortMaterializationPlan:
+            raise StateError("Collector process exit requires an exact canonical cohort")
+        with self.state._lock:
+            profiles = self.collectors.open_connections()
+            if not profiles:
+                return (), ()
+            self.state.validate_action_cohort_materialization(cohort)
+            endings = {
+                (item.identity.hostname, _process(item.identity)): item
+                for item in cohort.process_terminations
+            }
+            requests: list[ESCollectorClosure] = []
+            processes: list[ProcessIdentity] = []
+            for profile in profiles:
+                terminal = endings.get((profile.hostname, profile.process))
+                if terminal is None:
+                    continue
+                self._live_process(terminal.identity, terminal.end_time)
+                try:
+                    request = ESCollectorClosure(before=profile, closed_at=terminal.end_time)
+                except ValueError as exc:
+                    raise StateError("Collector delivery extends beyond its process exit") from exc
+                requests.append(request)
+                processes.append(terminal.identity)
+            return tuple(requests), tuple(processes)
 
     @contextmanager
     def prepared_closures(
