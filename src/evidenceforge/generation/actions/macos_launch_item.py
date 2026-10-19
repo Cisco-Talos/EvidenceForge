@@ -14,12 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from evidenceforge.events.content_identity import RuntimeServiceDeploymentIdentity
-from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.identity import PosixProcessCredentials
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
     LifecycleCloseBarrier,
     LifecycleEntityRef,
-    LifecycleTransition,
     LogicalServiceIdentity,
     ServiceInstanceLifecycleIdentity,
     ServiceProcessBindingIdentity,
@@ -29,7 +28,6 @@ from evidenceforge.events.macos_launchd import (
     LaunchdSystemJobSpec,
     validate_launchd_label,
 )
-from evidenceforge.events.parentage import ProcessParentageChange
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.command_effects import FileEffectAction, FileEffectIntent
@@ -39,6 +37,7 @@ from evidenceforge.generation.actions.endpoint_effects import (
     PreparedEndpointEffect,
     PreparedFileEffectPayload,
 )
+from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
     LocalArtifactPublishToken,
@@ -56,7 +55,6 @@ from evidenceforge.generation.lifecycle_registry import (
 )
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import (
-    ActionCohortMaterializationBuilder,
     ActionCohortMaterializationPlan,
     ProcessMaterializationPlan,
     ProcessTerminationMaterializationPlan,
@@ -449,55 +447,6 @@ class MacosSystemJobGroupUnloadPlan:
     group: PosixGroupIdentity
 
 
-def _adopt_surviving_children(
-    *,
-    lifecycle_registry: LifecycleRegistry,
-    state_manager: StateManager,
-    builder: ActionCohortMaterializationBuilder,
-    members: tuple[ProcessIdentity, ...],
-    closing_ids: set[str],
-    completed_at: datetime,
-    action_id: str,
-) -> tuple[LifecycleTransition, ...]:
-    """Prepare bounded exact direct-child adoption for an explicit terminal set."""
-    adoptions: list[LifecycleTransition] = []
-    for member in members:
-        children, more = lifecycle_registry.live_child_process_page(member.object_id, limit=257)
-        if more is not None:
-            raise StateError("Launchd group cleanup exceeds its child ownership budget")
-        for child in children:
-            if child.identity.object_id in closing_ids:
-                continue
-            if len(adoptions) >= 256:
-                raise StateError("Launchd group cleanup exceeds its adoption budget")
-            current_child = state_manager.get_process_identity_by_object_id(
-                child.identity.object_id
-            )
-            adopter = state_manager.get_process_identity(member.hostname, 1)
-            if current_child is None or adopter is None:
-                raise StateError("Launchd cleanup lost a child or explicit system parent")
-            adopted = builder.adopt_process_after_parent_exit(
-                current_child, adopter=adopter, changed_at=completed_at
-            )
-            change = ProcessParentageChange(
-                current_child.parentage, adopted.parentage, completed_at
-            )
-            adoptions.append(
-                LifecycleTransition(
-                    transition_id=stable_uuid(
-                        "macos-launchd-adoption", action_id, child.identity.object_id
-                    ),
-                    subject=child.identity.ref,
-                    kind="dependent",
-                    canonical_time=completed_at,
-                    action_id=action_id + ":adoption:" + child.identity.object_id,
-                    reason="Launchd group parent exit adoption",
-                    parentage_change=change,
-                )
-            )
-    return tuple(adoptions)
-
-
 def macos_system_job_unload_completion_plan(
     *,
     lifecycle_registry: LifecycleRegistry,
@@ -586,7 +535,7 @@ def macos_system_job_unload_completion_plan(
             parents[member.object_id] = retained.current_parent_object_id
         builder = state_manager.begin_action_cohort_materialization()
         controls: list[LifecycleSubjectClosureControl] = []
-        adoptions = _adopt_surviving_children(
+        adoptions = prepare_surviving_child_adoptions(
             lifecycle_registry=lifecycle_registry,
             state_manager=state_manager,
             builder=builder,
@@ -715,7 +664,7 @@ def macos_system_job_leader_exit_completion_plan(
     ):
         raise StateError("Leader exit cannot substitute group, process lifetime or activation time")
     builder = state_manager.begin_action_cohort_materialization()
-    adoptions = _adopt_surviving_children(
+    adoptions = prepare_surviving_child_adoptions(
         lifecycle_registry=lifecycle_registry,
         state_manager=state_manager,
         builder=builder,

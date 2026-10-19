@@ -8206,7 +8206,6 @@ class EventDispatcher:
                     plan.processes,
                     plan.live_session_process_role_patches,
                     plan.session_metadata_patches,
-                    plan.process_activity_patches,
                     plan.session_activity_patches,
                     plan.process_executions,
                     plan.session_terminalizations,
@@ -8216,6 +8215,18 @@ class EventDispatcher:
             or plan._smb_file_mutation_terminalization is not None
         ):
             raise EventContractError("Exact POSIX exit projection changed its singleton owner")
+        for patch in plan.process_activity_patches:
+            change = patch.parentage_change
+            if (
+                event.src_host.os_category != "macos"
+                or change is None
+                or change.before.current is None
+                or change.before.current.object_id != identity.object_id
+                or change.changed_at != event.timestamp
+                or patch.activity_time != event.timestamp
+                or patch.target.object_id == identity.object_id
+            ):
+                raise EventContractError("Exact POSIX exit only permits its Mac child adoptions")
         return "posix_exit"
 
     @staticmethod

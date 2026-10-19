@@ -83,6 +83,11 @@ scenarios/macos-workstation-example/*
 !scenarios/macos-workstation-example/smb-client.yaml
 !scenarios/macos-workstation-example/ssh-client.yaml
 !scenarios/macos-workstation-example/README.md
+!scenarios/macos-persistence-example/
+scenarios/macos-persistence-example/*
+!scenarios/macos-persistence-example/scenario.yaml
+!scenarios/macos-persistence-example/group-cleanup.yaml
+!scenarios/macos-persistence-example/README.md
 !scenarios/macos-failed-exec-example/
 scenarios/macos-failed-exec-example/*
 !scenarios/macos-failed-exec-example/scenario.yaml

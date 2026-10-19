@@ -3702,7 +3702,19 @@ class GeneratorLifecycleAuthority:
                 f"{identity.object_id}"
             )
         parent_object_id = ""
-        if identity.parent_pid != 0:
+        if snapshot.parentage_change is not None:
+            parentage = identity.parentage
+            if (
+                parentage != snapshot.parentage_change.after
+                or parentage is None
+                or parentage.original is None
+                or parentage.original.object_id != snapshot.identity.parent_object_id
+                or parentage.current is None
+                or parentage.current.pid != identity.parent_pid
+            ):
+                raise StateError("Action cohort process changed its authenticated parent adoption")
+            parent_object_id = snapshot.identity.parent_object_id
+        elif identity.parent_pid != 0:
             parent = self._registry.process_for_pid_at(
                 identity.hostname,
                 identity.parent_pid,

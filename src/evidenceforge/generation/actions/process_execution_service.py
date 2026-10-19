@@ -46,7 +46,14 @@ from evidenceforge.generation.actions import (
     ProcessExecutionRequest,
     ProcessTerminationRequest,
 )
+from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.actions.command_effects import (
+    ExecutionEffectAuditCohortEntry,
+    ExecutionEffectPlan,
+)
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
+from evidenceforge.generation.actions.posix_process import process_exit_occurrence
+from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
 from evidenceforge.generation.activity.helpers import (
     _get_os_category,
@@ -1785,6 +1792,19 @@ class ProcessTerminationService:
             storyline_origin=from_storyline,
         )
 
+        macos_exit = running_proc is not None and _get_os_category(system.os) == "macos"
+        if macos_exit:
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is None:
+                raise StateError("Mac process exit lost its exact live identity")
+            event = process_exit_occurrence(
+                host=self.identity.host_context(system),
+                process=process,
+                timestamp=time,
+                integrity_level=running_proc.integrity_level,
+            )
+            event.storyline_origin = from_storyline
+
         self.sources._record_process_source_terminate_time(system.hostname, pid, event)
         if (
             running_proc is not None
@@ -1813,7 +1833,10 @@ class ProcessTerminationService:
                 seed_text=running_proc.command_line,
                 concurrency_group_id=running_proc.concurrency_group_id,
             )
-        self.dispatcher.dispatch_builder(event)
+        if macos_exit:
+            self._publish_macos_exit(event)
+        else:
+            self.dispatcher.dispatch_builder(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         self.foreground.record_termination(
             system.hostname, pid, termination_start_time, event.timestamp
@@ -1830,3 +1853,45 @@ class ProcessTerminationService:
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
         )
+
+    def _publish_macos_exit(self, event: OccurrenceBuilder) -> None:
+        """Close State and lifecycle together, adopting surviving exact children."""
+        process = event.identity_plan.subject
+        authority = self.foreground._lifecycle_authority
+        if self.foreground._lifecycle_compatibility_fixture_mode:
+            authority.ensure_process(process.hostname, process.pid)
+        builder = self.state_manager.begin_action_cohort_materialization()
+        root = f"process-exit:{process.object_id}"
+        prepare_surviving_child_adoptions(
+            lifecycle_registry=authority.registry,
+            state_manager=self.state_manager,
+            builder=builder,
+            members=(process,),
+            closing_ids={process.object_id},
+            completed_at=event.timestamp,
+            action_id=root,
+        )
+        builder.terminate_process(process, end_time=event.timestamp)
+        plan = builder.seal()
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            carrier = self.dispatcher.prepare_action_cohort_projection(
+                event, source_timing_preparation=timing
+            )
+        try:
+            dispatch = self.dispatcher.bind_action_cohort_projection(carrier, state_plan=plan)
+            effects = ExecutionEffectPlan(
+                ActionAnchor("process_execution", root, source="process_termination"), ()
+            )
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                root,
+                plan,
+                (dispatch,),
+                (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+                (),
+                (),
+                exact_projection=True,
+            )
+        except BaseException:
+            timing.cancel()
+            raise
+        self.dispatcher.publish_prepared_action_cohort_batch(batch)

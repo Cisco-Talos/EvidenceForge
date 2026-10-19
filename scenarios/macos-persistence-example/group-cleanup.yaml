@@ -1,0 +1,148 @@
+version: '1.0'
+name: macos-persistence-group-cleanup
+description: Invented system job with two inherited child processes and explicit group-wide
+  unload
+environment:
+  description: One invented development workstation on an observed network
+  domain: example.test
+  users:
+  - username: alex
+    full_name: Alex Example
+    email: alex@example.test
+    persona: developer
+    primary_system: MAC-01
+  systems:
+  - hostname: MAC-01
+    ip: 192.0.2.10
+    os: macOS 26
+    os_build: 25A354
+    architecture: arm64
+    type: workstation
+    assigned_user: alex
+  network:
+    segments:
+    - name: workstations
+      cidr: 192.0.2.0/24
+      exposure: internal
+      systems:
+      - MAC-01
+    sensors:
+    - name: core-zeek
+      type: network
+      monitoring_segments:
+      - workstations
+      direction: bidirectional
+      placement: span
+      log_formats:
+      - zeek
+time_window:
+  start: '2026-10-19T14:00:00Z'
+  duration: 20m
+  warmup: 1h
+baseline_activity:
+  description: Low-volume developer activity; no attack storyline
+  intensity: low
+  variation: low
+output:
+  logs:
+  - format: ecar
+  - format: zeek
+  - format: zsh_history
+  - format: bash_history
+  destination: ./output
+  compression: false
+storyline:
+- id: provisioner
+  time: +1m
+  actor: root
+  system: MAC-01
+  activity: An invented privileged provisioning process
+  events:
+  - type: process
+    process_name: /usr/local/libexec/invented-provisioner
+    process_ref: provisioner
+    supplementary: none
+- id: job-2
+  time: +2m
+  actor: root
+  system: MAC-01
+  activity: Explicit modeled launch-item write
+  events:
+  - type: macos_launch_item
+    operation: write
+    label: org.example.worker
+    caller_ref: provisioner
+    path: /Library/LaunchDaemons/org.example.worker.plist
+    program: /usr/local/libexec/invented-worker
+    arguments:
+    - invented-worker
+    - --mode
+    - check
+    size_bytes: 512
+- id: job-3
+  time: +3m
+  actor: root
+  system: MAC-01
+  activity: Explicit modeled launch-item bootstrap
+  events:
+  - type: macos_launch_item
+    operation: bootstrap
+    label: org.example.worker
+    caller_ref: provisioner
+    path: /Library/LaunchDaemons/org.example.worker.plist
+- id: activate-worker
+  time: +4m
+  actor: root
+  system: MAC-01
+  activity: Explicit modeled launch-item activate
+  events:
+  - type: macos_launch_item
+    operation: activate
+    label: org.example.worker
+    caller_ref: provisioner
+    process_ref: worker
+- id: helper-1
+  time: +4m30s
+  actor: root
+  system: MAC-01
+  activity: An invented descendant inherits the running system job group
+  events:
+  - type: process
+    process_name: /usr/local/libexec/invented-helper-1
+    command_line: invented-helper-1 --worker --keep-alive
+    process_ref: helper-1
+    parent_ref: worker
+    supplementary: none
+- id: helper-2
+  time: +4m31s
+  actor: root
+  system: MAC-01
+  activity: An invented descendant inherits the running system job group
+  events:
+  - type: process
+    process_name: /usr/local/libexec/invented-helper-2
+    command_line: invented-helper-2 --worker --keep-alive
+    process_ref: helper-2
+    parent_ref: helper-1
+    supplementary: none
+- id: unload-group
+  time: +6m
+  actor: root
+  system: MAC-01
+  activity: Explicit modeled launch-item unload
+  events:
+  - type: macos_launch_item
+    operation: unload
+    label: org.example.worker
+    caller_ref: provisioner
+- id: remove-file
+  time: +7m
+  actor: root
+  system: MAC-01
+  activity: Explicit modeled launch-item remove
+  events:
+  - type: macos_launch_item
+    operation: remove
+    label: org.example.worker
+    caller_ref: provisioner
+    path: /Library/LaunchDaemons/org.example.worker.plist

@@ -303,3 +303,7 @@ Same-directory rename can now replace an exact distinct same-volume single-link 
 
 ### Prepared file-operation observations — revision 289
 The authenticated rename claim exposes detached canonical before/after file versions, optional replaced destination, operation time and exact publication token. Observation does not mutate placement or grant commit authority. Stale, foreign, expired and wrong-thread claims reject. This supplies source-preparation facts while leaving actor orchestration, directory updates, historical path lookup and native stat-time semantics explicit; no native ES output is enabled.
+
+
+### Ordinary exits and production group cleanup — revision 290
+Ordinary Mac exits now commit State closure, lifecycle closure and surviving-child adoption through the existing exact dispatcher. Later actions retain immutable birth ancestry and validate current adoption separately. System-job unload projects each descendant's own integrity. The invented group workflow covers natural child exits and group-wide unload; recovery tests explicitly retain a three-process job across the saved checkpoint and verify unique terminal output. Canonical modeled exits do not enable native ES exit output or close ES-R1; GUI launch-agent domains, automatic activation/respawn and native group publication remain open.

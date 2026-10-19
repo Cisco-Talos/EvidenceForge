@@ -373,3 +373,39 @@ def test_activation_image_retention_failure_cannot_allocate_job_or_binding(
     assert result.process is not None
     assert bundle.state.get_process_identity(host.hostname, result.process.pid) == result.process
     bundle.execute(_request(bundle, caller, host, definition, path, "unload", 4))
+
+
+@pytest.mark.parametrize("collect", [False, True])
+def test_group_unload_projects_each_descendants_own_integrity(collect: bool) -> None:
+    bundle, caller, host, definition, path, emitter = _workflow(collect)
+    for index, operation in enumerate(("write", "bootstrap", "activate"), 1):
+        result = bundle.execute(_request(bundle, caller, host, definition, path, operation, index))
+    parent = result.process
+    assert parent is not None
+    identities = [parent]
+    for index, integrity in enumerate(("High", "Medium"), 4):
+        plan = bundle.state.plan_process_materialization(
+            system=host.hostname,
+            parent_pid=identities[-1].pid,
+            image=f"/usr/local/libexec/invented-helper-{index}",
+            command_line="invented-helper",
+            username="root",
+            integrity_level=integrity,
+            os_category="macos",
+            credentials=PosixProcessCredentials(0, 0, 0, 0),
+            start_time=_START + timedelta(seconds=index),
+        )
+        bundle.authority.materialize_process(plan)
+        identities.append(plan.identity)
+    if collect:
+        emitter.reset_mock()
+    closed = bundle.execute(_request(bundle, caller, host, definition, path, "unload", 10))
+    assert {identity.object_id for identity in closed.terminated} == {
+        identity.object_id for identity in identities
+    }
+    assert all(
+        bundle.state.get_process(host.hostname, identity.pid) is None for identity in identities
+    )
+    if collect:
+        events = [call.args[0] for call in emitter.emit.call_args_list]
+        assert [event.process.integrity_level for event in events] == ["Medium", "High", "System"]

@@ -316,14 +316,19 @@ class MacosPersistenceActionBundle:
         terminated: list[ProcessIdentity] = []
         for plan in plans:
             identity = self.state.get_process_identity_by_object_id(plan.target.identity.object_id)
-            if identity is None:
-                raise StateError("Job closure lost its exact process")
+            live = (
+                self.state.get_process(identity.hostname, identity.pid)
+                if identity is not None
+                else None
+            )
+            if identity is None or live is None or live.ecar_object_id != identity.object_id:
+                raise StateError("Job closure lost its exact live process")
             terminated.append(identity)
             event = process_exit_occurrence(
                 host=request.host,
                 process=identity,
                 timestamp=plan.end_time,
-                integrity_level="System",
+                integrity_level=live.integrity_level,
             )
             event.process.exit_outcome = plan.target.exit_outcome
             event.storyline_origin = True

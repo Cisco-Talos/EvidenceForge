@@ -94,6 +94,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     failed_exec: bool = False,
     persistence: bool = False,
     persistence_active: bool = False,
+    persistence_group: bool = False,
     history_spillage: bool = False,
 ) -> None:
     scenario_path = (
@@ -187,14 +188,20 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
     if persistence:
         scenario_data = yaml.safe_load(
-            Path("scenarios/macos-persistence-example/scenario.yaml").read_text()
+            (
+                Path("scenarios/macos-persistence-example")
+                / ("group-cleanup.yaml" if persistence_group else "scenario.yaml")
+            ).read_text()
         )
-        # Retain the file and loaded job before recovery; remove and activate later.
+        # Suspension requested at hour 2 may seal at hour 3 (16:00). Keep the
+        # loaded job through either allowed recovery cursor, then complete it.
         times = (
-            ("+1m", "+2m", "+3m", "+4m", "+50m", "+1h10m", "+1h11m", "+1h12m")
+            ("+1m", "+2m", "+3m", "+4m", "+50m", "+2h10m", "+2h11m", "+2h12m")
             if persistence_active
-            else ("+1m", "+2m", "+3m", "+1h10m", "+1h11m", "+1h12m", "+1h13m", "+1h14m")
+            else ("+1m", "+2m", "+3m", "+2h10m", "+2h11m", "+2h12m", "+2h13m", "+2h14m")
         )
+        if persistence_group:
+            times = ("+1m", "+2m", "+3m", "+49m", "+50m", "+51m", "+2h10m", "+2h12m")
         for step, when in zip(scenario_data["storyline"], times, strict=True):
             step["time"] = when
     if history_spillage:
@@ -357,6 +364,30 @@ def test_short_generation_checkpoint_suspension_and_resume(
             process.ecar_object_id for _key, process in processes if "/Helpers/" in process.image
         }
         assert retained_helpers, "The checkpoint must retain live browser helpers"
+    retained_group: set[str] = set()
+    if persistence:
+        from evidenceforge.generation.checkpoints.packed import loads
+        from evidenceforge.generation.checkpoints.state_values import decode_state_value
+        from evidenceforge.generation.checkpoints.store import IncrementalCheckpointStore
+
+        store = IncrementalCheckpointStore(output)
+        recovery = store.recover(read_only=True)
+        head = loads(store.read_head(recovery, "state-manager"))
+        processes = decode_state_value(head["stores"]["_running_processes"])
+        members = [
+            process
+            for _key, process in processes
+            if process.image
+            in {
+                "/usr/local/libexec/invented-worker",
+                "/usr/local/libexec/invented-helper-1",
+                "/usr/local/libexec/invented-helper-2",
+            }
+        ]
+        assert len(members) == (3 if persistence_group else 1 if persistence_active else 0)
+        if members:
+            assert len({member.job_control for member in members}) == 1
+        retained_group = {member.ecar_object_id for member in members}
     _run_cli("checkpoint", "verify", str(output), environment=environment)
     assert index.read_bytes() == before_verify
     _run_cli("generate", "--output", str(output), "--resume", environment=environment)
@@ -399,6 +430,22 @@ def test_short_generation_checkpoint_suspension_and_resume(
         spills = [row for row in truth["events"] if row["kind"] == "spillage"]
         assert len(spills) == 2 and all(row["emitted"] for row in spills)
         assert all(row["attributes"]["expected_sources"] == ["zsh_history"] for row in spills)
+    if persistence_group:
+        truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+        unload = next(
+            event
+            for event in truth["events"]
+            if event.get("attributes", {}).get("launchd_operation") == "unload"
+        )
+        assert set(unload["attributes"]["process_object_ids"]) == retained_group
+        ends = [
+            json.loads(line)["objectID"]
+            for name, content in resumed_files.items()
+            if name.endswith("/ecar.json")
+            for line in content.splitlines()
+            if json.loads(line)["action"] == "TERMINATE"
+        ]
+        assert all(ends.count(object_id) == 1 for object_id in retained_group)
     if native:
         from evidenceforge.formats.macos_unified_log import decode_unified_log_record
 
@@ -568,4 +615,21 @@ def test_macos_authored_history_checkpoint_resume(tmp_path: Path, scenarios_dir:
         False,
         False,
         history_spillage=True,
+    )
+
+
+@pytest.mark.slow
+def test_macos_active_persistence_group_checkpoint(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        persistence=True,
+        persistence_group=True,
     )

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 289
+current_revision: 290
 history_start_revision: 1
-behavior_surface_sha256: a3302eaad4b3106f204d77ad3a98e3b732fc75edd352b3533fc068f219801fa3
+behavior_surface_sha256: 31acb3e9da20637b4296bda37167cc098e14302572f963febb444be0e393706d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2736,3 +2736,12 @@ changes:
       - native-publication-preparation
     formats: []
     summary: Freezes detached before/after rename facts from an exact live artifact claim, with shared fact validation, stale-placement checks and no mutation or native-stat timing assumptions.
+  - revision: 290
+    id: macos-ordinary-exit-child-adoption
+    impact: localized
+    domains:
+      - process-session-lifecycle
+      - macos-process-ownership
+    formats:
+      - ecar
+    summary: Publishes ordinary Mac process exits and surviving-child adoption through one exact State/lifecycle transaction.
