@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from evidenceforge.events.es_collector import ESDeliveryPreparation, PreparedESDeliveryCommit
 from evidenceforge.events.identity import ProcessIdentity, ThreadIdentity
+from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metadata
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.formats.macos_endpoint_security import (
     EndpointSecurityRecord,
@@ -23,8 +24,13 @@ from evidenceforge.formats.macos_endpoint_security import (
     ESThread,
 )
 from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
-from evidenceforge.generation.deployment_registry import LocalArtifactVersionRegistry
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactVersionRegistry,
+)
 from evidenceforge.generation.macos_endpoint_security import (
+    prepare_installed_es_process_snapshot,
+    prepare_planned_installed_es_process_snapshot,
     prepare_planned_runtime_es_process_snapshot,
     prepare_runtime_es_process_snapshot,
 )
@@ -43,9 +49,9 @@ class PreparedMacosForkRecord:
 
 
 @contextmanager
-def prepared_runtime_es_fork_record(
+def prepared_es_fork_record(
     owner: ESCollectionActionOwner,
-    artifacts: LocalArtifactVersionRegistry,
+    executables: LocalArtifactVersionRegistry | DeploymentContentRegistry,
     *,
     cohort: ActionCohortMaterializationPlan,
     delivery: ESDeliveryPreparation,
@@ -56,11 +62,12 @@ def prepared_runtime_es_fork_record(
     clock: MacosBootClock,
     action: ESAction,
     version: int,
+    installed_file: MacosFileMetadata | None = None,
 ) -> Iterator[PreparedMacosForkRecord]:
     """Freeze one actual fork and its counter observation before any canonical commit.
 
-    Only a standalone State-authenticated fork with a retained runtime image is
-    supported. Parent/child collection facts describe its canonical instant;
+    Only a standalone State-authenticated fork with a retained runtime image or
+    exact installed release is supported. Installed stat must be supplied explicitly. Parent/child collection facts describe its canonical instant;
     export delay does not move that instant or uptime. The initiating thread is
     supplied explicitly and must be active in the exact parent execution.
 
@@ -71,7 +78,7 @@ def prepared_runtime_es_fork_record(
     """
     if (
         type(owner) is not ESCollectionActionOwner
-        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(executables) not in {LocalArtifactVersionRegistry, DeploymentContentRegistry}
         or type(cohort) is not ActionCohortMaterializationPlan
         or type(delivery) is not ESDeliveryPreparation
         or type(parent) is not MacosProcessCollectionObservation
@@ -83,6 +90,12 @@ def prepared_runtime_es_fork_record(
         or version not in {6, 10}
     ):
         raise StateError("Native fork preparation requires exact supported owners and profile")
+    if type(executables) is DeploymentContentRegistry:
+        if type(installed_file) is not MacosFileMetadata:
+            raise StateError("Installed fork preparation requires explicit executable stat")
+        installed_file = detach_file_metadata(installed_file)
+    elif installed_file is not None:
+        raise StateError("Runtime fork stat must come from its exact retained artifact")
     parent.__post_init__()
     child.__post_init__()
     action = ESAction.model_validate_json(action.model_dump_json())
@@ -115,12 +128,32 @@ def prepared_runtime_es_fork_record(
             or state.get_thread(*thread.canonical_key) != thread
         ):
             raise StateError("Native fork preparation requires one exact fork occurrence")
-        actor = prepare_runtime_es_process_snapshot(
-            state, artifacts, process=parent.process, collection=parent, version=version
-        )
-        target = prepare_planned_runtime_es_process_snapshot(
-            state, artifacts, cohort=cohort, collection=child, version=version
-        )
+        if type(executables) is DeploymentContentRegistry:
+            assert installed_file is not None
+            actor = prepare_installed_es_process_snapshot(
+                state,
+                executables,
+                process=parent.process,
+                collection=parent,
+                metadata=installed_file,
+                version=version,
+            )
+            target = prepare_planned_installed_es_process_snapshot(
+                state,
+                executables,
+                cohort=cohort,
+                collection=child,
+                metadata=installed_file,
+                phase="birth",
+                version=version,
+            )
+        else:
+            actor = prepare_runtime_es_process_snapshot(
+                state, executables, process=parent.process, collection=parent, version=version
+            )
+            target = prepare_planned_runtime_es_process_snapshot(
+                state, executables, cohort=cohort, collection=child, version=version
+            )
         record = EndpointSecurityRecord(
             schema_version=1,
             version=version,

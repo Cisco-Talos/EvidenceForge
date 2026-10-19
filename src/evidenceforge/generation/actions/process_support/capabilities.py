@@ -180,6 +180,7 @@ class GenerateProcessCapability(Protocol):
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
         new_posix_session: bool = False,
+        arguments: tuple[str, ...] | None = None,
     ) -> int:
         """Delegate to the existing generate process owner."""
         ...

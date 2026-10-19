@@ -76,3 +76,54 @@ def test_child_descriptor_replacement_preserves_parent_and_recovers_before_exec(
     assert (
         restored.process_descriptors_at(parent, event_time=after.execution_started_at) == _table()
     )
+
+
+@pytest.mark.parametrize("other", ["file", "socket"])
+def test_shared_descriptor_identity_cannot_change_kind_within_one_table(other: str) -> None:
+    from evidenceforge.events.macos_descriptors import MacosDescriptorBinding
+
+    with pytest.raises(ValueError, match="conflicting kinds"):
+        _table().opened(
+            MacosDescriptorBinding(9, other, "invented-pipe", False), observed_at=_START
+        )
+
+
+@pytest.mark.parametrize("restored", [False, True])
+@pytest.mark.parametrize("exec_first", [False, True])
+def test_closed_descriptor_identity_cannot_change_kind_in_retained_lifetime(
+    restored: bool, exec_first: bool
+) -> None:
+    from evidenceforge.events.macos_descriptors import MacosDescriptorBinding
+    from evidenceforge.models.exceptions import StateError
+
+    state, process = _process()
+    builder = state.begin_action_cohort_materialization()
+    builder.record_macos_descriptors(process, table=_table())
+    state.materialize_action_cohort(builder.seal())
+    closed = _table().closed(3, observed_at=_START + timedelta(seconds=1))
+    builder = state.begin_action_cohort_materialization()
+    builder.record_macos_descriptors(process, table=closed)
+    state.materialize_action_cohort(builder.seal())
+    if exec_first:
+        process = _execute(state, process, seconds=2)
+    if restored:
+        recovered = StateManager()
+        _restore_head(recovered, _capture_head(state))
+        state = recovered
+    changed = closed.opened(
+        MacosDescriptorBinding(9, "socket", "invented-pipe", False),
+        observed_at=_START + timedelta(seconds=3),
+    )
+    before = state.materialization_digest()
+    builder = state.begin_action_cohort_materialization()
+    with pytest.raises(StateError, match="retained lifetime history"):
+        builder.record_macos_descriptors(process, table=changed)
+    assert state.materialization_digest() == before
+    valid = closed.opened(
+        MacosDescriptorBinding(9, "socket", "new-invented-socket", False),
+        observed_at=changed.observed_at,
+    )
+    builder = state.begin_action_cohort_materialization()
+    builder.record_macos_descriptors(process, table=valid)
+    state.materialize_action_cohort(builder.seal())
+    assert state.process_descriptors_at(process, event_time=changed.observed_at) == valid

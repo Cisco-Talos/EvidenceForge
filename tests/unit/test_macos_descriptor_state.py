@@ -212,7 +212,7 @@ def test_old_record_migrates_to_unknown_descriptors_and_new_history_is_bounded()
     assert state.process_descriptors_at(process, event_time=_START) is None
 
 
-@pytest.mark.parametrize("kind", ["future", "foreign", "oversized"])
+@pytest.mark.parametrize("kind", ["future", "foreign", "oversized", "object_kind"])
 def test_corrupt_descriptor_history_cannot_restore(kind: str) -> None:
     state, process = _process()
     row = state.get_process(process.hostname, process.pid)
@@ -220,6 +220,13 @@ def test_corrupt_descriptor_history_cannot_restore(kind: str) -> None:
         row.descriptor_history = (_table(99),)
     elif kind == "foreign":
         row.descriptor_history = (replace(_table(), hostname="FOREIGN"),)
+    elif kind == "object_kind":
+        changed = replace(
+            _table(1),
+            bindings=(replace(_table().bindings[0], kind="socket"),),
+        )
+        row.descriptor_history = (_table(), changed)
+        row.last_activity_time = changed.observed_at
     else:
         row.descriptor_history = (_table(),) * 65
     restored = StateManager()

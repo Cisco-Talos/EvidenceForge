@@ -16847,6 +16847,7 @@ class ActivityGenerator:
         source_visible_by: datetime | None = None,
         require_exact_parent: bool = False,
         new_posix_session: bool = False,
+        arguments: tuple[str, ...] | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -16869,6 +16870,7 @@ class ActivityGenerator:
             require_exact_parent: Reject the execution if ``parent_pid`` is not the exact
                 live parent instead of applying generic parent-repair heuristics.
             new_posix_session: Model an explicit session-creating POSIX launch.
+            arguments: Exact argv for a fresh Mac launch; never inferred from display text.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -16908,6 +16910,7 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             require_exact_parent=require_exact_parent,
             new_posix_session=new_posix_session,
+            arguments=arguments,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -25110,6 +25113,7 @@ class ActivityGenerator:
         Timing is a modeled readiness budget, not measured terminal startup latency.
         Each stage uses the canonical process bundle and existing session close owner.
         """
+        from evidenceforge.events.identity import validate_process_arguments
         from evidenceforge.generation.activity.application_catalog import application_descriptor
 
         if _get_os_category(target_system.os) != "macos":
@@ -25137,7 +25141,7 @@ class ActivityGenerator:
             ):
                 return shell.pid
 
-        launches: list[tuple[str, str]] = []
+        launches: list[tuple[str, str, tuple[str, ...]]] = []
         registry = self.dispatcher.deployment_registry
         for application_id in ("macos-terminal", "macos-login", "macos-zsh"):
             if registry is not None:
@@ -25153,9 +25157,25 @@ class ActivityGenerator:
                 platform = descriptor["platforms"]["macos"]
                 image = platform["image_path"]
                 command = platform["command_templates"][0]
-            command = command.replace("{username}", user.username)
-            # Login-shell argv differs from an independently executed zsh -c command.
-            launches.append((image, "-zsh" if application_id == "macos-zsh" else command))
+            # These session roles execute literal catalog argv, without a command shell.
+            if application_id == "macos-zsh":
+                arguments = ("-zsh",)
+                command = shlex.join(arguments)
+            else:
+                command = command.replace("{username}", shlex.quote(user.username))
+                quoted_image = f'"{image}"'
+                if '"' not in image and command.startswith(quoted_image):
+                    command = shlex.quote(image) + command[len(quoted_image) :]
+                try:
+                    arguments = tuple(shlex.split(command, posix=True))
+                    validate_process_arguments(arguments, command_line=command)
+                except ValueError as error:
+                    raise StateError(
+                        "Mac terminal requires canonical literal catalog argv"
+                    ) from error
+                if arguments[0] != image:
+                    raise StateError("Mac terminal argv must name its exact executable")
+            launches.append((image, command, arguments))
 
         gap = self._freeze_profile_activity_gap(
             "macos.terminal_stage_ready",
@@ -25170,7 +25190,7 @@ class ActivityGenerator:
             return None
         parent_pid = 1
         terminal_pid: int | None = None
-        for index, (image, command) in enumerate(launches):
+        for index, (image, command, arguments) in enumerate(launches):
             pid = self.generate_process(
                 user=user,
                 system=target_system,
@@ -25184,6 +25204,7 @@ class ActivityGenerator:
                 source_visible_by=start + gap.value * (index + 1),
                 require_exact_parent=True,
                 new_posix_session=index == 1,
+                arguments=arguments,
             )
             if pid <= 0:
                 return None

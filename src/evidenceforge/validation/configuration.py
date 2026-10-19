@@ -2157,7 +2157,10 @@ def _validate_timing_profiles(
                         )
                     )
                     continue
-                for os_name in ("windows", "linux"):
+                for os_name in ("windows", "linux", "macos"):
+                    # Existing two-platform overlays retain their zero-clock Mac fallback.
+                    if os_name == "macos" and os_name not in profile_data:
+                        continue
                     os_profile = profile_data.get(os_name)
                     if not isinstance(os_profile, dict):
                         result.issues.append(
@@ -2185,7 +2188,7 @@ def _validate_timing_profiles(
                             continue
                         min_value = bounds.get("min")
                         max_value = bounds.get("max")
-                        if not isinstance(min_value, int) or min_value < minimum:
+                        if type(min_value) is not int or min_value < minimum:
                             result.issues.append(
                                 Issue(
                                     "ERROR",
@@ -2194,7 +2197,7 @@ def _validate_timing_profiles(
                                     f"{profile_name}.{os_name}.{field_name}.min must be an integer >= {minimum}",
                                 )
                             )
-                        if not isinstance(max_value, int) or max_value > maximum:
+                        if type(max_value) is not int or max_value > maximum:
                             result.issues.append(
                                 Issue(
                                     "ERROR",
@@ -2204,8 +2207,8 @@ def _validate_timing_profiles(
                                 )
                             )
                         if (
-                            isinstance(min_value, int)
-                            and isinstance(max_value, int)
+                            type(min_value) is int
+                            and type(max_value) is int
                             and max_value < min_value
                         ):
                             result.issues.append(

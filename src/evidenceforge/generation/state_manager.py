@@ -16378,6 +16378,18 @@ class StateManager:
         ):
             raise StateError("Descriptor observation must follow process activity and prior table")
 
+        if process is not None:
+            known_kinds = {
+                binding.object_id: binding.kind
+                for table in process.descriptor_history
+                for binding in table.bindings
+            }
+            if any(
+                binding.object_id in known_kinds and known_kinds[binding.object_id] != binding.kind
+                for binding in patch.descriptor_table.bindings
+            ):
+                raise StateError("Descriptor object kind contradicts retained lifetime history")
+
     @staticmethod
     def _append_process_descriptors(process: RunningProcess, table: MacosDescriptorTable) -> None:
         history = process.descriptor_history

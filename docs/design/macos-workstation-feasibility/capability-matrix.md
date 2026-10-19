@@ -126,3 +126,6 @@ Mac SMTP/mailbox access selects the modeled user's compiled Outlook/Thunderbird 
 
 ### Legacy placement recovery (revision 258)
 Artifact checkpoint head 5 requires one current canonical version per execution placement. Compatible heads 1–4 migrate competing current versions with existing version/identity ordering; explicitly withdrawn paths stay removed. Historical content and retention leases survive. This closes the legacy-placement limitation recorded under revision 254, without changing scenario/configuration fields or the product version.
+
+### Installed fork and terminal argument integration — revisions 259–262
+Native fork preparation can use explicit installed-file metadata under the same authenticated State/collector boundary as runtime files. Native sink publication remains unavailable. Terminal/login/zsh production now retains explicit literal argv; environment and unsupplied filesystem facts remain unknown. Descriptor object kind is consistent within retained lifetime history and checkpoint restore. Optional Mac clock profiles use existing validation semantics. No new configuration fields or ES version/event families are admitted; ES-R1 and GK-R1 remain open.

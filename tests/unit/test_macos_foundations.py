@@ -508,6 +508,7 @@ def test_mac_terminal_uses_frozen_descriptors_before_process_mutation(
     if missing_entry:
         descriptors.pop("macos-zsh")
     else:
+        descriptors["macos-terminal"].image_path = "/frozen/Terminal"
         descriptors["macos-terminal"].command_templates = ['"/frozen/Terminal" --test-profile']
     lookup = Mock(side_effect=lambda app_id, platform: descriptors.get(app_id))
     dispatcher.deployment_registry = SimpleNamespace(application_descriptor=lookup)
@@ -526,7 +527,7 @@ def test_mac_terminal_uses_frozen_descriptors_before_process_mutation(
         )
         assert (
             materialize.call_args_list[0].kwargs["command_line"]
-            == '"/frozen/Terminal" --test-profile'
+            == "/frozen/Terminal --test-profile"
         )
         assert materialize.call_args_list[2].kwargs["command_line"] == "-zsh"
     packaged_lookup.assert_not_called()

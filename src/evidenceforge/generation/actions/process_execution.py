@@ -31,6 +31,7 @@ from inspect import getattr_static
 from typing import TYPE_CHECKING, Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
+from evidenceforge.events.identity import validate_process_arguments
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
@@ -274,6 +275,7 @@ class ProcessExecutionRequest:
     source_visible_by: datetime | None = None
     require_exact_parent: bool = field(default=False, kw_only=True)
     new_posix_session: bool = field(default=False, kw_only=True)
+    arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -291,6 +293,13 @@ class ProcessExecutionRequest:
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
 
+        validate_process_arguments(self.arguments, command_line=self.command_line)
+        if self.arguments is not None and (
+            platform_for_os(self.system.os) != "macos"
+            or not self.require_exact_parent
+            or self.reuse_intent is not None
+        ):
+            raise ValueError("Explicit Mac process argv requires a fresh exact-parent launch")
         if type(self.new_posix_session) is not bool:
             raise ValueError("New POSIX launch session requires an exact boolean")
         if self.new_posix_session and (
@@ -321,6 +330,7 @@ class ProcessExecutionRequest:
         lifecycle_suffix = f":{self.lifecycle_group_id}" if self.lifecycle_group_id else ""
         exact_parent_suffix = ":exact_parent" if self.require_exact_parent else ""
         session_suffix = ":new_posix_session" if self.new_posix_session else ""
+        arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
         endpoint_effect_signature = tuple(
             (
                 effect.spec.instance_key,
@@ -340,7 +350,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

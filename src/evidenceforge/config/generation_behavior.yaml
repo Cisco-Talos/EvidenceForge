@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 258
+current_revision: 262
 history_start_revision: 1
-behavior_surface_sha256: bfa61271f6cbe91e15f077b084000b3ad7e81eaaf380df619b610f3b36abfc9e
+behavior_surface_sha256: 23c47455fe4817be0874e7240a8cf5430bcc2a00889884b1a65e839a9182c495
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2477,3 +2477,34 @@ changes:
       - runtime-artifact-recovery
     formats: []
     summary: Migrates competing current file placements from legacy artifact checkpoint heads to one deterministic owner while retaining historical content and explicit removals; head 5 rejects ambiguous placement state.
+  - revision: 259
+    id: installed-executable-native-fork-preparation
+    impact: none
+    domains:
+      - macos-native-source-preparation
+    formats: []
+    summary: Composes installed release and explicit stat observations into the existing State-fenced native fork preparation without enabling a source or inventing filesystem facts.
+  - revision: 260
+    id: macos-clock-profile-validation
+    impact: none
+    domains:
+      - configuration-validation
+    formats: []
+    summary: Validates present Mac clock profiles under the existing range contract while preserving absent-profile legacy defaults and rejecting Boolean clock bounds.
+  - revision: 261
+    id: macos-descriptor-object-kind-consistency
+    impact: none
+    domains:
+      - macos-process-metadata
+    formats: []
+    summary: Rejects contradictory shared descriptor object kinds within a table or retained process lifetime, including checkpoint recovery, without allocating native open-object identities.
+  - revision: 262
+    id: production-macos-terminal-argument-ownership
+    impact: localized
+    domains:
+      - macos-process-metadata
+      - macos-terminal-lifecycle
+    formats:
+      - ecar
+      - zsh_history
+    summary: Retains explicit literal argv through fresh exact-parent Mac process publication and Terminal/login/zsh startup, preserving unknown environment and existing omitted-input behavior.

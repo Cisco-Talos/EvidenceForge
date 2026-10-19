@@ -18,9 +18,12 @@ from evidenceforge.formats.macos_endpoint_security import ESAction, decode_endpo
 from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 from evidenceforge.generation.actions.macos_es_fork import (
     PreparedMacosForkRecord,
-    prepared_runtime_es_fork_record,
+    prepared_es_fork_record,
 )
-from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
+from evidenceforge.generation.deployment_registry import (
+    DeploymentContentRegistry,
+    LocalArtifactVersionRegistry,
+)
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 from evidenceforge.generation.timing.macos import MachTimebase, MacosBootClock
 from evidenceforge.models.exceptions import StateError
@@ -31,7 +34,7 @@ from tests.unit.test_macos_runtime_es_preparation import _setup
 @dataclass
 class _Fixture:
     owner: ESCollectionActionOwner
-    content: RuntimeContentIdentityManager
+    executables: LocalArtifactVersionRegistry | DeploymentContentRegistry
     cohort: ActionCohortMaterializationPlan
     delivery: ESDeliveryPreparation
     parent: MacosProcessCollectionObservation
@@ -39,8 +42,14 @@ class _Fixture:
     clock: MacosBootClock
 
 
-def _fixture(status: str = "visible", *, fork: bool = True) -> _Fixture:
-    state, content, parent, _ = _setup()
+def _fixture(status: str = "visible", *, fork: bool = True, installed: bool = False) -> _Fixture:
+    if installed:
+        from tests.unit.test_macos_installed_es_preparation import _setup as installed_setup
+
+        state, executables, parent, _ = installed_setup()
+    else:
+        state, content, parent, _ = _setup()
+        executables = content.registry
     owner = ESCollectionActionOwner(state, ESCollectorRegistry())
     profile = owner.open(
         _profile(
@@ -83,7 +92,7 @@ def _fixture(status: str = "visible", *, fork: bool = True) -> _Fixture:
     )
     return _Fixture(
         owner,
-        content,
+        executables,
         cohort,
         token,
         MacosProcessCollectionObservation(parent, at, True, "absent"),
@@ -100,9 +109,11 @@ def _fixture(status: str = "visible", *, fork: bool = True) -> _Fixture:
 def _prepare(
     fixture: _Fixture, **changes: object
 ) -> AbstractContextManager[PreparedMacosForkRecord]:
-    return prepared_runtime_es_fork_record(
+    from tests.unit.test_macos_runtime_file_metadata import _metadata
+
+    return prepared_es_fork_record(
         fixture.owner,
-        fixture.content.registry,
+        fixture.executables,
         **(
             dict(
                 cohort=fixture.cohort,
@@ -116,19 +127,24 @@ def _prepare(
                     {"result": {"result_type": 0, "result": {"auth": 0}}}
                 ),
                 version=10,
+                installed_file=_metadata(mode=0o100755, size_bytes=8192)
+                if type(fixture.executables) is DeploymentContentRegistry
+                else None,
             )
             | changes
         ),
     )
 
 
+@pytest.mark.parametrize("installed", [False, True])
 @pytest.mark.parametrize("version", [6, 10])
 @pytest.mark.parametrize("status", ["visible", "delayed", "filtered", "dropped", "out_of_window"])
 def test_prepared_fork_joins_exact_snapshots_counters_and_clock_without_committing(
     version: int,
     status: str,
+    installed: bool,
 ) -> None:
-    fixture = _fixture(status)
+    fixture = _fixture(status, installed=installed)
     state = fixture.owner.state
     before = state.materialization_digest()
     connection = fixture.owner.collectors.connection(fixture.delivery.observation.source_instance)
@@ -148,8 +164,9 @@ def test_prepared_fork_joins_exact_snapshots_counters_and_clock_without_committi
     assert state.materialization_digest() == before
 
 
-def test_precommit_failure_rolls_back_state_and_leaves_no_counter_prefix() -> None:
-    fixture = _fixture()
+@pytest.mark.parametrize("installed", [False, True])
+def test_precommit_failure_rolls_back_state_and_leaves_no_counter_prefix(installed: bool) -> None:
+    fixture = _fixture(installed=installed)
     state = fixture.owner.state
     before = state.materialization_digest()
     with pytest.raises(RuntimeError, match="injected"):
@@ -163,8 +180,9 @@ def test_precommit_failure_rolls_back_state_and_leaves_no_counter_prefix() -> No
     fixture.owner.collectors.cancel(fixture.delivery)
 
 
-def test_frozen_bytes_survive_canonical_commit_and_collector_lost_return() -> None:
-    fixture = _fixture()
+@pytest.mark.parametrize("installed", [False, True])
+def test_frozen_bytes_survive_canonical_commit_and_collector_lost_return(installed: bool) -> None:
+    fixture = _fixture(installed=installed)
     state = fixture.owner.state
     encoded = ""
     with pytest.raises(RuntimeError, match="lost return"):
@@ -232,7 +250,7 @@ def test_inconsistent_fork_owners_reject_before_state_or_counter_changes(damage:
     elif damage == "missing_file":
         from tests.unit.test_macos_launch_file import _manager
 
-        fixture.content = _manager()
+        fixture.executables = _manager().registry
     before = fixture.owner.state.materialization_digest()
     with pytest.raises(StateError):
         with _prepare(fixture, **changes):
@@ -242,8 +260,9 @@ def test_inconsistent_fork_owners_reject_before_state_or_counter_changes(damage:
     fixture.owner.collectors.cancel(fixture.delivery)
 
 
-def test_failed_native_preparation_can_retry_the_same_reserved_delivery() -> None:
-    fixture = _fixture()
+@pytest.mark.parametrize("installed", [False, True])
+def test_failed_native_preparation_can_retry_the_same_reserved_delivery(installed: bool) -> None:
+    fixture = _fixture(installed=installed)
     with pytest.raises(StateError, match="exact fork occurrence"):
         with _prepare(fixture, clock=replace(fixture.clock, hostname="another-mac")):
             pytest.fail("foreign clock accepted")
@@ -256,7 +275,8 @@ def test_failed_native_preparation_can_retry_the_same_reserved_delivery() -> Non
 
 
 @pytest.mark.slow
-def test_native_fork_bytes_are_stable_across_fresh_python_hash_seeds() -> None:
+@pytest.mark.parametrize("installed", [False, True])
+def test_native_fork_bytes_are_stable_across_fresh_python_hash_seeds(installed: bool) -> None:
     import os
     import subprocess
     import sys
@@ -269,6 +289,7 @@ with _prepare(fixture) as prepared:
     print(prepared.ndjson, end="")
 fixture.owner.collectors.cancel(fixture.delivery)
 """
+    script = script.replace("_fixture()", f"_fixture(installed={installed!r})")
     outputs: list[str] = []
     for seed in ("1", "87654"):
         outputs.append(
@@ -283,3 +304,39 @@ fixture.owner.collectors.cancel(fixture.delivery)
         )
     assert outputs[0] == outputs[1]
     assert decode_endpoint_security_record(outputs[0]).event_type == 11
+
+
+@pytest.mark.parametrize("damage", ["missing_stat", "foreign_registry", "runtime_override"])
+def test_fork_executable_provider_requires_complete_exact_facts(damage: str) -> None:
+    from tests.unit.test_macos_runtime_file_metadata import _metadata
+
+    fixture = _fixture(installed=damage != "runtime_override")
+    changes: dict[str, object] = {}
+    if damage == "missing_stat":
+        changes["installed_file"] = None
+    elif damage == "foreign_registry":
+        fixture.executables = DeploymentContentRegistry()
+    else:
+        changes["installed_file"] = _metadata()
+    before = fixture.owner.state.materialization_digest()
+    with pytest.raises(StateError):
+        with _prepare(fixture, **changes):
+            pytest.fail("incomplete fork facts accepted")
+    assert fixture.owner.state.materialization_digest() == before
+    assert fixture.owner.collectors.completed_observation(fixture.delivery) is None
+    fixture.owner.collectors.cancel(fixture.delivery)
+
+
+def test_installed_fork_bytes_detach_explicit_stat_from_caller_mutation() -> None:
+    from tests.unit.test_macos_runtime_file_metadata import _metadata
+
+    fixture = _fixture(installed=True)
+    metadata = _metadata(mode=0o100755, size_bytes=8192)
+    with _prepare(fixture, installed_file=metadata) as prepared:
+        expected = prepared.ndjson
+        object.__setattr__(metadata, "size_bytes", 1)
+        assert prepared.ndjson == expected
+        record = decode_endpoint_security_record(expected)
+        assert record.process.executable.stat.st_size == 8192
+        assert record.process.executable == record.event.fork.child.executable
+    fixture.owner.collectors.cancel(fixture.delivery)

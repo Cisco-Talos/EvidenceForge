@@ -65,8 +65,12 @@ class MacosDescriptorTable:
             raise ValueError(
                 "Mac descriptor table requires exact host, aware time and bounded bindings"
             )
+        object_kinds: dict[str, str] = {}
         for item in self.bindings:
             item.__post_init__()
+            previous = object_kinds.setdefault(item.object_id, item.kind)
+            if previous != item.kind:
+                raise ValueError("One shared descriptor object cannot have conflicting kinds")
         numbers = tuple(item.fd for item in self.bindings)
         if numbers != tuple(sorted(set(numbers))):
             raise ValueError("Mac descriptor table requires sorted unique descriptor numbers")

@@ -505,6 +505,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             if type(history) is not tuple or len(history) > _MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES:
                 raise ValueError("Invalid descriptor history container")
             previous = None
+            object_kinds: dict[str, str] = {}
             frontier = max(
                 process.last_activity_time or process.start_time,
                 process.executed_at or process.start_time,
@@ -523,6 +524,10 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
                     or (previous is not None and table.observed_at <= previous)
                 ):
                     raise ValueError("Invalid descriptor history ordering")
+                for binding in table.bindings:
+                    previous_kind = object_kinds.setdefault(binding.object_id, binding.kind)
+                    if previous_kind != binding.kind:
+                        raise ValueError("Conflicting descriptor object kinds in retained history")
                 previous = table.observed_at
         except (AttributeError, TypeError, ValueError) as error:
             raise CheckpointCorruptionError("StateManager descriptor history is invalid") from error
