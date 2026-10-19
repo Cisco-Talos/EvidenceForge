@@ -342,11 +342,11 @@ class MacosPersistenceActionBundle:
         token = self.services.prepare_service_process_closure(close.closure)
         if request.operation == "exit":
             proof = self.authority.materialize_process_group_leader_exit_composite(
-                close.cohort, close.group, token
+                close.cohort, close.group, token, collectors=self.dispatcher.es_collectors
             )
         else:
             proof = self.authority.materialize_process_group_service_closure_composite(
-                close.cohort, close.group, token
+                close.cohort, close.group, token, collectors=self.dispatcher.es_collectors
             )
         for prepared in dispatches:
             self.dispatcher.publish_prepared(prepared, materialization_receipt=proof)

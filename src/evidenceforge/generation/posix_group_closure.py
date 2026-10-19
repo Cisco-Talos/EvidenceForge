@@ -23,6 +23,7 @@ class PosixGroupServiceClosureReceipt:
     prior_version: int
     committed_version: int
     _integrity: str
+    collector_publication_token: str = ""
 
     def _payload(self) -> bytes:
         return repr(
@@ -35,6 +36,7 @@ class PosixGroupServiceClosureReceipt:
                 self.prior_version,
                 self.committed_version,
             )
+            + ((self.collector_publication_token,) if self.collector_publication_token else ())
         ).encode("utf-8")
 
     @classmethod
@@ -47,10 +49,19 @@ class PosixGroupServiceClosureReceipt:
         service_receipt: LifecycleServiceProcessClosureReceipt,
         prior_version: int,
         committed_version: int,
+        collector_publication_token: str = "",
     ) -> "PosixGroupServiceClosureReceipt":
         """Issue only after both owners have committed their admitted primitives."""
         from dataclasses import replace
 
+        if type(collector_publication_token) is not str or (
+            collector_publication_token
+            and (
+                len(collector_publication_token) != 64
+                or any(char not in "0123456789abcdef" for char in collector_publication_token)
+            )
+        ):
+            raise ValueError("Group closure requires an exact optional collector publication token")
         receipt = cls(
             group,
             tuple(plan.identity for plan in plans),
@@ -59,12 +70,23 @@ class PosixGroupServiceClosureReceipt:
             prior_version,
             committed_version,
             "",
+            collector_publication_token,
         )
         return replace(receipt, _integrity=hmac.digest(secret, receipt._payload(), "sha256").hex())
 
     def authenticates(self, secret: bytes) -> bool:
         """Reject modified nested proof contents as well as another owner's receipt."""
         try:
+            if type(self.collector_publication_token) is not str or (
+                self.collector_publication_token
+                and (
+                    len(self.collector_publication_token) != 64
+                    or any(
+                        char not in "0123456789abcdef" for char in self.collector_publication_token
+                    )
+                )
+            ):
+                return False
             expected = hmac.digest(secret, self._payload(), "sha256").hex()
             return type(self._integrity) is str and hmac.compare_digest(self._integrity, expected)
         except (RecursionError, TypeError, ValueError):

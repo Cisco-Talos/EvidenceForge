@@ -7692,6 +7692,8 @@ class EventDispatcher:
     ) -> None:
         """Cross every owner's one-shot final-auth boundary before primitive mutation."""
 
+        if record.es_closures_claimed is not None:
+            record.es_closures_claimed.certify_composite_commit(record.es_closures_result)
         cast("PreparedActionCohortMaterialization", record.state_claimed).certify_composite_commit(
             cast("ActionCohortMaterializationResult", record.expected_state_result)
         )

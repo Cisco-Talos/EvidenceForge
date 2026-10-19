@@ -184,3 +184,24 @@ def test_disconnect_completion_restores_through_existing_checkpoint_contract() -
     assert restored.snapshot() == expected
     with pytest.raises(StateError, match="open idle"):
         prepare_delivery(restored)
+
+
+def test_certified_closure_finalization_uses_only_prevalidated_primitive_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, process, owner, requests = _connections()
+    with owner.prepared_closures(requests, (process, process)) as claim:
+        expected = claim.expected_result
+        with pytest.raises(StateError, match="certification"):
+            claim.certify_composite_commit(tuple(list(expected)))
+        claim.certify_composite_commit(expected)
+        claim.apply_provisional()
+
+        def fail(*args: object) -> bytes:
+            raise AssertionError("late closure fact serialization")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(owner.collectors, "_closure_proof", fail)
+            claim.finalize_no_fail()
+        assert claim.committed
+    assert owner.collectors.snapshot() == expected

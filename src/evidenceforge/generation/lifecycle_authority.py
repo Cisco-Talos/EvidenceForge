@@ -27,6 +27,7 @@ from typing import Any, Literal, Protocol, cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
 from evidenceforge.events.base import CanonicalOccurrence
+from evidenceforge.events.es_collector import ESCollectorRegistry
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.lifecycle import (
@@ -8591,6 +8592,8 @@ class GeneratorLifecycleAuthority:
         plan: ActionCohortMaterializationPlan,
         group: PosixGroupIdentity,
         service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        collectors: ESCollectorRegistry | None = None,
     ) -> PosixGroupServiceClosureReceipt:
         """Close one exact live group and its service relations in one State version.
 
@@ -8599,7 +8602,7 @@ class GeneratorLifecycleAuthority:
         This transfers the service token, including on precommit rejection.
         """
         return self._materialize_posix_service_closure_cohort(
-            plan, group, service_token, close_group=True
+            plan, group, service_token, close_group=True, collectors=collectors
         )
 
     def materialize_process_group_leader_exit_composite(
@@ -8607,10 +8610,12 @@ class GeneratorLifecycleAuthority:
         plan: ActionCohortMaterializationPlan,
         group: PosixGroupIdentity,
         service_token: LifecycleServiceClosureAdmissionToken,
+        *,
+        collectors: ESCollectorRegistry | None = None,
     ) -> PosixGroupServiceClosureReceipt:
         """Close one bound launchd leader and adopt its children, preserving its job/group."""
         return self._materialize_posix_service_closure_cohort(
-            plan, group, service_token, close_group=False
+            plan, group, service_token, close_group=False, collectors=collectors
         )
 
     def _materialize_posix_service_closure_cohort(
@@ -8620,10 +8625,14 @@ class GeneratorLifecycleAuthority:
         service_token: LifecycleServiceClosureAdmissionToken,
         *,
         close_group: bool,
+        collectors: ESCollectorRegistry | None,
     ) -> PosixGroupServiceClosureReceipt:
         """Share the exact transaction boundary for group unload and bound leader exit."""
         state = self._state_manager
+        collector_token = ""
         try:
+            if collectors is not None and type(collectors) is not ESCollectorRegistry:
+                raise StateError("Group closure requires its exact optional collector registry")
             if type(group) is not PosixGroupIdentity or not state.authenticates_action_cohort_plan(
                 plan
             ):
@@ -8715,7 +8724,26 @@ class GeneratorLifecycleAuthority:
                 hook = self._materialization_precommit_hook
                 if hook is not None:
                     hook()
-                with state.prepared_action_cohort_materialization(plan) as prepared:
+                with (
+                    state.prepared_action_cohort_materialization(plan) as prepared,
+                    ExitStack() as external,
+                ):
+                    collector_closure = None
+                    if collectors is not None:
+                        from evidenceforge.generation.actions.es_collection import (
+                            ESCollectionActionOwner,
+                        )
+
+                        owner = ESCollectionActionOwner(state, collectors)
+                        requests, processes = owner.process_exit_closures(plan)
+                        if requests:
+                            collector_closure = external.enter_context(
+                                owner.prepared_closures(requests, processes)
+                            )
+                            collector_token = collector_closure.publication_token
+                            collector_closure.certify_composite_commit(
+                                collector_closure.expected_result
+                            )
                     if close_group and set(state.get_posix_group_members(group, limit=256)) != set(
                         identities
                     ):
@@ -8724,15 +8752,21 @@ class GeneratorLifecycleAuthority:
                     prepared.certify_composite_commit(expected)
                     # State remains rollback-owned until the registry's no-fail tail.
                     prepared.apply_provisional()
+                    if collector_closure is not None:
+                        collector_closure.apply_provisional()
                     try:
                         receipt = service.commit_no_fail()
                         result = prepared.finalize_no_fail()
+                        if collector_closure is not None:
+                            collector_closure.finalize_no_fail()
                     except BaseException as error:
                         if service.committed:
                             receipt = service.receipt
                             assert receipt is not None
                             if not prepared.committed:
                                 prepared.finalize_no_fail()
+                            if collector_closure is not None and not collector_closure.committed:
+                                collector_closure.finalize_no_fail()
                             proof = PosixGroupServiceClosureReceipt.issue(
                                 secret=self._receipt_secret,
                                 group=group,
@@ -8740,6 +8774,7 @@ class GeneratorLifecycleAuthority:
                                 service_receipt=receipt,
                                 prior_version=expected.prior_version,
                                 committed_version=expected.committed_version,
+                                collector_publication_token=collector_token,
                             )
                             error.process_group_service_receipt = proof
                         raise
@@ -8750,6 +8785,7 @@ class GeneratorLifecycleAuthority:
                 service_receipt=receipt,
                 prior_version=result.prior_version,
                 committed_version=result.committed_version,
+                collector_publication_token=collector_token,
             )
         except BaseException:
             self._discard_service_closure_admission(service_token)

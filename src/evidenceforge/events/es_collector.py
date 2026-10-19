@@ -322,6 +322,13 @@ class PreparedESCollectorClosures:
         """Whether the owning transaction finalized every disconnect."""
         return self._registry._closure_claim(self).committed
 
+    def certify_composite_commit(self, expected_result: tuple[ESCollectorState, ...]) -> None:
+        """Authenticate once before a trusted composite's callback-free commit tail."""
+        claim = self._registry._closure_claim(self)
+        if expected_result is not claim.result or claim.applied or claim.committed:
+            raise StateError("Collector closure certification requires its exact unapplied result")
+        claim.certified = True
+
     def apply_provisional(self) -> None:
         """Install terminal snapshots while retaining rollback ownership."""
         self._registry._apply_closures(self)
@@ -346,6 +353,7 @@ class _ClosureClaim:
     thread_id: int
     applied: bool = False
     committed: bool = False
+    certified: bool = False
 
 
 def _advance_delivery(
@@ -614,12 +622,16 @@ class ESCollectorRegistry:
                     if self._closing.get(key) is claim:
                         del self._closing[key]
 
-    def _closure_claim(self, handle: PreparedESCollectorClosures) -> _ClosureClaim:
+    def _closure_claim(
+        self, handle: PreparedESCollectorClosures, *, authenticate: bool = True
+    ) -> _ClosureClaim:
         if type(handle) is not PreparedESCollectorClosures or handle._registry is not self:
             raise StateError("Collector closure requires its exact active claim")
         claim = next((item for item in self._closing.values() if item.handle is handle), None)
         if claim is None or claim.thread_id != get_ident():
             raise StateError("Collector closure requires its same-thread active claim")
+        if not authenticate:
+            return claim
         if self._closure_proof(claim.result) != claim.proof:
             raise StateError("Collector closure terminal result changed")
         expected = claim.after if claim.applied else claim.before
@@ -636,7 +648,9 @@ class ESCollectorRegistry:
             self._states[state.source_instance] = state
 
     def _finalize_closures(self, handle: PreparedESCollectorClosures) -> None:
-        claim = self._closure_claim(handle)
+        claim = self._closure_claim(handle, authenticate=False)
+        if not claim.certified:
+            claim = self._closure_claim(handle)
         if not claim.applied:
             raise StateError("Collector closure finalization requires provisional application")
         claim.committed = True

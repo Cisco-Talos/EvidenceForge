@@ -325,3 +325,6 @@ Ordinary exact Mac exits and exact terminal groups now close explicitly bound cl
 
 ### Pending client-membership consistency — revision 296
 Pending frozen native records authenticate the current same-host modeled client ownership snapshot. A later open, close or connection generation invalidates their pending publication; completed historical bytes remain valid. This conservative guard does not supply negative membership for unmodeled clients. Ordinary counters and unrelated hosts do not invalidate prepared metadata. Native source admission, ES-R1 and GK-R1 remain open.
+
+### Service-owned collector shutdown — revision 297
+Production system-job leader exit and group unload join explicitly attached collector disconnects to their State/lifecycle composite. Rollback, pending-delivery rejection and lost-acknowledgement recovery are tested. The composite receipt authenticates collector completion. It does not yet give the older per-member service source path whole-group exact recovery, close the observing client's own native exit stream, or define collector behavior across exec. Those remain engineering dependencies; no native source is enabled.

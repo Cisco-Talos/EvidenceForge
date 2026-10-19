@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 296
+current_revision: 297
 history_start_revision: 1
-behavior_surface_sha256: f1c9c3e9200dde45b23cb4839ef601d4a91594df7bf7c0863bbd3d0cadd2a1ff
+behavior_surface_sha256: 5b9a672bf393c389b8769c14282fdaa6b30be91738ea8d5027740d59e047e0d3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2792,3 +2792,11 @@ changes:
       - native-projection-preparation
     formats: []
     summary: Rejects pending native projections after same-host modeled client ownership changes while preserving completed historical records and unrelated counters.
+  - revision: 297
+    id: macos-service-group-collector-disconnects
+    impact: localized
+    domains:
+      - macos-collector-ownership
+      - macos-service-lifecycle
+    formats: []
+    summary: Joins explicit collector disconnects to authored launchd leader and group closure with reversible preparation and authenticated composite recovery.
