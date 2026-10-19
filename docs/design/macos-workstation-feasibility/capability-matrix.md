@@ -175,3 +175,6 @@ Ordinary Mac exits now commit State closure, lifecycle closure and surviving-chi
 
 ### Exact collector batch cleanup — revision 291
 Batch cancellation retains exact reservation ownership even when caller-held source metadata is damaged; publication continues to reject changed facts. Claim-scoped batch completion tokens now support outer transaction composition. This does not yet integrate group counters with canonical publication or native sinks, and does not change ES-R1/GK-R1 or source admission.
+
+### Exact terminal-group publication — revision 292
+Bounded same-host Mac exit cohorts now use the existing canonical transaction and exact source journal, retaining per-process outcomes through partial writes and retries. This closes the canonical group writer prerequisite. Service-closure composites, collector batch participation and native sink admission remain distinct integration work; no native ES coverage or evidence gate changes.

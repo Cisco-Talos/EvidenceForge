@@ -907,6 +907,7 @@ class _PreparedActionCohortBatchRecord:
     retained_bytes: int
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
+    exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     es_registry: ESCollectorRegistry | None = None
     es_delivery: ESDeliveryPreparation | None = None
     es_collector_process: ProcessIdentity | None = None
@@ -7488,8 +7489,16 @@ class EventDispatcher:
                 and recovery.receipt is receipt
                 and recovery.result is result
                 and recovery.batch is record.exact_publication_batch
-                and len(outcomes) == 1
+                and (len(outcomes) == 1 or record.exact_projection_kind == "macos_exit_group")
                 and recovery.outcome is outcomes[0]
+                and (
+                    record.exact_projection_kind != "macos_exit_group"
+                    or (
+                        recovery.outcomes is outcomes
+                        and recovery.member_identifiers is record.exact_member_identifiers
+                        and len(recovery.member_identifiers) == len(outcomes)
+                    )
+                )
                 and recovery.occurrence_ids == record.member_occurrence_ids
                 and recovery.member_integrity_digest == record.member_integrity_digest
                 and recovery.identifiers == record.exact_prepared_identifiers
@@ -7626,7 +7635,9 @@ class EventDispatcher:
         record.publication_result = result
         if record.exact_projection:
             exact_batch = record.exact_publication_batch
-            if exact_batch is None or len(outcomes) != 1:
+            if exact_batch is None or (
+                len(outcomes) != 1 and record.exact_projection_kind != "macos_exit_group"
+            ):
                 raise EventContractError("Exact action-cohort recovery preallocation is malformed")
             record.exact_recovery = _ExactProjectionRecoveryRecord(
                 kind="action_cohort",
@@ -7637,6 +7648,8 @@ class EventDispatcher:
                 occurrence_ids=record.member_occurrence_ids,
                 member_integrity_digest=record.member_integrity_digest,
                 identifiers=record.exact_prepared_identifiers,
+                outcomes=outcomes if record.exact_projection_kind == "macos_exit_group" else (),
+                member_identifiers=record.exact_member_identifiers,
                 owner_record=record,
             )
         if not self._action_cohort_expected_publications_authenticate(record):
@@ -8049,6 +8062,8 @@ class EventDispatcher:
     ) -> str:
         """Return the authenticated closed semantic kind for exact cohort projection."""
 
+        if len(record.trusted_projections) > 1:
+            return self._require_macos_exit_group_projection(record)
         projection = record.trusted_projections[0]
         if record.root_action_id.startswith("process-exit:"):
             return self._require_posix_exit_projection(record)
@@ -8178,6 +8193,75 @@ class EventDispatcher:
         ):
             raise EventContractError("Exact POSIX fork projection changed its singleton owner")
         return "posix_fork"
+
+    @staticmethod
+    def _require_macos_exit_group_projection(record: _PreparedActionCohortBatchRecord) -> str:
+        """Admit a bounded Mac terminal set with only matching child adoptions."""
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.generation.state_manager import ProcessTerminationMaterializationPlan
+
+        plan = record.state_plan
+        if (
+            not record.root_action_id.startswith("process-exit-group:")
+            or not 2 <= len(record.trusted_projections) <= 256
+            or len(record.dispatches) != len(record.trusted_projections)
+            or len(plan.process_terminations) != len(record.trusted_projections)
+            or any(
+                (
+                    plan.sessions,
+                    plan.processes,
+                    plan.live_session_process_role_patches,
+                    plan.session_metadata_patches,
+                    plan.session_activity_patches,
+                    plan.process_executions,
+                    plan.session_terminalizations,
+                )
+            )
+            or plan._smb_connection_finalization is not None
+            or plan._smb_file_mutation_terminalization is not None
+        ):
+            raise EventContractError("Exact Mac exit group changed its bounded terminal shape")
+        endings = {item.identity.object_id: item for item in plan.process_terminations}
+        seen: set[str] = set()
+        hostname: str | None = None
+        for projection in record.trusted_projections:
+            event = projection.occurrence
+            try:
+                identity = process_exit_identity(event)
+            except ValueError as exc:
+                raise EventContractError(str(exc)) from exc
+            termination = endings.get(identity.object_id)
+            if (
+                event.src_host.os_category != "macos"
+                or (hostname is not None and hostname != identity.hostname)
+                or identity.object_id in seen
+                or termination is None
+                or type(termination.target) is not ProcessTerminationMaterializationPlan
+                or termination.identity != identity
+                or termination.end_time != event.timestamp
+                or termination.exit_outcome != event.process.exit_outcome
+            ):
+                raise EventContractError("Exact Mac exit group lost an exact terminal member")
+            hostname = identity.hostname
+            seen.add(identity.object_id)
+        for patch in plan.process_activity_patches:
+            change = patch.parentage_change
+            parent = (
+                endings.get(change.before.current.object_id)
+                if change is not None and change.before.current is not None
+                else None
+            )
+            if (
+                parent is None
+                or patch.target.object_id in seen
+                or patch.target.hostname != hostname
+                or change.changed_at != parent.end_time
+                or patch.activity_time != parent.end_time
+            ):
+                raise EventContractError(
+                    "Exact Mac exit group only permits surviving-child adoption"
+                )
+        return "macos_exit_group"
 
     @staticmethod
     def _require_posix_exit_projection(record: _PreparedActionCohortBatchRecord) -> str:
@@ -8873,6 +8957,27 @@ class EventDispatcher:
     ) -> None:
         """Validate one closed State-backed member and issue its private exact batch."""
 
+        if record.exact_projection and len(record.trusted_projections) > 1:
+            kind = self._require_macos_exit_group_projection(record)
+            if (
+                record.artifact_publications
+                or record.effect_member_bindings
+                or record.external_effect_links
+                or record.owned_effect_plans
+                or record.published_provenances
+            ):
+                raise EventContractError(
+                    "Exact Mac exit group cannot carry unrelated effect owners"
+                )
+            for projection in record.trusted_projections:
+                self._single_ecar_exact_projection_participants(projection)
+            record.exact_projection_kind = kind
+            record.exact_all_suppressed = all(
+                self._ecar_projection_is_exact_omission(item) for item in record.trusted_projections
+            )
+            cleanup_record.exact_publication_batch = self._exact_publication_authority.issue_batch()
+            record.exact_publication_batch = cleanup_record.exact_publication_batch
+            return
         if (
             not record.exact_projection
             or len(record.trusted_projections) != 1
@@ -8946,8 +9051,46 @@ class EventDispatcher:
         record: _PreparedActionCohortBatchRecord,
     ) -> None:
         """Freeze exact sink rows outside every dispatcher and member lock."""
+        from evidenceforge.generation.emitters.base import exact_publication_staged_row_count
 
         batch = record.exact_publication_batch
+        if batch is not None and record.exact_projection_kind == "macos_exit_group":
+            self._require_macos_exit_group_projection(record)
+            participants: list[object] = []
+            for projection in record.trusted_projections:
+                for participant in self._single_ecar_exact_projection_participants(projection):
+                    if not any(existing is participant for existing in participants):
+                        participants.append(participant)
+            batch.reserve_participants(tuple(participants))
+
+            def prepare_members() -> tuple[tuple[tuple[str, str], ...], ...]:
+                identifiers: list[tuple[tuple[str, str], ...]] = []
+                for projection in record.trusted_projections:
+                    before = exact_publication_staged_row_count()
+                    member = self._validate_exact_projection_identifiers(
+                        tuple(sorted(self._publish_action_cohort_projection(projection).items()))
+                    )
+                    omitted = self._ecar_projection_is_exact_omission(projection)
+                    count = exact_publication_staged_row_count() - before
+                    if (omitted and (count != 0 or member)) or (not omitted and count <= 0):
+                        raise EventContractError(
+                            "Exact Mac exit group changed a member's row shape"
+                        )
+                    identifiers.append(member)
+                return tuple(identifiers)
+
+            prepared = batch.prepare(prepare_members)
+            if type(prepared) is not tuple or len(prepared) != len(record.trusted_projections):
+                raise EventContractError("Exact Mac exit group lost its ordered source results")
+            record.exact_member_identifiers = tuple(
+                self._validate_exact_projection_identifiers(member) for member in prepared
+            )
+            if record.exact_all_suppressed is not all(
+                self._ecar_projection_is_exact_omission(item) for item in record.trusted_projections
+            ):
+                raise EventContractError("Exact Mac exit group changed its collection shape")
+            record.exact_prepared_row_count = batch.prepared_row_count
+            return
         if batch is None or len(record.trusted_projections) != 1:
             raise EventContractError("Exact action-cohort batch was not issued")
         projection = record.trusted_projections[0]
@@ -10423,9 +10566,14 @@ class EventDispatcher:
             if (
                 record.exact_publication_batch is None
                 or record.exact_publication_batch.state != "ready"
-                or len(record.trusted_projections) != 1
+                or (
+                    len(record.trusted_projections) != 1
+                    and record.exact_projection_kind != "macos_exit_group"
+                )
             ):
                 return False
+            if record.exact_projection_kind == "macos_exit_group":
+                self._require_macos_exit_group_projection(record)
         elif record.exact_publication_batch is not None:
             return False
         if not self.state_manager.authenticates_action_cohort_plan(record.state_plan):
@@ -11650,6 +11798,38 @@ class EventDispatcher:
                     )
                 )
             )
+        if record.kind == "action_cohort" and record.outcomes:
+            owner = record.owner_record
+            return bool(
+                type(owner) is _PreparedActionCohortBatchRecord
+                and owner.exact_projection_kind == "macos_exit_group"
+                and owner.exact_recovery is record
+                and owner.exact_publication_batch is record.batch
+                and owner.exact_member_identifiers is record.member_identifiers
+                and owner.exact_prepared_row_count == record.batch.commit_cursor
+                and record.batch.released
+                and type(receipt) is ActionCohortPublicationReceipt
+                and type(result) is ActionCohortPublicationResult
+                and result.receipt is receipt
+                and result.projections is record.outcomes
+                and receipt.occurrence_ids == record.occurrence_ids
+                and receipt.member_integrity_digest == record.member_integrity_digest
+                and len(record.outcomes)
+                == len(record.member_identifiers)
+                == len(record.occurrence_ids)
+                and all(
+                    item.occurrence_id == occurrence
+                    and item.status == "succeeded"
+                    and item.identifiers == identifiers
+                    and item.error is None
+                    for item, occurrence, identifiers in zip(
+                        record.outcomes,
+                        record.occurrence_ids,
+                        record.member_identifiers,
+                        strict=True,
+                    )
+                )
+            )
         if (
             not record.batch.released
             or receipt.occurrence_ids != record.occurrence_ids
@@ -11818,7 +11998,7 @@ class EventDispatcher:
             self._exact_projection_active_recoveries += 1
 
         outcome = record.outcome
-        outcomes = record.outcomes if record.kind == "deferred_session" else (outcome,)
+        outcomes = record.outcomes or (outcome,)
 
         def update_deferred_outcomes(
             *,
@@ -11898,8 +12078,9 @@ class EventDispatcher:
             if record.kind == "deferred_session":
                 update_deferred_outcomes()
             else:
-                object.__setattr__(outcome, "_status", "started")
-                object.__setattr__(outcome, "_error", None)
+                for member in outcomes:
+                    object.__setattr__(member, "_status", "started")
+                    object.__setattr__(member, "_error", None)
             if record.batch.state not in {"committed", "releasing"}:
                 try:
                     record.batch.commit()
@@ -11908,16 +12089,19 @@ class EventDispatcher:
                         if record.kind == "deferred_session":
                             update_deferred_outcomes(failure=failure)
                         else:
-                            object.__setattr__(outcome, "_status", "recoverable")
-                            object.__setattr__(outcome, "_error", failure)
+                            for member in outcomes:
+                                object.__setattr__(member, "_status", "recoverable")
+                                object.__setattr__(member, "_error", failure)
                         self._annotate_exact_projection_failure(failure, record)
                         raise
             if record.kind == "deferred_session":
                 update_deferred_outcomes()
             else:
-                object.__setattr__(outcome, "_identifiers", record.identifiers)
-                object.__setattr__(outcome, "_status", "succeeded")
-                object.__setattr__(outcome, "_error", None)
+                identifiers = record.member_identifiers or (record.identifiers,)
+                for member, values in zip(outcomes, identifiers, strict=True):
+                    object.__setattr__(member, "_identifiers", values)
+                    object.__setattr__(member, "_status", "succeeded")
+                    object.__setattr__(member, "_error", None)
             try:
                 record.batch.release_no_fail()
             except BaseException as failure:
@@ -11928,8 +12112,9 @@ class EventDispatcher:
                             release_pending=True,
                         )
                     else:
-                        object.__setattr__(outcome, "_status", "release_pending")
-                        object.__setattr__(outcome, "_error", failure)
+                        for member in outcomes:
+                            object.__setattr__(member, "_status", "release_pending")
+                            object.__setattr__(member, "_error", failure)
                     self._annotate_exact_projection_failure(failure, record)
                     raise
             if record.kind == "deferred_session":

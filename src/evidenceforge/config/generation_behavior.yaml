@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 291
+current_revision: 292
 history_start_revision: 1
-behavior_surface_sha256: 5b759253777af156885fddcfb6e3703b5b1ece4d3c3e51dc58e17e45d32529c6
+behavior_surface_sha256: dea932a06eabad4e8cd2ce6687c8f274c3cbc2e4698eb87bfacaacd47b997cdd
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2752,3 +2752,12 @@ changes:
       - macos-collector-ownership
     formats: []
     summary: Preserves exact ES batch cancellation ownership after damaged caller-held metadata and exposes authenticated batch completion tokens.
+  - revision: 292
+    id: macos-exact-process-exit-groups
+    impact: localized
+    domains:
+      - macos-process-lifecycle
+      - source-publication-recovery
+    formats:
+      - ecar
+    summary: Publishes bounded Mac terminal cohorts through one recoverable exact writer journal while preserving per-process results and canonical ownership.
