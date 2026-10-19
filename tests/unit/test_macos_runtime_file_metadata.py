@@ -96,7 +96,7 @@ def test_atomic_publication_and_checkpoint_retain_all_metadata(executable: bool)
     assert manager.resolve_record("MAC-A", "root", descriptor.native_path, "macos") is None
     _publish(manager, descriptor)
     seal = LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1)
-    assert seal.head.schema_version == "5"
+    assert seal.head.schema_version == "6"
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         seal.head.payload, ()
@@ -209,9 +209,8 @@ def test_older_heads_preserve_unknown_metadata_and_reject_new_facts(version: str
         LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1).head.payload
     )
     document["schema_version"] = version
-    if version in {"1", "2"}:
-        for row in document["records"]:
-            row.pop()
+    for row in document["records"]:
+        del row[9 if version in {"1", "2"} else 10 :]
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         dumps(document), ()
@@ -226,9 +225,8 @@ def test_older_heads_preserve_unknown_metadata_and_reject_new_facts(version: str
         LocalArtifactVersionRegistryParticipant(rich.registry).prepare_checkpoint(1).head.payload
     )
     document["schema_version"] = version
-    if version in {"1", "2"}:
-        for row in document["records"]:
-            row.pop()
+    for row in document["records"]:
+        del row[9 if version in {"1", "2"} else 10 :]
     with pytest.raises(CheckpointCorruptionError):
         LocalArtifactVersionRegistryParticipant(_manager().registry).restore_checkpoint(
             dumps(document), ()

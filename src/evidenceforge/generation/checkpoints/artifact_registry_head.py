@@ -21,7 +21,9 @@ from evidenceforge.events.content_identity import (
 from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
+    _UNKNOWN_ARTIFACT_PLACEMENT_TIME,
     LocalArtifactVersionRegistry,
+    _artifact_placement_datetime,
     _pack_artifact_payload,
     _unpack_artifact_payload,
 )
@@ -43,8 +45,8 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "5"
-_ROW_WIDTH = 10
+_SCHEMA_VERSION = "6"
+_ROW_WIDTH = 12
 _ALLOCATOR_ROW_WIDTH = 3
 
 
@@ -240,6 +242,21 @@ def _capture_rows(
             for handle, flag in enumerate(shard.store._withdrawn)
         ):
             raise RuntimeError("local artifact checkpoint placement state diverged")
+        for handle, introduced in enumerate(shard.store._introduced_at_us):
+            withdrawn_at = shard.store._withdrawn_at_us[handle]
+            if (
+                not shard.store.is_live_handle(handle)
+                and (
+                    introduced != _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+                    or withdrawn_at != _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+                )
+            ) or (
+                not shard.store._withdrawn[handle]
+                and withdrawn_at != _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+            ):
+                raise RuntimeError("local artifact checkpoint placement times diverged")
+            _artifact_placement_datetime(int(introduced))
+            _artifact_placement_datetime(int(withdrawn_at))
         if any(shard.store._reserved) or any(shard.store._release_pending):
             raise RuntimeError("local artifact checkpoint retains a reserved packed handle")
         leases_by_version: dict[str, list[list[object]]] = {}
@@ -276,6 +293,12 @@ def _capture_rows(
                     pending,
                     leases_by_version.pop(version_id, []),
                     bool(shard.store._withdrawn[handle]),
+                    None
+                    if shard.store._introduced_at_us[handle] == _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+                    else int(shard.store._introduced_at_us[handle]),
+                    None
+                    if shard.store._withdrawn_at_us[handle] == _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+                    else int(shard.store._withdrawn_at_us[handle]),
                 ]
             )
         free_handles = [
@@ -348,6 +371,19 @@ def _restore_row(
         raise CheckpointCorruptionError("local artifact checkpoint row is invalid")
     if type(row[9]) is not bool:
         raise CheckpointCorruptionError("local artifact placement flag is invalid")
+    if any(
+        value is not None and (type(value) is not int or value == _UNKNOWN_ARTIFACT_PLACEMENT_TIME)
+        for value in row[10:]
+    ) or (not row[9] and row[11] is not None):
+        raise CheckpointCorruptionError("local artifact placement time is invalid")
+    try:
+        for value in row[10:]:
+            if value is not None:
+                _artifact_placement_datetime(value)
+    except (OverflowError, ValueError) as error:
+        raise CheckpointCorruptionError(
+            "local artifact placement time is outside supported dates"
+        ) from error
     record = _decode_record(row[3], row[4], legacy=legacy, metadata=metadata)
     version_id = record.artifact.artifact_version_id
     deadline = None if row[5] is None else float(row[5])
@@ -368,6 +404,12 @@ def _restore_row(
         shard.store.insert_reserved(handle, record.artifact, record, packed_payload=row[4])
         shard.store.consume_reserved_handle(handle)
         shard.store._withdrawn[handle] = int(row[9])
+        shard.store._introduced_at_us[handle] = (
+            _UNKNOWN_ARTIFACT_PLACEMENT_TIME if row[10] is None else row[10]
+        )
+        shard.store._withdrawn_at_us[handle] = (
+            _UNKNOWN_ARTIFACT_PLACEMENT_TIME if row[11] is None else row[11]
+        )
     except (IndexError, StateError, ValueError) as error:
         raise CheckpointCorruptionError(
             "local artifact checkpoint packed handle is invalid"
@@ -528,7 +570,7 @@ class LocalArtifactVersionRegistryParticipant:
         retention = decode_state_value(document.retention)
         watermark = None if document.watermark is None else decode_state_value(document.watermark)
         if (
-            document.schema_version not in {"1", "2", "3", "4", self.checkpoint_schema_version}
+            document.schema_version not in {"1", "2", "3", "4", "5", self.checkpoint_schema_version}
             or document.capacity != self.registry._capacity
             or type(retention) is not timedelta
             or retention != self.registry._retention
@@ -546,6 +588,13 @@ class LocalArtifactVersionRegistryParticipant:
                 if type(row) is not list or len(row) != 9:
                     raise CheckpointCorruptionError("legacy local artifact row is invalid")
                 row.append(False)
+        if document.schema_version in {"1", "2", "3", "4", "5"}:
+            for row in document.records:
+                if type(row) is not list or len(row) != 10:
+                    raise CheckpointCorruptionError(
+                        "legacy local artifact placement row is invalid"
+                    )
+                row.extend((None, None))
         if self.registry._live_count or any(shard.store for shard in self.registry._shards):
             raise ValueError("local artifact checkpoint hydration requires a fresh registry")
         self.registry._watermark = watermark
@@ -577,7 +626,7 @@ class LocalArtifactVersionRegistryParticipant:
                 row,
                 lease_rows,
                 legacy=document.schema_version == "1",
-                metadata=document.schema_version in {"4", "5"},
+                metadata=document.schema_version in {"4", "5", "6"},
             )
             if order and order in deadline_orders[shard_id]:
                 raise CheckpointCorruptionError(
@@ -601,7 +650,7 @@ class LocalArtifactVersionRegistryParticipant:
                 raise CheckpointCorruptionError(
                     "local artifact pending expiry has no retained lease"
                 )
-        _restore_current_placements(self.registry, legacy=document.schema_version != "5")
+        _restore_current_placements(self.registry, legacy=document.schema_version not in {"5", "6"})
         self.registry._high_water_mark = self.registry._live_count
 
 

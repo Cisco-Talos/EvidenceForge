@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 305
+current_revision: 306
 history_start_revision: 1
-behavior_surface_sha256: 1b440a5a77272b7942bbb99c7ecee304f4d73b8a4a6d34c454b78d6fbf1e5cb0
+behavior_surface_sha256: d80c50c2523d2a7ebccfc79ccd87c62827234d4d79b514d7f714b94292df7c59
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2868,3 +2868,11 @@ changes:
     formats:
       - ecar
     summary: Routes authored Mac leader exits and group unload through one exact recoverable publication, preserving canonical ownership and user interruption.
+  - revision: 306
+    id: retained-runtime-placement-time-bounds
+    impact: none
+    domains:
+      - executable-content-retention
+      - runtime-artifact-checkpoints
+    formats: []
+    summary: Retains exact publication and withdrawal timestamps separately from content leases, with explicit unknown migration from older artifact heads.

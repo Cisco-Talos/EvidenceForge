@@ -153,7 +153,7 @@ def test_schema_two_job_file_restores_as_present() -> None:
     document = loads(seal.head.payload)
     document["schema_version"] = "2"
     for row in document["records"]:
-        row.pop()
+        del row[9:]
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         dumps(document), ()
@@ -170,7 +170,7 @@ def test_corrupt_placement_flag_is_rejected(value: object) -> None:
     document = loads(
         LocalArtifactVersionRegistryParticipant(manager.registry).prepare_checkpoint(1).head.payload
     )
-    document["records"][0][-1] = value
+    document["records"][0][9] = value
     with pytest.raises(CheckpointCorruptionError, match="placement flag"):
         LocalArtifactVersionRegistryParticipant(_manager().registry).restore_checkpoint(
             dumps(document), ()
@@ -266,7 +266,8 @@ def test_controller_restores_legacy_artifact_head_then_checkpoints_withdrawal(
             seal = super().prepare_checkpoint(sequence)
             document = loads(seal.head.payload)
             for row in document["records"]:
-                assert row.pop() is False
+                assert row[9] is False
+                del row[9:]
             return replace(seal, head=replace(seal.head, payload=dumps(document)))
 
     manager = _manager()
@@ -292,7 +293,7 @@ def test_controller_restores_legacy_artifact_head_then_checkpoints_withdrawal(
     )
     assert restored.registry.withdraw_execution_path(record, _START)
     manifest = controller.commit(cursor=_cursor(12), participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "5"
+    assert manifest.participant_heads[0].schema_version == "6"
     final = _manager()
     controller.restore_participants(
         recovery=store.recover(),

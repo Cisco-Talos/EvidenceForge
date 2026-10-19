@@ -212,15 +212,14 @@ def test_legacy_checkpoint_migrates_competing_current_versions(platform: str, sc
     document["schema_version"] = schema
     for row in document["records"]:
         row[9] = False
-        if schema == "2":
-            row.pop()
+        del row[9 if schema == "2" else 10 :]
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         dumps(document), ()
     )
     assert _resolve(restored, old) == manager.build_record(new)
     resealed = LocalArtifactVersionRegistryParticipant(restored.registry).prepare_checkpoint(2)
-    assert resealed.head.schema_version == "5"
+    assert resealed.head.schema_version == "6"
     restored.registry.advance_watermark(_START + timedelta(days=2))
     assert _resolve(restored, old) is None
     assert restored.registry.resolve_version(
@@ -240,6 +239,7 @@ def test_current_checkpoint_rejects_competing_placements_instead_of_migrating_co
     )
     for row in document["records"]:
         row[9] = False
+        row[11] = None
     with pytest.raises(CheckpointCorruptionError, match="competing current placements"):
         LocalArtifactVersionRegistryParticipant(_manager().registry).restore_checkpoint(
             dumps(document), ()
@@ -258,6 +258,7 @@ def test_legacy_checkpoint_never_revives_explicitly_withdrawn_placements() -> No
     document["schema_version"] = "4"
     for row in document["records"]:
         row[9] = True
+        del row[10:]
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         dumps(document), ()

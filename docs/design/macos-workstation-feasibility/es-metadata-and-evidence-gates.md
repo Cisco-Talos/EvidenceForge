@@ -340,3 +340,6 @@ Authored leader/group workflows continue source publication from a complete auth
 
 ### Production exact service cleanup — revision 305
 Authored launchd leader exit and whole-group unload now compose through the existing exact dispatcher transaction. State, real service closure receipts, timing, audit, modeled collector disconnects and the source journal retain one canonical result. Precommit rollback, partial rows, lost acknowledgements, user interruption and exact recovery are covered, with generation/checkpoint and Windows/Linux byte-equivalence gates passing. This closes the service-group existing-source publication dependency described in revisions 297–304. Native sink attachment, complete production ES metadata, observing-client self-exit, exec-specific collector attachment and ES-R1/GK-R1 remain open. No additional local inspection is authorized.
+
+### Retained placement bounds — revision 306
+Canonical runtime file versions retain publication/removal times separately from content leases. Rename/replacement and rollback preserve these bounds; checkpoint head 6 migrates old rows with unknown times rather than inventing history. This enables event-time placement engineering without claiming native stat timing, complete filesystem history or validated ES output. Full loaded-path projection and native delivery ownership remain integration work.

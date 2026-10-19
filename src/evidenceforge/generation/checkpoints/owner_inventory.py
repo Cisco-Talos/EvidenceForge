@@ -827,7 +827,15 @@ LOCAL_ARTIFACT_SHARD_CHECKPOINT_FIELDS = _fields(
 
 
 LOCAL_ARTIFACT_PACKED_STORE_CHECKPOINT_FIELDS = _fields(
-    live=("_active", "_withdrawn", "_payload_arena", "_payload_lengths", "_payload_overflow"),
+    live=(
+        "_active",
+        "_withdrawn",
+        "_introduced_at_us",
+        "_withdrawn_at_us",
+        "_payload_arena",
+        "_payload_lengths",
+        "_payload_overflow",
+    ),
     rebuilt=(
         "_application_profile_index",
         "_artifact_digests",

@@ -169,7 +169,7 @@ def test_job_file_metadata_roundtrips_artifact_checkpoint_without_external_sidec
     _publish(manager, _descriptor(_spec()))
     participant = LocalArtifactVersionRegistryParticipant(manager.registry)
     seal = participant.prepare_checkpoint(1)
-    assert seal.head.schema_version == "5"
+    assert seal.head.schema_version == "6"
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         seal.head.payload, ()
@@ -187,7 +187,7 @@ def test_legacy_artifact_head_still_restores_windows_content() -> None:
     document = loads(seal.head.payload)
     document["schema_version"] = "1"
     for row in document["records"]:
-        row.pop()
+        del row[9:]
     restored = _manager()
     LocalArtifactVersionRegistryParticipant(restored.registry).restore_checkpoint(
         dumps(document), ()
@@ -226,7 +226,7 @@ def test_legacy_head_rejects_new_metadata_instead_of_dropping_it() -> None:
     document = loads(seal.head.payload)
     document["schema_version"] = "1"
     for row in document["records"]:
-        row.pop()
+        del row[9:]
     with pytest.raises(CheckpointCorruptionError, match="record is invalid"):
         LocalArtifactVersionRegistryParticipant(_manager().registry).restore_checkpoint(
             dumps(document), ()

@@ -53,6 +53,7 @@ from threading import RLock, get_ident
 from typing import cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
+from evidenceforge.events.artifact_placement import LocalArtifactPlacementObservation
 from evidenceforge.events.content_identity import (
     ApplicationProfileCanonicalKey,
     ApplicationProfileIdentity,
@@ -2576,7 +2577,7 @@ class _LocalArtifactPreparedRollbackSavepoint:
     prior_deadline_high_water: int = 0
     prior_deadline_order_counter: int = 0
     prior_route_high_water: int = 0
-    withdrawal_rows: tuple[tuple[int, int, int, int], ...] = ()
+    withdrawal_rows: tuple[tuple[int, int, int, int, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -3712,12 +3713,31 @@ class _PackedInlineEqualityGroups:
         )
 
 
+_UNKNOWN_ARTIFACT_PLACEMENT_TIME = -(1 << 63)
+_ARTIFACT_PLACEMENT_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+
+
+def _artifact_placement_microseconds(value: datetime) -> int:
+    delta = ensure_utc(value) - _ARTIFACT_PLACEMENT_EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
+
+
+def _artifact_placement_datetime(value: int) -> datetime | None:
+    return (
+        None
+        if value == _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+        else _ARTIFACT_PLACEMENT_EPOCH + timedelta(microseconds=value)
+    )
+
+
 class _PackedArtifactStore:
     """Primitive-column artifact storage with lazy frozen-value reconstruction."""
 
     __slots__ = (
         "_active",
         "_withdrawn",
+        "_introduced_at_us",
+        "_withdrawn_at_us",
         "_application_profile_index",
         "_artifact_digests",
         "_artifact_index",
@@ -3752,6 +3772,8 @@ class _PackedArtifactStore:
     def __init__(self, capacity: int) -> None:
         self._active = bytearray(capacity)
         self._withdrawn = bytearray(capacity)
+        self._introduced_at_us = array("q", [_UNKNOWN_ARTIFACT_PLACEMENT_TIME]) * capacity
+        self._withdrawn_at_us = array("q", [_UNKNOWN_ARTIFACT_PLACEMENT_TIME]) * capacity
         self._payload_arena = bytearray(capacity * _ARTIFACT_INLINE_PAYLOAD_BYTES)
         self._payload_lengths = array("I", [0]) * capacity
         self._payload_overflow: dict[int, bytes] = {}
@@ -4075,6 +4097,8 @@ class _PackedArtifactStore:
             # the staged columns active lets exact index callbacks inspect them;
             # every escaping failure clears the flag before the lock is released.
             self._withdrawn[handle] = 0
+            self._introduced_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+            self._withdrawn_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
             self._active[handle] = 1
 
             started.append((self._primary, version_digest, self._version_digest, None))
@@ -4219,6 +4243,8 @@ class _PackedArtifactStore:
         self._write_digest(self._version_digests, handle, b"\0" * _ARTIFACT_DIGEST_BYTES)
         self._active[handle] = 0
         self._withdrawn[handle] = 0
+        self._introduced_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
+        self._withdrawn_at_us[handle] = _UNKNOWN_ARTIFACT_PLACEMENT_TIME
         self._append_free_handle(handle)
         self._live -= 1
         return artifact
@@ -4505,6 +4531,8 @@ class _PackedArtifactStore:
                     self,
                     self._active,
                     self._withdrawn,
+                    self._introduced_at_us,
+                    self._withdrawn_at_us,
                     self._payload_arena,
                     self._payload_lengths,
                     self._payload_overflow,
@@ -10049,9 +10077,10 @@ class LocalArtifactVersionRegistry:
             failures.append(error)
 
         try:
-            for shard_id, handle, withdrawn, version in rollback.withdrawal_rows:
+            for shard_id, handle, withdrawn, version, withdrawn_at in rollback.withdrawal_rows:
                 owner = self._shards[shard_id]
                 owner.store._withdrawn[handle] = withdrawn
+                owner.store._withdrawn_at_us[handle] = withdrawn_at
                 owner.mutation_version = version
         except BaseException as error:
             failures.append(error)
@@ -10188,6 +10217,9 @@ class LocalArtifactVersionRegistry:
                 token.record,
                 packed_payload=plan.packed_payload,
             )
+            shard.store._introduced_at_us[plan.expected_handle] = _artifact_placement_microseconds(
+                token.observed_at
+            )
             self._live_count += 1
             self._high_water_mark = max(self._high_water_mark, self._live_count)
         else:
@@ -10198,9 +10230,13 @@ class LocalArtifactVersionRegistry:
             )
         shard.pending_expiry.discard(token.record.artifact.artifact_version_id)
         shard.mutation_version += 1
-        for shard_id, handle, _, version in plan.rollback.withdrawal_rows:
+        for shard_id, handle, withdrawn, version, _ in plan.rollback.withdrawal_rows:
             owner = self._shards[shard_id]
             owner.store._withdrawn[handle] = 1
+            if not withdrawn:
+                owner.store._withdrawn_at_us[handle] = _artifact_placement_microseconds(
+                    token.observed_at
+                )
             owner.mutation_version = version + 1
         return plan.receipt
 
@@ -10260,7 +10296,9 @@ class LocalArtifactVersionRegistry:
                         shard.store.is_live_handle(handle)
                         and shard.store.artifact_version_id(handle) == version_id
                     ):
-                        return self._publish_locked(shard, handle, canonical_artifact, deadline)
+                        return self._publish_locked(
+                            shard, handle, canonical_artifact, deadline, observed_at=event_time
+                        )
             with self._capacity_lock:
                 if version_id in self._prepared_versions:
                     raise StateError(
@@ -10279,6 +10317,7 @@ class LocalArtifactVersionRegistry:
                                 handle,
                                 canonical_artifact,
                                 deadline,
+                                observed_at=event_time,
                             )
                 routing_identity = (
                     canonical_artifact.artifact_id
@@ -10289,7 +10328,9 @@ class LocalArtifactVersionRegistry:
                 with shard.lock:
                     self._live_count += 1
                     self._high_water_mark = max(self._high_water_mark, self._live_count)
-                    return self._publish_locked(shard, None, canonical_artifact, deadline)
+                    return self._publish_locked(
+                        shard, None, canonical_artifact, deadline, observed_at=event_time
+                    )
 
     def _publish_locked(
         self,
@@ -10298,6 +10339,7 @@ class LocalArtifactVersionRegistry:
         artifact: LocalArtifactIdentity,
         deadline: float,
         *,
+        observed_at: datetime,
         record: LocalArtifactVersionRecord | None = None,
         packed_payload: bytes | None = None,
     ) -> int:
@@ -10318,6 +10360,7 @@ class LocalArtifactVersionRegistry:
                 record,
                 packed_payload=packed_payload,
             )
+            shard.store._introduced_at_us[handle] = _artifact_placement_microseconds(observed_at)
             self._set_route(version_id, shard.shard_id, handle)
         current_deadline = shard.deadlines.deadline(handle)
         retained_until = (
@@ -10615,6 +10658,31 @@ class LocalArtifactVersionRegistry:
                         return artifact
         return None
 
+    def observe_version_placement(
+        self, artifact_version_id: str
+    ) -> LocalArtifactPlacementObservation | None:
+        """Return retained publication/removal facts for one exact version, if present.
+
+        This is not a complete file-object path history. Unknown legacy bounds
+        remain unknown; refreshing a lease cannot recreate placement history.
+        """
+        with self._all_shards_locked():
+            located = self._existing_locator(artifact_version_id)
+            if located is None:
+                return None
+            shard, handle = located
+            if (
+                not shard.store.is_live_handle(handle)
+                or shard.store.artifact_version_id(handle) != artifact_version_id
+            ):
+                return None
+            return LocalArtifactPlacementObservation(
+                artifact=shard.store.get_by_handle(handle),
+                introduced_at=_artifact_placement_datetime(shard.store._introduced_at_us[handle]),
+                withdrawn=bool(shard.store._withdrawn[handle]),
+                withdrawn_at=_artifact_placement_datetime(shard.store._withdrawn_at_us[handle]),
+            )
+
     def resolve_record_for_execution_path(
         self,
         hostname: str,
@@ -10662,7 +10730,7 @@ class LocalArtifactVersionRegistry:
         self,
         reservation: _LocalArtifactPreparedReservation,
         plan: _LocalArtifactPreparedCommitPlan,
-    ) -> tuple[tuple[int, int, int, int], ...]:
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
         """Withdraw superseded placements while retaining their immutable content.
 
         Every shard is locked by the publication owner. Preserve the established
@@ -10682,7 +10750,7 @@ class LocalArtifactVersionRegistry:
             )
         )
         incoming = (artifact.version, artifact.artifact_version_id)
-        rows: list[tuple[int, int, int, int]] = []
+        rows: list[tuple[int, int, int, int, int]] = []
         superseded = False
         for shard in self._shards:
             index, digest, digest_for_handle, equals_handle = shard.store._query(
@@ -10697,15 +10765,31 @@ class LocalArtifactVersionRegistry:
                 if (current.artifact.version, current.artifact.artifact_version_id) > incoming:
                     superseded = True
                 else:
-                    rows.append((shard.shard_id, handle, 0, shard.mutation_version))
+                    rows.append(
+                        (
+                            shard.shard_id,
+                            handle,
+                            0,
+                            shard.mutation_version,
+                            shard.store._withdrawn_at_us[handle],
+                        )
+                    )
         if superseded:
             owner = self._shards[token._shard_id]
-            rows.append((owner.shard_id, plan.expected_handle, 0, owner.mutation_version))
+            rows.append(
+                (
+                    owner.shard_id,
+                    plan.expected_handle,
+                    0,
+                    owner.mutation_version,
+                    owner.store._withdrawn_at_us[plan.expected_handle],
+                )
+            )
         return tuple(rows)
 
     def _prepare_withdrawal_rows_locked(
         self, reservation: _LocalArtifactPreparedReservation
-    ) -> tuple[tuple[int, int, int, int], ...]:
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
         """Freeze exact placement withdrawal while every affected shard is locked."""
         expected = reservation.canonical_token.record
         artifact = expected.artifact
@@ -10753,13 +10837,19 @@ class LocalArtifactVersionRegistry:
         if current != expected:
             raise StateError("prepared removal no longer names the current file version")
         key = "\0".join(placement)
-        rows: list[tuple[int, int, int, int]] = []
+        rows: list[tuple[int, int, int, int, int]] = []
         for shard in self._shards:
             index, digest, digest_for_handle, equals_handle = shard.store._query(
                 "execution_path", key
             )
             rows.extend(
-                (shard.shard_id, handle, shard.store._withdrawn[handle], shard.mutation_version)
+                (
+                    shard.shard_id,
+                    handle,
+                    shard.store._withdrawn[handle],
+                    shard.mutation_version,
+                    shard.store._withdrawn_at_us[handle],
+                )
                 for handle in index.iter_handles(digest, digest_for_handle, equals_handle)
             )
         return tuple(rows)
@@ -10819,7 +10909,7 @@ class LocalArtifactVersionRegistry:
                 return False
             if current != expected:
                 raise StateError("artifact removal requires the current file version")
-            updates: list[tuple[_LocalArtifactShard, int, int]] = []
+            updates: list[tuple[_LocalArtifactShard, int, int, int]] = []
             versions: list[tuple[_LocalArtifactShard, int]] = []
             for shard in self._shards:
                 index, digest, digest_for_handle, equals_handle = shard.store._query(
@@ -10829,16 +10919,27 @@ class LocalArtifactVersionRegistry:
                 if handles:
                     versions.append((shard, shard.mutation_version))
                     updates.extend(
-                        (shard, handle, shard.store._withdrawn[handle]) for handle in handles
+                        (
+                            shard,
+                            handle,
+                            shard.store._withdrawn[handle],
+                            shard.store._withdrawn_at_us[handle],
+                        )
+                        for handle in handles
                     )
             try:
-                for shard, handle, _ in updates:
+                for shard, handle, prior, _ in updates:
                     shard.store._withdrawn[handle] = 1
+                    if not prior:
+                        shard.store._withdrawn_at_us[handle] = _artifact_placement_microseconds(
+                            observed_at
+                        )
                 for shard, version in versions:
                     shard.mutation_version = version + 1
             except BaseException:
-                for shard, handle, prior in updates:
+                for shard, handle, prior, withdrawn_at in updates:
                     shard.store._withdrawn[handle] = prior
+                    shard.store._withdrawn_at_us[handle] = withdrawn_at
                 for shard, version in versions:
                     shard.mutation_version = version
                 raise
