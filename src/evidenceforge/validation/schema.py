@@ -2593,8 +2593,8 @@ class ScenarioValidator:
                         )
 
                 if getattr(spec, "type", "") in {"process", "macos_launch_item"}:
-                    denied = getattr(spec, "outcome", "success") == "denied"
-                    if denied:
+                    unsuccessful = getattr(spec, "outcome", "success") != "success"
+                    if unsuccessful:
                         target = next(
                             (
                                 system
@@ -2608,8 +2608,8 @@ class ScenarioValidator:
                                 ValidationIssue(
                                     severity="error",
                                     field_path=f"storyline.{idx}.events.{spec_idx}.outcome",
-                                    message="Denied process launch currently requires a Mac workstation",
-                                    suggestion="Use a modeled Mac host for this bounded pre-spawn outcome.",
+                                    message="Unsuccessful process outcome currently requires a Mac workstation",
+                                    suggestion="Use a modeled Mac host and an exact existing caller for this outcome.",
                                 )
                             )
                     ref_key_base = (event.system, event.actor)
@@ -2617,16 +2617,16 @@ class ScenarioValidator:
                     if parent_ref is not None and (*ref_key_base, parent_ref) not in process_refs:
                         self.issues.append(
                             ValidationIssue(
-                                severity="error" if denied else "warning",
+                                severity="error" if unsuccessful else "warning",
                                 field_path=f"storyline.{idx}.events.{spec_idx}.parent_ref",
                                 message=(
                                     f"Process parent_ref '{parent_ref}' has no earlier matching "
                                     "process_ref for the same storyline actor and system"
                                 ),
                                 suggestion=(
-                                    "Define the caller earlier with process_ref; denied launches "
+                                    "Define the caller earlier with process_ref; unsuccessful attempts "
                                     "require an exact existing caller."
-                                    if denied
+                                    if unsuccessful
                                     else "Define the parent process earlier with process_ref, or omit "
                                     "parent_ref to use the default shell/service parent inference."
                                 ),
@@ -4344,7 +4344,7 @@ class ScenarioValidator:
             for event in entry.events:
                 if (
                     event.type == "process"
-                    and getattr(event, "outcome", "success") != "denied"
+                    and getattr(event, "outcome", "success") == "success"
                     and getattr(event, "command_line", None)
                 ):
                     process_domains |= extract_hostnames_from_command(event.command_line)

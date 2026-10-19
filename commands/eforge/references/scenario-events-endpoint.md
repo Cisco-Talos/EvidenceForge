@@ -27,7 +27,7 @@ generation time. Use unique `process_ref` values only when later children need e
   supplementary: auto
 ```
 
-`outcome` defaults to `success`. On a modeled Mac, `outcome: denied` records an explicit terminal rejection before child allocation. It requires an absolute executable path and `parent_ref` naming an earlier caller on the same host and actor; `process_ref` is forbidden because no child exists. The caller stays live, but this attempt creates no process, automatic command effects, or shell-history entry. Ground truth records the denial with no expected native source. This does not model prompting, a failed exec in an existing child, or validated Gatekeeper evidence. Keep legitimate downloads and other precursors as separate earlier activities.
+`outcome` defaults to `success`. On a modeled Mac, `outcome: denied` records an explicit terminal rejection before child allocation. It requires an absolute executable path and `parent_ref` naming an earlier caller on the same host and actor; `process_ref` is forbidden because no child exists. The caller stays live, but this attempt creates no process, automatic command effects, or shell-history entry. Ground truth records the denial with no expected native source. `outcome: exec_failed` instead models an exec call returning failure in that existing caller, with the same path/reference constraints. Its original execution and credentials remain intact; the errno stays unknown and no native evidence is inferred. A later exit is separate. These outcomes do not model prompting, post-replacement failure or validated Gatekeeper evidence. Keep legitimate downloads and other precursors as separate earlier activities.
 
 ```yaml
 - type: process

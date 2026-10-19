@@ -129,8 +129,8 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
             if hostname not in known_hosts:
                 continue
             for spec_index, spec in enumerate(event.events):
-                if spec.type == "process" and getattr(spec, "outcome", "success") == "denied":
-                    continue  # Canonical no-child outcome has no admitted native policy source.
+                if spec.type == "process" and getattr(spec, "outcome", "success") != "success":
+                    continue  # No-new-execution outcomes have no admitted native source.
                 contract = (
                     MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.get(spec.operation)
                     if spec.type == "macos_launch_item"

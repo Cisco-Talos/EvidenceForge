@@ -69,25 +69,28 @@ def record_denied_process_launch(
 
 @dataclass(frozen=True, slots=True)
 class FailedProcessExec:
-    """An image-replacement call that returned an explicit error to its caller.
+    """An image-replacement call that returned failure to its caller.
 
     This bounded result preserves the existing execution. It does not describe
     a failure after the kernel's irreversible replacement point, a process exit,
     or a named security product's decision. A later exit is a separate action.
+    An omitted error number is unknown; it never supplies a guessed errno.
     """
 
     actor: ProcessIdentity
     attempted_at: datetime
     image: str
     command_line: str
-    error_number: int
+    error_number: int | None = None
     arguments: tuple[str, ...] | None = None
     environment: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         DeniedProcessLaunch(self.actor, self.attempted_at, self.image, self.command_line)
-        if type(self.error_number) is not int or not 0 < self.error_number < 2**31:
-            raise ValueError("Failed exec requires an explicit positive errno")
+        if self.error_number is not None and (
+            type(self.error_number) is not int or not 0 < self.error_number < 2**31
+        ):
+            raise ValueError("Known failed-exec errno must be an explicit positive integer")
         validate_process_arguments(self.arguments, command_line=self.command_line)
         validate_process_environment(self.environment)
 
@@ -99,7 +102,7 @@ def record_failed_process_exec(
     attempted_at: datetime,
     image: str,
     command_line: str,
-    error_number: int,
+    error_number: int | None = None,
     arguments: tuple[str, ...] | None = None,
     environment: tuple[str, ...] | None = None,
 ) -> FailedProcessExec:

@@ -528,6 +528,8 @@ class GroundTruthGenerator:
         event_type = event["type"]
         if event_type == "process" and event.get("outcome") == "denied":
             return f"Denied before child allocation: {event.get('process_name', 'N/A')}; native policy evidence unavailable"
+        if event_type == "process" and event.get("outcome") == "exec_failed":
+            return f"Exec returned failure; caller image preserved: {event.get('process_name', 'N/A')}; errno unknown; native evidence unavailable"
         skipped_reason = event.get("skipped_reason")
         if skipped_reason:
             reason = str(skipped_reason).replace("_", " ")

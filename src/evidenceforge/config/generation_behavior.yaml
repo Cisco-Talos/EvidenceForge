@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 249
+current_revision: 250
 history_start_revision: 1
-behavior_surface_sha256: 8bb751186077027e41081baea94b99a3f648358f842562affc537a89bb13f83a
+behavior_surface_sha256: d0e320c7d4fa42c7ca426bdd085c184340590037272d067c6a931642d38f1bd7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2406,3 +2406,10 @@ changes:
     formats:
       - ecar
     summary: Retains exact Mac SSH exec images through a finite generation/history window in the existing exact publication transaction, with lost-return recovery and unchanged artifact placements.
+  - revision: 250
+    id: macos-authored-returning-exec-failure
+    impact: localized
+    domains:
+      - authored-process-outcomes
+    formats: []
+    summary: Adds an exec_failed value to the existing process outcome field, preserving the exact caller and unknown errno while suppressing successful image-replacement effects and native messages.

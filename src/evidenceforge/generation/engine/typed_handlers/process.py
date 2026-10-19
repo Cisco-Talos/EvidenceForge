@@ -38,8 +38,8 @@ def handle_process(
     self: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
 ) -> dict[str, Any] | None:
     """Execute the process evidence path using the existing runtime owners."""
-    if getattr(spec, "outcome", "success") == "denied":
-        return _handle_denied_launch(self, spec, context)
+    if getattr(spec, "outcome", "success") != "success":
+        return _handle_unsuccessful_process(self, spec, context)
 
     from evidenceforge.generation.engine.storyline_helpers.process import (
         _estimate_process_lifetime,
@@ -1129,26 +1129,33 @@ def handle_process_access(
     return context.malicious_event
 
 
-def _handle_denied_launch(
+def _handle_unsuccessful_process(
     runtime: StorylineMixin, spec: ProcessEventSpec, context: TypedEventContext
 ) -> dict[str, Any]:
-    """Record a terminal pre-spawn rejection without entering successful execution."""
-    from evidenceforge.generation.actions.process_policy import record_denied_process_launch
+    """Record an explicit no-new-execution outcome on its exact existing caller."""
+    from evidenceforge.generation.actions.process_policy import (
+        record_denied_process_launch,
+        record_failed_process_exec,
+    )
     from evidenceforge.models.exceptions import StateError
 
+    label = "Denied launch" if spec.outcome == "denied" else "Returning exec failure"
     if _get_os_category(context.system.os) != "macos":
-        raise StateError("Authored denied process launch currently requires a Mac workstation")
+        raise StateError(f"{label} currently requires a Mac workstation")
     reference = getattr(runtime, "_storyline_process_refs", {}).get(
         (context.system.hostname, context.actor.username, spec.parent_ref)
     )
     if reference is None or len(reference) != 3:
-        raise StateError("Denied launch requires an earlier exact process_ref lifetime")
+        raise StateError(f"{label} requires an earlier exact process_ref lifetime")
     pid, image, object_id = reference
     state = runtime.state_manager
     parent = state.get_process_identity(context.system.hostname, pid)
     if parent is None or parent.object_id != object_id or parent.image != image:
-        raise StateError("Denied launch parent_ref no longer names its original live process")
-    result = record_denied_process_launch(
+        raise StateError(f"{label} parent_ref no longer names its original live process")
+    recorder = (
+        record_denied_process_launch if spec.outcome == "denied" else record_failed_process_exec
+    )
+    result = recorder(
         state,
         actor=parent,
         attempted_at=context.time,
@@ -1158,8 +1165,12 @@ def _handle_denied_launch(
     context.malicious_event.update(
         process_name=result.image,
         command_line=result.command_line,
-        outcome="denied",
-        skipped_reason="execution_denied_before_spawn",
+        outcome=spec.outcome,
+        skipped_reason=(
+            "execution_denied_before_spawn"
+            if spec.outcome == "denied"
+            else "exec_failed_caller_preserved"
+        ),
         expected_sources=[],
     )
     return context.malicious_event

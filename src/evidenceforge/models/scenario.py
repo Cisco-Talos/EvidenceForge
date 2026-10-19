@@ -910,22 +910,23 @@ class ProcessEventSpec(_EventSpecBase):
     parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
 
-    outcome: Literal["success", "denied"] = "success"
+    outcome: Literal["success", "denied", "exec_failed"] = "success"
 
     @model_validator(mode="after")
-    def bounded_denied_launch(self) -> "ProcessEventSpec":
-        """A denied pre-spawn attempt cannot define a process for later children."""
-        if self.outcome == "denied":
+    def bounded_unsuccessful_process(self) -> "ProcessEventSpec":
+        """A no-new-execution outcome requires its existing caller, never a new child."""
+        if self.outcome != "success":
+            label = (
+                "Denied process launch" if self.outcome == "denied" else "Returning exec failure"
+            )
             if not self.parent_ref or self.process_ref is not None:
-                raise ValueError(
-                    "Denied process launch requires parent_ref and forbids process_ref"
-                )
+                raise ValueError(f"{label} requires parent_ref and forbids process_ref")
             if (
                 not self.process_name.startswith("/")
                 or self.process_name == "/"
                 or "\0" in self.process_name
             ):
-                raise ValueError("Denied process launch requires an absolute Mac executable path")
+                raise ValueError(f"{label} requires an absolute Mac executable path")
         return self
 
 

@@ -91,6 +91,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     native: bool = False,
     helpers: bool = False,
     denied_launch: bool = False,
+    failed_exec: bool = False,
     persistence: bool = False,
     persistence_active: bool = False,
 ) -> None:
@@ -151,7 +152,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 ]
             )
         ]
-    if denied_launch:
+    if denied_launch or failed_exec:
         scenario_data["storyline"] = [
             {
                 "id": "caller-before-checkpoint",
@@ -174,7 +175,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
                         "type": "process",
                         "process_name": "/usr/local/libexec/invented-blocked-helper",
                         "parent_ref": "caller",
-                        "outcome": "denied",
+                        "outcome": "exec_failed" if failed_exec else "denied",
                     }
                 ],
             },
@@ -339,7 +340,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
-    if denied_launch:
+    if denied_launch or failed_exec:
         assert b"invented-blocked-helper" not in b"".join(
             content for name, content in resumed_files.items() if name.startswith("data/")
         )
@@ -348,8 +349,10 @@ def test_short_generation_checkpoint_suspension_and_resume(
             row for row in truth["events"] if row["storyline_id"] == "denied-after-checkpoint"
         )
         assert denied["emitted"] is False
-        assert denied["attributes"]["outcome"] == "denied"
-        assert denied["skipped_reason"] == "execution_denied_before_spawn"
+        assert denied["attributes"]["outcome"] == ("exec_failed" if failed_exec else "denied")
+        assert denied["skipped_reason"] == (
+            "exec_failed_caller_preserved" if failed_exec else "execution_denied_before_spawn"
+        )
     if native:
         from evidenceforge.formats.macos_unified_log import decode_unified_log_record
 
@@ -417,7 +420,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         ]
         assert len(reads) >= 2
     elif macos:
-        if not denied_launch and not persistence:
+        if not denied_launch and not failed_exec and not persistence:
             assert any(name.endswith(".zsh_history") for name in resumed_files)
         assert not any(name.endswith(".bash_history") for name in resumed_files)
     else:
@@ -487,4 +490,20 @@ def test_macos_persistence_checkpoint(tmp_path: Path, scenarios_dir: Path, activ
         False,
         persistence=True,
         persistence_active=active,
+    )
+
+
+@pytest.mark.slow
+def test_macos_failed_exec_checkpoint_resume(tmp_path: Path, scenarios_dir: Path) -> None:
+    test_short_generation_checkpoint_suspension_and_resume(
+        tmp_path,
+        scenarios_dir,
+        "default",
+        None,
+        True,
+        None,
+        False,
+        False,
+        False,
+        failed_exec=True,
     )

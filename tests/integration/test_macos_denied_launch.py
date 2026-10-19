@@ -14,8 +14,10 @@ from tests.support.output_equivalence import deterministic_bundle_files
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("outcome", ["denied", "exec_failed"])
 def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_deterministic(
     tmp_path: Path,
+    outcome: str,
 ) -> None:
     data = yaml.safe_load(Path("scenarios/macos-workstation-example/scenario.yaml").read_text())
     data["time_window"]["duration"] = "20m"
@@ -41,7 +43,7 @@ def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_de
                     process_name="/usr/local/libexec/invented-blocked-helper",
                     command_line="invented-blocked-helper --url https://never-executed.example.test/payload",
                     parent_ref="caller",
-                    outcome="denied",
+                    outcome=outcome,
                 )
             ],
         ),
@@ -106,5 +108,7 @@ def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_de
     ground_truth = json.loads((outputs[0] / "GROUND_TRUTH.json").read_text())
     denied = next(event for event in ground_truth["events"] if event["storyline_id"] == "denied")
     assert denied["emitted"] is False
-    assert denied["attributes"]["outcome"] == "denied"
-    assert denied["skipped_reason"] == "execution_denied_before_spawn"
+    assert denied["attributes"]["outcome"] == outcome
+    assert denied["skipped_reason"] == (
+        "execution_denied_before_spawn" if outcome == "denied" else "exec_failed_caller_preserved"
+    )
