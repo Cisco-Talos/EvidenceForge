@@ -251,18 +251,33 @@ def prepare_runtime_es_exec_script(
             )
         ):
             raise StateError("ES script preparation requires its exact live Mac execution")
-        script = process.exec_script
-        if script is None:
-            raise StateError("ES script preparation requires explicitly known script facts")
-        record = (
-            None
-            if script.artifact_version_id is None
-            else artifacts.resolve_version(script.artifact_version_id)
-        )
-        try:
-            return es_script_at_execution(process, record)
-        except ValueError as error:
-            raise StateError(f"Incomplete ES script facts: {error}") from error
+        return project_runtime_es_exec_script(artifacts, process)
+
+
+def project_runtime_es_exec_script(
+    artifacts: LocalArtifactVersionRegistry | None, process: ProcessIdentity
+) -> ESFile | None:
+    """Project exact script placement for a live or State-authenticated planned exec.
+
+    This read-only join grants no State authority. The caller must authenticate
+    the execution. Known absence stays distinct from missing script history.
+    """
+    if type(process) is not ProcessIdentity or process.exec_script is None:
+        raise StateError("ES script preparation requires explicitly known script facts")
+    script = process.exec_script
+    if script.artifact_version_id is None:
+        return es_script_at_execution(process)
+    if type(artifacts) is not LocalArtifactVersionRegistry:
+        raise StateError("ES script placement requires its runtime artifact owner")
+    placement = artifacts.observe_macos_file_placement(
+        script.artifact_version_id, process.execution_started_at
+    )
+    if placement is None:
+        raise StateError("Incomplete ES script facts: exact file placement is unavailable")
+    try:
+        return es_script_at_execution(process, placement)
+    except ValueError as error:
+        raise StateError(f"Incomplete ES script facts: {error}") from error
 
 
 def prepare_planned_runtime_es_exec_target(

@@ -29,7 +29,6 @@ from evidenceforge.formats.macos_endpoint_security import (
 from evidenceforge.formats.macos_exec_image import es_exec_image_fields
 from evidenceforge.formats.macos_file_metadata import (
     es_directory_at_execution,
-    es_script_at_execution,
 )
 from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 from evidenceforge.generation.deployment_registry import (
@@ -41,6 +40,7 @@ from evidenceforge.generation.macos_endpoint_security import (
     prepare_planned_installed_es_process_snapshot,
     prepare_planned_runtime_es_exec_target,
     prepare_runtime_es_process_snapshot,
+    project_runtime_es_exec_script,
 )
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 from evidenceforge.generation.timing.macos import MacosBootClock
@@ -208,11 +208,6 @@ def prepared_es_exec_record(
             binary = None if image is None else image.binary
         if binary is None:
             raise StateError("Native exec lost its exact executable")
-        script = (
-            None
-            if identity.exec_script.artifact_version_id is None
-            else executables.resolve_version(identity.exec_script.artifact_version_id)
-        )
         context = ProcessContext(
             identity.pid,
             identity.parent_pid,
@@ -226,7 +221,7 @@ def prepared_es_exec_record(
         try:
             image_fields = es_exec_image_fields(identity, context, version=version)
             cwd = es_directory_at_execution(identity)
-            script_file = es_script_at_execution(identity, script)
+            script_file = project_runtime_es_exec_script(executables, identity)
         except ValueError as error:
             raise StateError(f"Incomplete historical exec metadata: {error}") from error
         fds = tuple(

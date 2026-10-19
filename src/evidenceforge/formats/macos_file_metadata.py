@@ -3,6 +3,7 @@
 
 """Native file projection from an exact canonical runtime version."""
 
+from evidenceforge.events.artifact_placement import MacosRuntimeFilePlacementObservation
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
@@ -88,7 +89,8 @@ def _es_file(
 
 
 def es_script_at_execution(
-    process: ProcessIdentity, record: LocalArtifactVersionRecord | None = None
+    process: ProcessIdentity,
+    record: LocalArtifactVersionRecord | MacosRuntimeFilePlacementObservation | None = None,
 ) -> ESFile | None:
     """Project known shebang-script truth; arguments never establish script presence.
 
@@ -104,6 +106,12 @@ def es_script_at_execution(
         if record is not None:
             raise ValueError("Known script absence cannot carry a script file")
         return None
+    placement = record if type(record) is MacosRuntimeFilePlacementObservation else None
+    if placement is not None:
+        placement.__post_init__()
+        if placement.observed_at != process.execution_started_at:
+            raise ValueError("ES script placement must describe the exact execution time")
+        record = placement.reference
     if (
         type(record) is not LocalArtifactVersionRecord
         or MacosExecScript.from_runtime_record(record) != script
@@ -111,4 +119,4 @@ def es_script_at_execution(
         or process.executable_version.platform != "macos"
     ):
         raise ValueError("ES exec script requires its exact file and a distinct loaded interpreter")
-    return es_file_from_runtime_record(record)
+    return es_file_from_runtime_record(record if placement is None else placement.placed)

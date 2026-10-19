@@ -11196,6 +11196,7 @@ class EventDispatcher:
             decode_endpoint_security_record,
         )
         from evidenceforge.generation.macos_endpoint_security import (
+            project_runtime_es_exec_script,
             validate_runtime_es_executable_snapshot,
         )
 
@@ -11216,6 +11217,10 @@ class EventDispatcher:
                         (execution.target, parsed.process),
                         (execution.after, parsed.event.exec.target),
                     )
+                    if parsed.event.exec.script != project_runtime_es_exec_script(
+                        self.local_artifact_registry, execution.after
+                    ):
+                        raise ValueError("Native script placement changed after preparation")
                 else:
                     if type(parsed.event) is not ESExitEvent:
                         raise ValueError("Native exit placement lacks its exact process owner")

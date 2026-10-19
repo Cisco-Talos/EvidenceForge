@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 310
+current_revision: 311
 history_start_revision: 1
-behavior_surface_sha256: 9cd274173feda11cfa4b4432d7a0a3c973e6e1393cdf1423a1494e6d1446894c
+behavior_surface_sha256: 2c576de0ec361c66f9c5b5e6932474c48e712904b475d0dd1770ad7bb1ee9f24
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2909,3 +2909,12 @@ changes:
       - checkpoint-ownership
     formats: []
     summary: Fences runtime file placement through native canonical publication while allowing unchanged-content retention and deferring due cleanup until observers leave.
+  - revision: 311
+    id: exact-runtime-exec-script-placement
+    impact: localized
+    domains:
+      - process-file-observation
+      - endpoint-security-preparation
+      - exact-source-publication
+    formats: []
+    summary: Projects and revalidates shebang-script placement at the canonical exec boundary, preserving its reference separately from the loaded interpreter.
