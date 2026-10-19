@@ -232,3 +232,33 @@ def prepare_runtime_es_exec_script(
             return es_script_at_execution(process, record)
         except ValueError as error:
             raise StateError(f"Incomplete ES script facts: {error}") from error
+
+
+def prepare_planned_runtime_es_exec_target(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    version: int,
+) -> ESProcess:
+    """Prepare a complete process target for one sealed exec without replacing live State.
+
+    This is a process snapshot, not an ES exec event or event-family admission.
+    Full exec fields, collector sequencing and atomic native publication remain
+    separate owners. A prepared result supplies no authority to commit the cohort.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+    ):
+        raise StateError("Planned ES exec target requires exact canonical owners")
+    collection.__post_init__()
+    with state._lock:
+        relationships = state.observe_planned_execution_relationships(cohort)
+        target = relationships.parent.process
+        if collection.process != target or collection.observed_at != target.execution_started_at:
+            raise StateError("Planned ES exec target requires its exact execution observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)

@@ -16617,6 +16617,43 @@ class StateManager:
                 responsibility_observation,
             )
 
+    def observe_planned_execution_relationships(
+        self, cohort: ActionCohortMaterializationPlan
+    ) -> ProcessRelationshipObservation:
+        """Freeze one authenticated Mac exec target without temporarily replacing State.
+
+        Only a standalone execution is supported. Other identity/lifecycle changes
+        need their own temporal overlay. The result is source preparation, not a
+        commit capability; an outer transaction must retain/revalidate every owner
+        before publishing canonical state and native evidence together.
+        """
+        with self._lock:
+            self.validate_action_cohort_materialization(cohort)
+            if len(cohort.process_executions) != 1 or any(
+                (
+                    cohort.sessions,
+                    cohort.processes,
+                    cohort.process_activity_patches,
+                    cohort.process_terminations,
+                    cohort.session_terminalizations,
+                    cohort.session_metadata_patches,
+                    cohort.live_session_process_role_patches,
+                    cohort.session_activity_patches,
+                    cohort._smb_connection_finalization,
+                    cohort._smb_file_mutation_terminalization,
+                )
+            ):
+                raise StateError("Planned exec observation requires a standalone execution")
+            after = cohort.process_executions[0].after
+            if self._pid_os.get(after.hostname) != "macos":
+                raise StateError("Planned exec observation requires a modeled Mac execution")
+            if after.parentage is None or after.responsibility is None:
+                raise StateError("Planned exec observation requires known relationship owners")
+            at = after.execution_started_at
+            parent = self._observe_process_parent_locked(after, at)
+            responsibility = self._observe_process_responsibility_locked(after, at)
+            return ProcessRelationshipObservation(parent, responsibility)
+
     def observe_process_parent(
         self, identity: ProcessIdentity, *, observed_at: datetime
     ) -> ProcessParentObservation:

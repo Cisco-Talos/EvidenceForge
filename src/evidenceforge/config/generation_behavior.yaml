@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 245
+current_revision: 246
 history_start_revision: 1
-behavior_surface_sha256: 5c48a7ef64e77a7bd8af1caef5e58916bc7aabf6a303550d1da8e44188410683
+behavior_surface_sha256: fc9ab731f814e670ecea458ab6eb25d680cd2baaadaf3d93c4ddf198bdebd3cf
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2376,3 +2376,10 @@ changes:
       - macos-process-execution
     formats: []
     summary: Retains exact shebang-script linkage independently of interpreter images and argv through fork, failed exec and checkpoint restore; no native family is enabled.
+  - revision: 246
+    id: macos-exec-target-preparation-and-descriptor-operations
+    impact: localized
+    domains:
+      - macos-process-execution
+    formats: []
+    summary: Prepares a standalone exec target without live State mutation and models exact dup2 and descriptor flag changes without enabling a native event family.

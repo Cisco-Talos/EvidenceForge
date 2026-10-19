@@ -93,3 +93,6 @@ Explicit image subtype and pre-resolution exec-path metadata are execution-owned
 
 ### Script linkage update — revision 245
 Exact runtime shebang-script references now survive canonical fork, failed exec and recovery independently of loaded interpreter identity. Known absence and unknown remain distinct. Bounded native file preparation requires the exact retained script and complete metadata; argument lists do not imply shebang execution. Automatic producer/retention integration remains incomplete, and no native event family is enabled.
+
+### Exec preparation update — revision 246
+A bounded precommit helper now composes the runtime-backed ES process target for one standalone exec without modifying State. It requires complete explicit collection/file facts and exact relationship ownership. Descriptor replacement and flag transitions are also modeled through existing tables/cohorts. Neither helper admits native exec output; mixed lifecycle overlays, automatic producers and atomic native sink integration remain open.

@@ -129,6 +129,46 @@ class MacosDescriptorTable:
             replace(source, fd=target_fd, close_on_exec=close_on_exec), observed_at=observed_at
         )
 
+    def duplicate_to(
+        self, source_fd: int, target_fd: int, *, observed_at: datetime
+    ) -> "MacosDescriptorTable":
+        """Apply successful dup2 table semantics, retaining shared open-object identity.
+
+        An occupied destination loses only its descriptor binding. A distinct
+        destination clears close-on-exec; duplicating a descriptor onto itself
+        preserves its flags. This does not infer final object destruction or
+        shared-offset effects, and it does not simulate failed syscalls.
+        """
+        if type(source_fd) is not int or type(target_fd) is not int or not 0 <= target_fd < 2**31:
+            raise ValueError("Descriptor duplication requires exact valid numbers")
+        source = next((item for item in self.bindings if item.fd == source_fd), None)
+        if source is None:
+            raise ValueError("Descriptor duplication requires an existing source")
+        at = self._at(observed_at)
+        if source_fd == target_fd:
+            return at
+        copied = replace(source, fd=target_fd, close_on_exec=False)
+        retained = tuple(item for item in self.bindings if item.fd != target_fd)
+        return replace(at, bindings=tuple(sorted((*retained, copied), key=lambda item: item.fd)))
+
+    def set_close_on_exec(
+        self, fd: int, enabled: bool, *, observed_at: datetime
+    ) -> "MacosDescriptorTable":
+        """Apply an explicit successful descriptor-flag change without changing the open object."""
+        if (
+            type(fd) is not int
+            or type(enabled) is not bool
+            or not any(item.fd == fd for item in self.bindings)
+        ):
+            raise ValueError("Descriptor flags require an existing exact number and Boolean flag")
+        return replace(
+            self._at(observed_at),
+            bindings=tuple(
+                replace(item, close_on_exec=enabled) if item.fd == fd else item
+                for item in self.bindings
+            ),
+        )
+
 
 def validate_macos_descriptors(
     table: MacosDescriptorTable, *, hostname: str, observed_at: datetime, platform: str
