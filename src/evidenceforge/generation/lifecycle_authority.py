@@ -359,6 +359,19 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
                 directory.metadata.canonical_json(),
             ),
         )
+    if identity.executable_version is not None:
+        version = identity.executable_version
+        version.__post_init__()
+        payload = (
+            *payload,
+            (
+                "process-executable-version-v1",
+                version.platform,
+                version.identity_kind,
+                version.content_id,
+                version.artifact_version_id,
+            ),
+        )
     if identity.image_security is not None:
         security = identity.image_security
         payload = (

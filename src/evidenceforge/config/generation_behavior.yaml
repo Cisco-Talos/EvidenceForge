@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 234
+current_revision: 235
 history_start_revision: 1
-behavior_surface_sha256: 877acd47b4ad6a04c0a2c2694ce579e821eeb4b354f44935b2c7c9180f95ed12
+behavior_surface_sha256: 7f8bd5a4c603bb5a7711e30aab9bbb8a7ea3599a640da09da26e9de3a2b2c0ee
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2289,3 +2289,12 @@ changes:
       - state-checkpoint
     formats: []
     summary: Retains explicit occurrence-scoped directory stat through launch, fork, exec and recovery without inferring current cwd from a prior execution or enabling native output.
+  - revision: 235
+    id: execution-owned-macos-executable-version
+    impact: localized
+    domains:
+      - macos-process-execution
+      - macos-source-contracts
+      - state-checkpoint
+    formats: []
+    summary: Retains resolved Mac executable versions at launch, inherits them across fork and requires exact backing content for complete native process projections.

@@ -38,6 +38,9 @@ from evidenceforge.events.macos_execution_directory import (
 )
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.parentage import ProcessParentage, validate_process_parentage
+from evidenceforge.events.process_executable import (
+    ProcessExecutableVersion,
+)
 from evidenceforge.events.responsibility import (
     ProcessResponsibility,
     validate_process_responsibility,
@@ -385,6 +388,7 @@ class ProcessIdentity:
     responsibility: ProcessResponsibility | None = None
     image_security: MacosImageSecurity | None = None
     execution_directory: MacosExecutionDirectory | None = None
+    executable_version: ProcessExecutableVersion | None = None
 
     @property
     def initial_image(self) -> str:
@@ -415,6 +419,10 @@ class ProcessIdentity:
         )
         validate_process_arguments(self.arguments, command_line=self.command_line)
         validate_process_environment(self.environment)
+        if self.executable_version is not None:
+            if type(self.executable_version) is not ProcessExecutableVersion:
+                raise ValueError("Process executable version requires its exact immutable type")
+            self.executable_version.__post_init__()
         validate_macos_execution_directory(
             self.execution_directory, hostname=self.hostname, observed_at=self.execution_started_at
         )

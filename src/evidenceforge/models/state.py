@@ -50,6 +50,7 @@ from evidenceforge.events.macos_execution_directory import MacosExecutionDirecto
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.network import NetworkTrafficLedger
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.responsibility import ProcessResponsibility
 
@@ -173,6 +174,7 @@ class RunningProcess:
     responsibility: ProcessResponsibility | None = None
     image_security: MacosImageSecurity | None = None
     execution_directory: MacosExecutionDirectory | None = None
+    executable_version: ProcessExecutableVersion | None = None
 
 
 @dataclass

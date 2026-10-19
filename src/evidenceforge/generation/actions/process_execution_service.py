@@ -15,7 +15,13 @@ from enum import StrEnum
 from typing import cast
 
 from evidenceforge.events.base import OccurrenceBuilder
-from evidenceforge.events.content_identity import Platform, UnresolvedBinaryIdentity
+from evidenceforge.events.content_identity import (
+    BinaryReleaseIdentity,
+    LocalArtifactBinaryIdentity,
+    Platform,
+    ProcessBinaryIdentity,
+    UnresolvedBinaryIdentity,
+)
 from evidenceforge.events.contexts import (
     AuthContext,
     ProcessContext,
@@ -31,6 +37,7 @@ from evidenceforge.events.identity import (
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions import (
     EffectRequirement,
     ExecutionEffectPlanError,
@@ -901,6 +908,25 @@ class ProcessExecutionService:
         credentials = self.identity.process_credentials(
             request.system, launch.actor.username, launch.parent_pid, launch.time
         )
+        binary: ProcessBinaryIdentity | None = None
+        executable_version: ProcessExecutableVersion | None = None
+        if _get_os_category(request.system.os) == "macos":
+            publication = (
+                request.prepared_effects.process_binary_publication
+                if request.prepared_effects is not None
+                else None
+            )
+            binary = (
+                publication.record.binary
+                if publication is not None
+                else self.dispatcher.resolve_process_binary_identity(
+                    request.system.hostname, launch.actor.username, launch.actor.image, "macos"
+                )
+            )
+            if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+                executable_version = ProcessExecutableVersion.from_binary(binary)
+            else:
+                binary = None  # Unknown/virtual identities cannot bind a loaded file version.
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
             if admission.uses_action_cohort
@@ -925,6 +951,7 @@ class ProcessExecutionService:
                 auth_session_id=process_session_id,
                 auth_logon_type=launch.logon_type,
                 credentials=credentials,
+                executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
             )
             endpoint_activity_frontier = max(
@@ -957,6 +984,7 @@ class ProcessExecutionService:
                 start_time=ensure_utc(launch.time),
                 parent_activity_time=ensure_utc(launch.time),
                 credentials=credentials,
+                executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
             )
             action_cohort_state_plan = None
@@ -972,6 +1000,7 @@ class ProcessExecutionService:
             process_session_id,
             process_session_identity,
             parent_identity,
+            binary,
         )
 
     def _prepare_evidence(
@@ -1100,7 +1129,9 @@ class ProcessExecutionService:
                 ),
                 concurrency_group_id=request.concurrency_group_id,
                 binary_identity=(
-                    process_binary_publication.record.binary
+                    root.binary
+                    if root.binary is not None
+                    else process_binary_publication.record.binary
                     if process_binary_publication is not None
                     else None
                 ),

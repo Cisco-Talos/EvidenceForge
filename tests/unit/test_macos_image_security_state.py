@@ -112,11 +112,11 @@ def test_runtime_flag_fields_reject_coercion_and_out_of_range_values(
 def test_old_identity_and_process_codecs_preserve_unknown_security() -> None:
     state, identity = _create()
     current = encode_state_value(identity)
-    assert current[1] == "process-identity-v11"
+    assert current[1] == "process-identity-v12"
     older = decode_state_value(["record", "process-identity-v9", current[2][:22]])
     assert older.image_security is None and older == replace(identity, image_security=None)
     current = encode_state_value(state.get_process(identity.hostname, identity.pid))
-    assert current[1] == "running-process-v16"
+    assert current[1] == "running-process-v17"
     assert (
         decode_state_value(["record", "running-process-v14", current[2][:38]]).image_security
         is None

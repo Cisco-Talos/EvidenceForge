@@ -54,3 +54,5 @@ Explicit collector connections now retain an exact modeled process execution and
 The internal ES process compositor now accepts complete matching relationship, runtime-file, signing and collection observations. It supports explicit terminal absence only and rejects unknown client/terminal facts. This is a projection contract, not a new scenario event or source capability; production installed-file/terminal metadata and native source publication remain gated. Do not fill absent metadata with zeros, `false`, or `null` to make an ES record parse.
 
 Internal execution metadata can retain an explicit Mac directory/stat snapshot at launch or exec. It does not derive cwd from the generator host, a home directory or a previous launch. No authored/configuration field exposes this primitive, and it does not enable native ES exec generation.
+
+Ordinary Mac process launches retain resolved executable-version identity independently of subsequent file replacement. Complete internal native projections require that exact version; matching a path is insufficient. Other process producers, retention and native source admission remain separate gates.

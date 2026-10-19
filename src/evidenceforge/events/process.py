@@ -55,6 +55,7 @@ def process_exec_identities(
             arguments=before.arguments,
             environment=before.environment,
             image_security=before.image_security,
+            executable_version=before.executable_version,
             execution_directory=before.execution_directory,
             execution_ordinal=before.execution_ordinal,
             executed_at=before.executed_at,
@@ -255,6 +256,7 @@ def process_fork_identities(
         or child.job_control != parent.job_control
         or child.environment != parent.environment
         or child.image_security != parent.image_security
+        or child.executable_version != parent.executable_version
         or child.responsibility != parent.responsibility
         or child.arguments != parent.arguments
         or (

@@ -10,6 +10,7 @@ Installed executable stat and terminal-device profiles remain separate work.
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord, canonical_native_path
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import ESProcess
 from evidenceforge.formats.macos_file_metadata import es_file_from_runtime_record
@@ -52,6 +53,7 @@ def es_process_from_observations(
         or executable.artifact.hostname != process.hostname.casefold()
         or executable.binary is None
         or context.binary_identity != executable.binary
+        or process.executable_version != ProcessExecutableVersion.from_binary(executable.binary)
         or canonical_native_path(executable.artifact.native_path, "macos")
         != canonical_native_path(process.image, "macos")
     ):

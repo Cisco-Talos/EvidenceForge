@@ -11,6 +11,7 @@ from evidenceforge.events.content_identity import LocalArtifactVersionRecord
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
 from evidenceforge.formats.macos_endpoint_security import (
     ESAuditToken,
@@ -40,6 +41,7 @@ def _inputs() -> tuple[
         command_line="invented-worker",
         executed_at=subject.started_at + timedelta(seconds=1),
         image_security=MacosImageSecurity(7, False, 3),
+        executable_version=ProcessExecutableVersion.from_binary(record.binary),
     )
     state.materialize_action_cohort(builder.seal())
     at = subject.execution_started_at
