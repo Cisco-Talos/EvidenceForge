@@ -90,3 +90,6 @@ Explicit complete Mac descriptor tables now participate in fork, successful exec
 
 ### Execution image update — revision 244
 Explicit image subtype and pre-resolution exec-path metadata are execution-owned, fork-inherited, replaced by exec, authenticated and checkpointed. Historical field projection uses the retained Mach-O binary version, never the generator host or a normalized replacement path. Missing facts remain unavailable. This does not enable macOS 26 ES exec or supply automatic metadata producers.
+
+### Script linkage update — revision 245
+Exact runtime shebang-script references now survive canonical fork, failed exec and recovery independently of loaded interpreter identity. Known absence and unknown remain distinct. Bounded native file preparation requires the exact retained script and complete metadata; argument lists do not imply shebang execution. Automatic producer/retention integration remains incomplete, and no native event family is enabled.

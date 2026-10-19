@@ -359,6 +359,19 @@ def _process_identity_payload(identity: ProcessIdentity) -> tuple[object, ...]:
                 directory.metadata.canonical_json(),
             ),
         )
+    if identity.exec_script is not None:
+        identity.exec_script.__post_init__()
+        script = identity.exec_script
+        payload = (
+            *payload,
+            (
+                "macos-exec-script-v1",
+                script.hostname,
+                script.artifact_version_id,
+                script.content_id,
+                script.native_path,
+            ),
+        )
     if identity.exec_image is not None:
         identity.exec_image.__post_init__()
         payload = (

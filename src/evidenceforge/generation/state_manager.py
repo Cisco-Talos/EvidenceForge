@@ -69,6 +69,7 @@ from evidenceforge.events.macos_descriptors import (
     validate_macos_descriptors,
 )
 from evidenceforge.events.macos_exec_image import MacosExecImage, validate_macos_exec_image
+from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
 from evidenceforge.events.macos_execution_directory import (
     MacosExecutionDirectory,
     validate_macos_execution_directory,
@@ -1336,6 +1337,7 @@ class MaterializationBatchBuilder:
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
         exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
@@ -1371,6 +1373,7 @@ class MaterializationBatchBuilder:
             environment=environment,
             image_security=image_security,
             exec_image=exec_image,
+            exec_script=exec_script,
             executable_version=executable_version,
             execution_directory=execution_directory,
             new_posix_session=new_posix_session,
@@ -3015,6 +3018,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
         exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
@@ -3071,6 +3075,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 environment=environment,
                 image_security=image_security,
                 exec_image=exec_image,
+                exec_script=exec_script,
                 executable_version=executable_version,
                 execution_directory=execution_directory,
                 new_posix_session=new_posix_session,
@@ -3590,6 +3595,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 environment=parent.environment,
                 image_security=parent.image_security,
                 exec_image=parent.exec_image,
+                exec_script=parent.exec_script,
                 executable_version=parent.executable_version,
                 execution_directory=execution_directory,
                 responsibility=parent.responsibility,
@@ -3627,6 +3633,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
         exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
     ) -> ProcessIdentity:
@@ -3672,6 +3679,11 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         )
         validate_macos_exec_image(
             exec_image, self._manager._pid_os.get(normalized.hostname, "unknown")
+        )
+        validate_macos_exec_script(
+            exec_script,
+            platform=self._manager._pid_os.get(normalized.hostname, "unknown"),
+            hostname=normalized.hostname,
         )
         audit_pid_version = self._manager._preview_macos_audit_pid_version(
             normalized.hostname,
@@ -3728,6 +3740,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             environment=environment,
             image_security=image_security,
             exec_image=exec_image,
+            exec_script=exec_script,
             executable_version=executable_version,
             execution_directory=execution_directory,
             command_line=command_line,
@@ -4184,6 +4197,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
         ProcessResponsibility,
         MacosImageSecurity,
         MacosExecImage,
+        MacosExecScript,
         ProcessExecutableVersion,
         MacosExecutionDirectory,
         MacosDescriptorBinding,
@@ -10517,6 +10531,7 @@ class StateManager:
         environment: tuple[str, ...] | None = None,
         image_security: MacosImageSecurity | None = None,
         exec_image: MacosExecImage | None = None,
+        exec_script: MacosExecScript | None = None,
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
         new_posix_session: bool = False,
@@ -10539,6 +10554,7 @@ class StateManager:
             validate_process_environment(environment)
             validate_macos_image_security(image_security, os_category)
             validate_macos_exec_image(exec_image, os_category)
+            validate_macos_exec_script(exec_script, platform=os_category, hostname=system)
             validate_process_executable_version(executable_version, os_category)
             if environment is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit process environment requires a POSIX host")
@@ -10687,6 +10703,7 @@ class StateManager:
                 environment=environment,
                 image_security=image_security,
                 exec_image=exec_image,
+                exec_script=exec_script,
                 executable_version=executable_version,
                 execution_directory=execution_directory,
                 responsibility=responsibility,
@@ -10925,6 +10942,7 @@ class StateManager:
         environment: tuple[str, ...] | None,
         image_security: MacosImageSecurity | None,
         exec_image: MacosExecImage | None,
+        exec_script: MacosExecScript | None,
         executable_version: ProcessExecutableVersion | None,
         execution_directory: MacosExecutionDirectory | None,
         new_posix_session: bool,
@@ -10957,6 +10975,7 @@ class StateManager:
             validate_process_environment(environment)
             validate_macos_image_security(image_security, os_category)
             validate_macos_exec_image(exec_image, os_category)
+            validate_macos_exec_script(exec_script, platform=os_category, hostname=system)
             validate_process_executable_version(executable_version, os_category)
             if environment is not None and os_category not in {"macos", "linux"}:
                 raise StateError("Explicit process environment requires a POSIX host")
@@ -11219,6 +11238,7 @@ class StateManager:
                 environment=environment,
                 image_security=image_security,
                 exec_image=exec_image,
+                exec_script=exec_script,
                 executable_version=executable_version,
                 execution_directory=execution_directory,
                 responsibility=responsibility,
@@ -12306,6 +12326,7 @@ class StateManager:
                     environment=after.environment,
                     image_security=after.image_security,
                     exec_image=after.exec_image,
+                    exec_script=after.exec_script,
                     executable_version=after.executable_version,
                     execution_directory=after.execution_directory,
                     credentials=after.credentials,
@@ -12683,6 +12704,7 @@ class StateManager:
             environment=identity.environment,
             image_security=identity.image_security,
             exec_image=identity.exec_image,
+            exec_script=identity.exec_script,
             executable_version=identity.executable_version,
             execution_directory=identity.execution_directory,
             directory_history=(
@@ -14843,6 +14865,7 @@ class StateManager:
             process.environment = execution.after.environment
             process.image_security = execution.after.image_security
             process.exec_image = execution.after.exec_image
+            process.exec_script = execution.after.exec_script
             process.executable_version = execution.after.executable_version
             process.execution_directory = execution.after.execution_directory
             if execution.descriptors_after is not None:
@@ -16866,6 +16889,7 @@ class StateManager:
             environment=process.environment,
             image_security=process.image_security,
             exec_image=process.exec_image,
+            exec_script=process.exec_script,
             executable_version=process.executable_version,
             execution_directory=process.execution_directory,
             responsibility=process.responsibility,
@@ -16899,6 +16923,7 @@ class StateManager:
             identity.environment,
             identity.image_security,
             identity.exec_image,
+            identity.exec_script,
             identity.executable_version,
             identity.execution_directory,
             identity.parentage,

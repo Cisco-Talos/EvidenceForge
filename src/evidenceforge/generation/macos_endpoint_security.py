@@ -13,7 +13,8 @@ from evidenceforge.events.macos_file import MacosFileMetadata
 from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
 from evidenceforge.events.process_observation import ProcessRelationshipObservation
-from evidenceforge.formats.macos_endpoint_security import ESProcess
+from evidenceforge.formats.macos_endpoint_security import ESFile, ESProcess
+from evidenceforge.formats.macos_file_metadata import es_script_at_execution
 from evidenceforge.formats.macos_process_snapshot import es_process_from_observations
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
@@ -191,3 +192,43 @@ def _project_runtime_process(
         )
     except ValueError as error:
         raise StateError(f"Incomplete ES runtime process facts: {error}") from error
+
+
+def prepare_runtime_es_exec_script(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    process: ProcessIdentity,
+) -> ESFile | None:
+    """Prepare known script facts for the exact live execution before delayed rendering.
+
+    A reference must already be retained by its artifact owner. This helper neither
+    interprets commands nor extends retention nor admits a native event family.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(process) is not ProcessIdentity
+    ):
+        raise StateError("ES script preparation requires exact canonical owners")
+    with state._lock:
+        if (
+            state._pid_os.get(process.hostname) != "macos"
+            or state.get_process_identity(process.hostname, process.pid) != process
+            or not state.is_process_active_at(
+                process.hostname, process.pid, process.execution_started_at
+            )
+        ):
+            raise StateError("ES script preparation requires its exact live Mac execution")
+        script = process.exec_script
+        if script is None:
+            raise StateError("ES script preparation requires explicitly known script facts")
+        record = (
+            None
+            if script.artifact_version_id is None
+            else artifacts.resolve_version(script.artifact_version_id)
+        )
+        try:
+            return es_script_at_execution(process, record)
+        except ValueError as error:
+            raise StateError(f"Incomplete ES script facts: {error}") from error

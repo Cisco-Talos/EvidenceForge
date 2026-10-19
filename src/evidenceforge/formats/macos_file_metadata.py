@@ -5,6 +5,7 @@
 
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord
 from evidenceforge.events.identity import ProcessIdentity
+from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
 from evidenceforge.events.macos_file import (
     MacosDirectoryMetadata,
@@ -84,3 +85,30 @@ def _es_file(
             st_gen=metadata.generation,
         ),
     )
+
+
+def es_script_at_execution(
+    process: ProcessIdentity, record: LocalArtifactVersionRecord | None = None
+) -> ESFile | None:
+    """Project known shebang-script truth; arguments never establish script presence.
+
+    The loaded interpreter's image/version stays separate from this script file.
+    Missing metadata or a replacement at the same path cannot satisfy the reference.
+    """
+    if type(process) is not ProcessIdentity or process.exec_script is None:
+        raise ValueError("ES exec script requires explicitly known execution facts")
+    process.__post_init__()
+    script = process.exec_script
+    validate_macos_exec_script(script, platform="macos", hostname=process.hostname)
+    if script.artifact_version_id is None:
+        if record is not None:
+            raise ValueError("Known script absence cannot carry a script file")
+        return None
+    if (
+        type(record) is not LocalArtifactVersionRecord
+        or MacosExecScript.from_runtime_record(record) != script
+        or process.executable_version is None
+        or process.executable_version.platform != "macos"
+    ):
+        raise ValueError("ES exec script requires its exact file and a distinct loaded interpreter")
+    return es_file_from_runtime_record(record)

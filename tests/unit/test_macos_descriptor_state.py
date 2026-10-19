@@ -201,7 +201,7 @@ def test_old_record_migrates_to_unknown_descriptors_and_new_history_is_bounded()
     state, process = _process()
     row = state.get_process(process.hostname, process.pid)
     fields = encode_state_value(row)[2]
-    assert len(fields) == 44
+    assert len(fields) == 45
     old = decode_state_value(["record", "running-process-v18", fields[:42]])
     assert old.descriptor_history == ()
     for second in range(70):

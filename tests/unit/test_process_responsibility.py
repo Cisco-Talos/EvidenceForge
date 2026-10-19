@@ -189,13 +189,13 @@ def test_state_codec_preserves_explicit_absence_and_migrates_unknown_legacy() ->
     subject = _launch(state, root, second=1, responsibility=ProcessResponsibility(None))
     assert decode_state_value(encode_state_value(subject)) == subject
     encoded = encode_state_value(subject)
-    assert encoded[1] == "process-identity-v13"
+    assert encoded[1] == "process-identity-v14"
     legacy = [*encoded[:2], encoded[2][:21]]
     legacy[1] = "process-identity-v8"
     assert decode_state_value(legacy) == replace(subject, responsibility=None)
     running = state.get_process(subject.hostname, subject.pid)
     encoded = encode_state_value(running)
-    assert encoded[1] == "running-process-v20"
+    assert encoded[1] == "running-process-v21"
     legacy = [*encoded[:2], encoded[2][:37]]
     legacy[1] = "running-process-v13"
     assert decode_state_value(legacy).responsibility is None

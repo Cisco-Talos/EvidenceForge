@@ -33,6 +33,7 @@ from pydantic import Field
 
 from evidenceforge.events.job_control import PosixGroupIdentity
 from evidenceforge.events.macos_exec_image import MacosExecImage
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import (
     MacosExecutionDirectory,
     validate_macos_execution_directory,
@@ -391,6 +392,7 @@ class ProcessIdentity:
     execution_directory: MacosExecutionDirectory | None = None
     executable_version: ProcessExecutableVersion | None = None
     exec_image: MacosExecImage | None = None
+    exec_script: MacosExecScript | None = None
 
     @property
     def initial_image(self) -> str:
@@ -428,6 +430,28 @@ class ProcessIdentity:
         validate_macos_execution_directory(
             self.execution_directory, hostname=self.hostname, observed_at=self.execution_started_at
         )
+        if self.exec_script is not None:
+            if type(self.exec_script) is not MacosExecScript:
+                raise ValueError("Process script requires exact immutable facts")
+            self.exec_script.__post_init__()
+            if (
+                self.exec_script.hostname is not None
+                and self.exec_script.hostname.casefold() != self.hostname.casefold()
+            ):
+                raise ValueError("Process script belongs to another host")
+        if (
+            self.exec_script is not None
+            and self.exec_script.content_id is not None
+            and self.executable_version is not None
+        ):
+            if (
+                self.exec_script.content_id == self.executable_version.content_id
+                or self.exec_script.artifact_version_id
+                == self.executable_version.artifact_version_id
+            ):
+                raise ValueError(
+                    "Execution script and loaded interpreter require distinct file identities"
+                )
         if self.exec_image is not None:
             if type(self.exec_image) is not MacosExecImage:
                 raise ValueError("Process execution image requires its exact type")

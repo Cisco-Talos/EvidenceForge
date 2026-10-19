@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 244
+current_revision: 245
 history_start_revision: 1
-behavior_surface_sha256: a34b463df01df30249ef65c5df3e9cf5264edaa64647dcb53ed8e045f0c21ed3
+behavior_surface_sha256: 5c48a7ef64e77a7bd8af1caef5e58916bc7aabf6a303550d1da8e44188410683
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2369,3 +2369,10 @@ changes:
       - macos-process-execution
     formats: []
     summary: Retains explicit arm64 image subtype and pre-resolution exec path through fork, replacement and checkpoints; historical projection does not enable native event output.
+  - revision: 245
+    id: canonical-macos-exec-script-linkage
+    impact: localized
+    domains:
+      - macos-process-execution
+    formats: []
+    summary: Retains exact shebang-script linkage independently of interpreter images and argv through fork, failed exec and checkpoint restore; no native family is enabled.
