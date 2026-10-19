@@ -42,13 +42,19 @@ class _Fixture:
     clock: MacosBootClock
 
 
-def _fixture(status: str = "visible", *, fork: bool = True, installed: bool = False) -> _Fixture:
+def _fixture(
+    status: str = "visible",
+    *,
+    fork: bool = True,
+    installed: bool = False,
+    born_loaded: bool = False,
+) -> _Fixture:
     if installed:
         from tests.unit.test_macos_installed_es_preparation import _setup as installed_setup
 
         state, executables, parent, _ = installed_setup()
     else:
-        state, content, parent, _ = _setup()
+        state, content, parent, _ = _setup(born_loaded=born_loaded)
         executables = content.registry
     owner = ESCollectionActionOwner(state, ESCollectorRegistry())
     profile = owner.open(

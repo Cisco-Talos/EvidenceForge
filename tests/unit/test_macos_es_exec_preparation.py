@@ -69,8 +69,9 @@ def _fixture(
     status: str = "visible",
     missing: str | None = None,
     providers: str = "rr",
+    born_loaded: bool = False,
 ) -> _Fixture:
-    state, content, actor, _ = _setup()
+    state, content, actor, _ = _setup(born_loaded=born_loaded)
     runtime_version = actor.executable_version
     deployments = None
     installed_version = None

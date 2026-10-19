@@ -159,3 +159,6 @@ Authenticated surviving-child adoption can now share a native terminal-preparati
 
 ### Reversible collector publication — revision 286
 Prepared single and grouped counters can apply provisionally and roll back with an outer canonical transaction, retaining exact observations and frozen bytes. Completion proofs publish only on finalization. This supplies a transaction component; dispatcher/native-sink integration and source admission remain open, as do ES-R1 and GK-R1.
+
+### Exact dispatcher collector participation — revision 287
+Authenticated frozen single fork/exec/exit deliveries now join the existing exact canonical State/lifecycle/artifact publication transaction. Counter rollback, nested completion proofs, cancellation ownership, filtering, existing-source fault recovery and checkpoint reconstruction are tested. Native bytes use the existing retained-byte budget. This still does not attach a native sink, admit ES generation or validate macOS 26 exec/exit. Grouped delivery integration, production metadata and native sink publication remain engineering gates; ES-R1/GK-R1 are unchanged.

@@ -34,7 +34,9 @@ def _publish(
         prepared.commit()
 
 
-def _setup() -> tuple[
+def _setup(
+    *, born_loaded: bool = False
+) -> tuple[
     StateManager, RuntimeContentIdentityManager, ProcessIdentity, MacosProcessCollectionObservation
 ]:
     state, _, _, process = _family()
@@ -43,14 +45,33 @@ def _setup() -> tuple[
     _publish(content, descriptor, process.started_at)
     record = content.build_record(descriptor)
     builder = state.begin_action_cohort_materialization()
-    process = builder.execute_process(
-        process,
-        image=record.artifact.native_path,
-        command_line="invented-worker",
-        executed_at=process.started_at + timedelta(seconds=1),
-        executable_version=ProcessExecutableVersion.from_binary(record.binary),
-        image_security=MacosImageSecurity(7, False, 3),
-    )
+    if born_loaded:
+        # Integrated lifecycle tests start with a loaded birth; the default below
+        # deliberately exercises low-level executable replacement without dispatch.
+        loaded = builder.plan_process(
+            system=process.hostname,
+            parent_pid=process.parent_pid,
+            image=record.artifact.native_path,
+            command_line="invented-worker",
+            username=process.principal,
+            integrity_level="Medium",
+            os_category="macos",
+            start_time=process.started_at + timedelta(seconds=1),
+            credentials=process.credentials,
+            responsibility=process.responsibility,
+            executable_version=ProcessExecutableVersion.from_binary(record.binary),
+            image_security=MacosImageSecurity(7, False, 3),
+        )
+        process = loaded.identity
+    else:
+        process = builder.execute_process(
+            process,
+            image=record.artifact.native_path,
+            command_line="invented-worker",
+            executed_at=process.started_at + timedelta(seconds=1),
+            executable_version=ProcessExecutableVersion.from_binary(record.binary),
+            image_security=MacosImageSecurity(7, False, 3),
+        )
     state.materialize_action_cohort(builder.seal())
     collection = MacosProcessCollectionObservation(
         process, process.execution_started_at, False, "absent"

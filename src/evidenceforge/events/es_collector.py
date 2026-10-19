@@ -163,6 +163,11 @@ class PreparedESDeliveryCommit:
         )
 
     @property
+    def publication_token(self) -> str:
+        """Return the prepared completion proof for an outer canonical receipt."""
+        return self._registry._delivery_claim(self).proof.hex()
+
+    @property
     def committed(self) -> bool:
         """Whether this active claim finalized its counter publication."""
         return self._registry._delivery_claim(self).committed
@@ -944,6 +949,37 @@ class ESCollectorRegistry:
                 raise StateError("ES native projection belongs to another canonical publication")
             return None if native is None else native.ndjson
 
+    def owns_pending_delivery(self, capability: object) -> bool:
+        """Locate cleanup ownership even when caller-held observation fields changed.
+
+        This does not authenticate event facts or authorize publication. At most
+        128 source slots are inspected; only the exact reserved object can match.
+        """
+        if type(capability) is not ESDeliveryPreparation:
+            return False
+        with self._lock:
+            return any(
+                type(pending) is _Pending and pending.capability is capability
+                for pending in self._pending.values()
+            )
+
+    def authenticates_pending_delivery(self, capability: object) -> bool:
+        """Whether this exact uncompleted capability still owns its reservation."""
+        if (
+            type(capability) is not ESDeliveryPreparation
+            or type(capability.observation) is not ESCollectorObservation
+        ):
+            return False
+        with self._lock:
+            pending = self._pending.get(capability.observation.source_instance)
+            return bool(
+                type(pending) is _Pending
+                and pending.capability is capability
+                and pending.observation == capability.observation
+                and pending.native_projection is capability._native_projection
+                and self._native_authenticates(capability)
+            )
+
     def completed_observation(
         self, capability: ESDeliveryPreparation
     ) -> ESCollectorObservation | None:
@@ -1073,12 +1109,20 @@ class ESCollectorRegistry:
         if type(capability) is not ESDeliveryPreparation:
             raise StateError("ES cancellation requires its exact capability")
         with self._lock:
-            key = capability.observation.source_instance
+            # Cancellation owns the original reservation, not the caller's mutable
+            # observation locator. A changed field must not strand a source slot.
+            key = next(
+                (
+                    source_instance
+                    for source_instance, pending in self._pending.items()
+                    if type(pending) is _Pending and pending.capability is capability
+                ),
+                None,
+            )
+            if key is None:
+                raise StateError("ES cancellation capability is stale")
             if key in self._claimed:
                 raise StateError("ES cancellation requires an unclaimed reservation")
-            pending = self._pending.get(key)
-            if pending is None or pending.capability is not capability:
-                raise StateError("ES cancellation capability is stale")
             del self._pending[key]
 
     def snapshot(self) -> tuple[ESCollectorState, ...]:

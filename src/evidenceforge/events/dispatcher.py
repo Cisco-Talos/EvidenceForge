@@ -76,7 +76,12 @@ from evidenceforge.events.contracts import (
     SemanticOccurrenceKey,
     shadow_seal,
 )
-from evidenceforge.events.es_collector import ESCollectorRegistry
+from evidenceforge.events.es_collector import (
+    ESCollectorObservation,
+    ESCollectorRegistry,
+    ESDeliveryPreparation,
+    PreparedESDeliveryCommit,
+)
 from evidenceforge.events.evidence_requirements import (
     PERSISTENT_WINDOWS_SMB_TARGET_FORMATS as _PERSISTENT_SMB_PROJECTION_TARGET_ORDER,
 )
@@ -902,6 +907,13 @@ class _PreparedActionCohortBatchRecord:
     retained_bytes: int
     member_cleanup_status: list[bool]
     artifact_cleanup_status: list[bool]
+    es_registry: ESCollectorRegistry | None = None
+    es_delivery: ESDeliveryPreparation | None = None
+    es_collector_process: ProcessIdentity | None = None
+    es_native_projection: str | None = None
+    es_claimed: PreparedESDeliveryCommit | None = None
+    es_publication_token: str = ""
+    es_cleanup_complete: bool = True
     prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
     prepared_binary_counts: Counter[str] | None = None
     prepared_latest_network_observations_uid: str = ""
@@ -7391,6 +7403,17 @@ class EventDispatcher:
         ):
             return False
         try:
+            if record.es_delivery is not None:
+                self._validate_action_cohort_es_delivery(record)
+                if (
+                    record.es_claimed is None
+                    or record.es_claimed.observation != record.es_delivery.observation
+                    or record.es_claimed.publication_token != record.es_publication_token
+                    or record.es_claimed.committed
+                ):
+                    return False
+            elif record.es_claimed is not None or record.es_publication_token:
+                return False
             if (
                 state_claimed.expected_result is not state_result
                 or type(record.expected_state_result_publication_token) is not str
@@ -7569,6 +7592,8 @@ class EventDispatcher:
             ),
             ("timing", timing_receipt._integrity),
         )
+        if record.es_delivery is not None:
+            nested_publication_tokens += (("es_collector", record.es_publication_token),)
         receipt = ActionCohortPublicationReceipt(
             dispatcher_id=self._action_cohort_dispatcher_id,
             receipt_id=secrets.token_hex(16),
@@ -10378,6 +10403,8 @@ class EventDispatcher:
     ) -> bool:
         """Check retained owner identities and lifecycle states without graph hashing."""
 
+        if record.es_delivery is not None:
+            self._validate_action_cohort_es_delivery(record)
         authority = self._lifecycle_authority
         if authority is None or self._execution_effect_audit is not record.execution_effect_audit:
             return False
@@ -10575,6 +10602,145 @@ class EventDispatcher:
         except BaseException:
             return False
 
+    def bind_es_delivery_to_action_cohort(
+        self,
+        batch: PreparedActionCohortBatch,
+        *,
+        delivery: ESDeliveryPreparation,
+        collector_process: ProcessIdentity,
+    ) -> None:
+        """Join one frozen native delivery to an exact Mac process transaction.
+
+        This binds counters and retained native bytes, not a native output sink.
+        Single fork/exec/exit cohorts only; the ordinary dispatcher still owns
+        canonical state, lifecycle, artifact leases and existing source recovery.
+        Once bound, batch cancellation also owns the collector reservation.
+        """
+        if (
+            type(delivery) is not ESDeliveryPreparation
+            or type(collector_process) is not ProcessIdentity
+        ):
+            raise EventContractError(
+                "Action-cohort ES binding requires exact delivery and collector"
+            )
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        with self._action_cohort_lock:
+            record = self._active_action_cohort_batch_locked(batch)
+            if record.es_delivery is not None:
+                raise EventContractError("Action-cohort already owns an ES delivery")
+        if not self._action_cohort_batch_record_authenticates(record):
+            raise EventContractError(
+                "Action-cohort ES binding requires an authenticated prepared batch"
+            )
+        owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
+        with owner.prepared_commit(delivery, collector_process):
+            native = self._validate_action_cohort_es_values(
+                record, self.es_collectors, delivery, collector_process
+            )
+            retained_bytes = len(native.encode("utf-8"))
+            with self._action_cohort_lock:
+                if (
+                    self._active_action_cohort_batch_locked(batch) is not record
+                    or record.es_delivery is not None
+                ):
+                    raise EventContractError("Action-cohort changed during ES binding")
+                if (
+                    self._action_cohort_retained_bytes
+                    + self._action_cohort_projection_retained_bytes
+                    + retained_bytes
+                    > self._action_cohort_byte_capacity
+                ):
+                    raise EventContractError(
+                        "Action-cohort ES native bytes exceed retained capacity"
+                    )
+                record.es_registry = self.es_collectors
+                record.es_delivery = delivery
+                record.es_collector_process = collector_process
+                record.es_native_projection = native
+                record.es_cleanup_complete = False
+                record.retained_bytes += retained_bytes
+                self._action_cohort_retained_bytes += retained_bytes
+
+    def _validate_action_cohort_es_values(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryPreparation,
+        collector: ProcessIdentity,
+    ) -> str:
+        """Require exact occurrence, State and source-counter ownership before mutation."""
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        expected_type = {"posix_fork": 11, "posix_exec": 9, "posix_exit": 15}.get(
+            record.exact_projection_kind
+        )
+        if (
+            registry is not self.es_collectors
+            or not record.exact_projection
+            or expected_type is None
+            or len(record.member_occurrences) != 1
+            or not registry.authenticates_pending_delivery(delivery)
+        ):
+            raise EventContractError(
+                "ES binding requires one exact Mac fork, exec or exit delivery"
+            )
+        event = record.member_occurrences[0]
+        observation = delivery.observation
+        if (
+            event.src_host is None
+            or event.src_host.os_category != "macos"
+            or observation.hostname != event.src_host.hostname
+            or observation.occurrence_id != record.root_action_id
+            or observation.event_type != expected_type
+            or observation.observed_at != event.timestamp
+            or collector.hostname != observation.hostname
+            or any(
+                item.identity.object_id == collector.object_id
+                for item in record.state_plan.process_terminations
+            )
+            or any(
+                item.target.object_id == collector.object_id
+                for item in record.state_plan.process_executions
+            )
+        ):
+            raise EventContractError(
+                "ES binding disagrees with its exact canonical process occurrence"
+            )
+        owner = ESCollectionActionOwner(self.state_manager, registry)
+        expected_collector = owner._live_process(collector, observation.observed_at)
+        if observation.collector_process != expected_collector:
+            raise EventContractError("ES binding lost its exact collector execution")
+        native = registry.retained_native_projection(
+            delivery, canonical_token=record.state_plan.publication_token
+        )
+        if native is None:
+            raise EventContractError(
+                "ES binding requires frozen native bytes before canonical publication"
+            )
+        return native
+
+    def _validate_action_cohort_es_delivery(self, record: _PreparedActionCohortBatchRecord) -> None:
+        if (
+            record.es_registry is None
+            or record.es_delivery is None
+            or record.es_collector_process is None
+        ):
+            raise EventContractError("Action-cohort ES binding lost its retained owners")
+        native = self._validate_action_cohort_es_values(
+            record, record.es_registry, record.es_delivery, record.es_collector_process
+        )
+        if native != record.es_native_projection:
+            raise EventContractError("Action-cohort ES native bytes changed after binding")
+
+    @staticmethod
+    def _finalize_action_cohort_es_delivery(
+        record: _PreparedActionCohortBatchRecord,
+    ) -> ESCollectorObservation:
+        assert record.es_claimed is not None and record.es_delivery is not None
+        record.es_claimed.finalize_no_fail()
+        return record.es_delivery.observation
+
     def _active_claimed_action_cohort_locked(
         self,
         capability: PreparedActionCohortCapability,
@@ -10691,6 +10857,20 @@ class EventDispatcher:
                     )
                     artifact_claimed = artifact_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], artifact_context))
+
+                if record.es_delivery is not None:
+                    from evidenceforge.generation.actions.es_collection import (
+                        ESCollectionActionOwner,
+                    )
+
+                    self._validate_action_cohort_es_delivery(record)
+                    es_owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
+                    es_context = es_owner.prepared_commit(
+                        record.es_delivery, record.es_collector_process
+                    )
+                    record.es_claimed = es_context.__enter__()
+                    entered.append(cast(AbstractContextManager[object], es_context))
+                    record.es_publication_token = record.es_claimed.publication_token
 
                 record.claim_thread_id = get_ident()
                 record.timing_claimed = timing_claimed
@@ -10829,6 +11009,7 @@ class EventDispatcher:
         if not all(
             (
                 record.members_cleanup_complete,
+                record.es_cleanup_complete,
                 record.artifact_cleanup_complete,
                 record.intent_cleanup_complete,
                 record.audit_cleanup_complete,
@@ -11051,6 +11232,8 @@ class EventDispatcher:
                         # Provisional State remains reversible. An exception here exits every
                         # claim before another canonical owner commits, so State rolls back.
                         state_claimed.apply_provisional()
+                        if record.es_claimed is not None:
+                            record.es_claimed.apply_provisional()
                         if record.artifact_claimed is not None:
                             artifact_claimed = record.artifact_claimed
                             artifact_receipt = record.expected_artifact_receipt
@@ -11153,6 +11336,17 @@ class EventDispatcher:
                             ),
                             label="Exact action-cohort State owner",
                         )
+                        if record.es_claimed is not None:
+                            self._commit_exact_expected_owner(
+                                lambda: self._finalize_action_cohort_es_delivery(record),
+                                expected=record.es_delivery.observation,
+                                terminal_authenticates=lambda: bool(
+                                    record.es_registry.completed_observation(record.es_delivery)
+                                    is record.es_delivery.observation
+                                ),
+                                label="Exact action-cohort ES collector owner",
+                            )
+                            record.es_cleanup_complete = True
                     else:
                         # Runtime artifacts publish first through their reversible group owner.
                         # Every later owner has crossed its composite certification fence, so a
@@ -11855,6 +12049,20 @@ class EventDispatcher:
         """Attempt every trusted cleanup and return failures without short-circuiting."""
 
         failures: list[BaseException] = []
+        if not record.es_cleanup_complete:
+            try:
+                if record.es_registry is None or record.es_delivery is None:
+                    raise EventContractError("Action-cohort ES cleanup lost its exact owner")
+                if record.es_registry.owns_pending_delivery(record.es_delivery):
+                    record.es_registry.cancel(record.es_delivery)
+                record.es_cleanup_complete = True
+            except BaseException as exc:
+                if record.es_registry is not None and not record.es_registry.owns_pending_delivery(
+                    record.es_delivery
+                ):
+                    record.es_cleanup_complete = True
+                else:
+                    failures.append(exc)
         exact_batch = record.exact_publication_batch
         if exact_batch is None:
             record.exact_cleanup_complete = True
