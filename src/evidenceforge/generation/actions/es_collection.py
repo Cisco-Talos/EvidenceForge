@@ -7,6 +7,8 @@ This adapter supplies ownership only. It neither enables a native renderer nor
 claims an atomic native sink. Unknown legacy owners cannot authorize delivery.
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 
 from evidenceforge.events.es_collector import (
@@ -16,6 +18,7 @@ from evidenceforge.events.es_collector import (
     ESCollectorState,
     ESDeliveryPreparation,
     ESKernelLoss,
+    PreparedESDeliveryCommit,
 )
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.observation import ObservationDecision
@@ -102,13 +105,15 @@ class ESCollectionActionOwner:
                 kernel_lost=kernel_lost,
             )
 
-    def commit(
+    @contextmanager
+    def prepared_commit(
         self, capability: ESDeliveryPreparation, process: ProcessIdentity
-    ) -> ESCollectorObservation:
-        """Revalidate live ownership before counter commit; authenticate completed retries.
+    ) -> Iterator[PreparedESDeliveryCommit]:
+        """Fence exact State ownership and counters for an outer atomic publication.
 
-        This couples State admission and counters, not native sink publication.
-        A failed revalidation leaves the exact reservation available for cancellation.
+        Acquire State before the collector and retain both through the caller's
+        commit. Completed proof retries remain admissible after owner exit or
+        exec; they cannot allocate counters again. No source bytes are written.
         """
         if (
             type(capability) is not ESDeliveryPreparation
@@ -118,9 +123,16 @@ class ESCollectionActionOwner:
             or capability.observation.collector_process != _process(process)
         ):
             raise StateError("Bound collector commit requires its exact owning execution")
-        completed = self.collectors.completed_observation(capability)
-        if completed is not None:
-            return completed
         with self.state._lock:
-            self._live_process(process, capability.observation.observed_at)
-            return self.collectors.commit(capability)
+            if self.collectors.completed_observation(capability) is None:
+                self._live_process(process, capability.observation.observed_at)
+            with self.collectors.prepared_delivery(capability) as prepared:
+                yield prepared
+
+    def commit(
+        self, capability: ESDeliveryPreparation, process: ProcessIdentity
+    ) -> ESCollectorObservation:
+        """Revalidate ownership and commit once; retain proof across lost returns."""
+        with self.prepared_commit(capability, process) as prepared:
+            prepared.commit_no_fail()
+            return prepared.observation

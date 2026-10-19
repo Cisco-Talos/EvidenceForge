@@ -12,9 +12,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from threading import RLock
+from threading import RLock, get_ident
 from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -120,6 +122,38 @@ class _Pending:
     observation: ESCollectorObservation
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedESDeliveryCommit:
+    """Opaque lock-held counter commit for an outer atomic owner.
+
+    The registry keeps every authoritative preimage and result. A copied or
+    modified handle cannot supply replacement counters or completion proofs.
+    """
+
+    _registry: ESCollectorRegistry
+    _source_instance: str
+
+    @property
+    def observation(self) -> ESCollectorObservation:
+        """Return the registry-owned immutable observation while the claim is active."""
+        return self._registry._delivery_claim(self).observation
+
+    def commit_no_fail(self) -> None:
+        """Publish the prevalidated registry-owned state under retained owner locks."""
+        self._registry._commit_claimed_delivery(self)
+
+
+@dataclass(slots=True)
+class _DeliveryClaim:
+    handle: PreparedESDeliveryCommit
+    capability: ESDeliveryPreparation
+    observation: ESCollectorObservation
+    after: ESCollectorState | None
+    proof: bytes
+    thread_id: int
+    committed: bool = False
+
+
 class ESCollectorRegistry:
     """Transactional source-local counters with bounded current-client state.
 
@@ -134,6 +168,7 @@ class ESCollectorRegistry:
         self._lock = RLock()
         self._states: dict[str, ESCollectorState] = {}
         self._pending: dict[str, _Pending] = {}
+        self._claimed: dict[str, _DeliveryClaim] = {}
         self._secret = secrets.token_bytes(32)
 
     def open(self, state: ESCollectorState) -> None:
@@ -149,7 +184,7 @@ class ESCollectorRegistry:
             raise StateError("New ES client connection cannot contain delivered history")
         with self._lock:
             previous = self._states.get(state.source_instance)
-            if state.source_instance in self._pending:
+            if state.source_instance in self._pending or state.source_instance in self._claimed:
                 raise StateError("ES client restart requires completed publication")
             if previous is None:
                 if len(self._states) >= 128 or state.generation != 1:
@@ -181,7 +216,11 @@ class ESCollectorRegistry:
         )
         with self._lock:
             current = self._states.get(expected.source_instance)
-            if current != expected or expected.source_instance in self._pending:
+            if (
+                current != expected
+                or expected.source_instance in self._pending
+                or expected.source_instance in self._claimed
+            ):
                 raise StateError("Collector closure requires the unchanged idle connection")
             if current.closed_at is not None:
                 if current.closed_at == closed_at:
@@ -217,7 +256,12 @@ class ESCollectorRegistry:
         )
         with self._lock:
             before = self._states.get(source_instance)
-            if before is None or before.closed_at is not None or source_instance in self._pending:
+            if (
+                before is None
+                or before.closed_at is not None
+                or source_instance in self._pending
+                or source_instance in self._claimed
+            ):
                 raise StateError("ES delivery requires an open idle client")
             if (
                 type(generation) is not int
@@ -295,30 +339,81 @@ class ESCollectorRegistry:
                 return capability.observation
             return None
 
-    def commit(self, capability: ESDeliveryPreparation) -> ESCollectorObservation:
-        """Advance once; retry a proven completed publication without allocating again."""
+    @contextmanager
+    def prepared_delivery(
+        self, capability: ESDeliveryPreparation
+    ) -> Iterator[PreparedESDeliveryCommit]:
+        """Prevalidate and retain the collector lock for a composite's final commit.
+
+        This is a counter transaction component, not a sink or State commit.
+        The outer owner must acquire State before this registry, prepare all
+        fallible work first, and invoke commit_no_fail only at its commit point.
+        """
         if (
             type(capability) is not ESDeliveryPreparation
             or type(capability.observation) is not ESCollectorObservation
         ):
             raise StateError("ES publication requires its exact capability")
         with self._lock:
-            if capability._proof and hmac.compare_digest(
-                capability._proof, self._proof(capability)
-            ):
-                return capability.observation
             key = capability.observation.source_instance
-            pending = self._pending.get(key)
-            if (
-                pending is None
-                or pending.capability is not capability
-                or pending.observation != capability.observation
-            ):
-                raise StateError("ES publication capability is stale or changed")
-            self._states[key] = pending.after
-            object.__setattr__(capability, "_proof", self._proof(capability))
+            if key in self._claimed:
+                raise StateError("ES delivery already has an active commit scope")
+            completed = self.completed_observation(capability)
+            prepared = PreparedESDeliveryCommit(self, key)
+            if completed is not None:
+                claim = _DeliveryClaim(
+                    prepared, capability, completed, None, capability._proof, get_ident()
+                )
+            else:
+                pending = self._pending.get(key)
+                if (
+                    pending is None
+                    or pending.capability is not capability
+                    or pending.observation != capability.observation
+                ):
+                    raise StateError("ES publication capability is stale or changed")
+                proof = self._proof(capability)
+                claim = _DeliveryClaim(
+                    prepared, capability, pending.observation, pending.after, proof, get_ident()
+                )
+            self._claimed[key] = claim
+            try:
+                yield prepared
+            finally:
+                del self._claimed[key]
+
+    def _delivery_claim(self, handle: PreparedESDeliveryCommit) -> _DeliveryClaim:
+        """Authenticate an exact same-thread active handle without invoking value protocols."""
+        if type(handle) is not PreparedESDeliveryCommit:
+            raise StateError("ES counter commit requires its active preparation scope")
+        key = object.__getattribute__(handle, "_source_instance")
+        claim = self._claimed.get(key) if type(key) is str else None
+        if (
+            claim is None
+            or claim.handle is not handle
+            or claim.thread_id != get_ident()
+            or object.__getattribute__(handle, "_registry") is not self
+        ):
+            raise StateError("ES counter commit requires its active preparation scope")
+        return claim
+
+    def _commit_claimed_delivery(self, handle: PreparedESDeliveryCommit) -> None:
+        """Perform only prepared dictionary/proof writes at the composite commit point."""
+        claim = self._delivery_claim(handle)
+        if claim.committed:
+            return
+        if claim.after is not None:
+            key = claim.observation.source_instance
+            self._states[key] = claim.after
+            object.__setattr__(claim.capability, "_proof", claim.proof)
             del self._pending[key]
-            return pending.observation
+        claim.committed = True
+
+    def commit(self, capability: ESDeliveryPreparation) -> ESCollectorObservation:
+        """Advance once; retry a proven completed publication without allocating again."""
+        with self.prepared_delivery(capability) as prepared:
+            prepared.commit_no_fail()
+            return prepared.observation
 
     def cancel(self, capability: ESDeliveryPreparation) -> None:
         """Release only an exact uncommitted reservation."""
@@ -326,6 +421,8 @@ class ESCollectorRegistry:
             raise StateError("ES cancellation requires its exact capability")
         with self._lock:
             key = capability.observation.source_instance
+            if key in self._claimed:
+                raise StateError("ES cancellation requires an unclaimed reservation")
             pending = self._pending.get(key)
             if pending is None or pending.capability is not capability:
                 raise StateError("ES cancellation capability is stale")
@@ -334,7 +431,7 @@ class ESCollectorRegistry:
     def snapshot(self) -> tuple[ESCollectorState, ...]:
         """Capture quiescent source state in deterministic instance order."""
         with self._lock:
-            if self._pending:
+            if self._pending or self._claimed:
                 raise StateError("ES checkpoint requires completed or cancelled publication")
             return tuple(
                 ESCollectorState.model_validate_json(self._states[key].model_dump_json())
@@ -356,6 +453,6 @@ class ESCollectorRegistry:
         if keys != tuple(sorted(set(keys))):
             raise StateError("ES checkpoint clients must be unique and sorted")
         with self._lock:
-            if self._states or self._pending:
+            if self._states or self._pending or self._claimed:
                 raise StateError("ES checkpoint requires a fresh collector registry")
             self._states = {state.source_instance: state for state in restored}

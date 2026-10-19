@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 241
+current_revision: 242
 history_start_revision: 1
-behavior_surface_sha256: aaebd39419ba914aff71b165d0de889020a629e7c7d19a5a0834e47eef04cdc5
+behavior_surface_sha256: f3fe295b87e310d95a508e9c2faf2cf383140b7d33103c863e27b75961240f96
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2348,3 +2348,10 @@ changes:
     formats:
       - ecar
     summary: Shares finite-window executable leases, preserves exact loaded versions for explicit process observations, and adds bounded directory state and returning failed-exec semantics without new native source admission.
+  - revision: 242
+    id: preclaimed-macos-collector-commit
+    impact: none
+    domains:
+      - macos-collector-ownership
+    formats: []
+    summary: Exposes a State-fenced prevalidated collector commit component with exact same-thread handles and retry proofs, without native sink publication or source admission.
