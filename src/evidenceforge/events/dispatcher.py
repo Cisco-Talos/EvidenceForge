@@ -5751,6 +5751,7 @@ class EventDispatcher:
         else:
             from evidenceforge.generation.lifecycle_authority import (
                 LifecyclePreparedNetworkReceipt,
+                LifecycleProcessServiceCompositeReceipt,
             )
             from evidenceforge.generation.network_runtime import (
                 PreparedNetworkTransactionRoot,
@@ -5804,6 +5805,11 @@ class EventDispatcher:
                         materialization_receipt,
                     )
                     if isinstance(plan, ProcessTerminationMaterializationPlan)
+                    else authority.authenticates_process_service_composite_receipt(
+                        plan, materialization_receipt
+                    )
+                    if type(materialization_receipt) is LifecycleProcessServiceCompositeReceipt
+                    and type(plan) is ProcessMaterializationPlan
                     else authority.authenticates_materialization_receipt(
                         plan,
                         materialization_receipt,
@@ -5812,11 +5818,16 @@ class EventDispatcher:
                 plan_version = plan.expected_version
             from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
 
-            if type(materialization_receipt) is PosixGroupServiceClosureReceipt and (
+            if type(materialization_receipt) in {
+                PosixGroupServiceClosureReceipt,
+                LifecycleProcessServiceCompositeReceipt,
+            } and (
                 materialization_receipt.source_timing_receipt
                 is not (timing_preparation.receipt if timing_preparation is not None else None)
             ):
-                raise EventContractError("Group closure receipt does not own this source timing")
+                raise EventContractError(
+                    "Service composite receipt does not own this source timing"
+                )
             if prepared._expected_state_version != plan_version or not receipt_authentic:
                 raise EventContractError(
                     "Authority receipt does not authenticate the prepared dispatch plan"

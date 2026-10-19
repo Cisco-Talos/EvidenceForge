@@ -331,3 +331,6 @@ Production system-job leader exit and group unload join explicitly attached coll
 
 ### Authored close timing — revision 298
 Launchd leader/group close projections share one staged timing preparation. Rejection leaves timing unchanged; canonical completion authenticates its exact timing receipt, including lost-acknowledgement recovery. Existing generated evidence is unchanged. This closes preparation rollback and timing-ownership gaps; it does not yet make per-member source publication a recoverable whole-group writer transaction.
+
+### Activation timing — revision 299
+Authored system-job activation stages timing until canonical allocation and verifies its exact completion proof at dispatch. Rejection, retained-image failure and lost lifecycle/State/timing acknowledgements have regression coverage; normal evidence remains unchanged. This does not add automatic activation, GUI launch-agent domains or native ES admission.

@@ -257,17 +257,22 @@ class MacosPersistenceActionBundle:
                     retained_until=retained_until,
                     lease_owner=runtime_executable_lease_owner(identity.hostname, retained_until),
                 )
+            timing = None
             try:
-                prepared = self.dispatcher.prepare_builder(
-                    event,
-                    state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
-                    lifecycle_ticket=plan.process,
-                    artifact_publications=(retention,) if retention is not None else (),
-                )
+                with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+                    prepared = self.dispatcher.prepare_builder(
+                        event,
+                        state_intent=PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START,
+                        lifecycle_ticket=plan.process,
+                        source_timing_preparation=timing,
+                        artifact_publications=(retention,) if retention is not None else (),
+                    )
                 self.dispatcher.validate_prepared(prepared)
                 if retention is None:
                     proof = self.authority.materialize_process_service_composite(
-                        plan.process, self.services.prepare_service_publication(plan.activation)
+                        plan.process,
+                        self.services.prepare_service_publication(plan.activation),
+                        source_timing_preparation=timing,
                     )
                 else:
                     with self.content.registry.prepared_publication(retention) as publication:
@@ -275,13 +280,14 @@ class MacosPersistenceActionBundle:
                             plan.process,
                             self.services.prepare_service_publication(plan.activation),
                             commit_external_first=publication.commit_no_fail,
+                            source_timing_preparation=timing,
                         )
             finally:
+                if timing is not None and not timing.committed:
+                    timing.cancel()
                 if retention is not None:
                     self.content.registry.cancel_prepared(retention)
-            self.dispatcher.publish_prepared(
-                prepared, materialization_receipt=proof.receipt.process_receipt
-            )
+            self.dispatcher.publish_prepared(prepared, materialization_receipt=proof.receipt)
             return MacosPersistenceResult(process=identity)
         if request.operation == "exit":
             close = macos_system_job_leader_exit_completion_plan(

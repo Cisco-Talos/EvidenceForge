@@ -911,6 +911,7 @@ class LifecycleProcessServiceCompositeReceipt:
     process_receipt: LifecycleMaterializationReceipt
     service_receipt: LifecycleServicePublicationReceipt
     _integrity_token: str
+    source_timing_receipt: SourceTimingPreparationReceipt | None = None
 
     @classmethod
     def _issue(
@@ -919,11 +920,12 @@ class LifecycleProcessServiceCompositeReceipt:
         authority_secret: bytes,
         process_receipt: LifecycleMaterializationReceipt,
         service_receipt: LifecycleServicePublicationReceipt,
+        source_timing_receipt: SourceTimingPreparationReceipt | None = None,
     ) -> LifecycleProcessServiceCompositeReceipt:
         """Issue an authority-keyed proof over both registry receipts."""
 
         integrity_token = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
-        return cls(process_receipt, service_receipt, integrity_token)
+        return cls(process_receipt, service_receipt, integrity_token, source_timing_receipt)
 
     def _has_valid_integrity(self, authority_secret: bytes) -> bool:
         expected = sha256(b"process-service-owner-v2\0" + authority_secret).hexdigest()
@@ -8388,6 +8390,7 @@ class GeneratorLifecycleAuthority:
         service_token: LifecycleServiceAdmissionToken,
         *,
         commit_external_first: Callable[[], object] | None = None,
+        source_timing_preparation: SourceTimingPreparation | None = None,
     ) -> LifecycleProcessServiceCompositeResult:
         """Atomically publish one staged process, service, and exact binding.
 
@@ -8399,13 +8402,32 @@ class GeneratorLifecycleAuthority:
         prefix. Successfully committed external retention may conservatively
         survive a lost acknowledgement; it owns no process or service effects.
         The remaining lifecycle/State tail uses validated primitive commits.
+        Optional bound source timing is claimed before State, cancelled on
+        rejection and completed after canonical allocation. Its exact proof is
+        retained in the composite receipt for source publication.
         """
 
         identity = plan.identity
-        process_start = self._process_start_request(plan)
+        timing_receipt = None
         try:
+            if source_timing_preparation is not None and (
+                type(source_timing_preparation) is not SourceTimingPreparation
+                or source_timing_preparation.owner is not self._source_timing_planner
+                or not self._source_timing_planner.authenticates_preparation(
+                    source_timing_preparation
+                )
+                or source_timing_preparation.committed
+            ):
+                raise StateError("Service activation requires its exact uncommitted timing owner")
+            process_start = self._process_start_request(plan)
             self._validate_process_service_admission(plan, process_start, service_token)
-            with self._registry.claimed_service_publication(service_token) as service_publication:
+            with (
+                self._registry.claimed_service_publication(service_token) as service_publication,
+                ExitStack() as external,
+            ):
+                if source_timing_preparation is not None:
+                    external.enter_context(source_timing_preparation.claimed_commit())
+                    timing_receipt = source_timing_preparation.expected_receipt
                 with self._state_manager.materialization_guard(plan):
                     self._state_manager.validate_process_materialization(plan)
                     with self._registry.prepare_start_batch(
@@ -8421,19 +8443,37 @@ class GeneratorLifecycleAuthority:
                             process_start,
                             service_token,
                         )
+                        if source_timing_preparation is not None:
+                            source_timing_preparation.certify_composite_commit(timing_receipt)
                         if commit_external_first is not None:
                             commit_external_first()
-                        ticket.commit()
+                        try:
+                            ticket.commit()
+                        except BaseException:
+                            if source_timing_preparation is None or not ticket.committed:
+                                raise
                         service_receipt = ticket.service_receipt
                         if service_receipt is None:
                             raise AssertionError(
                                 "Composite lifecycle ticket returned no service receipt"
                             )
-                        process = self._state_manager._commit_prevalidated_process_materialization(
-                            plan
-                        )
+                        if source_timing_preparation is None:
+                            process = (
+                                self._state_manager._commit_prevalidated_process_materialization(
+                                    plan
+                                )
+                            )
+                        else:
+                            process = self._commit_service_process_state_recoverably(plan)
+                            self._commit_source_timing_recoverably(source_timing_preparation)
         except BaseException:
             self._discard_service_admission(service_token)
+            if (
+                type(source_timing_preparation) is SourceTimingPreparation
+                and source_timing_preparation.owner is self._source_timing_planner
+                and not source_timing_preparation.committed
+            ):
+                source_timing_preparation.cancel()
             raise
 
         process_receipt = LifecycleMaterializationReceipt._issue(
@@ -8448,8 +8488,34 @@ class GeneratorLifecycleAuthority:
             authority_secret=self._receipt_secret,
             process_receipt=process_receipt,
             service_receipt=service_receipt,
+            source_timing_receipt=timing_receipt,
         )
         return LifecycleProcessServiceCompositeResult(process=process, receipt=receipt)
+
+    def _commit_service_process_state_recoverably(
+        self, plan: ProcessMaterializationPlan
+    ) -> RunningProcess:
+        """Finish exact State allocation after the admitted lifecycle/service commit."""
+        state = self._state_manager
+        first_failure: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                return state._commit_prevalidated_process_materialization(plan)
+            except BaseException as error:
+                if first_failure is None:
+                    first_failure = error
+                current = state.get_process(plan.identity.hostname, plan.identity.pid)
+                if (
+                    state.materialization_version == plan.expected_version + 1
+                    and current is not None
+                    and state.get_process_identity(plan.identity.hostname, plan.identity.pid)
+                    == plan.identity
+                ):
+                    return current
+                if state.materialization_version != plan.expected_version or current is not None:
+                    raise
+        assert first_failure is not None
+        raise first_failure
 
     def authenticates_process_service_composite_receipt(
         self,
@@ -8461,6 +8527,14 @@ class GeneratorLifecycleAuthority:
         if not isinstance(receipt, LifecycleProcessServiceCompositeReceipt):
             return False
         if not receipt._has_valid_integrity(self._receipt_secret):
+            return False
+        if receipt.source_timing_receipt is not None and (
+            type(receipt.source_timing_receipt) is not SourceTimingPreparationReceipt
+            or self._source_timing_planner is None
+            or not self._source_timing_planner.authenticates_preparation_receipt(
+                receipt.source_timing_receipt
+            )
+        ):
             return False
         if not self.authenticates_materialization_receipt(
             plan,

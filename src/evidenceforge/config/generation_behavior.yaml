@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 298
+current_revision: 299
 history_start_revision: 1
-behavior_surface_sha256: 1e270607096896735e852d432733de6cb66227f7e438ba143f07ce6560776512
+behavior_surface_sha256: 2ced1a9fdbb3bc98faa243d31fda2243aa7e5e81d3d8aa66098e2d4b81918016
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2809,3 +2809,12 @@ changes:
     formats:
       - ecar
     summary: Stages authored launchd close timing until the exact service composite commits and preserves rollback, lost acknowledgements and receipt ownership.
+  - revision: 299
+    id: macos-service-start-source-timing-ownership
+    impact: localized
+    domains:
+      - macos-service-lifecycle
+      - source-timing
+    formats:
+      - ecar
+    summary: Commits authored system-job activation timing with exact canonical allocation and recovers complete lifecycle, State and timing acknowledgements without duplicate starts.
