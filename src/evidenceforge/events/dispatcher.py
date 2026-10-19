@@ -79,7 +79,9 @@ from evidenceforge.events.contracts import (
 from evidenceforge.events.es_collector import (
     ESCollectorObservation,
     ESCollectorRegistry,
+    ESDeliveryBatchPreparation,
     ESDeliveryPreparation,
+    PreparedESDeliveryBatchCommit,
     PreparedESDeliveryCommit,
 )
 from evidenceforge.events.evidence_requirements import (
@@ -909,10 +911,10 @@ class _PreparedActionCohortBatchRecord:
     artifact_cleanup_status: list[bool]
     exact_member_identifiers: tuple[tuple[tuple[str, str], ...], ...] = ()
     es_registry: ESCollectorRegistry | None = None
-    es_delivery: ESDeliveryPreparation | None = None
+    es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None
     es_collector_process: ProcessIdentity | None = None
     es_native_projection: str | None = None
-    es_claimed: PreparedESDeliveryCommit | None = None
+    es_claimed: PreparedESDeliveryCommit | PreparedESDeliveryBatchCommit | None = None
     es_publication_token: str = ""
     es_cleanup_complete: bool = True
     prepared_observation_updates: tuple[_ActionCohortPreparedObservationCluster, ...] | None = None
@@ -7408,7 +7410,8 @@ class EventDispatcher:
                 self._validate_action_cohort_es_delivery(record)
                 if (
                     record.es_claimed is None
-                    or record.es_claimed.observation != record.es_delivery.observation
+                    or self._es_delivery_result(record.es_claimed)
+                    != self._es_delivery_result(record.es_delivery)
                     or record.es_claimed.publication_token != record.es_publication_token
                     or record.es_claimed.committed
                 ):
@@ -10765,18 +10768,18 @@ class EventDispatcher:
         self,
         batch: PreparedActionCohortBatch,
         *,
-        delivery: ESDeliveryPreparation,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
         collector_process: ProcessIdentity,
     ) -> None:
-        """Join one frozen native delivery to an exact Mac process transaction.
+        """Join frozen native deliveries to an exact Mac process transaction.
 
         This binds counters and retained native bytes, not a native output sink.
-        Single fork/exec/exit cohorts only; the ordinary dispatcher still owns
+        Single fork/exec/exit or bounded exit groups; the dispatcher still owns
         canonical state, lifecycle, artifact leases and existing source recovery.
         Once bound, batch cancellation also owns the collector reservation.
         """
         if (
-            type(delivery) is not ESDeliveryPreparation
+            type(delivery) not in (ESDeliveryPreparation, ESDeliveryBatchPreparation)
             or type(collector_process) is not ProcessIdentity
         ):
             raise EventContractError(
@@ -10793,7 +10796,12 @@ class EventDispatcher:
                 "Action-cohort ES binding requires an authenticated prepared batch"
             )
         owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
-        with owner.prepared_commit(delivery, collector_process):
+        claim = (
+            owner.prepared_batch_commit(delivery, collector_process)
+            if type(delivery) is ESDeliveryBatchPreparation
+            else owner.prepared_commit(delivery, collector_process)
+        )
+        with claim:
             native = self._validate_action_cohort_es_values(
                 record, self.es_collectors, delivery, collector_process
             )
@@ -10825,12 +10833,16 @@ class EventDispatcher:
         self,
         record: _PreparedActionCohortBatchRecord,
         registry: ESCollectorRegistry,
-        delivery: ESDeliveryPreparation,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
         collector: ProcessIdentity,
     ) -> str:
         """Require exact occurrence, State and source-counter ownership before mutation."""
         from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 
+        if type(delivery) is ESDeliveryBatchPreparation:
+            return self._validate_action_cohort_es_batch_values(
+                record, registry, delivery, collector
+            )
         expected_type = {"posix_fork": 11, "posix_exec": 9, "posix_exit": 15}.get(
             record.exact_projection_kind
         )
@@ -10879,6 +10891,82 @@ class EventDispatcher:
             )
         return native
 
+    def _validate_action_cohort_es_batch_values(
+        self,
+        record: _PreparedActionCohortBatchRecord,
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryBatchPreparation,
+        collector: ProcessIdentity,
+    ) -> str:
+        """Match every frozen terminal delivery to its canonical group member."""
+        from evidenceforge.events.process import process_exit_identity
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        if (
+            registry is not self.es_collectors
+            or not record.exact_projection
+            or record.exact_projection_kind != "macos_exit_group"
+            or not registry.authenticates_pending_batch(delivery)
+            or len(delivery.observations) != len(record.member_occurrences)
+            or any(
+                item.identity.object_id == collector.object_id
+                for item in record.state_plan.process_terminations
+            )
+        ):
+            raise EventContractError("ES batch binding requires one exact Mac terminal group")
+        self._require_macos_exit_group_projection(record)
+        owner = ESCollectionActionOwner(self.state_manager, registry)
+        for event, observation in zip(
+            record.member_occurrences, delivery.observations, strict=True
+        ):
+            identity = process_exit_identity(event)
+            if (
+                observation.hostname != identity.hostname
+                or collector.hostname != identity.hostname
+                or observation.occurrence_id != f"process-exit:{identity.object_id}"
+                or observation.event_type != 15
+                or observation.observed_at != event.timestamp
+                or observation.collector_process != owner._live_process(collector, event.timestamp)
+            ):
+                raise EventContractError("ES batch binding disagrees with its canonical member")
+        native = registry.retained_native_batch_projection(
+            delivery, canonical_token=record.state_plan.publication_token
+        )
+        if native is None:
+            raise EventContractError("ES batch binding requires every frozen native row")
+        return "".join(native)
+
+    @staticmethod
+    def _es_delivery_result(
+        delivery: ESDeliveryPreparation
+        | ESDeliveryBatchPreparation
+        | PreparedESDeliveryCommit
+        | PreparedESDeliveryBatchCommit,
+    ) -> ESCollectorObservation | tuple[ESCollectorObservation, ...]:
+        """Return the exact result object retained by one authenticated reservation."""
+        if type(delivery) in (ESDeliveryBatchPreparation, PreparedESDeliveryBatchCommit):
+            return delivery.observations
+        return delivery.observation
+
+    @staticmethod
+    def _completed_action_cohort_es_delivery(record: _PreparedActionCohortBatchRecord) -> bool:
+        assert record.es_registry is not None and record.es_delivery is not None
+        completed = (
+            record.es_registry.completed_batch(record.es_delivery)
+            if type(record.es_delivery) is ESDeliveryBatchPreparation
+            else record.es_registry.completed_observation(record.es_delivery)
+        )
+        return completed is EventDispatcher._es_delivery_result(record.es_delivery)
+
+    @staticmethod
+    def _owns_action_cohort_es_delivery(record: _PreparedActionCohortBatchRecord) -> bool:
+        assert record.es_registry is not None and record.es_delivery is not None
+        return (
+            record.es_registry.owns_pending_batch(record.es_delivery)
+            if type(record.es_delivery) is ESDeliveryBatchPreparation
+            else record.es_registry.owns_pending_delivery(record.es_delivery)
+        )
+
     def _validate_action_cohort_es_delivery(self, record: _PreparedActionCohortBatchRecord) -> None:
         if (
             record.es_registry is None
@@ -10895,10 +10983,10 @@ class EventDispatcher:
     @staticmethod
     def _finalize_action_cohort_es_delivery(
         record: _PreparedActionCohortBatchRecord,
-    ) -> ESCollectorObservation:
+    ) -> ESCollectorObservation | tuple[ESCollectorObservation, ...]:
         assert record.es_claimed is not None and record.es_delivery is not None
         record.es_claimed.finalize_no_fail()
-        return record.es_delivery.observation
+        return EventDispatcher._es_delivery_result(record.es_delivery)
 
     def _active_claimed_action_cohort_locked(
         self,
@@ -11024,8 +11112,14 @@ class EventDispatcher:
 
                     self._validate_action_cohort_es_delivery(record)
                     es_owner = ESCollectionActionOwner(self.state_manager, self.es_collectors)
-                    es_context = es_owner.prepared_commit(
-                        record.es_delivery, record.es_collector_process
+                    es_context = (
+                        es_owner.prepared_batch_commit(
+                            record.es_delivery, record.es_collector_process
+                        )
+                        if type(record.es_delivery) is ESDeliveryBatchPreparation
+                        else es_owner.prepared_commit(
+                            record.es_delivery, record.es_collector_process
+                        )
                     )
                     record.es_claimed = es_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], es_context))
@@ -11498,10 +11592,9 @@ class EventDispatcher:
                         if record.es_claimed is not None:
                             self._commit_exact_expected_owner(
                                 lambda: self._finalize_action_cohort_es_delivery(record),
-                                expected=record.es_delivery.observation,
-                                terminal_authenticates=lambda: bool(
-                                    record.es_registry.completed_observation(record.es_delivery)
-                                    is record.es_delivery.observation
+                                expected=self._es_delivery_result(record.es_delivery),
+                                terminal_authenticates=lambda: (
+                                    self._completed_action_cohort_es_delivery(record)
                                 ),
                                 label="Exact action-cohort ES collector owner",
                             )
@@ -12249,12 +12342,15 @@ class EventDispatcher:
             try:
                 if record.es_registry is None or record.es_delivery is None:
                     raise EventContractError("Action-cohort ES cleanup lost its exact owner")
-                if record.es_registry.owns_pending_delivery(record.es_delivery):
-                    record.es_registry.cancel(record.es_delivery)
+                if self._owns_action_cohort_es_delivery(record):
+                    if type(record.es_delivery) is ESDeliveryBatchPreparation:
+                        record.es_registry.cancel_batch(record.es_delivery)
+                    else:
+                        record.es_registry.cancel(record.es_delivery)
                 record.es_cleanup_complete = True
             except BaseException as exc:
-                if record.es_registry is not None and not record.es_registry.owns_pending_delivery(
-                    record.es_delivery
+                if record.es_registry is not None and not self._owns_action_cohort_es_delivery(
+                    record
                 ):
                     record.es_cleanup_complete = True
                 else:

@@ -23,10 +23,12 @@ from tests.unit.test_macos_runtime_es_preparation import _setup as _runtime
 from tests.unit.test_macos_runtime_file_metadata import _executable, _metadata
 
 
-def _setup() -> tuple[
+def _setup(
+    *, born_loaded: bool = False
+) -> tuple[
     StateManager, DeploymentContentRegistry, ProcessIdentity, MacosProcessCollectionObservation
 ]:
-    state, _, process, _ = _runtime()
+    state, _, process, _ = _runtime(born_loaded=born_loaded)
     descriptor = _executable()
     binary = BinaryReleaseIdentity(
         BinaryReleaseKey(
@@ -48,14 +50,30 @@ def _setup() -> tuple[
         installations=(installation,),
     )
     builder = state.begin_action_cohort_materialization()
-    process = builder.execute_process(
-        process,
-        image=process.image,
-        command_line=process.command_line,
-        executed_at=process.execution_started_at + timedelta(seconds=1),
-        executable_version=ProcessExecutableVersion.from_binary(binary),
-        image_security=process.image_security,
-    )
+    if born_loaded:
+        process = builder.plan_process(
+            system=process.hostname,
+            parent_pid=process.parent_pid,
+            image=process.image,
+            command_line=process.command_line,
+            username=process.principal,
+            integrity_level="Medium",
+            os_category="macos",
+            start_time=process.execution_started_at + timedelta(seconds=1),
+            credentials=process.credentials,
+            responsibility=process.responsibility,
+            executable_version=ProcessExecutableVersion.from_binary(binary),
+            image_security=process.image_security,
+        ).identity
+    else:
+        process = builder.execute_process(
+            process,
+            image=process.image,
+            command_line=process.command_line,
+            executed_at=process.execution_started_at + timedelta(seconds=1),
+            executable_version=ProcessExecutableVersion.from_binary(binary),
+            image_security=process.image_security,
+        )
     state.materialize_action_cohort(builder.seal())
     collection = MacosProcessCollectionObservation(
         process, process.execution_started_at, False, "absent"

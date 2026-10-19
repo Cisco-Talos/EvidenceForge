@@ -37,8 +37,10 @@ class _Group:
     clock: MacosBootClock
 
 
-def _group(installed: bool = False, unknown_last: bool = False) -> _Group:
-    base = _fixture(installed=installed)
+def _group(
+    installed: bool = False, unknown_last: bool = False, *, born_loaded: bool = False
+) -> _Group:
+    base = _fixture(installed=installed, born_loaded=born_loaded)
     owner = base.owner
     owner.collectors.cancel(base.delivery)
     subject = base.process.process

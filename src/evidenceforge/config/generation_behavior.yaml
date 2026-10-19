@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 292
+current_revision: 293
 history_start_revision: 1
-behavior_surface_sha256: dea932a06eabad4e8cd2ce6687c8f274c3cbc2e4698eb87bfacaacd47b997cdd
+behavior_surface_sha256: 569fe91beb462a88b0d55d3cb2c9372e7a21f289430d6241573d43eb1bb0df7e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2761,3 +2761,11 @@ changes:
     formats:
       - ecar
     summary: Publishes bounded Mac terminal cohorts through one recoverable exact writer journal while preserving per-process results and canonical ownership.
+  - revision: 293
+    id: macos-exact-collector-terminal-groups
+    impact: localized
+    domains:
+      - macos-collector-ownership
+      - macos-process-lifecycle
+    formats: []
+    summary: Joins authenticated frozen ES terminal batches to canonical group transactions with reversible counters and retained completion proofs.

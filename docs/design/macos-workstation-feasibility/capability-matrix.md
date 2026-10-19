@@ -178,3 +178,6 @@ Batch cancellation retains exact reservation ownership even when caller-held sou
 
 ### Exact terminal-group publication — revision 292
 Bounded same-host Mac exit cohorts now use the existing canonical transaction and exact source journal, retaining per-process outcomes through partial writes and retries. This closes the canonical group writer prerequisite. Service-closure composites, collector batch participation and native sink admission remain distinct integration work; no native ES coverage or evidence gate changes.
+
+### Joint terminal-group counters — revision 293
+Authenticated historical ES exit batches now compose with exact canonical State/lifecycle group publication. Rollback, lost acknowledgements, cancellation, source retry, filtering and checkpoint restoration preserve ordered counters and frozen bytes. Native sink integration, service-closure composites, observing-client shutdown and target-build evidence gates remain open; no ES source admission is implied.

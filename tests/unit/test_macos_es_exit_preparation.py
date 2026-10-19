@@ -50,13 +50,14 @@ def _fixture(
     *,
     installed: bool = False,
     status: str = "visible",
+    born_loaded: bool = False,
 ) -> _Fixture:
     if installed:
         from tests.unit.test_macos_installed_es_preparation import _setup as installed_setup
 
-        state, executables, process, _ = installed_setup()
+        state, executables, process, _ = installed_setup(born_loaded=born_loaded)
     else:
-        state, content, process, _ = _setup()
+        state, content, process, _ = _setup(born_loaded=born_loaded)
         executables = content.registry
     collector = state.get_process_identity(process.hostname, process.parent_pid)
     assert collector is not None
