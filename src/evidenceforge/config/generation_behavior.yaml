@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 300
+current_revision: 301
 history_start_revision: 1
-behavior_surface_sha256: 6c9e3958cdb7e192e3184eda10064aa43867093c0873367a16ee44dc4049ec13
+behavior_surface_sha256: c219bf70515f5ac0adbbe0ef25f03aa6d330cc5be6906130e913b372471cf032
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2827,3 +2827,11 @@ changes:
     formats:
       - ecar
     summary: Continues authored leader and group close source publication from exact complete composite proofs after lost canonical acknowledgements without repeating closure.
+  - revision: 301
+    id: preallocated-service-closure-results
+    impact: localized
+    domains:
+      - service-lifecycle
+      - canonical-publication
+    formats: []
+    summary: Allocates exact service closure result snapshots before canonical mutation and retains one completion identity across commit, retry and lost acknowledgements.

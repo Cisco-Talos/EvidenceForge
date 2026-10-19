@@ -8462,6 +8462,8 @@ class _PreparedServiceClosureCommitPlan:
     token: LifecycleServiceClosureAdmissionToken
     already_terminal: bool = False
     terminal_receipt: LifecycleServiceProcessClosureReceipt | None = None
+    expected_receipt: LifecycleServiceProcessClosureReceipt | None = None
+    expected_receipt_digest: str = ""
     effective_times: tuple[tuple[LifecycleEntityRef, datetime], ...] = ()
 
 
@@ -8550,7 +8552,7 @@ class PreparedLifecycleServicePublication:
 class PreparedLifecycleServiceProcessClosure:
     """One-shot no-validation commit capability for a claimed service closure."""
 
-    __slots__ = ("_active", "_committed", "_plan", "_registry", "_result", "_token")
+    __slots__ = ("_active", "_committed", "_plan", "_registry", "_result", "_token", "_thread_id")
 
     def __init__(
         self,
@@ -8558,6 +8560,7 @@ class PreparedLifecycleServiceProcessClosure:
         token: LifecycleServiceClosureAdmissionToken,
         plan: _PreparedServiceClosureCommitPlan,
     ) -> None:
+        self._thread_id = get_ident()
         self._registry = registry
         self._token = token
         self._plan = plan
@@ -8576,6 +8579,17 @@ class PreparedLifecycleServiceProcessClosure:
         """Return the authenticated receipt after successful commit."""
 
         return self._plan.terminal_receipt
+
+    @property
+    def expected_receipt(self) -> LifecycleServiceProcessClosureReceipt:
+        """Return the preallocated result while this exact same-thread claim is active."""
+        if (
+            not self._active
+            or self._thread_id != get_ident()
+            or self._plan.expected_receipt is None
+        ):
+            raise StateError("Service closure result requires its active same-thread claim")
+        return self._plan.expected_receipt
 
     @property
     def effective_times(self) -> tuple[tuple[LifecycleEntityRef, datetime], ...]:
@@ -12007,9 +12021,11 @@ class LifecycleRegistry:
 
     def _action_cohort_expected_transition_snapshot(
         self,
-        snapshot: ProcessLifecycleSnapshot | SessionLifecycleSnapshot,
+        snapshot: ProcessLifecycleSnapshot
+        | SessionLifecycleSnapshot
+        | ServiceInstanceLifecycleSnapshot,
         transition: LifecycleTransition,
-    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot:
+    ) -> ProcessLifecycleSnapshot | SessionLifecycleSnapshot | ServiceInstanceLifecycleSnapshot:
         """Project one already-admitted transition into an immutable result snapshot."""
 
         transitions = sorted(
@@ -15213,6 +15229,13 @@ class LifecycleRegistry:
                         reservation.commit_plan = self._prepare_service_closure_commit_locked(
                             canonical_token
                         )
+                        expected = self._prepare_service_closure_receipt_locked(
+                            reservation.commit_plan
+                        )
+                        reservation.commit_plan.expected_receipt = expected
+                        reservation.commit_plan.expected_receipt_digest = sha256(
+                            repr(expected).encode()
+                        ).hexdigest()
                 self._validate_service_closure_token(token)
             except BaseException:
                 self._release_service_closure_reservation_locked(reservation)
@@ -15270,14 +15293,95 @@ class LifecycleRegistry:
             self._routes.cache_snapshot_locked("service", snapshot.identity.object_id, snapshot)
         return snapshot
 
+    def _prepare_service_closure_receipt_locked(
+        self, plan: _PreparedServiceClosureCommitPlan
+    ) -> LifecycleServiceProcessClosureReceipt:
+        """Preallocate complete terminal snapshots before any canonical close mutation."""
+        request = plan.token.request
+        processes: dict[str, ProcessLifecycleSnapshot] = {}
+        bindings: list[ServiceProcessBindingSnapshot] = []
+        service_results: list[ServiceInstanceLifecycleSnapshot] = []
+        effective = dict(plan.effective_times)
+        if not plan.already_terminal:
+            for operation in request.parent_adoptions:
+                partition = self._partitions[self._subject_partition_locked(operation.subject)]
+                current = partition.get_process(operation.subject.object_id)
+                assert current is not None
+                projected = self._action_cohort_expected_transition_snapshot(current, operation)
+                assert type(projected) is ProcessLifecycleSnapshot
+                processes[operation.subject.object_id] = projected
+        for item in request.binding_closures:
+            partition_id = self._routes.get_locked(
+                "service_process_binding", item.identity.binding_id
+            )
+            assert type(partition_id) is int
+            current = self._partitions[partition_id].service_process_binding(
+                item.identity.binding_id
+            )
+            assert current is not None
+            bindings.append(
+                current
+                if plan.already_terminal
+                else replace(
+                    current,
+                    closed_at=item.closed_at,
+                    close_action_id=item.action_id,
+                    close_transition_ordinal=item.transition_ordinal,
+                )
+            )
+        for control in (*request.process_closures, *request.service_closures):
+            subject = control.barrier.subject
+            partition = self._partitions[self._subject_partition_locked(subject)]
+            snapshot = (
+                processes.get(subject.object_id) or partition.get_process(subject.object_id)
+                if subject.kind == "process"
+                else partition.get_service_instance(subject.object_id)
+            )
+            assert snapshot is not None
+            if not plan.already_terminal:
+                at = effective[subject]
+                ticket, requested, scheduled, closed = self._expected_subject_closure_transitions(
+                    control, at
+                )
+                snapshot = replace(
+                    snapshot, close_barrier=control.barrier, closure_ticket=ticket, closed_at=at
+                )
+                for transition in (requested, scheduled, closed):
+                    snapshot = self._action_cohort_expected_transition_snapshot(
+                        snapshot, transition
+                    )
+            if subject.kind == "process":
+                assert type(snapshot) is ProcessLifecycleSnapshot
+                processes[subject.object_id] = snapshot
+            else:
+                assert type(snapshot) is ServiceInstanceLifecycleSnapshot
+                service_results.append(snapshot)
+        binding_results = tuple(bindings)
+        process_results = tuple(
+            processes[item.barrier.subject.object_id] for item in request.process_closures
+        )
+        services = tuple(service_results)
+        digest = sha256(
+            repr((request, binding_results, process_results, services)).encode()
+        ).hexdigest()
+        return LifecycleServiceProcessClosureReceipt(
+            request=request,
+            bindings=binding_results,
+            processes=process_results,
+            services=services,
+            registry_id=self._service_registry_id,
+            plan_digest=plan.token.plan_digest,
+            committed_digest=digest,
+            _integrity=self._service_receipt_integrity(
+                kind="closure", plan_digest=plan.token.plan_digest, committed_digest=digest
+            ),
+        )
+
     def _service_closure_receipt_locked(
         self,
         plan: _PreparedServiceClosureCommitPlan,
     ) -> LifecycleServiceProcessClosureReceipt:
         request = plan.token.request
-        bindings: list[ServiceProcessBindingSnapshot] = []
-        processes: list[ProcessLifecycleSnapshot] = []
-        services: list[ServiceInstanceLifecycleSnapshot] = []
         if not plan.already_terminal:
             for operation in request.parent_adoptions:
                 partition_id = self._subject_partition_locked(operation.subject)
@@ -15292,70 +15396,23 @@ class LifecycleRegistry:
                     "service_process_binding", item.identity.binding_id
                 )
                 assert isinstance(partition_id, int)
-                bindings.append(
-                    self._partitions[partition_id].close_service_process_binding(
-                        item.identity.binding_id,
-                        expected_identity=item.identity,
-                        closed_at=item.closed_at,
-                        action_id=item.action_id,
-                        transition_ordinal=item.transition_ordinal,
-                    )
+                self._partitions[partition_id].close_service_process_binding(
+                    item.identity.binding_id,
+                    expected_identity=item.identity,
+                    closed_at=item.closed_at,
+                    action_id=item.action_id,
+                    transition_ordinal=item.transition_ordinal,
                 )
             for item in request.process_closures:
                 partition_id = self._subject_partition_locked(item.barrier.subject)
                 result = self._commit_subject_closure_locked(item, partition_id)
                 assert isinstance(result, ProcessLifecycleSnapshot)
-                processes.append(result)
             for item in request.service_closures:
                 partition_id = self._subject_partition_locked(item.barrier.subject)
                 result = self._commit_subject_closure_locked(item, partition_id)
                 assert isinstance(result, ServiceInstanceLifecycleSnapshot)
-                services.append(result)
-        else:
-            for item in request.binding_closures:
-                partition_id = self._routes.get_locked(
-                    "service_process_binding", item.identity.binding_id
-                )
-                assert isinstance(partition_id, int)
-                snapshot = self._partitions[partition_id].service_process_binding(
-                    item.identity.binding_id
-                )
-                assert snapshot is not None
-                bindings.append(snapshot)
-            for item in request.process_closures:
-                partition_id = self._subject_partition_locked(item.barrier.subject)
-                snapshot = self._partitions[partition_id].get_process(
-                    item.barrier.subject.object_id
-                )
-                assert snapshot is not None
-                processes.append(snapshot)
-            for item in request.service_closures:
-                partition_id = self._subject_partition_locked(item.barrier.subject)
-                snapshot = self._partitions[partition_id].get_service_instance(
-                    item.barrier.subject.object_id
-                )
-                assert snapshot is not None
-                services.append(snapshot)
-        binding_results = tuple(bindings)
-        process_results = tuple(processes)
-        service_results = tuple(services)
-        committed_digest = sha256(
-            repr((request, binding_results, process_results, service_results)).encode()
-        ).hexdigest()
-        receipt = LifecycleServiceProcessClosureReceipt(
-            request=request,
-            bindings=binding_results,
-            processes=process_results,
-            services=service_results,
-            registry_id=self._service_registry_id,
-            plan_digest=plan.token.plan_digest,
-            committed_digest=committed_digest,
-            _integrity=self._service_receipt_integrity(
-                kind="closure",
-                plan_digest=plan.token.plan_digest,
-                committed_digest=committed_digest,
-            ),
-        )
+        receipt = plan.expected_receipt
+        assert receipt is not None
         self._service_closure_receipts[id(receipt)] = receipt
         plan.terminal_receipt = receipt
         return receipt
@@ -15382,6 +15439,13 @@ class LifecycleRegistry:
                 partition_ids = self._service_closure_partition_ids_locked(canonical_token.request)
                 with self._locked_partition_ids(partition_ids):
                     self._validate_service_closure_token(token)
+                    if (
+                        type(commit_plan.expected_receipt)
+                        is not LifecycleServiceProcessClosureReceipt
+                        or sha256(repr(commit_plan.expected_receipt).encode()).hexdigest()
+                        != commit_plan.expected_receipt_digest
+                    ):
+                        raise StateError("Service closure expected result changed before commit")
                     receipt = self._service_closure_receipt_locked(commit_plan)
             with self._closed_transport_preparation_lock:
                 active = self._service_closure_reservations.get(token.preparation_id)
