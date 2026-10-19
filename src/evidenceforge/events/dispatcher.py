@@ -10334,10 +10334,16 @@ class EventDispatcher:
                 )
                 if exact_projection:
                     self._initialize_action_cohort_exact_projection(record, cleanup_record)
-                    if record.exact_projection_kind in {"posix_exit", "macos_exit_group"}:
+                    if record.exact_projection_kind in {
+                        "posix_exit",
+                        "macos_exit_group",
+                        "posix_exec",
+                    }:
                         closure_bytes = self._prepare_action_cohort_es_closures(record)
                         retained_bytes += closure_bytes
                         cleanup_record.retained_bytes += closure_bytes
+                else:
+                    self._validate_action_cohort_es_closures(record)
                 integrity = self._action_cohort_batch_integrity(carrier, record)
                 carrier._integrity_token = integrity
                 record.integrity_token = integrity
@@ -10951,12 +10957,12 @@ class EventDispatcher:
             return False
 
     def _prepare_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> int:
-        """Retain only explicit clients whose exact canonical execution will terminate."""
+        """Retain explicit clients whose execution terminates or is replaced."""
         from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 
         requests, processes = ESCollectionActionOwner(
             self.state_manager, self.es_collectors
-        ).process_exit_closures(record.state_plan)
+        ).process_execution_closures(record.state_plan)
         if not requests:
             return 0
         size = sum(len(item.model_dump_json().encode("utf-8")) for item in requests)
@@ -10978,25 +10984,36 @@ class EventDispatcher:
         return size
 
     def _validate_action_cohort_es_closures(self, record: _PreparedActionCohortBatchRecord) -> None:
-        if record.exact_projection_kind not in {"posix_exit", "macos_exit_group"}:
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+
+        if record.exact_projection_kind not in {"posix_exit", "macos_exit_group", "posix_exec"}:
             if (
                 record.es_closure_requests
                 or record.es_closure_processes
                 or record.es_closure_registry is not None
             ):
-                raise EventContractError("Collector disconnects require an exact process exit")
+                raise EventContractError("Collector disconnects require exact process publication")
+            if record.state_plan.process_executions:
+                requests, _ = ESCollectionActionOwner(
+                    self.state_manager, self.es_collectors
+                ).process_execution_closures(record.state_plan)
+                if requests:
+                    raise EventContractError(
+                        "Collector-attached exec requires exact process publication"
+                    )
             return
-        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 
         requests, processes = ESCollectionActionOwner(
             self.state_manager, self.es_collectors
-        ).process_exit_closures(record.state_plan)
+        ).process_execution_closures(record.state_plan)
         if (
             requests != record.es_closure_requests
             or processes != record.es_closure_processes
             or (requests and record.es_closure_registry is not self.es_collectors)
         ):
-            raise EventContractError("Process exit collector connections changed after preparation")
+            raise EventContractError(
+                "Process execution collector connections changed after preparation"
+            )
 
     @staticmethod
     def _finalize_action_cohort_es_closures(

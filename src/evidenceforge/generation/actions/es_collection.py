@@ -111,38 +111,50 @@ class ESCollectionActionOwner:
             self.collectors.close(expected, closed_at)
             return after
 
-    def process_exit_closures(
+    def process_execution_closures(
         self, cohort: ActionCohortMaterializationPlan
     ) -> tuple[tuple[ESCollectorClosure, ...], tuple[ProcessIdentity, ...]]:
-        """Plan disconnects for explicitly bound clients whose exact execution exits.
+        """Plan disconnects when an explicitly bound execution exits or is replaced.
 
-        This reads only modeled profiles. Unknown owners remain unknown. Exec
-        handling and implicit subscription or connection discovery are excluded.
+        Connections belong to an execution, not a reusable PID or process image.
+        Successful exec retires that ownership at its canonical transition;
+        a replacement execution needs an explicit new connection epoch. Failed
+        exec has no image transition and keeps its attachment. This modeled
+        ownership policy does not claim native disconnect-notification evidence.
+        Unknown owners remain unknown.
         """
         if type(cohort) is not ActionCohortMaterializationPlan:
-            raise StateError("Collector process exit requires an exact canonical cohort")
+            raise StateError("Collector execution closure requires an exact canonical cohort")
         with self.state._lock:
             profiles = self.collectors.open_connections()
             if not profiles:
                 return (), ()
             self.state.validate_action_cohort_materialization(cohort)
             endings = {
-                (item.identity.hostname, _process(item.identity)): item
-                for item in cohort.process_terminations
+                (identity.hostname, _process(identity)): (identity, at)
+                for identity, at in (
+                    *((item.identity, item.end_time) for item in cohort.process_terminations),
+                    *(
+                        (item.target, item.after.execution_started_at)
+                        for item in cohort.process_executions
+                    ),
+                )
+                if self.state._pid_os.get(identity.hostname) == "macos"
             }
             requests: list[ESCollectorClosure] = []
             processes: list[ProcessIdentity] = []
             for profile in profiles:
-                terminal = endings.get((profile.hostname, profile.process))
-                if terminal is None:
+                ending = endings.get((profile.hostname, profile.process))
+                if ending is None:
                     continue
-                self._live_process(terminal.identity, terminal.end_time)
+                identity, at = ending
+                self._live_process(identity, at)
                 try:
-                    request = ESCollectorClosure(before=profile, closed_at=terminal.end_time)
+                    request = ESCollectorClosure(before=profile, closed_at=at)
                 except ValueError as exc:
-                    raise StateError("Collector delivery extends beyond its process exit") from exc
+                    raise StateError("Collector delivery extends beyond its execution") from exc
                 requests.append(request)
-                processes.append(terminal.identity)
+                processes.append(identity)
             return tuple(requests), tuple(processes)
 
     @contextmanager

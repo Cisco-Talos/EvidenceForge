@@ -364,10 +364,10 @@ def test_native_bytes_use_existing_aggregate_retention_limit(tmp_path: Path) -> 
     emitter.close()
 
 
-@pytest.mark.parametrize("kind", ["fork", "exec"])
+@pytest.mark.parametrize("kind,subject_client", [("fork", False), ("exec", False), ("exec", True)])
 @pytest.mark.parametrize("collected", [False, True])
 def test_bound_fork_and_exec_publish_through_the_same_canonical_owner(
-    tmp_path: Path, kind: str, collected: bool
+    tmp_path: Path, kind: str, collected: bool, subject_client: bool
 ) -> None:
     from evidenceforge.generation.actions.posix_process import (
         process_exec_occurrence,
@@ -382,6 +382,20 @@ def test_bound_fork_and_exec_publish_through_the_same_canonical_owner(
     state = native.owner.state
     collector = native.parent.process if kind == "fork" else native.collector
     target = native.child.process if kind == "fork" else native.after.process
+    if subject_client:
+        from tests.unit.test_es_collector import _profile
+
+        actor = native.before.process
+        native.owner.open(
+            _profile(
+                source_instance="replaced-client",
+                hostname=actor.hostname,
+                opened_at=actor.started_at,
+                last_delivery_at=actor.started_at,
+            ),
+            actor,
+        )
+        native.before = replace(native.before, is_es_client=True)
     registry = LifecycleRegistry(shard_count=4)
     shadow = LifecycleShadow(state, registry)
     authority = GeneratorLifecycleAuthority(state, shadow, shard_count=4)
@@ -434,6 +448,19 @@ def test_bound_fork_and_exec_publish_through_the_same_canonical_owner(
         == native.delivery.observation
     )
     assert native.owner.collectors.retained_native_projection(native.delivery) == frozen
+    if subject_client:
+        row = json.loads(frozen)
+        assert row["process"]["is_es_client"] is True
+        assert row["event"]["exec"]["target"]["is_es_client"] is False
+        assert (
+            native.owner.collectors.connection("replaced-client").closed_at
+            == target.execution_started_at
+        )
+        observer = native.owner.collectors.connection(native.delivery.observation.source_instance)
+        assert observer.closed_at is None and observer.next_delivery == 1
+        assert {"es_collector", "es_closures"} <= dict(
+            result.receipt.nested_publication_tokens
+        ).keys()
     dispatcher.assert_exact_projection_recoveries_drained()
     emitter.close()
     rows = [

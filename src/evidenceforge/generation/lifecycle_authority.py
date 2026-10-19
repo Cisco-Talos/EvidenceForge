@@ -8872,7 +8872,7 @@ class GeneratorLifecycleAuthority:
                         )
 
                         owner = ESCollectionActionOwner(state, collectors)
-                        requests, processes = owner.process_exit_closures(plan)
+                        requests, processes = owner.process_execution_closures(plan)
                         if requests:
                             collector_closure = external.enter_context(
                                 owner.prepared_closures(requests, processes)

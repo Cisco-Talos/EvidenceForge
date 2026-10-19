@@ -276,7 +276,7 @@ def test_disconnect_requests_respect_existing_aggregate_retention_budget(tmp_pat
     state, dispatcher, emitter, plan, events, _, owner, _ = _bound(tmp_path)
     batch = _prepare(dispatcher, plan, events)
     retained = dispatcher.action_cohort_publication_census().retained_bytes
-    requests, _ = owner.process_exit_closures(plan)
+    requests, _ = owner.process_execution_closures(plan)
     size = sum(len(item.model_dump_json().encode("utf-8")) for item in requests)
     assert dispatcher.cancel_prepared_action_cohort_batch(batch)
     dispatcher._action_cohort_byte_capacity = retained - size

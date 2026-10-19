@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 313
+current_revision: 314
 history_start_revision: 1
-behavior_surface_sha256: 61027bb3a1d875e6fbf1ecdc5f072a6acc19fa9b4fd5f5012c40406510c01408
+behavior_surface_sha256: 918ae05b7762ac65b9e05e449cd2b5858625e45c271f9bc5fe013748dbf2ba92
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2934,3 +2934,11 @@ changes:
       - runtime-content-identity
     formats: []
     summary: Lets already-admitted nested owner work finish ahead of a queued watermark while preserving writer priority over new readers.
+  - revision: 314
+    id: macos-exec-collector-ownership-closure
+    impact: localized
+    domains:
+      - endpoint-security-collection
+      - exact-source-publication
+    formats: []
+    summary: Closes explicitly attached collector epochs with exact successful Mac exec publication while preserving failed-exec ownership, rollback and source retries.
