@@ -98,7 +98,10 @@ def test_changed_expected_service_result_rejects_before_mutating_any_owner(field
 
 
 @pytest.mark.parametrize("history_limit", [1, 2, 4])
-def test_preallocated_results_preserve_bounded_transition_history(history_limit: int) -> None:
+@pytest.mark.parametrize("certified", [False, True])
+def test_preallocated_results_preserve_bounded_transition_history(
+    history_limit: int, certified: bool
+) -> None:
     from datetime import timedelta
 
     from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
@@ -131,6 +134,8 @@ def test_preallocated_results_preserve_bounded_transition_history(history_limit:
         adapter.prepare_service_process_closure(request)
     ) as claimed:
         expected = claimed.expected_receipt
+        if certified:
+            claimed.certify_composite_commit(expected)
         assert claimed.commit_no_fail() is expected
     assert expected.processes[0] == registry.get_process(process.object_id)
     assert expected.services[0] == registry.get_service_instance(

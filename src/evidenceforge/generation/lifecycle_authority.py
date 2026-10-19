@@ -8855,6 +8855,7 @@ class GeneratorLifecycleAuthority:
                     prepared.certify_composite_commit(expected)
                     if source_timing_preparation is not None:
                         source_timing_preparation.certify_composite_commit(timing_receipt)
+                    service.certify_composite_commit(service.expected_receipt)
                     # State remains rollback-owned until the registry's no-fail tail.
                     prepared.apply_provisional()
                     if collector_closure is not None:

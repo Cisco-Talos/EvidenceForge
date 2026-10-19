@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 301
+current_revision: 302
 history_start_revision: 1
-behavior_surface_sha256: c219bf70515f5ac0adbbe0ef25f03aa6d330cc5be6906130e913b372471cf032
+behavior_surface_sha256: 30961281ea3fa2fb72ce1e2adc3db366a5ad5e1ad61e366955f7c22539ae0733
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2835,3 +2835,11 @@ changes:
       - canonical-publication
     formats: []
     summary: Allocates exact service closure result snapshots before canonical mutation and retains one completion identity across commit, retry and lost acknowledgements.
+  - revision: 302
+    id: certified-service-closure-primitives
+    impact: localized
+    domains:
+      - service-lifecycle
+      - canonical-publication
+    formats: []
+    summary: Certifies service closure operands before composite mutation and applies prevalidated binding, adoption and terminal primitives with exact preallocated results.

@@ -8455,6 +8455,16 @@ class _PreparedServiceCommitPlan:
     bindings: tuple[_PreparedServiceProcessBinding, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedServiceBindingClosure:
+    """Exact binding tombstone and aggregate targets prepared before terminal writes."""
+
+    partition_id: int
+    after: ServiceProcessBindingSnapshot
+    aggregates: tuple[_DependentClosureAggregate, _DependentClosureAggregate]
+    retained_until: datetime
+
+
 @dataclass(slots=True)
 class _PreparedServiceClosureCommitPlan:
     """Validated binding-first terminal writes retained by one claimed reservation."""
@@ -8464,6 +8474,12 @@ class _PreparedServiceClosureCommitPlan:
     terminal_receipt: LifecycleServiceProcessClosureReceipt | None = None
     expected_receipt: LifecycleServiceProcessClosureReceipt | None = None
     expected_receipt_digest: str = ""
+    certified: bool = False
+    binding_plans: tuple[_PreparedServiceBindingClosure, ...] = ()
+    subject_plans: tuple[_PreparedActionCohortOperation, ...] = ()
+    adoption_entries: tuple[tuple[int, _ProcessEntry, LifecycleTransition], ...] = ()
+    route_keys: tuple[tuple[str, str], ...] = ()
+    partition_ids: tuple[int, ...] = ()
     effective_times: tuple[tuple[LifecycleEntityRef, datetime], ...] = ()
 
 
@@ -8596,6 +8612,14 @@ class PreparedLifecycleServiceProcessClosure:
         """Return admitted closure times, including holds and resource leases."""
         return self._plan.effective_times
 
+    def certify_composite_commit(
+        self, expected_receipt: LifecycleServiceProcessClosureReceipt
+    ) -> None:
+        """Finish validation before a trusted composite's callback-free primitive tail."""
+        if not self._active or self._thread_id != get_ident():
+            raise StateError("Service closure certification requires its active same-thread claim")
+        self._registry._certify_service_closure(self._token, self._plan, expected_receipt)
+
     def commit_no_fail(self) -> LifecycleServiceProcessClosureReceipt:
         """Publish every prevalidated closure primitive exactly once."""
 
@@ -8603,7 +8627,11 @@ class PreparedLifecycleServiceProcessClosure:
             raise StateError("Prepared lifecycle service closure is no longer active")
         if self.committed:
             raise StateError("Prepared lifecycle service closure is already committed")
-        self._result = self._registry._commit_claimed_service_closure(self._token)
+        self._result = (
+            self._registry._commit_certified_service_closure(self._token, self._plan)
+            if self._plan.certified
+            else self._registry._commit_claimed_service_closure(self._token)
+        )
         self._committed = True
         return self._result
 
@@ -12590,6 +12618,10 @@ class LifecycleRegistry:
             assert isinstance(entry, _ProcessEntry)
             partition._record_process_closed(entry, effective_at)
             partition._live_processes -= 1
+        elif subject.kind == "service":
+            assert isinstance(entry, _ServiceEntry)
+            partition._record_service_closed(entry, effective_at)
+            partition._live_service_instances -= 1
         else:
             assert subject.kind == "session"
             partition._live_sessions -= 1
@@ -15377,12 +15409,161 @@ class LifecycleRegistry:
             ),
         )
 
+    def _certify_service_closure(
+        self,
+        token: LifecycleServiceClosureAdmissionToken,
+        plan: _PreparedServiceClosureCommitPlan,
+        expected: LifecycleServiceProcessClosureReceipt,
+    ) -> None:
+        """Validate exact retained facts and preallocate every service-close operand."""
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            active = self._active_service_closure_reservation_locked(token)
+            if (
+                not active.claimed
+                or active.claim_thread_id != get_ident()
+                or active.commit_plan is not plan
+                or plan.certified
+                or plan.terminal_receipt is not None
+                or expected is not plan.expected_receipt
+                or self._watermark != active.canonical_token.expected_watermark
+                or sha256(repr(expected).encode()).hexdigest() != plan.expected_receipt_digest
+            ):
+                raise StateError("Service closure certification lost its exact uncommitted result")
+            route_keys = self._service_closure_route_keys(active.canonical_token.request)
+            with self._routes.locked(route_keys):
+                partition_ids = self._service_closure_partition_ids_locked(
+                    active.canonical_token.request
+                )
+                with self._locked_partition_ids(partition_ids):
+                    fresh = self._prepare_service_closure_commit_locked(active.canonical_token)
+                    if self._prepare_service_closure_receipt_locked(fresh) != expected:
+                        raise StateError("Service closure result changed before certification")
+                    bindings: list[_PreparedServiceBindingClosure] = []
+                    subjects: list[_PreparedActionCohortOperation] = []
+                    adoptions: list[tuple[int, _ProcessEntry, LifecycleTransition]] = []
+                    aggregates: dict[int, tuple[_DependentClosureAggregate, int]] = {}
+                    if not plan.already_terminal:
+                        for item in expected.bindings:
+                            partition_id = self._routes.get_locked(
+                                "service_process_binding", item.identity.binding_id
+                            )
+                            assert type(partition_id) is int and item.closed_at is not None
+                            partition = self._partitions[partition_id]
+                            owners = (
+                                partition._service_processes_by_service.get(
+                                    item.identity.service_object_id
+                                ),
+                                partition._service_bindings_by_process.get(
+                                    item.identity.process_object_id
+                                ),
+                            )
+                            for aggregate in owners:
+                                if type(aggregate) is not _DependentClosureAggregate:
+                                    raise StateError("Service closure lost a binding aggregate")
+                                count = aggregates.get(id(aggregate), (aggregate, 0))[1] + 1
+                                aggregates[id(aggregate)] = (aggregate, count)
+                            bindings.append(
+                                _PreparedServiceBindingClosure(
+                                    partition_id,
+                                    item,
+                                    owners,
+                                    item.closed_at + partition._closed_retention,
+                                )
+                            )
+                        if any(owner.unclosed < count for owner, count in aggregates.values()):
+                            raise StateError("Service closure binding aggregate would underflow")
+                        for operation in plan.token.request.parent_adoptions:
+                            partition_id = self._subject_partition_locked(operation.subject)
+                            entry = self._partitions[partition_id]._entry(operation.subject)
+                            assert isinstance(entry, _ProcessEntry)
+                            adoptions.append((partition_id, entry, operation))
+                        effective = dict(plan.effective_times)
+                        for control in (
+                            *plan.token.request.process_closures,
+                            *plan.token.request.service_closures,
+                        ):
+                            subject = control.barrier.subject
+                            at = effective[subject]
+                            ticket, requested, scheduled, closed = (
+                                self._expected_subject_closure_transitions(control, at)
+                            )
+                            subjects.append(
+                                _PreparedActionCohortOperation(
+                                    operation=control,
+                                    partition_id=self._subject_partition_locked(subject),
+                                    effective_at=at,
+                                    closure_ticket=ticket,
+                                    closure_transitions=(requested, scheduled, closed),
+                                )
+                            )
+                    plan.binding_plans = tuple(bindings)
+                    plan.subject_plans = tuple(subjects)
+                    plan.adoption_entries = tuple(adoptions)
+                    plan.route_keys = route_keys
+                    plan.partition_ids = partition_ids
+                    plan.certified = True
+
+    def _commit_certified_service_closure_primitives_locked(
+        self, plan: _PreparedServiceClosureCommitPlan
+    ) -> None:
+        """Apply only certified adoption, binding and terminal operands."""
+        for partition_id, entry, operation in plan.adoption_entries:
+            self._routes.invalidate_subject_snapshot_locked(operation.subject)
+            self._partitions[partition_id]._append_transition(
+                entry, operation, claim_validated=True
+            )
+            self._routes.set_locked("transition", operation.transition_id, operation)
+        for item in plan.binding_plans:
+            partition = self._partitions[item.partition_id]
+            at = item.after.closed_at
+            assert at is not None
+            for aggregate in item.aggregates:
+                aggregate.unclosed -= 1
+                if aggregate.latest_closed_at is None or at > aggregate.latest_closed_at:
+                    aggregate.latest_closed_at = at
+            binding_id = item.after.identity.binding_id
+            partition._service_process_bindings.pop(binding_id)
+            partition._service_process_tombstones[binding_id] = item.after
+            handle = partition._service_process_tombstones.handle_for(binding_id)
+            partition._service_process_tombstone_deadlines.set(handle, item.retained_until)
+            partition._active_service_process_bindings -= 1
+        for prepared in plan.subject_plans:
+            self._commit_action_cohort_closure_locked(prepared)
+        assert plan.expected_receipt is not None
+        for service in plan.expected_receipt.services:
+            self._routes.cache_snapshot_locked("service", service.identity.object_id, service)
+
+    def _commit_certified_service_closure(
+        self, token: LifecycleServiceClosureAdmissionToken, plan: _PreparedServiceClosureCommitPlan
+    ) -> LifecycleServiceProcessClosureReceipt:
+        """Consume the same-thread certified reservation without repeating admission."""
+        with self._gate.mutation(), self._closed_transport_preparation_lock:
+            active = self._service_closure_reservations.get(plan.token.preparation_id)
+            if (
+                active is None
+                or active.token is not token
+                or active.commit_plan is not plan
+                or active.claim_thread_id != get_ident()
+                or not plan.certified
+                or plan.terminal_receipt is not None
+            ):
+                raise StateError("Certified service closure requires its exact active claim")
+            with (
+                self._routes.locked(plan.route_keys),
+                self._locked_partition_ids(plan.partition_ids),
+            ):
+                receipt = self._service_closure_receipt_locked(plan)
+            self._release_service_closure_reservation_locked(active)
+            return receipt
+
     def _service_closure_receipt_locked(
         self,
         plan: _PreparedServiceClosureCommitPlan,
     ) -> LifecycleServiceProcessClosureReceipt:
         request = plan.token.request
-        if not plan.already_terminal:
+        if plan.certified:
+            self._commit_certified_service_closure_primitives_locked(plan)
+        elif not plan.already_terminal:
             for operation in request.parent_adoptions:
                 partition_id = self._subject_partition_locked(operation.subject)
                 partition = self._partitions[partition_id]
