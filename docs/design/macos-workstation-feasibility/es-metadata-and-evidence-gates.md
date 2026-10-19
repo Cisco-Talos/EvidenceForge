@@ -288,3 +288,6 @@ A single-link, same-directory, non-replacing Mac rename now uses the existing at
 
 ### Authored history source integration — revision 284
 Mac `spillage: shell_history` reuses the existing scenario surface, canonical local GUI/zsh ownership and source-observation path. Exact target-host `zsh_history` reachability is required before generation, including format filtering. Evaluation checks source, actor, host and exposed value. A history submission does not establish command success or create process/network side effects. Unsupported owners remain explicit skips. Filtering, fresh-process determinism and checkpoint continuation are tested; native ES and Gatekeeper gates are unchanged.
+
+### Terminal adoption composition — revision 285
+Authenticated surviving-child adoption can now share a native terminal-preparation cohort. Pre-close snapshots preserve equal-time ordering; earlier adoption changes retained relationship observations. Production launchd group cleanup and runtime/installed exit batches are tested without terminating surviving descendants. Other mixed-transition overlays and atomic native publication remain separate engineering gates. This does not enable ES output or close target-build validation.

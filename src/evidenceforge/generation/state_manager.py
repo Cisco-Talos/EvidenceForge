@@ -16672,31 +16672,39 @@ class StateManager:
         *,
         process: ProcessIdentity | None = None,
     ) -> ProcessRelationshipObservation:
-        """Freeze a selected Mac exit in a sealed termination-only cohort.
+        """Freeze a selected Mac exit with optional surviving-child adoptions.
 
         Each observation is immediately before its canonical terminal instant.
         Strictly earlier planned closes affect responsibility; equal-time closes
         share the pre-close boundary, independent of tuple order. A previously
-        closed parent requires an explicit adoption overlay, which this bounded
-        profile does not supply. No State mutation or commit authority is granted.
+        closed parent still rejects. Authenticated adoption of surviving children
+        may share the cohort; strictly earlier adoption changes their relationship
+        observations, while equal-time adoption remains after the exit boundary.
+        Other activity or identity changes remain unsupported. No State mutation
+        or commit authority is granted.
         """
         with self._lock:
             self.validate_action_cohort_materialization(cohort)
-            if not cohort.process_terminations or any(
-                (
-                    cohort.sessions,
-                    cohort.processes,
-                    cohort.process_activity_patches,
-                    cohort.process_executions,
-                    cohort.session_terminalizations,
-                    cohort.session_metadata_patches,
-                    cohort.live_session_process_role_patches,
-                    cohort.session_activity_patches,
-                    cohort._smb_connection_finalization,
-                    cohort._smb_file_mutation_terminalization,
+            if (
+                not cohort.process_terminations
+                or any(
+                    (
+                        cohort.sessions,
+                        cohort.processes,
+                        cohort.process_executions,
+                        cohort.session_terminalizations,
+                        cohort.session_metadata_patches,
+                        cohort.live_session_process_role_patches,
+                        cohort.session_activity_patches,
+                        cohort._smb_connection_finalization,
+                        cohort._smb_file_mutation_terminalization,
+                    )
                 )
+                or any(patch.parentage_change is None for patch in cohort.process_activity_patches)
             ):
-                raise StateError("Planned terminal observation requires a termination-only cohort")
+                raise StateError(
+                    "Planned terminal observation requires terminations with only child adoptions"
+                )
             if process is None:
                 if len(cohort.process_terminations) != 1:
                     raise StateError(
@@ -16722,7 +16730,26 @@ class StateManager:
                 for item in cohort.process_terminations
                 if item.end_time < at
             }
+            adoptions = {
+                patch.target.object_id: patch
+                for patch in cohort.process_activity_patches
+                if patch.activity_time < at
+            }
+
+            def observed_survivor(subject: ProcessIdentity) -> ProcessIdentity:
+                patch = adoptions.get(subject.object_id)
+                if patch is None:
+                    return subject
+                assert patch.parentage_change is not None and patch.adopting_parent is not None
+                return replace(
+                    subject,
+                    parent_pid=patch.adopting_parent.pid,
+                    parentage=patch.parentage_change.after,
+                )
+
             parent = self._observe_process_parent_locked(identity, at)
+            if parent.parent is not None:
+                parent = replace(parent, parent=observed_survivor(parent.parent))
             if parent.parent is not None and parent.parent.object_id in earlier:
                 raise StateError(
                     "Planned terminal parent closed earlier and requires an adoption overlay"
@@ -16733,6 +16760,11 @@ class StateManager:
                 if closed is not None:
                     responsibility = ProcessResponsibilityObservation(
                         identity, identity, at, "exited", closed.end_time
+                    )
+                else:
+                    responsibility = replace(
+                        responsibility,
+                        responsible=observed_survivor(responsibility.responsible),
                     )
             return ProcessRelationshipObservation(parent, responsibility)
 

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 284
+current_revision: 285
 history_start_revision: 1
-behavior_surface_sha256: e49613e8a5b74d0b3c0e70ca4e442826fddf785f4b0edcd175eb9204e27446af
+behavior_surface_sha256: ced5d260c247acdb72ec715c7dfcfb652d89e39e7b01b1448214000b5c0e5b89
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2696,3 +2696,11 @@ changes:
     formats:
       - zsh_history
     summary: Routes authored Mac shell-history exposures through an explicit live zsh session, preserves filtering-independent shell choice, and validates/evaluates their actual native history source.
+  - revision: 285
+    id: macos-terminal-adoption-observation
+    impact: localized
+    domains:
+      - macos-process-observation
+      - native-publication-preparation
+    formats: []
+    summary: Allows authenticated surviving-child adoption alongside prepared terminal observations, preserving pre-close boundaries and freezing native exits without changing survivor state.

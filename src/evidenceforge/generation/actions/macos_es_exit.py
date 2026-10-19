@@ -255,7 +255,7 @@ def prepared_es_exit_records(
     clock: MacosBootClock,
     version: int,
 ) -> Iterator[PreparedMacosExitRecords]:
-    """Freeze every exit in one same-host termination-only cohort before mutation.
+    """Freeze every exit in one same-host terminal/adoption cohort before mutation.
 
     The ordered collection batch supplies exact counters and visibility decisions.
     Every canonical termination occurs once, including filtered deliveries. A
