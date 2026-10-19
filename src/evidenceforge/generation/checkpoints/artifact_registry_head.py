@@ -597,6 +597,11 @@ class LocalArtifactVersionRegistryParticipant:
                 row.extend((None, None))
         if self.registry._live_count or any(shard.store for shard in self.registry._shards):
             raise ValueError("local artifact checkpoint hydration requires a fresh registry")
+        assert_transient_owner_state_empty(
+            self.registry,
+            self.checkpoint_state_fields,
+            owner_name="LocalArtifactVersionRegistry",
+        )
         self.registry._watermark = watermark
         self.registry._eviction_cursor = document.eviction_cursor
         self.registry._next_reservation_id = document.next_reservation_id

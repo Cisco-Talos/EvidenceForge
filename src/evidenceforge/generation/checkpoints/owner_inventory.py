@@ -805,6 +805,8 @@ LOCAL_ARTIFACT_REGISTRY_CHECKPOINT_FIELDS = _fields(
         "_shard_count",
     ),
     transient=(
+        "_placement_observation_claims",
+        "_placement_deferred_expiry",
         "_claimed_reservations",
         "_committing_reservations",
         "_prepared_capability_locators",

@@ -8154,6 +8154,8 @@ class LocalArtifactVersionRegistry:
         "_gate",
         "_high_water_mark",
         "_live_count",
+        "_placement_observation_claims",
+        "_placement_deferred_expiry",
         "_next_reservation_id",
         "_prepared_byte_capacity",
         "_prepared_capability_locators",
@@ -8213,6 +8215,8 @@ class LocalArtifactVersionRegistry:
         self._routes = tuple(_ArtifactRouteShard() for _ in range(self._shard_count))
         self._gate = _ArtifactRegistryGate()
         self._capacity_lock = RLock()
+        self._placement_observation_claims: set[object] = set()
+        self._placement_deferred_expiry: set[tuple[int, str]] = set()
         self._claimed_reservations: set[int] = set()
         self._committing_reservations: set[int] = set()
         self._live_count = 0
@@ -8460,6 +8464,7 @@ class LocalArtifactVersionRegistry:
         _pack_artifact_payload(canonical_record.artifact, canonical_record)
         version_id = canonical_record.artifact.artifact_version_id
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             self._require_after_watermark_locked(
                 event_time,
                 "artifact observed_at",
@@ -9668,6 +9673,7 @@ class LocalArtifactVersionRegistry:
 
         with self._gate.mutation(), self._capacity_lock:
             reservation = self._active_claimed_commit_locked(transaction)
+            self._validate_observed_retention_locked((reservation,))
             if reservation.claimed_by != get_ident():
                 raise StateError(
                     "local artifact prepared publication must commit on its claiming thread"
@@ -9749,6 +9755,7 @@ class LocalArtifactVersionRegistry:
 
         with self._gate.mutation(), self._capacity_lock:
             reservations = self._active_claimed_group_locked(transaction)
+            self._validate_observed_retention_locked(reservations)
             if any(reservation.claimed_by != get_ident() for reservation in reservations):
                 raise StateError(
                     "local artifact prepared publication group must commit on its claiming thread"
@@ -10287,6 +10294,7 @@ class LocalArtifactVersionRegistry:
                 allow_boundary=True,
             )
             with self._capacity_lock:
+                self._require_unclaimed_placement_locked()
                 if version_id in self._prepared_versions:
                     raise StateError(
                         f"artifact version {version_id!r} has an active prepared publication"
@@ -10303,6 +10311,7 @@ class LocalArtifactVersionRegistry:
                             shard, handle, canonical_artifact, deadline, observed_at=event_time
                         )
             with self._capacity_lock:
+                self._require_unclaimed_placement_locked()
                 if version_id in self._prepared_versions:
                     raise StateError(
                         f"artifact version {version_id!r} has an active prepared publication"
@@ -10348,6 +10357,7 @@ class LocalArtifactVersionRegistry:
     ) -> int:
         """Commit one artifact publish while holding its stable owner shard."""
 
+        self._require_unclaimed_placement_locked()
         version_id = artifact.artifact_version_id
         if handle is not None:
             current = shard.store.get_by_handle(handle)
@@ -10661,6 +10671,69 @@ class LocalArtifactVersionRegistry:
                         return artifact
         return None
 
+    @contextmanager
+    def claimed_placement_observations(self) -> Iterator[None]:
+        """Fence file facts through a short outer canonical publication.
+
+        This bounded read claim holds no locks across owners. Placement writes,
+        eviction and lease release reject while it is active; already-prepared
+        unchanged-content retention may commit. Callers must validate their
+        observations after entering. This grants no source or mutation authority.
+        """
+        claim = object()
+        primary: BaseException | None = None
+        try:
+            with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+                if len(self._placement_observation_claims) >= self._capacity:
+                    raise LocalArtifactCapacityError(
+                        "Artifact placement observation capacity exhausted"
+                    )
+                self._placement_observation_claims.add(claim)
+            yield
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            with self._capacity_lock:
+                self._placement_observation_claims.discard(claim)
+                if not self._placement_observation_claims:
+                    try:
+                        self._drain_placement_deferred_expiry_locked()
+                    except BaseException as cleanup_error:
+                        if primary is None:
+                            raise
+                        primary.add_note(
+                            "Artifact placement expiry cleanup also raised "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+
+    def _drain_placement_deferred_expiry_locked(self) -> tuple[LocalArtifactIdentity, ...]:
+        """Retire only due versions whose cancellation met an observation fence."""
+        evicted: list[LocalArtifactIdentity] = []
+        for shard_id, version_id in sorted(self._placement_deferred_expiry):
+            artifact = self._evict_pending_version(self._shards[shard_id], version_id)
+            if artifact is not None:
+                evicted.append(artifact)
+            self._placement_deferred_expiry.discard((shard_id, version_id))
+        return tuple(evicted)
+
+    def _require_unclaimed_placement_locked(self) -> None:
+        if self._placement_observation_claims:
+            raise StateError("Artifact placement is fenced by an active native observation")
+
+    def _validate_observed_retention_locked(
+        self, reservations: Sequence[_LocalArtifactPreparedReservation]
+    ) -> None:
+        """Permit only unchanged payload retention under a placement observation fence."""
+        if self._placement_observation_claims and any(
+            item.canonical_token.withdraw_placement
+            or item.commit_plan is None
+            or item.commit_plan.places_record
+            or item.commit_plan.prior_payload != item.commit_plan.packed_payload
+            for item in reservations
+        ):
+            raise StateError("Artifact placement is fenced by an active native observation")
+
     def observe_version_placement(
         self, artifact_version_id: str
     ) -> LocalArtifactPlacementObservation | None:
@@ -10944,6 +11017,7 @@ class LocalArtifactVersionRegistry:
             )
         )
         with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            self._require_unclaimed_placement_locked()
             self._require_after_watermark_locked(
                 ensure_utc(observed_at), "artifact removal observed_at", allow_boundary=True
             )
@@ -11074,6 +11148,7 @@ class LocalArtifactVersionRegistry:
         shard: _LocalArtifactShard | None = None
         released = False
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             if self._version_has_claimed_preparation_locked(version_id):
                 raise StateError(
                     "artifact lease cannot change during an active claimed publication"
@@ -11103,6 +11178,7 @@ class LocalArtifactVersionRegistry:
         released: list[str] = []
         pending: list[tuple[_LocalArtifactShard, str]] = []
         with self._gate.mutation(), self._capacity_lock:
+            self._require_unclaimed_placement_locked()
             for shard in self._shards:
                 with shard.lock:
                     owner_versions = tuple(shard.leases.keys_for_owner(owner_id))
@@ -11125,6 +11201,7 @@ class LocalArtifactVersionRegistry:
 
         cutoff = ensure_utc(watermark)
         with self._gate.watermark(), self._capacity_lock, self._all_shards_locked():
+            self._require_unclaimed_placement_locked()
             if self._watermark is not None and cutoff < self._watermark:
                 raise ValueError("artifact registry watermark cannot move backwards")
             if self._claimed_reservations and cutoff != self._watermark:
@@ -11133,7 +11210,7 @@ class LocalArtifactVersionRegistry:
                     "publication"
                 )
             cutoff_timestamp = cutoff.timestamp()
-            evicted: list[LocalArtifactIdentity] = []
+            evicted = list(self._drain_placement_deferred_expiry_locked())
             for shard in self._shards:
                 expired_leases = shard.leases.expire_before(
                     cutoff_timestamp,
@@ -11254,6 +11331,9 @@ class LocalArtifactVersionRegistry:
                 or shard.leases.is_leased(artifact_version_id)
             ):
                 return None
+            if self._placement_observation_claims:
+                self._placement_deferred_expiry.add((shard.shard_id, artifact_version_id))
+                return None
             artifact = self._evict_locked(shard, artifact_version_id)
             if artifact is not None:
                 self._live_count -= 1
@@ -11361,6 +11441,8 @@ class LocalArtifactVersionRegistry:
                     + sys.getsizeof(self._prepared_reservations)
                     + sys.getsizeof(self._prepared_versions)
                     + sys.getsizeof(self._claimed_reservations)
+                    + _owned_graph_size(self._placement_observation_claims)
+                    + _owned_graph_size(self._placement_deferred_expiry)
                     + sys.getsizeof(self._committing_reservations)
                     + sum(sys.getsizeof(count) for count in self._prepared_counts)
                     + sum(

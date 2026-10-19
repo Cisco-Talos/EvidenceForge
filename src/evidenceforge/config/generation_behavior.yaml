@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 309
+current_revision: 310
 history_start_revision: 1
-behavior_surface_sha256: a5aadcdace413300f36d57658c89692229211a9fa96b69ed5d03b341dad0bd67
+behavior_surface_sha256: 9cd274173feda11cfa4b4432d7a0a3c973e6e1393cdf1423a1494e6d1446894c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2900,3 +2900,12 @@ changes:
       - exact-source-publication
     formats: []
     summary: Revalidates pending native executable placement against canonical event-time runtime records before binding and publication.
+  - revision: 310
+    id: canonical-native-file-observation-fence
+    impact: localized
+    domains:
+      - runtime-content-identity
+      - exact-source-publication
+      - checkpoint-ownership
+    formats: []
+    summary: Fences runtime file placement through native canonical publication while allowing unchanged-content retention and deferring due cleanup until observers leave.

@@ -11397,6 +11397,13 @@ class EventDispatcher:
                     intent_context = record.intent_ledger.claimed_batch(record.intent_token)
                     intent_claimed = intent_context.__enter__()
                     entered.append(cast(AbstractContextManager[object], intent_context))
+                if record.es_delivery is not None and self.local_artifact_registry is not None:
+                    placement_context = (
+                        self.local_artifact_registry.claimed_placement_observations()
+                    )
+                    placement_context.__enter__()
+                    entered.append(cast(AbstractContextManager[object], placement_context))
+
                 artifact_claimed: LocalArtifactPreparedGroupCommit | None = None
                 if record.artifact_registry is not None and record.artifact_publications:
                     artifact_context = record.artifact_registry.prepared_publication_group(
