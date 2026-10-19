@@ -5367,12 +5367,14 @@ class EventDispatcher:
             actor = event.identity_plan.actor if event.identity_plan is not None else None
             retained_exec_content = bool(
                 platform == "macos"
-                and event.event_type in {"process_exec", "process_fork"}
+                and event.event_type in {"process_exec", "process_fork", "process_create"}
                 and registry is not None
                 and registry.authenticates_prepared_retention(token)
                 and any(
                     self._process_owns_runtime_exec_content(identity, record)
-                    for identity in (actor, subject)
+                    for identity in (
+                        (subject,) if event.event_type == "process_create" else (actor, subject)
+                    )
                 )
             )
             if (

@@ -142,6 +142,7 @@ from evidenceforge.events.lifecycle import (
     LifecycleEntityRef,
     SessionEndPlan,
 )
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkEndpointObservationPlan,
@@ -16849,6 +16850,7 @@ class ActivityGenerator:
         require_exact_parent: bool = False,
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
+        exec_script: MacosExecScript | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -16872,6 +16874,7 @@ class ActivityGenerator:
                 live parent instead of applying generic parent-repair heuristics.
             new_posix_session: Model an explicit session-creating POSIX launch.
             arguments: Exact argv for a fresh Mac launch; never inferred from display text.
+            exec_script: Explicit shebang file or known absence; never inferred from argv.
             suppress_command_file_effect: Caller already owns command output file artifacts.
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
@@ -16912,6 +16915,7 @@ class ActivityGenerator:
             require_exact_parent=require_exact_parent,
             new_posix_session=new_posix_session,
             arguments=arguments,
+            exec_script=exec_script,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,

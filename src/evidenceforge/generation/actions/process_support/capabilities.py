@@ -12,6 +12,7 @@ from typing import Protocol
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.identity import PosixProcessCredentials
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.generation.actions import NmapCommandProbeRequest
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
 from evidenceforge.generation.actions.process_execution import (
@@ -181,6 +182,7 @@ class GenerateProcessCapability(Protocol):
         require_exact_parent: bool = False,
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
+        exec_script: MacosExecScript | None = None,
     ) -> int:
         """Delegate to the existing generate process owner."""
         ...

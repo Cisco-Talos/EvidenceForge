@@ -19,6 +19,7 @@ from evidenceforge.events.content_identity import (
     canonical_native_path,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.generation.actions import (
     ExecutionEffectNode,
     ExecutionEffectPlan,
@@ -291,6 +292,7 @@ class ProcessPreflightPlanner:
             root_binary_publication = self._reserve_root_binary(
                 request, anchor, selection, endpoint, reservations, newly_reserved
             )
+            root_script_publication = self._reserve_root_script(request, selection, newly_reserved)
             return ProcessExecutionPreparedEffects(
                 root_anchor=anchor,
                 actor=selection.actor,
@@ -299,6 +301,7 @@ class ProcessPreflightPlanner:
                 lifetime_plan=lifetime.lifetime_plan,
                 provisional_termination=lifetime.termination_time,
                 root_binary_publication=root_binary_publication,
+                root_script_publication=root_script_publication,
             )
         except RuntimeContentOwnerError as exc:
             if runtime_content_manager is not None:
@@ -896,6 +899,38 @@ class ProcessPreflightPlanner:
                     )
                 newly_reserved.append(root_binary_publication)
         return root_binary_publication
+
+    def _reserve_root_script(
+        self,
+        request: ProcessExecutionRequest,
+        selection: SelectedProcessEffects,
+        newly_reserved: list[LocalArtifactPublishToken],
+    ) -> LocalArtifactPublishToken | None:
+        """Retain one explicitly supplied existing shebang file, never infer its role."""
+        script = request.exec_script
+        if script is None or script.artifact_version_id is None:
+            return None
+        manager = self._runtime_content_manager
+        deadline = self._runtime_executable_deadline(
+            selection.actor.started_at, selection.os_category
+        )
+        if manager is None or deadline is None:
+            raise StateError(
+                "Mac script launch requires runtime content and a finite retention horizon"
+            )
+        record = manager.registry.resolve_version(script.artifact_version_id)
+        if record is None or MacosExecScript.from_runtime_record(record) != script:
+            raise StateError("Mac script launch lost its exact retained file version")
+        publication = manager.registry.prepare_publish_version(
+            record,
+            selection.actor.started_at,
+            retention=deadline - selection.actor.started_at,
+            lease_owner=runtime_executable_lease_owner(request.system.hostname, deadline),
+            lease_until=deadline + timedelta(microseconds=1),
+            require_existing=True,
+        )
+        newly_reserved.append(publication)
+        return publication
 
     def _runtime_executable_deadline(self, started_at: datetime, platform: str) -> datetime | None:
         """Protect Mac loaded content through an explicit finite generation and history window."""

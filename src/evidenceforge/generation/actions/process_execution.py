@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Protocol
 from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.identity import validate_process_arguments
 from evidenceforge.events.lifecycle import SessionEndPlan
+from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
@@ -145,6 +146,8 @@ class ProcessExecutionPreparedEffects:
         repr=False,
     )
 
+    root_script_publication: LocalArtifactPublishToken | None = field(default=None, repr=False)
+
     def __post_init__(self) -> None:
         if self.root_anchor.family != "process_execution":
             raise ExecutionEffectPlanError(
@@ -201,9 +204,12 @@ class ProcessExecutionPreparedEffects:
             if isinstance(effect.payload, PreparedFileEffectPayload)
             if (publication := effect.payload.artifact_publication) is not None
         )
-        if self.root_binary_publication is None:
-            return endpoint_publications
-        return (self.root_binary_publication, *endpoint_publications)
+        roots = tuple(
+            token
+            for token in (self.root_binary_publication, self.root_script_publication)
+            if token is not None
+        )
+        return (*roots, *endpoint_publications)
 
     @property
     def process_binary_publication(self) -> LocalArtifactPublishToken | None:
@@ -276,6 +282,7 @@ class ProcessExecutionRequest:
     require_exact_parent: bool = field(default=False, kw_only=True)
     new_posix_session: bool = field(default=False, kw_only=True)
     arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
+    exec_script: MacosExecScript | None = field(default=None, kw_only=True)
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -293,6 +300,15 @@ class ProcessExecutionRequest:
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
 
+        validate_macos_exec_script(
+            self.exec_script,
+            platform=platform_for_os(self.system.os),
+            hostname=self.system.hostname,
+        )
+        if self.exec_script is not None and (
+            not self.require_exact_parent or self.reuse_intent is not None
+        ):
+            raise ValueError("Explicit Mac script requires a fresh exact-parent launch")
         validate_process_arguments(self.arguments, command_line=self.command_line)
         if self.arguments is not None and (
             platform_for_os(self.system.os) != "macos"
@@ -331,6 +347,7 @@ class ProcessExecutionRequest:
         exact_parent_suffix = ":exact_parent" if self.require_exact_parent else ""
         session_suffix = ":new_posix_session" if self.new_posix_session else ""
         arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
+        script_suffix = f":script={self.exec_script!r}" if self.exec_script is not None else ""
         endpoint_effect_signature = tuple(
             (
                 effect.spec.instance_key,
@@ -350,7 +367,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

@@ -37,6 +37,7 @@ from evidenceforge.events.identity import (
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
+from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions import (
     EffectRequirement,
@@ -427,7 +428,7 @@ class ProcessExecutionService:
                 effect_plan=request.effect_plan,
             )
         )
-        if uses_action_cohort:
+        if uses_action_cohort and prepared_endpoint is not None:
             admitted_occurrence_count = sum(
                 len(effect.spec.occurrence_times) for effect in prepared_endpoint.admitted_effects
             )
@@ -436,10 +437,15 @@ class ProcessExecutionService:
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
                     "process endpoint action cohort exceeds its root/occurrence member limit",
                 )
+        if request.exec_script is not None and request.exec_script.artifact_version_id is not None:
+            if prepared_endpoint is not None and not uses_action_cohort:
+                raise StateError("Mac script launch requires cohort-compatible endpoint effects")
+            uses_action_cohort = True
         prepared_requires_new_root = bool(
             request.prepared_effects is not None
             and (
                 request.prepared_effects.process_binary_publication is not None
+                or request.prepared_effects.root_script_publication is not None
                 or (
                     request.prepared_effects.endpoint is not None
                     and any(
@@ -927,6 +933,18 @@ class ProcessExecutionService:
                 executable_version = ProcessExecutableVersion.from_binary(binary)
             else:
                 binary = None  # Unknown/virtual identities cannot bind a loaded file version.
+        if request.exec_script is not None and request.exec_script.artifact_version_id is not None:
+            retained_script = (
+                request.prepared_effects.root_script_publication
+                if request.prepared_effects is not None
+                else None
+            )
+            if (
+                retained_script is None
+                or MacosExecScript.from_runtime_record(retained_script.record)
+                != request.exec_script
+            ):
+                raise StateError("Mac script launch requires its exact prepared retention")
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
             if admission.uses_action_cohort
@@ -954,10 +972,12 @@ class ProcessExecutionService:
                 executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
                 arguments=request.arguments,
+                exec_script=request.exec_script,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
-                admission.endpoint.latest_admitted_occurrence or ensure_utc(launch.time),
+                (admission.endpoint.latest_admitted_occurrence if admission.endpoint else None)
+                or ensure_utc(launch.time),
             )
             action_cohort_builder.patch_process_activity(
                 process_plan,
@@ -988,6 +1008,7 @@ class ProcessExecutionService:
                 executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
                 arguments=request.arguments,
+                exec_script=request.exec_script,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity
@@ -1254,10 +1275,15 @@ class ProcessExecutionService:
                     else PreparedDispatchStateIntent.EXTERNAL_MATERIALIZED_START
                 ),
                 lifecycle_ticket=(root.cohort if root.cohort is not None else process_plan),
-                artifact_publications=(
-                    (evidence.binary_publication,)
-                    if evidence.binary_publication is not None
-                    else ()
+                artifact_publications=tuple(
+                    token
+                    for token in (
+                        evidence.binary_publication,
+                        request.prepared_effects.root_script_publication
+                        if request.prepared_effects is not None
+                        else None,
+                    )
+                    if token is not None
                 ),
                 source_timing_preparation=timing_preparation,
             )
@@ -1303,16 +1329,34 @@ class ProcessExecutionService:
                 ExecutionEffectAuditCohortEntry,
             )
 
-            if endpoint_reconciliation is None or admission.endpoint is None:
-                raise ExecutionEffectPlanError(
-                    ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its exact reconciliation",
+            audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...] = ()
+            if admission.endpoint is not None:
+                if endpoint_reconciliation is None or admission.endpoint.execution_plan is None:
+                    raise ExecutionEffectPlanError(
+                        ExecutionEffectPlanErrorCode.INVALID_PLAN,
+                        "process endpoint action cohort lost its exact reconciliation or plan",
+                    )
+                audit_entries = (
+                    ExecutionEffectAuditCohortEntry(
+                        admission.endpoint.execution_plan, endpoint_reconciliation
+                    ),
                 )
-            endpoint_effect_plan = admission.endpoint.execution_plan
-            if endpoint_effect_plan is None:
+                root_action_id = admission.endpoint.root_anchor.action_id
+            elif (
+                request.prepared_effects is not None
+                and request.prepared_effects.root_script_publication is not None
+            ):
+                root_effects = request.effect_plan
+                if root_effects is None or root_effects.nodes:
+                    raise StateError("Mac script-only cohort requires its empty root effect plan")
+                audit_entries = (
+                    ExecutionEffectAuditCohortEntry(root_effects, root_effects.reconcile(())),
+                )
+                root_action_id = request.prepared_effects.root_anchor.action_id
+            else:
                 raise ExecutionEffectPlanError(
                     ExecutionEffectPlanErrorCode.INVALID_PLAN,
-                    "process endpoint action cohort lost its execution-effect plan",
+                    "process action cohort lost its endpoint or explicit script owner",
                 )
             effect_member_bindings = tuple(
                 ActionCohortEffectMemberBinding(
@@ -1330,15 +1374,10 @@ class ProcessExecutionService:
             )
             try:
                 action_cohort_batch = self.dispatcher.prepare_action_cohort_batch(
-                    admission.endpoint.root_anchor.action_id,
+                    root_action_id,
                     root.cohort,
                     (root_dispatch, *dependent_dispatches),
-                    (
-                        ExecutionEffectAuditCohortEntry(
-                            endpoint_effect_plan,
-                            endpoint_reconciliation,
-                        ),
-                    ),
+                    audit_entries,
                     effect_member_bindings,
                     (),
                 )

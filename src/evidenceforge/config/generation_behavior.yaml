@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 269
+current_revision: 270
 history_start_revision: 1
-behavior_surface_sha256: c5c712d6dc26540fd3061bfa79003406a242a7f50643ecba5fd29d192ad3cb7e
+behavior_surface_sha256: a736a6efc43d57aba7668adaae5e29b7cb35a782474f12fb7bea71962faac1fb
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2568,3 +2568,12 @@ changes:
     formats:
       - ecar
     summary: Carries known Mac actor credentials and installed loaded-image versions through persistent SMB preparation, materialization, exact reuse and scalar retry snapshots; older recipes and Windows/Linux shapes retain their defaults.
+  - revision: 270
+    id: explicit-macos-birth-script-retention
+    impact: localized
+    domains:
+      - macos-executable-retention
+      - process-lifecycle
+    formats:
+      - ecar
+    summary: Retains an explicitly supplied runtime shebang file alongside its interpreter through fresh Mac process publication and recovery without inferring script execution from command text.
