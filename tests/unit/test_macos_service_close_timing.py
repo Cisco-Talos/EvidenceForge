@@ -108,10 +108,17 @@ def test_lost_service_acknowledgement_retains_committed_timing_proof(
         original(plan)
         raise RuntimeError("injected service lost acknowledgement")
 
+    retained = []
+    publish = bundle.dispatcher.publish_prepared
+
+    def capture(prepared: object, *, materialization_receipt: object) -> object:
+        retained.append(materialization_receipt)
+        return publish(prepared, materialization_receipt=materialization_receipt)
+
     monkeypatch.setattr(bundle.lifecycle, "_service_closure_receipt_locked", fail)
-    with pytest.raises(RuntimeError, match="injected service") as caught:
-        bundle.execute(_request(bundle, caller, host, definition, path, "unload", 10))
-    proof = caught.value.process_group_service_receipt
+    monkeypatch.setattr(bundle.dispatcher, "publish_prepared", capture)
+    bundle.execute(_request(bundle, caller, host, definition, path, "unload", 10))
+    proof = retained[0]
     assert proof.source_timing_receipt is not None
     assert bundle.dispatcher.source_timing_planner.authenticates_preparation_receipt(
         proof.source_timing_receipt

@@ -334,3 +334,6 @@ Launchd leader/group close projections share one staged timing preparation. Reje
 
 ### Activation timing — revision 299
 Authored system-job activation stages timing until canonical allocation and verifies its exact completion proof at dispatch. Rejection, retained-image failure and lost lifecycle/State/timing acknowledgements have regression coverage; normal evidence remains unchanged. This does not add automatic activation, GUI launch-agent domains or native ES admission.
+
+### Completed service-close adoption — revision 300
+Authored leader/group workflows continue source publication from a complete authenticated canonical completion proof after lost acknowledgements. Invalid proofs and user interrupts do not silently proceed. Whole-group exact source-writer recovery after a partial sink write remains open. Its next dependency is a preallocated service-closure result that can join the existing dispatcher transaction; source timing and collector closure ownership are now in place. ES-R1 and GK-R1 are unchanged.

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 299
+current_revision: 300
 history_start_revision: 1
-behavior_surface_sha256: 2ced1a9fdbb3bc98faa243d31fda2243aa7e5e81d3d8aa66098e2d4b81918016
+behavior_surface_sha256: 6c9e3958cdb7e192e3184eda10064aa43867093c0873367a16ee44dc4049ec13
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2818,3 +2818,12 @@ changes:
     formats:
       - ecar
     summary: Commits authored system-job activation timing with exact canonical allocation and recovers complete lifecycle, State and timing acknowledgements without duplicate starts.
+  - revision: 300
+    id: macos-service-close-completion-adoption
+    impact: localized
+    domains:
+      - macos-service-lifecycle
+      - source-publication
+    formats:
+      - ecar
+    summary: Continues authored leader and group close source publication from exact complete composite proofs after lost canonical acknowledgements without repeating closure.

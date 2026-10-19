@@ -1,0 +1,150 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Production service workflows adopt exact completed closure proofs once."""
+
+from datetime import timedelta
+
+import pytest
+
+from evidenceforge.events.es_collector import ESCollectorRegistry
+from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+from evidenceforge.generation.state_manager import PreparedActionCohortMaterialization
+from tests.unit.test_es_collector import _profile
+from tests.unit.test_macos_launch_registration import _START
+from tests.unit.test_macos_persistence_workflow import _request, _workflow
+
+
+def _active_group(collect: bool = True) -> tuple:
+    bundle, caller, host, definition, path, emitter = _workflow(collect)
+    for index, operation in enumerate(("write", "bootstrap", "activate"), 1):
+        result = bundle.execute(_request(bundle, caller, host, definition, path, operation, index))
+    identities = [result.process]
+    for index in (4, 5):
+        plan = bundle.state.plan_process_materialization(
+            system=host.hostname,
+            parent_pid=identities[-1].pid,
+            image=f"/usr/local/libexec/invented-child-{index}",
+            command_line="invented-child",
+            username="root",
+            integrity_level="Medium",
+            os_category="macos",
+            credentials=PosixProcessCredentials(0, 0, 0, 0),
+            start_time=_START + timedelta(seconds=index),
+        )
+        bundle.authority.materialize_process(plan)
+        identities.append(plan.identity)
+    collector = ESCollectionActionOwner(bundle.state, bundle.dispatcher.es_collectors)
+    profile = collector.open(
+        _profile(
+            hostname=host.hostname,
+            opened_at=identities[0].started_at,
+            last_delivery_at=identities[0].started_at,
+        ),
+        identities[0],
+    )
+    emitter.reset_mock()
+    return bundle, caller, host, definition, path, emitter, tuple(identities), collector, profile
+
+
+@pytest.mark.parametrize("stage", ["service", "state", "collector"])
+@pytest.mark.parametrize("collect", [False, True])
+@pytest.mark.parametrize("operation", ["exit", "unload"])
+def test_group_unload_finishes_source_publication_after_exact_owner_lost_return(
+    monkeypatch: pytest.MonkeyPatch, stage: str, collect: bool, operation: str
+) -> None:
+    bundle, caller, host, definition, path, emitter, identities, collector, profile = _active_group(
+        collect
+    )
+    if stage == "service":
+        target, method = bundle.lifecycle, "_service_closure_receipt_locked"
+    elif stage == "state":
+        target, method = PreparedActionCohortMaterialization, "finalize_no_fail"
+    else:
+        target, method = ESCollectorRegistry, "_finalize_closures"
+    original = getattr(target, method)
+    calls = 0
+
+    def fail(*args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        original(*args, **kwargs)
+        raise RuntimeError("injected completed closure lost return")
+
+    monkeypatch.setattr(target, method, fail)
+    before = bundle.state.materialization_version
+    request = _request(bundle, caller, host, definition, path, operation, 10)
+    result = bundle.execute(request)
+    assert calls == 1
+    assert bundle.state.materialization_version == before + 1
+    terminated = identities if operation == "unload" else identities[:1]
+    assert set(result.terminated) == set(terminated)
+    assert all(bundle.state.get_process(item.hostname, item.pid) is None for item in terminated)
+    if operation == "exit":
+        assert all(
+            bundle.state.get_process(item.hostname, item.pid) is not None for item in identities[1:]
+        )
+        assert (
+            bundle.state.get_process_identity(identities[1].hostname, identities[1].pid).parent_pid
+            == 1
+        )
+    assert collector.collectors.connection(profile.source_instance).closed_at == request.timestamp
+    assert emitter.emit.call_count == (len(terminated) if collect else 0)
+    if collect:
+        assert {call.args[0].process.pid for call in emitter.emit.call_args_list} == {
+            item.pid for item in terminated
+        }
+    assert bundle.services.service_preparation_census().reserved_keys == 0
+
+
+@pytest.mark.parametrize("damage", ["absent", "integrity", "members", "timing"])
+def test_workflow_rejects_incomplete_or_unauthenticated_completion_proof(
+    monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    from dataclasses import replace
+
+    bundle, caller, host, definition, path, emitter, identities, _, _ = _active_group()
+    original = bundle.authority.materialize_process_group_service_closure_composite
+
+    def fail(*args: object, **kwargs: object) -> None:
+        proof = original(*args, **kwargs)
+        if damage == "integrity":
+            proof = replace(proof, _integrity="0" * 64)
+        elif damage == "members":
+            proof = replace(proof, process_plan_tokens=proof.process_plan_tokens[:-1])
+        elif damage == "timing":
+            proof = replace(proof, source_timing_receipt=None)
+        error = RuntimeError("injected unusable completion proof")
+        if damage != "absent":
+            error.process_group_service_receipt = proof
+        raise error
+
+    monkeypatch.setattr(
+        bundle.authority, "materialize_process_group_service_closure_composite", fail
+    )
+    before = bundle.state.materialization_version
+    with pytest.raises(RuntimeError, match="unusable completion"):
+        bundle.execute(_request(bundle, caller, host, definition, path, "unload", 10))
+    assert bundle.state.materialization_version == before + 1
+    assert all(bundle.state.get_process(item.hostname, item.pid) is None for item in identities)
+    assert not emitter.emit.called
+    assert bundle.services.service_preparation_census().reserved_keys == 0
+
+
+def test_completed_close_does_not_swallow_a_user_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle, caller, host, definition, path, emitter, identities, _, _ = _active_group()
+    original = bundle.lifecycle._service_closure_receipt_locked
+
+    def interrupt(*args: object, **kwargs: object) -> None:
+        original(*args, **kwargs)
+        raise KeyboardInterrupt("injected user interruption")
+
+    monkeypatch.setattr(bundle.lifecycle, "_service_closure_receipt_locked", interrupt)
+    with pytest.raises(KeyboardInterrupt, match="user interruption") as caught:
+        bundle.execute(_request(bundle, caller, host, definition, path, "unload", 10))
+    assert caught.value.process_group_service_receipt.authenticates(
+        bundle.authority._receipt_secret
+    )
+    assert all(bundle.state.get_process(item.hostname, item.pid) is None for item in identities)
+    assert not emitter.emit.called

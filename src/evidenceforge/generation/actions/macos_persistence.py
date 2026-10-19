@@ -51,6 +51,7 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.posix_group_closure import PosixGroupServiceClosureReceipt
 from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     runtime_executable_lease_owner,
@@ -369,10 +370,28 @@ class MacosPersistenceActionBundle:
                     collectors=self.dispatcher.es_collectors,
                     source_timing_preparation=timing,
                 )
-        except BaseException:
+        except Exception as error:
+            # The canonical owner may finish every participant but lose its return.
+            # Adopt only its complete exact proof; never repeat the modeled close.
+            proof = getattr(error, "process_group_service_receipt", None)
+            if (
+                type(proof) is not PosixGroupServiceClosureReceipt
+                or not timing.committed
+                or proof.source_timing_receipt is not timing.receipt
+                or proof.group != close.group
+                or proof.process_plan_tokens
+                != tuple(plan.target.publication_token for plan in plans)
+                or not all(
+                    self.authority.authenticates_process_service_closure_composite_receipt(
+                        plan.target, proof
+                    )
+                    for plan in plans
+                )
+            ):
+                raise
+        finally:
             if not timing.committed:
                 timing.cancel()
-            raise
         for prepared in dispatches:
             self.dispatcher.publish_prepared(prepared, materialization_receipt=proof)
         return MacosPersistenceResult(terminated=tuple(terminated))

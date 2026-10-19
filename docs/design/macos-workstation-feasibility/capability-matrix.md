@@ -187,3 +187,6 @@ Explicit bounded connection sets can close provisionally under exact live proces
 
 ### Canonical process-owned disconnects — revision 295
 Ordinary exact Mac exits and exact terminal groups now close explicitly bound clients atomically with process State/lifecycle. Rollback, capacity limits, changed profiles, source retries, independent observing clients and existing checkpoint restoration are tested. Service-closure composites, exec-specific attachment semantics, native self-exit observations and native sink/source admission remain open. Pending native metadata must also reject changed client membership before publication; completed historical records retain their validity.
+
+### Collector and service integration — revisions 296–300
+Pending native bytes now reject changed modeled client ownership; completed historical records remain valid. Explicit client disconnects join ordinary, terminal-group and authored service-group exits. Authored activation/closure timing rolls back on rejection and shares exact canonical completion proofs. Production workflows adopt complete lost acknowledgements without duplicate allocation, closure or source rows. Whole-group service sink recovery, native sink/source admission, complete negative membership and observing-client self-exit remain engineering gaps. No external evidence gate is closed by these changes.
