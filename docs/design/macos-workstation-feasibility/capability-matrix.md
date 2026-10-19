@@ -129,3 +129,6 @@ Artifact checkpoint head 5 requires one current canonical version per execution 
 
 ### Installed fork and terminal argument integration — revisions 259–262
 Native fork preparation can use explicit installed-file metadata under the same authenticated State/collector boundary as runtime files. Native sink publication remains unavailable. Terminal/login/zsh production now retains explicit literal argv; environment and unsupplied filesystem facts remain unknown. Descriptor object kind is consistent within retained lifetime history and checkpoint restore. Optional Mac clock profiles use existing validation semantics. No new configuration fields or ES version/event families are admitted; ES-R1 and GK-R1 remain open.
+
+### Production retention and boot argv — revisions 263–264
+Mac boot processes preserve literal argv through both materialization paths and checkpoint restore. Deferred SSH transport authenticates a Mac source process against its exact retained loaded image even after replacement of that path. Missing retained content rejects instead of substituting a newer executable. Loaded-file path presentation after rename remains a separate observation problem; this does not introduce native ES source emission.

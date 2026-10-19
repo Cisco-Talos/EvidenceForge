@@ -56,6 +56,7 @@ from evidenceforge.events.collection_policy import (
     ProjectionRole,
 )
 from evidenceforge.events.content_identity import (
+    LocalArtifactBinaryIdentity,
     LocalArtifactVersionRecord,
     Platform,
     ProcessBinaryIdentity,
@@ -12867,12 +12868,28 @@ class EventDispatcher:
             raise EventContractError(
                 "Deferred-session binary transport uses an unsupported source platform"
             )
-        resolved_binary = self.resolve_process_binary_identity(
-            host.hostname,
-            process.username,
-            process.image,
-            cast(Platform, platform_name),
+        resolved_binary = (
+            self.resolve_loaded_process_binary_identity(actor)
+            if platform_name == "macos" and actor.executable_version is not None
+            else self.resolve_process_binary_identity(
+                host.hostname,
+                process.username,
+                process.image,
+                cast(Platform, platform_name),
+            )
         )
+        # Runtime records are decoded from the bounded artifact store on lookup,
+        # unlike interned installed releases. Authenticate their complete value
+        # against the exact State-owned loaded version, not Python object identity.
+        matching_binary = resolved_binary is binary
+        if (
+            platform_name == "macos"
+            and actor.executable_version is not None
+            and actor.executable_version.identity_kind == "local_artifact"
+            and type(resolved_binary) is LocalArtifactBinaryIdentity
+            and type(binary) is LocalArtifactBinaryIdentity
+        ):
+            matching_binary = resolved_binary == binary
         matching_activity = tuple(
             patch
             for patch in state_plan.process_activity
@@ -12913,7 +12930,7 @@ class EventDispatcher:
             or lifecycle.parent_group_id is not None
             or binary is None
             or prepared._binary_identity_kind != getattr(binary, "identity_kind", None)
-            or resolved_binary is not binary
+            or not matching_binary
         ):
             raise EventContractError(
                 "Deferred-session binary transport actor is not the exact live root-owned process"

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 263
+current_revision: 264
 history_start_revision: 1
-behavior_surface_sha256: 25f6b56057f129eaed509cadcacb4890718e9bdba4c45436b91042556c61c292
+behavior_surface_sha256: 7ac38aa2a7d7cc95ba04c149f2096c81f17d93a3a68b634233453625c8fe1bf7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2516,3 +2516,13 @@ changes:
       - boot-lifecycle
     formats: []
     summary: Retains explicit canonical literal argv in Mac boot specifications and exact process materialization while preserving old Windows/Linux boot request payloads.
+  - revision: 264
+    id: macos-deferred-transport-loaded-executable
+    impact: localized
+    domains:
+      - macos-executable-retention
+      - deferred-session-publication
+    formats:
+      - ecar
+      - zeek_conn
+    summary: Authenticates Mac deferred-session transport against its retained loaded executable instead of a replacement at the current path, preserving exact interned binary and live-root checks.
