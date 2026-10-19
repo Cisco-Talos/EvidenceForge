@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 282
+current_revision: 283
 history_start_revision: 1
-behavior_surface_sha256: fe1e5240f65f8e68aad72fde0856fb141a803717637726b0cceafdab42aec658
+behavior_surface_sha256: 94facb1336b1152aeb5a4e486c55975c58aa3ffeecee1fbf879b1406fc5f3800
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2679,3 +2679,11 @@ changes:
       - es-collector-ownership
     formats: []
     summary: Builds every historical v9 exit row for an exact same-host terminal cohort under one collector batch claim, freezing no partial prefix on validation failure.
+  - revision: 283
+    id: macos-canonical-file-rename-retention
+    impact: localized
+    domains:
+      - macos-file-placement
+      - runtime-executable-retention
+    formats: []
+    summary: Atomically withdraws an exact current Mac file name and publishes its unchanged object/content at a new name in the same directory, rejecting replacement and preserving loaded historical versions.

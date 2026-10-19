@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import ntpath
 import posixpath
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -34,6 +36,8 @@ from evidenceforge.events.macos_file import MacosFileMetadata, detach_file_metad
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
 from evidenceforge.generation.deployment_registry import (
     DeploymentContentRegistry,
+    LocalArtifactPreparedGroupCommit,
+    LocalArtifactPublicationGroupReceipt,
     LocalArtifactPublishToken,
     LocalArtifactRegistryCensus,
     LocalArtifactVersionRegistry,
@@ -127,6 +131,39 @@ class RuntimeArtifactDescriptor:
             raise ValueError("Mach-O metadata requires an executable Mac runtime artifact")
 
 
+class PreparedMacosFileRename:
+    """Artifact-only rename capability; loaded executions retain their old version."""
+
+    __slots__ = ("_registry", "_publication")
+
+    def __init__(
+        self,
+        registry: LocalArtifactVersionRegistry,
+        publication: LocalArtifactPreparedGroupCommit,
+    ) -> None:
+        self._registry = registry
+        self._publication = publication
+
+    @property
+    def expected_receipt(self) -> LocalArtifactPublicationGroupReceipt:
+        """Return the exact receipt for lost-acknowledgement authentication."""
+        return self._publication.expected_receipt
+
+    @property
+    def committed_receipt(self) -> LocalArtifactPublicationGroupReceipt | None:
+        """Return a completed receipt, including after a lost commit return."""
+        receipt = self._publication.receipt
+        if self._publication.committed and self._registry.authenticates_publication_group_receipt(
+            receipt
+        ):
+            return receipt
+        return None
+
+    def commit(self) -> LocalArtifactPublicationGroupReceipt:
+        """Withdraw the old name and publish the new name atomically."""
+        return self._registry.commit_macos_file_rename(self._publication)
+
+
 class RuntimeContentIdentityManager:
     """Build and prepare exact runtime artifact/content identities."""
 
@@ -210,6 +247,53 @@ class RuntimeContentIdentityManager:
             lease_owner=lease_owner,
             lease_until=lease_until,
         )
+
+    @contextmanager
+    def prepared_macos_file_rename(
+        self,
+        source: LocalArtifactVersionRecord,
+        *,
+        native_path: str,
+        artifact_version: int,
+        metadata: MacosFileMetadata,
+        observed_at: datetime,
+        retention: timedelta | None = None,
+    ) -> Iterator[PreparedMacosFileRename]:
+        """Prepare an explicit same-directory rename without inventing file facts.
+
+        The initial profile excludes replacement, hard links, cross-directory or
+        cross-volume moves and alias resolution. Only the supplied change time
+        may differ in stat. Historical loaded-image references keep their exact
+        version and leases; this operation does not rewrite process observations.
+        """
+        artifact = replace(source.artifact, native_path=native_path, version=artifact_version)
+        binary = (
+            None
+            if source.binary is None
+            else replace(
+                source.binary,
+                artifact_version_id=artifact.artifact_version_id,
+                artifact_name=_artifact_name(native_path, "macos"),
+            )
+        )
+        target = replace(
+            source, artifact=artifact, binary=binary, macos_file=detach_file_metadata(metadata)
+        )
+        self._registry.validate_macos_file_rename(source, target)
+        removal = self._registry.prepare_publish_version(
+            source, observed_at, retention=retention, withdraw_placement=True, require_existing=True
+        )
+        try:
+            publication = self._registry.prepare_publish_version(
+                target, observed_at, retention=retention
+            )
+            try:
+                with self._registry.prepared_publication_group((removal, publication)) as group:
+                    yield PreparedMacosFileRename(self._registry, group)
+            finally:
+                self._registry.cancel_prepared(publication)
+        finally:
+            self._registry.cancel_prepared(removal)
 
     def prepare_effect_publication(
         self,

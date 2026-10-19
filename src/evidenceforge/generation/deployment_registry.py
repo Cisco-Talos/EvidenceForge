@@ -9023,6 +9023,91 @@ class LocalArtifactVersionRegistry:
             if cleanup_error is not None:
                 raise cleanup_error
 
+    @staticmethod
+    def validate_macos_file_rename(
+        source: LocalArtifactVersionRecord, target: LocalArtifactVersionRecord
+    ) -> None:
+        """Validate the bounded unchanged-object rename before any reservation."""
+        source = _canonical_local_artifact_record(source)
+        target = _canonical_local_artifact_record(target)
+        before, after = source.artifact, target.artifact
+        old_stat, new_stat = source.macos_file, target.macos_file
+        if (
+            before.platform != "macos"
+            or after.platform != "macos"
+            or before.object_key != after.object_key
+            or after.version <= before.version
+            or source.content != target.content
+            or source.launchd_job != target.launchd_job
+            or old_stat is None
+            or new_stat is None
+            or old_stat.link_count != 1
+            or new_stat.model_copy(update={"changed": old_stat.changed}) != old_stat
+            or (new_stat.changed.seconds, new_stat.changed.nanoseconds)
+            < (old_stat.changed.seconds, old_stat.changed.nanoseconds)
+            or before.normalized_native_path == after.normalized_native_path
+            or before.native_path != before.normalized_native_path
+            or after.native_path != after.normalized_native_path
+            or posixpath.dirname(before.normalized_native_path)
+            != posixpath.dirname(after.normalized_native_path)
+        ):
+            raise StateError("Mac rename requires one unchanged single-link file in one directory")
+        expected_binary = (
+            None
+            if source.binary is None
+            else replace(
+                source.binary,
+                artifact_version_id=after.artifact_version_id,
+                artifact_name=posixpath.basename(after.native_path),
+            )
+        )
+        if target.binary != expected_binary:
+            raise StateError("Mac rename must preserve executable content and signing facts")
+
+    def commit_macos_file_rename(
+        self,
+        transaction: LocalArtifactPreparedGroupCommit,
+    ) -> LocalArtifactPublicationGroupReceipt:
+        """Commit one same-directory, non-replacing regular-file rename.
+
+        The two authenticated group members withdraw the exact old placement and
+        publish a new artifact version of the same file object/content. Validate
+        destination vacancy under the same locks as publication, so a concurrent
+        write cannot turn this bounded operation into replacement. The existing
+        group owns rollback, retention and completed-receipt authentication.
+        This commits file state only, not process state or source evidence.
+        """
+        with self._gate.mutation(), self._capacity_lock, self._all_shards_locked():
+            members = self._active_claimed_group_locked(transaction)
+            if len(members) != 2:
+                raise StateError("Mac rename requires exactly two artifact publications")
+            removal, publication = (item.canonical_token for item in members)
+            source, target = removal.record, publication.record
+            if (
+                not removal.withdraw_placement
+                or publication.withdraw_placement
+                or publication._existing_handle is not None
+                or removal.observed_at != publication.observed_at
+            ):
+                raise StateError("Mac rename requires an exact removal and new placement group")
+            self.validate_macos_file_rename(source, target)
+            after = target.artifact
+            destination_key = (after.hostname, after.principal, after.native_path, after.platform)
+            if self.resolve_record_for_execution_path(*destination_key) is not None:
+                raise StateError("Mac rename destination is occupied; replacement is unsupported")
+            for other in self._prepared_reservations.values():
+                if any(other is member for member in members):
+                    continue
+                candidate = other.canonical_token.record.artifact
+                if (
+                    candidate.hostname == after.hostname
+                    and candidate.principal == after.principal
+                    and candidate.platform == after.platform
+                    and candidate.normalized_native_path == after.normalized_native_path
+                ):
+                    raise StateError("Mac rename destination has a competing prepared publication")
+            return transaction.commit_no_fail()
+
     def _release_failed_claim_locked(
         self,
         reservations: Sequence[_LocalArtifactPreparedReservation],

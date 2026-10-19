@@ -133,7 +133,15 @@ def test_explicit_rename_keeps_file_object_and_inode_without_rewriting_old_obser
         native_path="/Library/LaunchDaemons/org.example.moved.plist",
         artifact_version=2,
     )
-    _publish(manager, moved)
+    with manager.prepared_macos_file_rename(
+        first,
+        native_path=moved.native_path,
+        artifact_version=moved.artifact_version,
+        metadata=moved.macos_file,
+        observed_at=_START,
+    ) as rename:
+        rename.commit()
+    assert manager.resolve_record("MAC-A", "root", first_descriptor.native_path, "macos") is None
     second = manager.resolve_record("MAC-A", "root", moved.native_path, "macos")
     assert second.macos_file == first.macos_file
     assert second.content == first.content
