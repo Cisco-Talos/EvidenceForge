@@ -195,6 +195,13 @@ def _project_runtime_process(
     record = artifacts.resolve_version(image.artifact_version_id)
     if record is None:
         raise StateError("ES process preparation requires its exact retained executable version")
+    placement = artifacts.observe_macos_file_placement(
+        image.artifact_version_id, collection.observed_at
+    )
+    if placement is None:
+        raise StateError(
+            "Incomplete ES runtime process facts: requires known retained executable placement"
+        )
     context = ProcessContext(
         pid=process.pid,
         parent_pid=process.parent_pid,
@@ -207,7 +214,7 @@ def _project_runtime_process(
     )
     try:
         return es_process_from_observations(
-            relationships, collection, context, record, version=version
+            relationships, collection, context, placement, version=version
         )
     except ValueError as error:
         raise StateError(f"Incomplete ES runtime process facts: {error}") from error

@@ -7,6 +7,7 @@ This is a pure projection boundary, not source admission or a metadata producer.
 All file and terminal facts must come from canonical observations.
 """
 
+from evidenceforge.events.artifact_placement import MacosRuntimeFilePlacementObservation
 from evidenceforge.events.content_identity import LocalArtifactVersionRecord, canonical_native_path
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
@@ -28,7 +29,11 @@ def es_process_from_observations(
     relationships: ProcessRelationshipObservation,
     collection: MacosProcessCollectionObservation,
     context: ProcessContext,
-    executable: LocalArtifactVersionRecord | MacosInstalledFileObservation,
+    executable: (
+        LocalArtifactVersionRecord
+        | MacosInstalledFileObservation
+        | MacosRuntimeFilePlacementObservation
+    ),
     *,
     version: int,
 ) -> ESProcess:
@@ -43,7 +48,12 @@ def es_process_from_observations(
         type(relationships) is not ProcessRelationshipObservation
         or type(collection) is not MacosProcessCollectionObservation
         or type(context) is not ProcessContext
-        or type(executable) not in {LocalArtifactVersionRecord, MacosInstalledFileObservation}
+        or type(executable)
+        not in {
+            LocalArtifactVersionRecord,
+            MacosInstalledFileObservation,
+            MacosRuntimeFilePlacementObservation,
+        }
     ):
         raise ValueError("ES process snapshot requires exact canonical observation types")
     relationships.__post_init__()
@@ -52,7 +62,17 @@ def es_process_from_observations(
     collection.__post_init__()
     executable.__post_init__()
     process = relationships.parent.process
-    if type(executable) is MacosInstalledFileObservation:
+    if type(executable) is MacosRuntimeFilePlacementObservation:
+        if executable.observed_at != collection.observed_at:
+            raise ValueError("Runtime ES placement must describe this exact occurrence")
+        loaded = executable.reference
+        file_host = loaded.artifact.hostname
+        file_platform = loaded.artifact.platform
+        file_path = loaded.artifact.native_path
+        binary = loaded.binary
+        native_file = es_file_from_runtime_record(executable.placed)
+    elif type(executable) is MacosInstalledFileObservation:
+        binary = executable.binary
         file_host = executable.installation.hostname
         file_platform = executable.installation.platform
         file_path = executable.native_path
@@ -60,6 +80,7 @@ def es_process_from_observations(
             raise ValueError("Installed ES stat must describe this exact occurrence")
         native_file = es_file_from_installed_observation(executable)
     else:
+        binary = executable.binary
         file_host = executable.artifact.hostname
         file_platform = executable.artifact.platform
         file_path = executable.artifact.native_path
@@ -69,9 +90,9 @@ def es_process_from_observations(
         or collection.observed_at != relationships.parent.observed_at
         or file_platform != "macos"
         or file_host != process.hostname.casefold()
-        or executable.binary is None
-        or context.binary_identity != executable.binary
-        or process.executable_version != ProcessExecutableVersion.from_binary(executable.binary)
+        or binary is None
+        or context.binary_identity != binary
+        or process.executable_version != ProcessExecutableVersion.from_binary(binary)
         or canonical_native_path(file_path, "macos")
         != canonical_native_path(process.image, "macos")
     ):

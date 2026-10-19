@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 307
+current_revision: 308
 history_start_revision: 1
-behavior_surface_sha256: 3c58c17006273e52b2b38648d8fae046e129be39c8ac9234ed6c9a6d96be431c
+behavior_surface_sha256: 582adfd6cf5977660fc02313c59bb6217fd02b3e1d92742277b94899990ec5f3
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2884,3 +2884,11 @@ changes:
       - process-file-observation
     formats: []
     summary: Resolves a retained Mac file object's known event-time name without replacing its original content identity or guessing missing history.
+  - revision: 308
+    id: runtime-es-executable-placement-observation
+    impact: localized
+    domains:
+      - process-file-observation
+      - endpoint-security-preparation
+    formats: []
+    summary: Prepares runtime ES executable paths from known event-time placement while retaining the original loaded image and signing identity.
