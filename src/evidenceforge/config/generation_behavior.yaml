@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 285
+current_revision: 286
 history_start_revision: 1
-behavior_surface_sha256: ced5d260c247acdb72ec715c7dfcfb652d89e39e7b01b1448214000b5c0e5b89
+behavior_surface_sha256: 17f20a4dfb0e1cdde7c3d6dd336e9639991300a807610ad60195427c200a416c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2704,3 +2704,11 @@ changes:
       - native-publication-preparation
     formats: []
     summary: Allows authenticated surviving-child adoption alongside prepared terminal observations, preserving pre-close boundaries and freezing native exits without changing survivor state.
+  - revision: 286
+    id: es-provisional-counter-publication
+    impact: localized
+    domains:
+      - es-collector-ownership
+      - native-publication-preparation
+    formats: []
+    summary: Separates reversible single and grouped collector counter application from completion proof finalization, preserving exact frozen retries when an outer canonical transaction rolls back.

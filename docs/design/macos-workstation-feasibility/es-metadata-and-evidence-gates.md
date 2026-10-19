@@ -291,3 +291,6 @@ Mac `spillage: shell_history` reuses the existing scenario surface, canonical lo
 
 ### Terminal adoption composition — revision 285
 Authenticated surviving-child adoption can now share a native terminal-preparation cohort. Pre-close snapshots preserve equal-time ordering; earlier adoption changes retained relationship observations. Production launchd group cleanup and runtime/installed exit batches are tested without terminating surviving descendants. Other mixed-transition overlays and atomic native publication remain separate engineering gates. This does not enable ES output or close target-build validation.
+
+### Reversible collector publication — revision 286
+Prepared single and grouped counters can apply provisionally and roll back with an outer canonical transaction, retaining exact observations and frozen bytes. Completion proofs publish only on finalization. This supplies a transaction component; dispatcher/native-sink integration and source admission remain open, as do ES-R1 and GK-R1.

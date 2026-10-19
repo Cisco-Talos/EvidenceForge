@@ -162,9 +162,23 @@ class PreparedESDeliveryCommit:
             self, ndjson, canonical_token=canonical_token
         )
 
+    @property
+    def committed(self) -> bool:
+        """Whether this active claim finalized its counter publication."""
+        return self._registry._delivery_claim(self).committed
+
+    def apply_provisional(self) -> None:
+        """Apply counters under the retained lock, rolling back unless finalized."""
+        self._registry._apply_claimed_delivery(self)
+
+    def finalize_no_fail(self) -> None:
+        """Publish the prepared completion proof after the outer owners commit."""
+        self._registry._finalize_claimed_delivery(self)
+
     def commit_no_fail(self) -> None:
-        """Publish the prevalidated registry-owned state under retained owner locks."""
-        self._registry._commit_claimed_delivery(self)
+        """Apply and finalize the prevalidated counters for standalone callers."""
+        self.apply_provisional()
+        self.finalize_no_fail()
 
 
 @dataclass(slots=True)
@@ -177,6 +191,8 @@ class _DeliveryClaim:
     thread_id: int
     committed: bool = False
     native_projection: _NativeProjection | None = None
+    before: ESCollectorState | None = None
+    applied: bool = False
 
 
 class ESDeliveryRequest(_Value):
@@ -226,9 +242,23 @@ class PreparedESDeliveryBatchCommit:
             self, rows, canonical_token=canonical_token
         )
 
+    @property
+    def committed(self) -> bool:
+        """Whether this active claim finalized every reserved counter effect."""
+        return self._registry._batch_claim(self).committed
+
+    def apply_provisional(self) -> None:
+        """Apply the final counters with no prefix and roll back unless finalized."""
+        self._registry._apply_claimed_batch(self)
+
+    def finalize_no_fail(self) -> None:
+        """Publish the prepared all-member completion proof."""
+        self._registry._finalize_claimed_batch(self)
+
     def commit_no_fail(self) -> None:
-        """Publish only the precomputed final counters and completion proof."""
-        self._registry._commit_claimed_batch(self)
+        """Apply and finalize the bounded group for standalone callers."""
+        self.apply_provisional()
+        self.finalize_no_fail()
 
 
 @dataclass(slots=True)
@@ -241,6 +271,8 @@ class _BatchClaim:
     thread_id: int
     committed: bool = False
     native_projection: _NativeProjection | None = None
+    before: ESCollectorState | None = None
+    applied: bool = False
 
 
 def _advance_delivery(
@@ -598,10 +630,13 @@ class ESCollectorRegistry:
                     get_ident(),
                     native_projection=pending.native_projection,
                 )
+            claim.before = self._states.get(key) if claim.after is not None else None
             self._claimed[key] = claim
             try:
                 yield handle
             finally:
+                if claim.applied and not claim.committed and claim.before is not None:
+                    self._states[key] = claim.before
                 del self._claimed[key]
 
     def _batch_claim(self, handle: PreparedESDeliveryBatchCommit) -> _BatchClaim:
@@ -618,13 +653,26 @@ class ESCollectorRegistry:
             raise StateError("ES batch commit requires its active preparation scope")
         return claim
 
-    def _commit_claimed_batch(self, handle: PreparedESDeliveryBatchCommit) -> None:
+    def _apply_claimed_batch(self, handle: PreparedESDeliveryBatchCommit) -> None:
+        """Install only precomputed counters; the active scope owns rollback."""
+        claim = self._batch_claim(handle)
+        if claim.committed or claim.applied:
+            return
+        if claim.after is not None:
+            if claim.before is None:
+                raise StateError("ES provisional counters lost their exact connection savepoint")
+            self._states[claim.observations[0].source_instance] = claim.after
+        claim.applied = True
+
+    def _finalize_claimed_batch(self, handle: PreparedESDeliveryBatchCommit) -> None:
+        """Finish the primitive proof tail only after provisional application."""
         claim = self._batch_claim(handle)
         if claim.committed:
             return
+        if not claim.applied:
+            raise StateError("ES counter finalization requires provisional application")
         if claim.after is not None:
             key = claim.observations[0].source_instance
-            self._states[key] = claim.after
             object.__setattr__(claim.capability, "_native_projection", claim.native_projection)
             object.__setattr__(claim.capability, "_proof", claim.proof)
             del self._pending[key]
@@ -766,7 +814,7 @@ class ESCollectorRegistry:
             if native.ndjson != ndjson or native.canonical_token != canonical_token:
                 raise StateError("ES native projection changed for the same reserved delivery")
             return native.ndjson
-        if claim.committed or claim.after is None:
+        if claim.committed or claim.applied or claim.after is None:
             raise StateError("ES native projection must freeze before counter publication")
         pending = self._pending.get(claim.observation.source_instance)
         if type(pending) is not _Pending or pending.capability is not capability:
@@ -816,7 +864,7 @@ class ESCollectorRegistry:
             if native.ndjson != rendered or native.canonical_token != canonical_token:
                 raise StateError("ES native batch changed for the same reserved deliveries")
             return rows
-        if claim.committed or claim.after is None:
+        if claim.committed or claim.applied or claim.after is None:
             raise StateError("ES native batch must freeze before counter publication")
         key = claim.observations[0].source_instance
         pending = self._pending.get(key)
@@ -965,10 +1013,13 @@ class ESCollectorRegistry:
                     get_ident(),
                     native_projection=pending.native_projection,
                 )
+            claim.before = self._states.get(key) if claim.after is not None else None
             self._claimed[key] = claim
             try:
                 yield prepared
             finally:
+                if claim.applied and not claim.committed and claim.before is not None:
+                    self._states[key] = claim.before
                 del self._claimed[key]
 
     def _delivery_claim(self, handle: PreparedESDeliveryCommit) -> _DeliveryClaim:
@@ -986,14 +1037,26 @@ class ESCollectorRegistry:
             raise StateError("ES counter commit requires its active preparation scope")
         return claim
 
-    def _commit_claimed_delivery(self, handle: PreparedESDeliveryCommit) -> None:
-        """Perform only prepared dictionary/proof writes at the composite commit point."""
+    def _apply_claimed_delivery(self, handle: PreparedESDeliveryCommit) -> None:
+        """Install only precomputed counters; the active scope owns rollback."""
+        claim = self._delivery_claim(handle)
+        if claim.committed or claim.applied:
+            return
+        if claim.after is not None:
+            if claim.before is None:
+                raise StateError("ES provisional counters lost their exact connection savepoint")
+            self._states[claim.observation.source_instance] = claim.after
+        claim.applied = True
+
+    def _finalize_claimed_delivery(self, handle: PreparedESDeliveryCommit) -> None:
+        """Finish the primitive proof tail only after provisional application."""
         claim = self._delivery_claim(handle)
         if claim.committed:
             return
+        if not claim.applied:
+            raise StateError("ES counter finalization requires provisional application")
         if claim.after is not None:
             key = claim.observation.source_instance
-            self._states[key] = claim.after
             object.__setattr__(claim.capability, "_native_projection", claim.native_projection)
             object.__setattr__(claim.capability, "_proof", claim.proof)
             del self._pending[key]
