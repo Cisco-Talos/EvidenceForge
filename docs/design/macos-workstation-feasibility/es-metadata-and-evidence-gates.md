@@ -343,3 +343,5 @@ Authored launchd leader exit and whole-group unload now compose through the exis
 
 ### Retained placement bounds — revision 306
 Canonical runtime file versions retain publication/removal times separately from content leases. Rename/replacement and rollback preserve these bounds; checkpoint head 6 migrates old rows with unknown times rather than inventing history. This enables event-time placement engineering without claiming native stat timing, complete filesystem history or validated ES output. Full loaded-path projection and native delivery ownership remain integration work.
+
+Revision 307 adds bounded event-time lookup for a retained single-link Mac file object. It keeps loaded bytes and observed placement separate and rejects unknown, expired, changed-content or ambiguous history. Native projection, publication fencing and path-history retention beyond existing leases remain engineering work.

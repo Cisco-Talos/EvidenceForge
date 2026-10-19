@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 306
+current_revision: 307
 history_start_revision: 1
-behavior_surface_sha256: d80c50c2523d2a7ebccfc79ccd87c62827234d4d79b514d7f714b94292df7c59
+behavior_surface_sha256: 3c58c17006273e52b2b38648d8fae046e129be39c8ac9234ed6c9a6d96be431c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2876,3 +2876,11 @@ changes:
       - runtime-artifact-checkpoints
     formats: []
     summary: Retains exact publication and withdrawal timestamps separately from content leases, with explicit unknown migration from older artifact heads.
+  - revision: 307
+    id: retained-macos-event-time-file-placement
+    impact: localized
+    domains:
+      - runtime-content-identity
+      - process-file-observation
+    formats: []
+    summary: Resolves a retained Mac file object's known event-time name without replacing its original content identity or guessing missing history.

@@ -3,10 +3,11 @@
 
 """Retained publication/removal times for one immutable runtime placement version."""
 
-from dataclasses import dataclass
+import posixpath
+from dataclasses import dataclass, replace
 from datetime import datetime
 
-from evidenceforge.events.content_identity import LocalArtifactIdentity
+from evidenceforge.events.content_identity import LocalArtifactIdentity, LocalArtifactVersionRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,3 +48,64 @@ class LocalArtifactPlacementObservation:
         return timestamp >= self.introduced_at and (
             self.withdrawn_at is None or timestamp < self.withdrawn_at
         )
+
+
+@dataclass(frozen=True, slots=True)
+class MacosRuntimeFilePlacementObservation:
+    """One retained file object's known placement at a modeled event time.
+
+    The reference preserves originally loaded bytes and identity. The placed
+    record supplies the event-time name and explicit metadata. This detached
+    value grants no publication authority and makes no native stat-time claim.
+    Only unchanged single-link content is supported; missing history is unknown.
+    """
+
+    reference: LocalArtifactVersionRecord
+    placed: LocalArtifactVersionRecord
+    placement: LocalArtifactPlacementObservation
+    observed_at: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.reference) is not LocalArtifactVersionRecord
+            or type(self.placed) is not LocalArtifactVersionRecord
+            or type(self.placement) is not LocalArtifactPlacementObservation
+            or type(self.observed_at) is not datetime
+            or self.observed_at.utcoffset() is None
+        ):
+            raise ValueError("Mac file placement requires exact records and an aware time")
+        before, after = self.reference, self.placed
+        before.__post_init__()
+        after.__post_init__()
+        old_stat, new_stat = before.macos_file, after.macos_file
+        expected_binary = (
+            None
+            if before.binary is None
+            else replace(
+                before.binary,
+                artifact_version_id=after.artifact.artifact_version_id,
+                artifact_name=posixpath.basename(after.artifact.native_path),
+            )
+        )
+        if (
+            before.artifact.platform != "macos"
+            or after.artifact.platform != "macos"
+            or before.artifact.object_key != after.artifact.object_key
+            or after.artifact.version < before.artifact.version
+            or before.content != after.content
+            or before.launchd_job != after.launchd_job
+            or after.binary != expected_binary
+            or old_stat is None
+            or new_stat is None
+            or old_stat.link_count != 1
+            or new_stat.model_copy(update={"changed": old_stat.changed}) != old_stat
+            or (new_stat.changed.seconds, new_stat.changed.nanoseconds)
+            < (old_stat.changed.seconds, old_stat.changed.nanoseconds)
+            or before.artifact.native_path != before.artifact.normalized_native_path
+            or after.artifact.native_path != after.artifact.normalized_native_path
+            or posixpath.dirname(before.artifact.native_path)
+            != posixpath.dirname(after.artifact.native_path)
+            or self.placement.artifact != after.artifact
+            or self.placement.present_at(self.observed_at) is not True
+        ):
+            raise ValueError("Mac file placement requires one unchanged retained single-link file")

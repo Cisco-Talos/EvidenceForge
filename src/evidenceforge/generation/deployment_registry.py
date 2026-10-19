@@ -53,7 +53,10 @@ from threading import RLock, get_ident
 from typing import cast
 from weakref import ReferenceType, WeakValueDictionary, ref
 
-from evidenceforge.events.artifact_placement import LocalArtifactPlacementObservation
+from evidenceforge.events.artifact_placement import (
+    LocalArtifactPlacementObservation,
+    MacosRuntimeFilePlacementObservation,
+)
 from evidenceforge.events.content_identity import (
     ApplicationProfileCanonicalKey,
     ApplicationProfileIdentity,
@@ -10682,6 +10685,68 @@ class LocalArtifactVersionRegistry:
                 withdrawn=bool(shard.store._withdrawn[handle]),
                 withdrawn_at=_artifact_placement_datetime(shard.store._withdrawn_at_us[handle]),
             )
+
+    def observe_macos_file_placement(
+        self,
+        artifact_version_id: str,
+        observed_at: datetime,
+        *,
+        max_versions: int = 256,
+    ) -> MacosRuntimeFilePlacementObservation | None:
+        """Resolve a retained file object's bounded event-time placement.
+
+        The exact reference must still exist. Indexed history is examined under
+        one registry snapshot; ambiguous, incomplete, expired or unsupported
+        facts return unavailable. Neither leases nor current paths are changed.
+        A bounded query refuses excess history instead of choosing a partial hit.
+        """
+        if type(observed_at) is not datetime or observed_at.utcoffset() is None:
+            raise ValueError("Mac file placement requires an aware observation time")
+        if type(max_versions) is not int or not 1 <= max_versions <= 256:
+            raise ValueError("Mac file placement history bound must be between 1 and 256")
+        with self._all_shards_locked():
+            reference = self.resolve_version(artifact_version_id)
+            if (
+                reference is None
+                or reference.artifact.platform != "macos"
+                or reference.macos_file is None
+                or reference.macos_file.link_count != 1
+            ):
+                return None
+            origin = self.observe_version_placement(artifact_version_id)
+            if origin is None or origin.introduced_at is None or observed_at < origin.introduced_at:
+                return None
+            artifact_id = reference.artifact.artifact_id
+            count = sum(shard.store.count("artifact_object", artifact_id) for shard in self._shards)
+            if count > max_versions:
+                return None
+            selected: LocalArtifactVersionRecord | None = None
+            selected_placement: LocalArtifactPlacementObservation | None = None
+            for shard in self._shards:
+                for candidate in shard.store.find_iter("artifact_object", artifact_id):
+                    placement = self.observe_version_placement(candidate.artifact_version_id)
+                    if placement is None:
+                        return None
+                    present = placement.present_at(observed_at)
+                    if present is None:
+                        return None
+                    if not present:
+                        continue
+                    if selected is not None:
+                        return None
+                    selected = self.resolve_version(candidate.artifact_version_id)
+                    if selected is None:
+                        return None
+                    selected_placement = placement
+            if selected is None or selected_placement is None:
+                return None
+            try:
+                return MacosRuntimeFilePlacementObservation(
+                    reference, selected, selected_placement, observed_at
+                )
+            except ValueError:
+                # Unsupported changes cannot be projected as a renamed loaded file.
+                return None
 
     def resolve_record_for_execution_path(
         self,
