@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 232
+current_revision: 233
 history_start_revision: 1
-behavior_surface_sha256: c763c127ad9725baa823a6cf3fb05c998628aecb95329176d437c0e7974dc545
+behavior_surface_sha256: 9f685e53f29ab8d638385066209d011efe010ea898c43e669177c3739cfbc752
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2274,3 +2274,10 @@ changes:
     formats:
       - ecar
     summary: Shares the runtime content owner across process and persistence producers, classifying Mac root artifacts as system-owned through existing semantics.
+  - revision: 233
+    id: bounded-macos-native-process-snapshot-projection
+    impact: none
+    domains:
+      - macos-source-contracts
+    formats: []
+    summary: Composes complete explicit non-terminal ES process snapshots without metadata defaults or native source admission.
