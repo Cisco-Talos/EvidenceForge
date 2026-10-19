@@ -552,3 +552,18 @@ def test_successful_exec_cannot_render_a_denied_authorization_result() -> None:
             pytest.fail("successful exec carried a denial result")
     assert fixture.owner.state.materialization_digest() == before
     fixture.owner.collectors.cancel(fixture.delivery)
+
+
+def test_pending_exec_retry_cannot_replace_previously_frozen_native_metadata() -> None:
+    fixture = _fixture()
+    original = fixture.descriptors
+    with _prepare(fixture) as first:
+        expected = first.ndjson
+    fixture.descriptors = replace(original, last_fd=original.last_fd + 1)
+    with pytest.raises(StateError, match="native projection"):
+        with _prepare(fixture):
+            pytest.fail("one reserved delivery acquired different native bytes")
+    fixture.descriptors = original
+    with _prepare(fixture) as retry:
+        assert retry.ndjson == expected
+    fixture.owner.collectors.cancel(fixture.delivery)

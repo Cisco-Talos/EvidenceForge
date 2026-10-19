@@ -14,7 +14,7 @@ import hmac
 import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from threading import RLock, get_ident
 from typing import Annotated, Literal, Self
@@ -23,6 +23,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.models.exceptions import StateError
+
+_MAX_NATIVE_ROW_BYTES = 1024 * 1024
 
 type _Counter = Annotated[int, Field(ge=0, lt=2**64)]
 type _Name = Annotated[str, Field(min_length=1, max_length=256)]
@@ -107,12 +109,22 @@ class ESCollectorObservation(_Value):
     delay: timedelta
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeProjection:
+    """Caller-retained bytes authenticated for one exact delivery capability."""
+
+    ndjson: str
+    canonical_token: str | None
+    proof: bytes = field(repr=False)
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class ESDeliveryPreparation:
     """Exact caller-held capability; terminal proof survives a lost commit return."""
 
     observation: ESCollectorObservation
     _proof: bytes = b""
+    _native_projection: _NativeProjection | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +132,7 @@ class _Pending:
     capability: ESDeliveryPreparation
     after: ESCollectorState
     observation: ESCollectorObservation
+    native_projection: _NativeProjection | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +151,16 @@ class PreparedESDeliveryCommit:
         """Return the registry-owned immutable observation while the claim is active."""
         return self._registry._delivery_claim(self).observation
 
+    def freeze_native_projection(self, ndjson: str, *, canonical_token: str | None = None) -> str:
+        """Bind exact prepared bytes before commit; retries cannot change them.
+
+        Source preparation owns native semantics. This owner only authenticates
+        a bounded opaque NDJSON line against its reserved counter observation.
+        """
+        return self._registry._freeze_native_projection(
+            self, ndjson, canonical_token=canonical_token
+        )
+
     def commit_no_fail(self) -> None:
         """Publish the prevalidated registry-owned state under retained owner locks."""
         self._registry._commit_claimed_delivery(self)
@@ -152,6 +175,7 @@ class _DeliveryClaim:
     proof: bytes
     thread_id: int
     committed: bool = False
+    native_projection: _NativeProjection | None = None
 
 
 class ESDeliveryRequest(_Value):
@@ -595,9 +619,149 @@ class ESCollectorRegistry:
                 raise StateError("ES batch cancellation capability is stale")
             del self._pending[key]
 
-    def _proof(self, capability: ESDeliveryPreparation) -> bytes:
+    def _proof_for(
+        self, capability: ESDeliveryPreparation, native: _NativeProjection | None
+    ) -> bytes:
         material = str(id(capability)).encode() + capability.observation.model_dump_json().encode()
+        if native is not None:
+            material += b":native-projection:" + native.proof
         return hmac.digest(self._secret, material, hashlib.sha256)
+
+    def _proof(self, capability: ESDeliveryPreparation) -> bytes:
+        return self._proof_for(capability, capability._native_projection)
+
+    def _native_proof(
+        self, capability: ESDeliveryPreparation, ndjson: str, canonical_token: str | None
+    ) -> bytes:
+        observation = capability.observation.model_dump_json().encode()
+        payload = ndjson.encode("utf-8")
+        canonical = b"" if canonical_token is None else canonical_token.encode("ascii")
+        material = (
+            b"es-native-projection-v1:"
+            + str(id(capability)).encode()
+            + b":"
+            + len(observation).to_bytes(8, "big")
+            + observation
+            + len(payload).to_bytes(8, "big")
+            + payload
+            + len(canonical).to_bytes(8, "big")
+            + canonical
+        )
+        return hmac.digest(self._secret, material, hashlib.sha256)
+
+    @staticmethod
+    def _valid_native_canonical_token(token: object) -> bool:
+        return token is None or (
+            type(token) is str
+            and len(token) == 64
+            and all(character in "0123456789abcdef" for character in token)
+        )
+
+    def _native_authenticates(self, capability: ESDeliveryPreparation) -> bool:
+        native = capability._native_projection
+        if native is None:
+            return True
+        if (
+            type(native) is not _NativeProjection
+            or type(native.ndjson) is not str
+            or len(native.ndjson) > _MAX_NATIVE_ROW_BYTES
+            or type(native.proof) is not bytes
+            or not self._valid_native_canonical_token(native.canonical_token)
+        ):
+            return False
+        try:
+            return hmac.compare_digest(
+                native.proof, self._native_proof(capability, native.ndjson, native.canonical_token)
+            )
+        except UnicodeEncodeError:
+            return False
+
+    def _freeze_native_projection(
+        self, handle: PreparedESDeliveryCommit, ndjson: str, *, canonical_token: str | None
+    ) -> str:
+        claim = self._delivery_claim(handle)
+        if not self._valid_native_canonical_token(canonical_token):
+            raise StateError("ES native projection requires an exact canonical publication token")
+        if (
+            type(ndjson) is not str
+            or not ndjson.endswith("\n")
+            or "\n" in ndjson[:-1]
+            or "\r" in ndjson
+        ):
+            raise StateError("ES native projection requires one newline-terminated NDJSON line")
+        if len(ndjson) > _MAX_NATIVE_ROW_BYTES:
+            raise StateError("ES native projection exceeds its 1 MiB modeled row budget")
+        try:
+            size = len(ndjson.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise StateError("ES native projection requires valid UTF-8") from error
+        if not 2 <= size <= _MAX_NATIVE_ROW_BYTES:
+            raise StateError("ES native projection exceeds its 1 MiB modeled row budget")
+        capability = claim.capability
+        if (
+            type(capability.observation) is not ESCollectorObservation
+            or capability.observation != claim.observation
+            or capability._native_projection is not claim.native_projection
+            or not self._native_authenticates(capability)
+            or not hmac.compare_digest(
+                claim.proof, self._proof_for(capability, claim.native_projection)
+            )
+        ):
+            raise StateError("ES native projection lost its exact counter observation")
+        native = claim.native_projection
+        if native is not None:
+            if native.ndjson != ndjson or native.canonical_token != canonical_token:
+                raise StateError("ES native projection changed for the same reserved delivery")
+            return native.ndjson
+        if claim.committed or claim.after is None:
+            raise StateError("ES native projection must freeze before counter publication")
+        pending = self._pending.get(claim.observation.source_instance)
+        if type(pending) is not _Pending or pending.capability is not capability:
+            raise StateError("ES native projection lost its reserved delivery")
+        native = _NativeProjection(
+            ndjson, canonical_token, self._native_proof(capability, ndjson, canonical_token)
+        )
+        replacement = replace(pending, native_projection=native)
+        proof = self._proof_for(capability, native)
+        self._pending[claim.observation.source_instance] = replacement
+        object.__setattr__(capability, "_native_projection", native)
+        claim.native_projection = native
+        claim.proof = proof
+        return native.ndjson
+
+    def retained_native_projection(
+        self, capability: ESDeliveryPreparation, *, canonical_token: str | None = None
+    ) -> str | None:
+        """Recover authenticated frozen bytes without re-observing canonical State.
+
+        Works for the exact pending delivery or its completed caller-held proof,
+        including after a connection restart. Cancelled and foreign capabilities
+        cannot resurrect a row. No global completed-row ledger is retained.
+        """
+        if (
+            type(capability) is not ESDeliveryPreparation
+            or type(capability.observation) is not ESCollectorObservation
+        ):
+            raise StateError("ES native projection requires its exact delivery capability")
+        if not self._valid_native_canonical_token(canonical_token):
+            raise StateError("ES native projection requires an exact canonical publication token")
+        with self._lock:
+            pending = self._pending.get(capability.observation.source_instance)
+            if type(pending) is _Pending and pending.capability is capability:
+                if (
+                    pending.observation != capability.observation
+                    or pending.native_projection is not capability._native_projection
+                    or not self._native_authenticates(capability)
+                ):
+                    raise StateError("ES native projection capability changed")
+            elif self.completed_observation(capability) is None:
+                raise StateError("ES native projection capability is stale or foreign")
+            native = capability._native_projection
+            if canonical_token is not None and (
+                native is None or native.canonical_token != canonical_token
+            ):
+                raise StateError("ES native projection belongs to another canonical publication")
+            return None if native is None else native.ndjson
 
     def completed_observation(
         self, capability: ESDeliveryPreparation
@@ -609,8 +773,10 @@ class ESCollectorRegistry:
         ):
             raise StateError("ES completion lookup requires its exact capability")
         with self._lock:
-            if capability._proof and hmac.compare_digest(
-                capability._proof, self._proof(capability)
+            if (
+                self._native_authenticates(capability)
+                and capability._proof
+                and hmac.compare_digest(capability._proof, self._proof(capability))
             ):
                 return capability.observation
             return None
@@ -638,19 +804,33 @@ class ESCollectorRegistry:
             prepared = PreparedESDeliveryCommit(self, key)
             if completed is not None:
                 claim = _DeliveryClaim(
-                    prepared, capability, completed, None, capability._proof, get_ident()
+                    prepared,
+                    capability,
+                    completed,
+                    None,
+                    capability._proof,
+                    get_ident(),
+                    native_projection=capability._native_projection,
                 )
             else:
                 pending = self._pending.get(key)
                 if (
-                    pending is None
+                    type(pending) is not _Pending
                     or pending.capability is not capability
                     or pending.observation != capability.observation
+                    or pending.native_projection is not capability._native_projection
+                    or not self._native_authenticates(capability)
                 ):
                     raise StateError("ES publication capability is stale or changed")
                 proof = self._proof(capability)
                 claim = _DeliveryClaim(
-                    prepared, capability, pending.observation, pending.after, proof, get_ident()
+                    prepared,
+                    capability,
+                    pending.observation,
+                    pending.after,
+                    proof,
+                    get_ident(),
+                    native_projection=pending.native_projection,
                 )
             self._claimed[key] = claim
             try:
@@ -681,6 +861,7 @@ class ESCollectorRegistry:
         if claim.after is not None:
             key = claim.observation.source_instance
             self._states[key] = claim.after
+            object.__setattr__(claim.capability, "_native_projection", claim.native_projection)
             object.__setattr__(claim.capability, "_proof", claim.proof)
             del self._pending[key]
         claim.committed = True

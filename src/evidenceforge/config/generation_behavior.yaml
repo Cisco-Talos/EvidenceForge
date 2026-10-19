@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 277
+current_revision: 278
 history_start_revision: 1
-behavior_surface_sha256: fd61ff1a8d7f0f5ce855481e53504b65b4e00baef4af66a24ec1f04b075c4c0f
+behavior_surface_sha256: 32d62a4582f03f546fc88667d84c5ca28cf3812f3d864c01ee15827579b50ab6
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2636,3 +2636,11 @@ changes:
       - process-outcome
     formats: []
     summary: Rejects a denied notification authorization result when preparing an authenticated successful exec transition, preserving the distinction between result metadata and an authorization-callback stream.
+  - revision: 278
+    id: frozen-native-es-delivery-binding
+    impact: localized
+    domains:
+      - es-collector-ownership
+      - native-publication-recovery
+    formats: []
+    summary: Authenticates bounded frozen native bytes and their canonical cohort token against one reserved collector delivery, rejects changed retries, and retains caller-held bytes across counter completion without adding a sink or unbounded ledger.

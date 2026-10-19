@@ -155,4 +155,9 @@ def prepared_es_exit_record(
             process=snapshot,
             event=ESExitEvent(exit=ESExit.from_process_exit(terminal.exit_outcome)),
         )
-        yield PreparedMacosExitRecord(record.to_ndjson(), claimed)
+        yield PreparedMacosExitRecord(
+            claimed.freeze_native_projection(
+                record.to_ndjson(), canonical_token=cohort.publication_token
+            ),
+            claimed,
+        )

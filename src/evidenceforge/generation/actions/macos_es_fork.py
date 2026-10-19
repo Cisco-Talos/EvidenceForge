@@ -170,4 +170,9 @@ def prepared_es_fork_record(
             process=actor,
             event=ESForkEvent(fork=ESFork(child=target)),
         )
-        yield PreparedMacosForkRecord(record.to_ndjson(), claimed)
+        yield PreparedMacosForkRecord(
+            claimed.freeze_native_projection(
+                record.to_ndjson(), canonical_token=cohort.publication_token
+            ),
+            claimed,
+        )

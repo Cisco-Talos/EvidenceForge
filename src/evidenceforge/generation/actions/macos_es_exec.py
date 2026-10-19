@@ -260,4 +260,9 @@ def prepared_es_exec_record(
                 )
             ),
         )
-        yield PreparedMacosExecRecord(record.to_ndjson(), claimed)
+        yield PreparedMacosExecRecord(
+            claimed.freeze_native_projection(
+                record.to_ndjson(), canonical_token=cohort.publication_token
+            ),
+            claimed,
+        )
