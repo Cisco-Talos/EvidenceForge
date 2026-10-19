@@ -87,8 +87,11 @@ def test_rename_preserves_loaded_content_and_does_not_restore_old_name_after_exp
     assert manager.registry.resolve_version(source.artifact.artifact_version_id) == source
     manager.registry.advance_watermark(_START + timedelta(days=2))
     assert _at(manager, old_path) is None
-    assert _at(manager, target.artifact.native_path) is None
+    assert _at(manager, target.artifact.native_path) == target
     assert manager.registry.resolve_version(source.artifact.artifact_version_id) == source
+    manager.registry.advance_watermark(_START + timedelta(days=10))
+    assert _at(manager, target.artifact.native_path) is None
+    assert manager.registry.resolve_version(source.artifact.artifact_version_id) is None
 
 
 def test_rename_checkpoint_retains_both_versions_and_only_new_placement() -> None:

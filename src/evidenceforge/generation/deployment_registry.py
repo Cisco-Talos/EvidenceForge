@@ -9136,6 +9136,11 @@ class LocalArtifactVersionRegistry:
             )
         ):
             raise StateError("Mac rename requires an exact removal and new placement group")
+        horizon = self.retained_version_deadline(source.artifact.artifact_version_id)
+        if horizon is None or publication.retained_until < max(horizon, removal.retained_until):
+            raise StateError(
+                "Mac rename must retain placement through its source retention horizon"
+            )
         replacement = None if replaced is None else replaced.record
         self.validate_macos_file_rename(source, target, replacement=replacement)
         after = target.artifact
@@ -10733,6 +10738,26 @@ class LocalArtifactVersionRegistry:
             for item in reservations
         ):
             raise StateError("Artifact placement is fenced by an active native observation")
+
+    def retained_version_deadline(self, artifact_version_id: str) -> datetime | None:
+        """Read the exact version's existing retention/lease horizon without extending it."""
+        with self._capacity_lock:
+            located = self._existing_locator(artifact_version_id)
+            if located is None:
+                return None
+            shard, handle = located
+            with shard.lock:
+                if (
+                    not shard.store.is_live_handle(handle)
+                    or shard.store.artifact_version_id(handle) != artifact_version_id
+                ):
+                    return None
+                deadlines = (
+                    shard.deadlines.deadline(handle),
+                    shard.leases.latest_deadline(artifact_version_id),
+                )
+                latest = max((value for value in deadlines if value is not None), default=None)
+                return None if latest is None else datetime.fromtimestamp(latest, tz=UTC)
 
     def observe_version_placement(
         self, artifact_version_id: str

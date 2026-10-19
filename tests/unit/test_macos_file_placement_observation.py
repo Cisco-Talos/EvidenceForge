@@ -68,7 +68,9 @@ def test_expired_new_name_does_not_resurrect_retained_loaded_name() -> None:
     version = source.artifact.artifact_version_id
     with _rename(manager, source) as rename:
         rename.commit()
-    manager.registry.advance_watermark(_START + timedelta(days=2))
+    # A later explicit lease extension is not a retroactive rename publication.
+    manager.registry.acquire_lease(version, "later-loaded-reference", _START + timedelta(days=13))
+    manager.registry.advance_watermark(_START + timedelta(days=10))
     assert manager.registry.resolve_version(version) == source
     assert manager.registry.observe_macos_file_placement(version, _START).placed == source
     assert (
@@ -76,7 +78,7 @@ def test_expired_new_name_does_not_resurrect_retained_loaded_name() -> None:
         is None
     )
     assert (
-        manager.registry.observe_macos_file_placement(version, _START + timedelta(days=2)) is None
+        manager.registry.observe_macos_file_placement(version, _START + timedelta(days=10)) is None
     )
     assert _at(manager, source.artifact.native_path) is None
 

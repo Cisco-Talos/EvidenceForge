@@ -43,6 +43,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactRegistryCensus,
     LocalArtifactVersionRegistry,
 )
+from evidenceforge.models.exceptions import StateError
 from evidenceforge.utils.rng import stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
@@ -299,8 +300,12 @@ class RuntimeContentIdentityManager:
                 )
                 cleanup.callback(self._registry.cancel_prepared, removal)
                 removals.append(removal)
+            horizon = self._registry.retained_version_deadline(source.artifact.artifact_version_id)
+            if horizon is None:
+                raise StateError("Mac rename requires its exact source retention horizon")
+            target_retention = max(horizon, removals[0].retained_until) - observed_at
             publication = self._registry.prepare_publish_version(
-                target, observed_at, retention=retention
+                target, observed_at, retention=target_retention
             )
             cleanup.callback(self._registry.cancel_prepared, publication)
             with self._registry.prepared_publication_group((*removals, publication)) as group:

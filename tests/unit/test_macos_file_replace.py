@@ -73,7 +73,7 @@ def test_explicit_replacement_retains_both_loaded_contents_and_moves_source_obje
         assert manager.registry.resolve_version(loaded.artifact.artifact_version_id) == loaded
     manager.registry.advance_watermark(_START + timedelta(days=2))
     assert _at(manager, source.artifact.native_path) is None
-    assert _at(manager, destination.artifact.native_path) is None
+    assert _at(manager, destination.artifact.native_path) == current
     for loaded in (source, destination):
         assert manager.registry.resolve_version(loaded.artifact.artifact_version_id) == loaded
     assert manager.census().prepared_publications == 0
@@ -131,6 +131,10 @@ def test_replacement_checkpoint_keeps_current_name_and_both_historical_versions(
     for loaded in (source, destination):
         assert restored.registry.resolve_version(loaded.artifact.artifact_version_id) == loaded
     restored.registry.advance_watermark(_START + timedelta(days=2))
+    assert _at(restored, destination.artifact.native_path) == _at(
+        manager, destination.artifact.native_path
+    )
+    restored.registry.advance_watermark(_START + timedelta(days=10))
     assert _at(restored, destination.artifact.native_path) is None
 
 

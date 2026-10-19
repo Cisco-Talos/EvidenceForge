@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 311
+current_revision: 312
 history_start_revision: 1
-behavior_surface_sha256: 2c576de0ec361c66f9c5b5e6932474c48e712904b475d0dd1770ad7bb1ee9f24
+behavior_surface_sha256: a1d83994eb67a907b7befa3980570d25493eb71977b2aff486659011bac0808d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2918,3 +2918,11 @@ changes:
       - exact-source-publication
     formats: []
     summary: Projects and revalidates shebang-script placement at the canonical exec boundary, preserving its reference separately from the loaded interpreter.
+  - revision: 312
+    id: renamed-file-known-retention-horizon
+    impact: localized
+    domains:
+      - runtime-content-identity
+      - process-file-observation
+    formats: []
+    summary: Retains a renamed placement through its source's existing lease and retention horizon, rejecting stale preparation when that horizon grows.

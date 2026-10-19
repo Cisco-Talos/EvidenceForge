@@ -3160,6 +3160,11 @@ class ReferenceLeaseIndex[K: Hashable, OwnerT: Hashable]:
         for lease in self._leases.find_iter("key", key):
             yield lease.owner
 
+    def latest_deadline(self, key: K) -> float | None:
+        """Return the latest active lease deadline from this key's indexed owners."""
+        deadlines = (self._expirations.deadline((key, owner)) for owner in self.owners(key))
+        return max((value for value in deadlines if value is not None), default=None)
+
     def keys_for_owner(self, owner: OwnerT) -> Iterator[K]:
         """Yield keys retained by one owner."""
 
