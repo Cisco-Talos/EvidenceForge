@@ -206,3 +206,51 @@ def test_retained_exited_caller_cannot_authorize_any_stage(operation: str) -> No
     assert bundle.state.get_process_identity(plan.identity.hostname, plan.identity.pid) is not None
     with pytest.raises(StateError, match="exact live Mac root"):
         bundle.execute(_request(bundle, plan, host, definition, path, operation, 2))
+
+
+@pytest.mark.parametrize("collect", [True, False])
+def test_job_activation_binds_the_current_image_but_retains_earlier_execution_version(
+    collect: bool,
+) -> None:
+    from dataclasses import replace
+
+    from evidenceforge.events.process_executable import ProcessExecutableVersion
+    from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
+    from evidenceforge.generation.state_manager import StateManager
+    from tests.unit.test_macos_runtime_es_preparation import _publish
+    from tests.unit.test_macos_runtime_file_metadata import _executable
+
+    bundle, plan, host, definition, path, _ = _workflow(collect)
+    descriptor = replace(_executable(), hostname=host.hostname, principal="root")
+    assert descriptor.native_path == definition.program
+    _publish(bundle.content, descriptor, _START)
+    first = bundle.content.build_record(descriptor)
+    for index, operation in enumerate(("write", "bootstrap", "activate"), 1):
+        result = bundle.execute(_request(bundle, plan, host, definition, path, operation, index))
+    identity = result.process
+    assert identity.executable_version == ProcessExecutableVersion.from_binary(first.binary)
+    replacement = replace(descriptor, artifact_version=2, content_version=2)
+    _publish(bundle.content, replacement, _START + timedelta(seconds=4))
+    assert (
+        bundle.state.get_process_identity(host.hostname, identity.pid).executable_version
+        == identity.executable_version
+    )
+    restored = StateManager()
+    _restore_head(restored, _capture_head(bundle.state))
+    assert (
+        restored.get_process_identity(host.hostname, identity.pid).executable_version
+        == identity.executable_version
+    )
+    bundle.execute(_request(bundle, plan, host, definition, path, "exit", 5))
+    restarted = bundle.execute(
+        _request(bundle, plan, host, definition, path, "activate", 6)
+    ).process
+    assert restarted.executable_version == ProcessExecutableVersion.from_binary(
+        bundle.content.build_record(replacement).binary
+    )
+    assert restarted.executable_version != identity.executable_version
+    assert (
+        bundle.state.get_process_identity_by_object_id(identity.object_id).executable_version
+        == identity.executable_version
+    )
+    bundle.execute(_request(bundle, plan, host, definition, path, "unload", 7))

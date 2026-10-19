@@ -73,3 +73,5 @@ Revision 235 retains resolved executable versions for ordinary Mac launches, for
 Revision 236 adds read-only complete snapshot preparation for already-live processes backed by an exact retained runtime executable version. It preserves explicit collection facts and rejects stale, missing or replacement versions. Installed-file and staged-process providers, artifact retention and atomic native source publication remain open; source admission is unchanged.
 
 Precommit refinement (revision 237): a validated sealed single-start cohort can prepare a new runtime-file process snapshot before publication, with exact live relationship owners. Staged multi-process/session owners and simultaneous transitions still need a cohort overlay; the native source and atomic sink gates remain open.
+
+Executable producer refinement (revision 238): compiled Mac boot images, SSH wrapper/exec transitions and authored system-job activation retain canonical loaded versions. Fork inheritance and existing checkpoint codecs preserve them. Runtime placement replacement cannot rewrite retained State; native-file metadata and execution-long registry leases remain independent requirements.

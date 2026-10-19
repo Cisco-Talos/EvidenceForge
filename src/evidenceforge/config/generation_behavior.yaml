@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 237
+current_revision: 238
 history_start_revision: 1
-behavior_surface_sha256: 787ce7a8cc1834159b67ac2b7ff4256a0677652146d3cf50d43cb6c7be1cc98d
+behavior_surface_sha256: 19671987a6648262a5b2a6608a9c2e260679543941b22113b61b209131428ad9
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2312,3 +2312,13 @@ changes:
       - macos-source-contracts
     formats: []
     summary: Prepares single-start runtime process snapshots from fully validated sealed cohorts before State publication without enabling a native source.
+  - revision: 238
+    id: macos-system-producer-executable-versions
+    impact: localized
+    domains:
+      - macos-process-execution
+      - macos-ssh-session
+      - macos-launchd-lifecycle
+      - state-checkpoint
+    formats: []
+    summary: Binds known executable versions in Mac boot, SSH startup and authored system-job activation while preserving unknown compatibility inputs and other platforms.

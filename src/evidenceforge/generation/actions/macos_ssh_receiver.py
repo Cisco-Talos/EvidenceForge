@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalArtifactBinaryIdentity
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.dispatcher import (
     ActionCohortPublicationReceipt,
@@ -20,6 +21,7 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortCapability,
 )
 from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectAuditCohortEntry,
@@ -336,6 +338,14 @@ class MacosSshReceiverStartup:
                 if phase == 3
                 else request.shell
             )
+            binary = self._dispatcher.resolve_process_binary_identity(
+                before.hostname, before.principal, descriptor.image_path, "macos"
+            )
+            executable_version = (
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
+                else None
+            )
             after = builder.execute_process(
                 before,
                 image=descriptor.image_path,
@@ -345,6 +355,7 @@ class MacosSshReceiverStartup:
                     else descriptor.command_templates[0]
                 ),
                 executed_at=timestamp,
+                executable_version=executable_version,
             )
             session_identity = None
             if phase == shell_exec:
@@ -359,6 +370,8 @@ class MacosSshReceiverStartup:
                 integrity_level=integrity,
                 session=session_identity,
             )
+            if executable_version is not None:
+                event.process.binary_identity = binary
             root = f"process-exec:{after.execution_id}"
         elif phase == 10:
             after = builder.change_posix_job_control(

@@ -42,6 +42,7 @@ from evidenceforge.events.application import (
     ApplicationChannelSnapshot,
 )
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalArtifactBinaryIdentity
 from evidenceforge.events.contexts import (
     AuthContext,
     HostContext,
@@ -69,6 +70,7 @@ from evidenceforge.events.lifecycle import (
     SessionEndPlan,
 )
 from evidenceforge.events.network import NetworkTransactionPlan
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.actions.base import (
     ActionAnchor,
     source_observation_delay_difference,
@@ -4311,6 +4313,13 @@ class SshSessionActionBundle:
             receiver_parent_pid, receiver_parent_group = self._deferred_receiver_parent(
                 receiver_start
             )
+        receiver_executable_version = None
+        if environment is not None:
+            binary = executor.dispatcher.resolve_process_binary_identity(
+                request.target_system.hostname, "root", environment.wrapper.image_path, "macos"
+            )
+            if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+                receiver_executable_version = ProcessExecutableVersion.from_binary(binary)
         receiver_plan = batch_builder.plan_process(
             system=request.target_system.hostname,
             parent_pid=receiver_parent_pid,
@@ -4323,6 +4332,7 @@ class SshSessionActionBundle:
             os_category="macos" if environment else "linux",
             credentials=PosixProcessCredentials(0, 0, 0, 0) if environment else None,
             new_posix_session=environment is not None,
+            executable_version=receiver_executable_version,
             logon_id=session_plan.identity.logon_id,
             lifecycle_group_id=stable_uuid(
                 "ssh-deferred-receiver-lifecycle",

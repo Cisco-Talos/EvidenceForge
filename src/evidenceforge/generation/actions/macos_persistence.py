@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Literal
 
 from evidenceforge.events.base import OccurrenceBuilder
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalArtifactBinaryIdentity
 from evidenceforge.events.contexts import FileContext, HostContext, ProcessContext
 from evidenceforge.events.contracts import (
     EffectOccurrenceKind,
@@ -26,6 +27,7 @@ from evidenceforge.events.dispatcher import (
 from evidenceforge.events.identity import EventIdentityPlan, ProcessIdentity
 from evidenceforge.events.lifecycle import ActionLifecycleContext
 from evidenceforge.events.macos_launchd_spec import LaunchdSystemJobSpec
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.command_effects import (
     ActionAnchor,
@@ -198,6 +200,17 @@ class MacosPersistenceActionBundle:
         if job is None or job.identity.launchd_job is None:
             raise StateError("Launch-item operation requires its currently loaded system job")
         if request.operation == "activate":
+            binary = self.dispatcher.resolve_process_binary_identity(
+                host.hostname,
+                job.identity.launchd_job.principal,
+                job.identity.launchd_job.program,
+                "macos",
+            )
+            version = (
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
+                else None
+            )
             plan = macos_system_job_launch_plan(
                 lifecycle_registry=self.lifecycle,
                 lifecycle_authority=self.authority,
@@ -205,13 +218,17 @@ class MacosPersistenceActionBundle:
                 service_object_id=job.identity.object_id,
                 started_at=request.timestamp,
                 action_id=request.action_id,
+                executable_version=version,
             )
             identity = plan.process.identity
+            process_context = _context(identity, self.state)
+            if version is not None:
+                process_context.binary_identity = binary
             event = OccurrenceBuilder(
                 timestamp=identity.started_at,
                 event_type="process_create",
                 src_host=request.host,
-                process=_context(identity, self.state),
+                process=process_context,
                 identity_plan=EventIdentityPlan(subject=identity),
                 lifecycle=ActionLifecycleContext(
                     group_id=identity.lifecycle_group_id,

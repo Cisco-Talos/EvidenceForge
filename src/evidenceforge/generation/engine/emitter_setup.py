@@ -39,7 +39,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from evidenceforge.events.collection_policy import canonical_source_hostname
+from evidenceforge.events.content_identity import BinaryReleaseIdentity
 from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.events.process_executable import (
+    ProcessExecutableVersion,
+    validate_process_executable_version,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.actions import dhcp_renewal_interval_seconds
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -54,6 +59,7 @@ from evidenceforge.generation.activity.smb_profiles import (
 from evidenceforge.generation.activity.smb_profiles import (
     select_server_profile,
 )
+from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
     CiscoAsaEmitter,
@@ -121,6 +127,23 @@ class _BootProcessSpec:
     os_category: str
     logon_id: str
     start_time: datetime | None
+    executable_version: ProcessExecutableVersion | None = None
+
+    def executable_payload(self) -> tuple[object, ...]:
+        """Freeze optional loaded-image facts without changing old platform payloads."""
+        version = self.executable_version
+        validate_process_executable_version(version, self.os_category)
+        if version is None:
+            return ()
+        return (
+            (
+                "process-executable-version-v1",
+                version.platform,
+                version.identity_kind,
+                version.content_id,
+                version.artifact_version_id,
+            ),
+        )
 
     def canonical_payload(self) -> tuple[object, ...]:
         """Return the exact immutable request projection used by planning."""
@@ -136,7 +159,7 @@ class _BootProcessSpec:
             self.os_category,
             self.logon_id,
             self.start_time,
-        )
+        ) + self.executable_payload()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1128,6 +1151,7 @@ class EmitterSetupMixin:
         from evidenceforge.generation.activity.application_catalog import load_catalog
 
         rng = random.Random(_stable_seed(f"macos_boot_sequence:{system.hostname}"))
+        deployment = getattr(self, "deployment_registry", None)
         elapsed = 0.0
         processes: list[_BootProcessSpec] = []
         for app in load_catalog()["applications"]:
@@ -1138,6 +1162,18 @@ class EmitterSetupMixin:
             is_init = alias == "launchd"
             if not is_init:
                 elapsed += rng.uniform(0.05, 1.9)
+            binary = (
+                deployment.resolve_binary(
+                    system.hostname, platform["image_path"], "macos", principal="root"
+                )
+                if type(deployment) is DeploymentContentRegistry
+                else None
+            )
+            executable_version = (
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) is BinaryReleaseIdentity
+                else None
+            )
             processes.append(
                 _BootProcessSpec(
                     alias=alias,
@@ -1150,6 +1186,7 @@ class EmitterSetupMixin:
                     os_category="macos",
                     logon_id="",
                     start_time=boot_time + timedelta(seconds=elapsed) if boot_time else None,
+                    executable_version=executable_version,
                 )
             )
         if not processes or processes[0].alias != "launchd":
@@ -1181,6 +1218,7 @@ class EmitterSetupMixin:
                 os_category=host.os_category,
                 credentials=PosixProcessCredentials(0, 0, 0, 0),
                 new_posix_session=True,
+                executable_version=member.executable_version,
                 logon_id=member.logon_id,
             )
             with state.materialization_guard(plan.expected_version):
@@ -1378,6 +1416,7 @@ class EmitterSetupMixin:
                         uuid_upper,
                         thread_projection,
                     )
+                    + member.executable_payload()
                 )
         external_projection = EmitterSetupMixin._boot_materialization_external_result(
             dict(machine_ids),
@@ -1438,6 +1477,7 @@ class EmitterSetupMixin:
                 ),
                 logon_id=member.logon_id,
                 new_posix_session=member.os_category == "macos",
+                executable_version=member.executable_version,
                 start_time=member.start_time,
                 parent_plan=parent_plan,
             )

@@ -30,6 +30,7 @@ from evidenceforge.events.macos_launchd import (
     validate_launchd_label,
 )
 from evidenceforge.events.parentage import ProcessParentageChange
+from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.command_effects import FileEffectAction, FileEffectIntent
 from evidenceforge.generation.actions.endpoint_effects import (
@@ -290,6 +291,7 @@ def macos_system_job_launch_plan(
     service_object_id: str,
     started_at: datetime,
     action_id: str,
+    executable_version: ProcessExecutableVersion | None = None,
 ) -> MacosSystemJobLaunchPlan:
     """Compose an explicit successful root job launch from its loaded definition.
 
@@ -321,6 +323,7 @@ def macos_system_job_launch_plan(
         credentials=PosixProcessCredentials(0, 0, 0, 0),
         start_time=started_at,
         new_posix_session=True,
+        executable_version=executable_version,
     )
     activation = macos_system_job_activation_plan(
         lifecycle_registry=lifecycle_registry,
