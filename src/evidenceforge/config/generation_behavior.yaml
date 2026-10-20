@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 320
+current_revision: 321
 history_start_revision: 1
-behavior_surface_sha256: a290bd609768896c1efc5414bdd0e1ab6a33ab030fac0176195ac287fbd22bcc
+behavior_surface_sha256: 4c3cc87314253959199fbcce14db3111498acaa078a66976babff5d2f4c675b7
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2992,3 +2992,11 @@ changes:
       - macos-execution-metadata
     formats: []
     summary: Produces explicit frozen-policy code-validation outcomes for listed native images and content-bound runtime execution decisions; unknown policy remains unknown.
+  - revision: 321
+    id: ordered-posix-fork-exec-close-cohorts
+    impact: localized
+    domains:
+      - process-lifecycle
+      - macos-process-descriptors
+    formats: []
+    summary: Authenticates fork birth, one image replacement and its later exact close in one canonical cohort with shared allocator, thread and rollback ownership.

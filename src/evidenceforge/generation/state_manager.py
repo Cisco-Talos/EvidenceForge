@@ -2369,6 +2369,7 @@ class ActionCohortProcessTermination:
     staged_session_references: tuple[_ProcessTerminationSessionReference, ...]
     _capability: _ActionCohortCapability = field(repr=False, compare=False)
     exit_outcome: PosixProcessExit | None = None
+    post_execution: ProcessIdentity | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical terminal time."""
@@ -2381,7 +2382,7 @@ class ActionCohortProcessTermination:
     def identity(self) -> ProcessIdentity:
         """Return the exact process identity being terminalized."""
 
-        return self.target.identity
+        return self.post_execution if self.post_execution is not None else self.target.identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -3694,7 +3695,18 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 responsibility=parent.responsibility,
             )
 
-            payload = replace(plan._payload, forked=True)
+            descriptors = (
+                self._manager.process_descriptors_at(parent, event_time=timestamp)
+                if platform == "macos"
+                else None
+            )
+            payload = replace(
+                plan._payload,
+                forked=True,
+                initial_descriptors=(
+                    descriptors.inherited_at(timestamp) if descriptors is not None else None
+                ),
+            )
             fork = replace(
                 plan,
                 _payload=payload,
@@ -3708,15 +3720,11 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 ),
             )
             self._processes[-1] = fork
-            if platform == "macos":
-                descriptors = self._manager.process_descriptors_at(parent, event_time=timestamp)
-                if descriptors is not None:
-                    self.record_macos_descriptors(fork, table=descriptors.inherited_at(timestamp))
             return fork
 
     def execute_process(
         self,
-        target: ProcessIdentity,
+        target: ProcessMaterializationPlan | ProcessIdentity,
         *,
         image: str,
         command_line: str,
@@ -3733,12 +3741,20 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
         self._require_open()
-        if type(target) is not ProcessIdentity:
-            raise StateError("Process execution requires an existing live process identity")
-        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        selected = self._manager._normalize_action_cohort_process_target(self, target)
+        birth = selected if type(selected) is ProcessMaterializationPlan else None
+        normalized = birth.identity if birth is not None else selected
         assert type(normalized) is ProcessIdentity
+        if birth is not None and not birth._payload.forked:
+            raise StateError("Same-cohort execution requires an authenticated fork birth")
+        platform = (
+            self._manager._action_cohort_process_pid_namespaces(tuple(self._processes))[id(birth)]
+            if birth is not None
+            else self._manager._pid_os.get(normalized.hostname, "unknown")
+        )
         if any(
-            patch.target.object_id == target.object_id for patch in self._process_execution_drafts
+            patch.target.object_id == normalized.object_id
+            for patch in self._process_execution_drafts
         ):
             raise StateError("Action cohort repeats a process execution")
         if type(image) is not str or not image.startswith("/") or "\0" in image:
@@ -3750,43 +3766,35 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         timestamp = ensure_utc(executed_at)
         if timestamp <= normalized.execution_started_at:
             raise StateError("Process execution must follow the current execution start")
-        self._manager._validate_process_credentials(
-            credentials, self._manager._pid_os.get(normalized.hostname, "unknown")
-        )
+        self._manager._validate_process_credentials(credentials, platform)
         if credentials is not None and (
             normalized.credentials is None or credentials.origin != normalized.credentials.origin
         ):
             raise StateError("Process execution must preserve known real and audit credentials")
         validate_process_environment(environment)
-        validate_process_executable_version(
-            executable_version, self._manager._pid_os.get(normalized.hostname, "unknown")
-        )
+        validate_process_executable_version(executable_version, platform)
         validate_macos_execution_directory(
             execution_directory,
             hostname=normalized.hostname,
             observed_at=timestamp,
-            platform=self._manager._pid_os.get(normalized.hostname, "unknown"),
+            platform=platform,
         )
-        validate_macos_image_security(
-            image_security, self._manager._pid_os.get(normalized.hostname, "unknown")
-        )
-        validate_macos_exec_image(
-            exec_image, self._manager._pid_os.get(normalized.hostname, "unknown")
-        )
+        validate_macos_image_security(image_security, platform)
+        validate_macos_exec_image(exec_image, platform)
         validate_macos_exec_script(
             exec_script,
-            platform=self._manager._pid_os.get(normalized.hostname, "unknown"),
+            platform=platform,
             hostname=normalized.hostname,
         )
         audit_pid_version = self._manager._preview_macos_audit_pid_version(
             normalized.hostname,
-            self._manager._pid_os.get(normalized.hostname, "unknown"),
+            platform,
             previous=self._macos_audit_pid_versions.get(normalized.hostname),
         )
         retired_threads: tuple[ThreadIdentity, ...] = ()
         thread_counter: tuple[str, int] | None = None
         primary_thread = normalized.primary_thread
-        if self._manager._pid_os.get(normalized.hostname) == "macos":
+        if platform == "macos":
             retired_threads = tuple(
                 sorted(
                     (
@@ -3798,6 +3806,9 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                     key=lambda thread: thread.tid,
                 )
             )
+            if birth is not None:
+                assert normalized.primary_thread is not None
+                retired_threads = (normalized.primary_thread,)
             tid, thread_counter, _ = self._manager._preview_primary_thread(
                 system=normalized.hostname,
                 os_category="macos",
@@ -3842,8 +3853,10 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             executed_at=timestamp,
         )
         descriptors = (
-            self._manager.process_descriptors_at(normalized, event_time=timestamp)
-            if self._manager._pid_os.get(normalized.hostname) == "macos"
+            birth._payload.initial_descriptors
+            if birth is not None
+            else self._manager.process_descriptors_at(normalized, event_time=timestamp)
+            if platform == "macos"
             else None
         )
         if audit_pid_version is not None:
@@ -3900,7 +3913,25 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         """Stage one live or same-cohort process terminalization."""
 
         self._require_open()
-        normalized = self._manager._normalize_action_cohort_process_target(self, target)
+        execution = next(
+            (
+                item
+                for item in self._process_execution_drafts
+                if type(target) is ProcessIdentity and item.after == target
+            ),
+            None,
+        )
+        base = target
+        if execution is not None:
+            base = next(
+                (item for item in self._processes if item.identity == execution.target),
+                execution.target,
+            )
+            if ensure_utc(end_time) <= execution.after.execution_started_at:
+                raise StateError("Ordered process close must follow its exact execution")
+            if parent_activity_time is not None:
+                raise StateError("Ordered execution close cannot add parent activity")
+        normalized = self._manager._normalize_action_cohort_process_target(self, base)
         self._manager._validate_process_exit_outcome(
             exit_outcome, self._manager._action_process_identity(normalized).hostname
         )
@@ -3947,6 +3978,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 staged_session_references=(),
                 _capability=_ActionCohortCapability(),
                 exit_outcome=exit_outcome,
+                post_execution=execution.after if execution is not None else None,
             )
         )
 
@@ -4683,6 +4715,11 @@ def _action_cohort_semantic_preimage(
                     else None
                 ),
                 termination.staged_session_references,
+            )
+            + (
+                (("post-execution-close-v1", termination.post_execution),)
+                if termination.post_execution is not None
+                else ()
             )
             for termination in process_terminations
         ),
@@ -7327,6 +7364,16 @@ class StateManager:
         for termination in plan._process_terminations:
             if type(termination._capability) is not _ActionCohortCapability:
                 raise StateError("Action cohort process termination capability is malformed")
+            if termination.post_execution is not None and (
+                type(termination.post_execution) is not ProcessIdentity
+                or not any(
+                    item.target == termination.target.identity
+                    and item.after == termination.post_execution
+                    for item in plan._process_executions
+                )
+                or termination.end_time <= termination.post_execution.execution_started_at
+            ):
+                raise StateError("Ordered close requires the exact earlier execution member")
             self._validate_process_exit_outcome(
                 termination.exit_outcome, termination.identity.hostname
             )
@@ -12466,13 +12513,23 @@ class StateManager:
             }
             for execution in plan._process_executions:
                 before, after = execution.target, execution.after
-                process = self._validate_action_live_process_identity(before)
-                if self._pid_os.get(before.hostname) not in {"linux", "macos"}:
+                birth = processes.get(before.object_id)
+                if birth is not None:
+                    if birth.identity != before or not birth._payload.forked:
+                        raise StateError("Ordered exec requires the exact authenticated fork birth")
+                    process = self._prepare_action_cohort_process_start(birth).process
+                    platform = process_pid_namespaces[id(birth)]
+                else:
+                    process = self._validate_action_live_process_identity(before)
+                    platform = self._pid_os.get(before.hostname)
+                if platform not in {"linux", "macos"}:
                     raise StateError("Process image replacement requires a POSIX PID namespace")
                 threads = self._running_threads.find("process_object_id", before.object_id)
-                is_macos = self._pid_os.get(before.hostname) == "macos"
+                is_macos = platform == "macos"
                 current_descriptors = (
-                    self._descriptor_table_from_history(process, after.execution_started_at)
+                    birth._payload.initial_descriptors
+                    if birth is not None
+                    else self._descriptor_table_from_history(process, after.execution_started_at)
                     if is_macos
                     else None
                 )
@@ -12490,6 +12547,9 @@ class StateManager:
                             key=lambda thread: thread.tid,
                         )
                     )
+                    if birth is not None:
+                        assert before.primary_thread is not None
+                        actual_threads = (before.primary_thread,)
                     replacement = after.primary_thread
                     if (
                         not actual_threads
@@ -12576,12 +12636,13 @@ class StateManager:
                     and after.execution_started_at < process.last_activity_time
                 ):
                     raise StateError("Process execution precedes already committed activity")
-                # Until a bundle owns ordered same-cohort dependencies, require a separate
-                # transaction for children, dependent activity and termination after exec.
+                # The canonical stage order owns fork birth -> one exec -> exact close.
+                # Other activity, dependent children and session shutdown still require
+                # their own explicit ordering contract.
                 if (
                     before.object_id in process_activity
                     or any(
-                        item.identity.object_id == before.object_id
+                        item.identity.object_id == before.object_id and item.post_execution != after
                         for item in plan._process_terminations
                     )
                     or any(
@@ -12991,7 +13052,7 @@ class StateManager:
             primitive = target
         else:
             assert type(target) is ProcessMaterializationPlan
-            identity = target.identity
+            identity = termination.identity
             parent_activity = termination.parent_activity
             parent_identity = (
                 StateManager._action_process_identity(parent_activity.target)
@@ -13015,6 +13076,14 @@ class StateManager:
                 _identity=identity,
                 _payload=payload,
                 _integrity_token="",
+            )
+        if termination.post_execution is not None:
+            identity = termination.post_execution
+            assert identity.primary_thread is not None
+            primitive = replace(
+                primitive,
+                _identity=identity,
+                _payload=replace(primitive._payload, threads=(identity.primary_thread,)),
             )
         identity = primitive.identity
         deadline = (primitive.end_time + _ENDED_IDENTITY_RETENTION).timestamp()
@@ -13412,7 +13481,10 @@ class StateManager:
                 )
         for execution in plan._process_executions:
             capture_mapping(self._macos_audit_pid_versions, execution.target.hostname)  # type: ignore[arg-type]
-            capture_object(self._processes_by_object_id[execution.target.object_id])
+            capture_object(
+                process_rows.get(execution.target.object_id)
+                or self._processes_by_object_id[execution.target.object_id]
+            )
         for replacement in exec_threads:
             capture_mapping(self._thread_id_counters, replacement.replacement.hostname)  # type: ignore[arg-type]
             for thread in (*replacement.retired, replacement.replacement):
@@ -14454,6 +14526,10 @@ class StateManager:
         processes = tuple(
             self._prepare_action_cohort_process_start(item) for item in plan.processes
         )
+        staged_threads = {
+            (item.thread.hostname, item.thread.process_object_id, item.thread.tid): item.thread
+            for item in processes
+        }
         exec_threads: list[_PreparedActionCohortExecThreads] = []
         for execution in plan.process_executions:
             if not execution.retired_threads:
@@ -14464,7 +14540,8 @@ class StateManager:
                 _PreparedActionCohortExecThreads(
                     execution=execution,
                     retired=tuple(
-                        self._running_threads[
+                        staged_threads.get((thread.hostname, thread.process_object_id, thread.tid))
+                        or self._running_threads[
                             (thread.hostname, thread.process_object_id, thread.tid)
                         ]
                         for thread in execution.retired_threads
