@@ -229,3 +229,7 @@ Exact selected births, fork sources, exec sources/targets and exits can now prep
 ## Engineering checkpoint 323
 
 The bounded metadata, ordered transaction, collector initialization/lifetime and native publication engineering items are implemented. An explicit internal native sink shares State/lifecycle/artifact/counter/closure ownership and the existing exact durable journal with eCAR. Tests cover unavailable self-observation, later observer replacement, partial native writes and recovery after collector epoch replacement. Native generator-source admission, complete per-profile facts, current-build exec/exit evidence (ES-R1), terminal Gatekeeper denial (GK-R1) and parser/ingestion acceptance remain gates. Unsupported ordering/metadata families retain their explicit guards; no native event-family/version admission was expanded.
+
+## Native output lifecycle checkpoint 324
+
+An internal host-output adapter now composes the native exact sinks with standard emitter barriers, counts, incremental spool checkpoints and retryable terminal export. Invented historical fixtures cover partial-publication rejection/recovery, filtered mixed cohorts, collector retirement, aborted checkpoint preparation and fresh-process byte equality. The adapter remains outside the production factory and format catalog. Automatic source activation, supported build/event selection, complete per-profile facts and CLI/manifest/ingestion acceptance remain open; ES-R1/GK-R1 are unchanged.

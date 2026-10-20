@@ -32,6 +32,7 @@ from evidenceforge.generation.actions.posix_process import (
     process_fork_occurrence,
 )
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.macos_endpoint_security import MacosEndpointSecurityEmitter
 from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
@@ -43,7 +44,12 @@ from tests.unit.test_macos_native_sink_publication import _prepare
 
 
 def _setup(
-    tmp_path: Path, *, retire: bool = False, collected: bool = True, filtered: bool = False
+    tmp_path: Path,
+    *,
+    retire: bool = False,
+    collected: bool = True,
+    filtered: bool = False,
+    output: MacosEndpointSecurityEmitter | None = None,
 ) -> tuple:
     fixture = _fixture(born_loaded=True)
     owner = fixture.owner
@@ -205,7 +211,11 @@ def _setup(
         retained_until=end + timedelta(days=10),
         lease_owner="invented-ordered-chain",
     )
-    sink = create_es_native_sink(tmp_path / "native.ndjson")
+    sink = (
+        create_es_native_sink(tmp_path / "native.ndjson")
+        if output is None
+        else output.native_sink(host)
+    )
     batch = _prepare(
         dispatcher,
         cohort,

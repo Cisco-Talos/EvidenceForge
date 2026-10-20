@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 323
+current_revision: 324
 history_start_revision: 1
-behavior_surface_sha256: 9f4bea822d6898164dd3ea21179c6bd5a8b4a51c29e2928fc278619a98fffecc
+behavior_surface_sha256: 0ff95ab5725faa9cf953d8eb0068fa11d3b761b94907ea63fedb3e5affb5d0f5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3016,3 +3016,11 @@ changes:
       - process-lifecycle
     formats: []
     summary: Composes ordered Mac process lifecycles, artifact retention, collector delivery and closure with authenticated native rows in one recoverable exact publication journal.
+  - revision: 324
+    id: native-es-host-output-lifecycle
+    impact: localized
+    domains:
+      - endpoint-security-publication
+      - endpoint-security-recovery
+    formats: []
+    summary: Adds an internal exact-only native ES host output adapter using shared barriers, counts, incremental spool recovery and retryable terminal export without registering a generator source.
