@@ -355,6 +355,7 @@ class _ClosureClaim:
     applied: bool = False
     committed: bool = False
     certified: bool = False
+    delivery_prerequisites: tuple[_DeliveryClaim | _BatchClaim | None, ...] = ()
 
 
 def _advance_delivery(
@@ -730,7 +731,10 @@ class ESCollectorRegistry:
 
     @contextmanager
     def prepared_closures(
-        self, requests: tuple[ESCollectorClosure, ...]
+        self,
+        requests: tuple[ESCollectorClosure, ...],
+        *,
+        after_deliveries: tuple[PreparedESDeliveryCommit | PreparedESDeliveryBatchCommit, ...] = (),
     ) -> Iterator[PreparedESCollectorClosures]:
         """Fence a bounded idle-client set; unfinalized scope exit restores all clients.
 
@@ -751,38 +755,83 @@ class ESCollectorRegistry:
         if len(set(keys)) != len(keys):
             raise StateError("Collector closure requires distinct connection owners")
         before = tuple(item.before for item in requests)
-        after = tuple(
-            ESCollectorState.model_validate_json(
-                item.before.model_copy(update={"closed_at": item.closed_at}).model_dump_json()
-            )
-            for item in requests
-        )
-        result = tuple(
-            ESCollectorState.model_validate_json(item.model_dump_json()) for item in after
-        )
         handle = PreparedESCollectorClosures(self)
-        claim = _ClosureClaim(
-            handle, before, after, result, self._closure_proof(result), get_ident()
-        )
         with self._lock:
-            for request in requests:
+            if type(after_deliveries) is not tuple or len(after_deliveries) > 128:
+                raise StateError("Collector closure requires bounded exact delivery prerequisites")
+            allowed: dict[str, _DeliveryClaim | _BatchClaim] = {}
+            for delivery in after_deliveries:
+                if type(delivery) is PreparedESDeliveryCommit:
+                    prerequisite = self._delivery_claim(delivery)
+                    key = prerequisite.observation.source_instance
+                elif type(delivery) is PreparedESDeliveryBatchCommit:
+                    prerequisite = self._batch_claim(delivery)
+                    key = prerequisite.observations[0].source_instance
+                else:
+                    raise StateError("Collector closure requires exact active delivery handles")
+                if key not in keys or key in allowed:
+                    raise StateError("Collector closure changed its delivery prerequisite set")
+                allowed[key] = prerequisite
+            prerequisites = tuple(allowed.get(key) for key in keys)
+            for request, prerequisite in zip(requests, prerequisites, strict=True):
                 self._validate_membership_transition(request.before.hostname, request.closed_at)
+                if prerequisite is not None and (
+                    prerequisite.thread_id != get_ident()
+                    or prerequisite.before != request.before
+                    or prerequisite.after is None
+                    or prerequisite.applied
+                    or prerequisite.committed
+                    or request.closed_at <= prerequisite.after.last_delivery_at
+                ):
+                    raise StateError(
+                        "Collector closure requires an exact earlier unapplied delivery"
+                    )
             if any(
                 self._states.get(key) != previous
-                or key in self._pending
-                or key in self._claimed
                 or key in self._closing
-                for key, previous in zip(keys, before, strict=True)
+                or (key in self._claimed and prerequisite is None)
+                or (key in self._pending and prerequisite is None)
+                for key, previous, prerequisite in zip(keys, before, prerequisites, strict=True)
             ):
-                raise StateError("Collector closure requires unchanged idle connections")
+                raise StateError(
+                    "Collector closure requires unchanged idle connections or exact claimed deliveries"
+                )
+            ready = tuple(
+                prerequisite.after if prerequisite is not None else previous
+                for previous, prerequisite in zip(before, prerequisites, strict=True)
+            )
+            after = tuple(
+                ESCollectorState.model_validate_json(
+                    previous.model_copy(update={"closed_at": request.closed_at}).model_dump_json()
+                )
+                for request, previous in zip(requests, ready, strict=True)
+            )
+            result = tuple(
+                ESCollectorState.model_validate_json(item.model_dump_json()) for item in after
+            )
+            claim = _ClosureClaim(
+                handle,
+                before,
+                after,
+                result,
+                self._closure_proof(result),
+                get_ident(),
+                delivery_prerequisites=prerequisites,
+            )
             try:
                 for key in keys:
                     self._closing[key] = claim
                 yield handle
             finally:
                 if claim.applied and not claim.committed:
-                    for key, previous in zip(keys, before, strict=True):
-                        self._states[key] = previous
+                    for key, previous, prerequisite in zip(
+                        keys, before, prerequisites, strict=True
+                    ):
+                        self._states[key] = (
+                            prerequisite.after
+                            if prerequisite is not None and prerequisite.applied
+                            else previous
+                        )
                 for key in keys:
                     if self._closing.get(key) is claim:
                         del self._closing[key]
@@ -799,7 +848,18 @@ class ESCollectorRegistry:
             return claim
         if self._closure_proof(claim.result) != claim.proof:
             raise StateError("Collector closure terminal result changed")
-        expected = claim.after if claim.applied else claim.before
+        expected = (
+            claim.after
+            if claim.applied
+            else tuple(
+                prerequisite.after
+                if prerequisite is not None and prerequisite.applied
+                else previous
+                for previous, prerequisite in zip(
+                    claim.before, claim.delivery_prerequisites, strict=True
+                )
+            )
+        )
         if any(self._states.get(item.source_instance) != item for item in expected):
             raise StateError("Collector closure lost its exact connection snapshots")
         return claim
@@ -808,6 +868,8 @@ class ESCollectorRegistry:
         claim = self._closure_claim(handle)
         if claim.applied:
             return
+        if any(item is not None and not item.applied for item in claim.delivery_prerequisites):
+            raise StateError("Collector closure requires its exact earlier delivery to apply first")
         for state in claim.after:
             self._validate_membership_transition(state.hostname, state.closed_at)
         claim.applied = True

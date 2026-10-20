@@ -3844,6 +3844,7 @@ class GeneratorLifecycleAuthority:
             )
 
         staged_processes: dict[tuple[str, int], ProcessMaterializationPlan] = {}
+        staged_views: dict[str, ProcessRuntimeView] = {}
         for ordinal, process_plan in enumerate(plan.processes):
             identity = process_plan.identity
             parent_object_id = ""
@@ -3875,6 +3876,7 @@ class GeneratorLifecycleAuthority:
                 session_logon_type=session_logon_type,
                 parent_object_id=parent_object_id,
             )
+            staged_views[identity.object_id] = ProcessRuntimeView.initial(lifecycle_identity, token)
             category = "process-start"
             append(
                 identity.started_at,
@@ -3973,10 +3975,13 @@ class GeneratorLifecycleAuthority:
             )
 
         for ordinal, execution in enumerate(plan.process_executions):
-            identity = self._action_cohort_registered_process(execution.target)
-            snapshot = self._registry.get_process(identity.object_id)
-            assert snapshot is not None
-            before = snapshot.current_view
+            identity = execution.target
+            before = staged_views.get(identity.object_id)
+            if before is None:
+                self._action_cohort_registered_process(identity)
+                snapshot = self._registry.get_process(identity.object_id)
+                assert snapshot is not None
+                before = snapshot.current_view
             if (before.execution_ordinal, before.image) != (
                 identity.execution_ordinal,
                 identity.image,

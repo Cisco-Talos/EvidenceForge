@@ -204,6 +204,8 @@ class ESCollectionActionOwner:
         self,
         requests: tuple[ESCollectorClosure, ...],
         processes: tuple[ProcessIdentity, ...],
+        *,
+        after_deliveries: tuple[PreparedESDeliveryCommit | PreparedESDeliveryBatchCommit, ...] = (),
     ) -> Iterator[PreparedESCollectorClosures]:
         """Fence exact live executions and reversible connection disconnects.
 
@@ -222,7 +224,9 @@ class ESCollectionActionOwner:
                 owner = self._live_process(process, request.closed_at)
                 if request.before.hostname != process.hostname or request.before.process != owner:
                     raise StateError("Collector closure disagrees with its exact live execution")
-            with self.collectors.prepared_closures(requests) as prepared:
+            with self.collectors.prepared_closures(
+                requests, after_deliveries=after_deliveries
+            ) as prepared:
                 yield prepared
 
     def validate_client_observation(self, observation: MacosProcessCollectionObservation) -> None:

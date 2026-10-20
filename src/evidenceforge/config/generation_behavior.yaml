@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 322
+current_revision: 323
 history_start_revision: 1
-behavior_surface_sha256: f9379f95377fd289cb52d6b268253943d96d43ca7557539da5913d52784b461c
+behavior_surface_sha256: 9f4bea822d6898164dd3ea21179c6bd5a8b4a51c29e2928fc278619a98fffecc
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3008,3 +3008,11 @@ changes:
       - endpoint-security-preparation
     formats: []
     summary: Atomically initializes complete modeled client inventories and bounds self-observation by the exact observing execution without consuming unavailable delivery counters.
+  - revision: 323
+    id: exact-native-macos-process-cohort-publication
+    impact: localized
+    domains:
+      - endpoint-security-publication
+      - process-lifecycle
+    formats: []
+    summary: Composes ordered Mac process lifecycles, artifact retention, collector delivery and closure with authenticated native rows in one recoverable exact publication journal.

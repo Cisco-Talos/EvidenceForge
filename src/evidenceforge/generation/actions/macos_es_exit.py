@@ -163,6 +163,18 @@ def _exit_record(
         raise StateError("Native exit preparation requires one exact selected termination")
     at = terminal.end_time
     identity = terminal.identity
+    planned_execution = next(
+        (item for item in cohort.process_executions if item.after == identity), None
+    )
+    thread_owned = (
+        thread == planned_execution.after.primary_thread
+        if planned_execution is not None
+        else state.get_thread(*thread.canonical_key) == thread
+        or any(
+            item.identity == identity and item.identity.primary_thread == thread
+            for item in cohort.processes
+        )
+    )
     if (
         terminal.exit_outcome is None
         or process.process != identity
@@ -177,7 +189,7 @@ def _exit_record(
         or thread.process_object_id != identity.object_id
         or thread.pid != identity.pid
         or thread.started_at > at
-        or state.get_thread(*thread.canonical_key) != thread
+        or not thread_owned
     ):
         raise StateError("Native exit preparation requires one explicit owned terminal outcome")
     if type(executables) is DeploymentContentRegistry:
