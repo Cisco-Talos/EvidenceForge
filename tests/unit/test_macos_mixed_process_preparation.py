@@ -240,7 +240,8 @@ def test_native_exec_freezes_mixed_relationships_with_identical_counter_retry(
     assert fixture.owner.collectors.retained_native_projection(fixture.delivery) == frozen
 
 
-def test_mixed_native_preparation_rejects_transitioning_its_observing_collector() -> None:
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_native_observation_is_bounded_by_its_collectors_transition(offset: int) -> None:
     fixture = _fixture()
     state = fixture.owner.state
     original = fixture.cohort.process_executions[0]
@@ -249,7 +250,7 @@ def test_mixed_native_preparation_rejects_transitioning_its_observing_collector(
         fixture.collector,
         image="/usr/bin/true",
         command_line="true",
-        executed_at=original.after.execution_started_at + timedelta(seconds=1),
+        executed_at=original.after.execution_started_at + timedelta(seconds=offset),
     )
     after = builder.execute_process(
         original.target,
@@ -257,15 +258,27 @@ def test_mixed_native_preparation_rejects_transitioning_its_observing_collector(
         command_line=original.after.command_line,
         executed_at=original.after.execution_started_at,
         executable_version=original.after.executable_version,
+        arguments=original.after.arguments,
+        environment=original.after.environment,
+        image_security=original.after.image_security,
+        exec_image=original.after.exec_image,
+        exec_script=original.after.exec_script,
+        execution_directory=original.after.execution_directory,
     )
     fixture.cohort = builder.seal()
     fixture.after = replace(fixture.after, process=after)
     before = state.materialization_digest()
-    with pytest.raises(StateError, match="observing collector"):
-        with _prepare(fixture):
-            pass
+    if offset <= 0:
+        with pytest.raises(StateError, match="observing collector"):
+            with _prepare(fixture):
+                pass
+        assert fixture.owner.collectors.retained_native_projection(fixture.delivery) is None
+    else:
+        with _prepare(fixture) as prepared:
+            assert prepared.ndjson.count("\n") == 1
+        assert fixture.owner.collectors.retained_native_projection(fixture.delivery) is not None
     assert state.materialization_digest() == before
-    assert fixture.owner.collectors.retained_native_projection(fixture.delivery) is None
+    fixture.owner.collectors.cancel(fixture.delivery)
 
 
 def test_mixed_preparation_preserves_canonical_exec_dependency_rejection() -> None:

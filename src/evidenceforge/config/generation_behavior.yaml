@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 321
+current_revision: 322
 history_start_revision: 1
-behavior_surface_sha256: 4c3cc87314253959199fbcce14db3111498acaa078a66976babff5d2f4c675b7
+behavior_surface_sha256: f9379f95377fd289cb52d6b268253943d96d43ca7557539da5913d52784b461c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3000,3 +3000,11 @@ changes:
       - macos-process-descriptors
     formats: []
     summary: Authenticates fork birth, one image replacement and its later exact close in one canonical cohort with shared allocator, thread and rollback ownership.
+  - revision: 322
+    id: es-initial-inventory-and-observer-lifetime
+    impact: localized
+    domains:
+      - endpoint-security-collection
+      - endpoint-security-preparation
+    formats: []
+    summary: Atomically initializes complete modeled client inventories and bounds self-observation by the exact observing execution without consuming unavailable delivery counters.

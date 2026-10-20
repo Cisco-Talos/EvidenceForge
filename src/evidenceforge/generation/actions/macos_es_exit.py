@@ -154,18 +154,13 @@ def _exit_record(
     action = ESAction.model_validate_json(action.model_dump_json())
     state = owner.state
     state.validate_action_cohort_materialization(cohort)
-    owner.validate_observing_cohort(cohort, collector_process)
+    owner.validate_observing_cohort(cohort, collector_process, observed_at=observation.observed_at)
     owner.validate_client_observation(process)
     terminal = next(
         (item for item in cohort.process_terminations if item.identity == process.process), None
     )
     if terminal is None:
         raise StateError("Native exit preparation requires one exact selected termination")
-    if any(
-        item.identity.object_id == collector_process.object_id
-        for item in cohort.process_terminations
-    ):
-        raise StateError("Native exit preparation cannot also close its observing collector")
     at = terminal.end_time
     identity = terminal.identity
     if (

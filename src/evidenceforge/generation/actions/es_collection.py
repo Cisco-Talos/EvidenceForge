@@ -89,6 +89,36 @@ class ESCollectionActionOwner:
                 raise StateError("ES inventory declaration requires an initialized Mac host")
             self.collectors.declare_complete_membership(coverage)
 
+    def initialize_inventory(
+        self,
+        coverage: ESClientMembershipCoverage,
+        clients: tuple[tuple[ESCollectorState, ProcessIdentity], ...],
+    ) -> tuple[ESCollectorState, ...]:
+        """Bind every explicit initial client before publishing complete host knowledge."""
+        if (
+            type(coverage) is not ESClientMembershipCoverage
+            or type(clients) is not tuple
+            or len(clients) > 128
+            or any(type(item) is not tuple or len(item) != 2 for item in clients)
+        ):
+            raise StateError("ES initialization requires an exact bounded client inventory")
+        with self.state._lock:
+            if self.state._pid_os.get(coverage.hostname) != "macos":
+                raise StateError("ES initialization requires an initialized modeled Mac host")
+            bound: list[ESCollectorState] = []
+            for profile, process in clients:
+                if type(profile) is not ESCollectorState:
+                    raise StateError("ES initialization requires exact client profiles")
+                owner = self._live_process(process, coverage.known_from)
+                if profile.hostname != coverage.hostname or profile.process not in (None, owner):
+                    raise StateError("ES initial profile disagrees with its exact execution")
+                bound.append(
+                    ESCollectorState.model_validate_json(
+                        profile.model_copy(update={"process": owner}).model_dump_json()
+                    )
+                )
+            return self.collectors.initialize_inventory(coverage, tuple(bound))
+
     def close(
         self,
         expected: ESCollectorState,
@@ -219,24 +249,53 @@ class ESCollectionActionOwner:
                 raise StateError("ES terminal observation contradicts its canonical session device")
 
     def validate_observing_cohort(
-        self, cohort: ActionCohortMaterializationPlan, collector: ProcessIdentity
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        collector: ProcessIdentity,
+        *,
+        observed_at: datetime | None = None,
     ) -> None:
-        """Keep mixed preparation from silently changing its observing execution.
+        """Admit only observations strictly before the collector changes or ends.
 
-        Collector self-observation needs a separate lifecycle/publication policy.
-        Conservatively reject its own close, exec or identity transition anywhere
-        in the cohort, including a future close after the selected source row.
+        Self-exec/self-exit notifications have no surviving same-execution
+        connection under this model. They require a distinct live observer.
+        Earlier events remain observable even when this cohort later retires
+        its collector. Omitted time preserves the conservative legacy guard.
         """
+        if observed_at is not None and (
+            type(observed_at) is not datetime or observed_at.utcoffset() is None
+        ):
+            raise StateError("ES self-observation requires an aware observation time")
+        boundary = self.observing_execution_boundary(cohort, collector)
+        if boundary is not None and (observed_at is None or observed_at >= boundary):
+            raise StateError(
+                "Native preparation cannot observe the same observing collector at or after its transition"
+            )
+
+    def observing_execution_boundary(
+        self, cohort: ActionCohortMaterializationPlan, collector: ProcessIdentity
+    ) -> datetime | None:
+        """Return the earliest modeled transition that retires this exact observer view."""
         if (
-            any(
-                item.identity.object_id == collector.object_id
+            type(cohort) is not ActionCohortMaterializationPlan
+            or type(collector) is not ProcessIdentity
+        ):
+            raise StateError("ES self-observation requires exact cohort and execution facts")
+        boundaries = (
+            [
+                item.end_time
                 for item in cohort.process_terminations
-            )
-            or any(
-                item.target.object_id == collector.object_id for item in cohort.process_executions
-            )
-            or any(
-                self.state._action_process_identity(item.target).object_id == collector.object_id
+                if item.identity.object_id == collector.object_id
+            ]
+            + [
+                item.after.execution_started_at
+                for item in cohort.process_executions
+                if item.target.object_id == collector.object_id
+            ]
+            + [
+                item.activity_time
+                for item in cohort.process_activity_patches
+                if self.state._action_process_identity(item.target).object_id == collector.object_id
                 and any(
                     value is not None
                     for value in (
@@ -247,10 +306,59 @@ class ESCollectionActionOwner:
                         item.parentage_change,
                     )
                 )
-                for item in cohort.process_activity_patches
+            ]
+        )
+        return min(boundaries) if boundaries else None
+
+    def prepare_observable(
+        self,
+        cohort: ActionCohortMaterializationPlan,
+        *,
+        source_instance: str,
+        process: ProcessIdentity,
+        generation: int,
+        delivery: int,
+        request: ESDeliveryRequest,
+    ) -> ESDeliveryPreparation | None:
+        """Reserve a real delivery or withhold unavailable same-client self-observation.
+
+        Withholding consumes no delivery/global/event counter and never implies
+        kernel loss. A distinct surviving observer can collect the same canonical
+        transition. Native source admission remains a separate contract.
+        """
+        if type(request) is not ESDeliveryRequest:
+            raise StateError("ES observable preparation requires an exact delivery request")
+        request = ESDeliveryRequest.model_validate_json(request.model_dump_json())
+        with self.state._lock:
+            self.state.validate_action_cohort_materialization(cohort)
+            self._live_process(process, request.observed_at)
+            connection = self.collectors.connection(source_instance)
+            if (
+                connection is None
+                or connection.process != _process(process)
+                or connection.hostname != process.hostname
+                or type(generation) is not int
+                or type(delivery) is not int
+                or connection.generation != generation
+                or connection.next_delivery != delivery
+                or connection.closed_at is not None
+                or request.event_type not in {item.event_type for item in connection.event_counters}
+            ):
+                raise StateError("ES observable preparation requires its established execution")
+            boundary = self.observing_execution_boundary(cohort, process)
+            if boundary is not None and request.observed_at >= boundary:
+                return None
+            return self.prepare(
+                source_instance=source_instance,
+                process=process,
+                generation=generation,
+                delivery=delivery,
+                occurrence_id=request.occurrence_id,
+                event_type=request.event_type,
+                observed_at=request.observed_at,
+                decision=request.decision,
+                kernel_lost=request.kernel_lost,
             )
-        ):
-            raise StateError("Native preparation cannot transition the same observing collector")
 
     def observe_process_collection(
         self,

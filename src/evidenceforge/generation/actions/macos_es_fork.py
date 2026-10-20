@@ -117,7 +117,9 @@ def prepared_es_fork_record(
         raise StateError("Completed fork delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
-        owner.validate_observing_cohort(cohort, collector_process)
+        owner.validate_observing_cohort(
+            cohort, collector_process, observed_at=claimed.observation.observed_at
+        )
         owner.validate_client_observation(parent)
         owner.validate_client_observation(child)
         birth = next((item for item in cohort.processes if item.identity == child.process), None)

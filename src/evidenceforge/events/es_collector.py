@@ -530,6 +530,68 @@ class ESCollectorRegistry:
                 raise StateError("ES membership declaration cannot rewrite delivered history")
             self._membership_coverage[coverage.hostname] = coverage
 
+    def initialize_inventory(
+        self, coverage: ESClientMembershipCoverage, clients: tuple[ESCollectorState, ...]
+    ) -> tuple[ESCollectorState, ...]:
+        """Atomically install one explicit complete initial modeled host inventory.
+
+        Validate a bounded candidate registry before replacing any live mapping.
+        This does not discover clients, subscribe a real sensor or enable output.
+        Exact pre-delivery retries are harmless; later history cannot be reset.
+        """
+        if (
+            type(coverage) is not ESClientMembershipCoverage
+            or type(clients) is not tuple
+            or len(clients) > 128
+            or any(type(item) is not ESCollectorState for item in clients)
+        ):
+            raise StateError("ES initialization requires exact bounded inventory facts")
+        coverage = ESClientMembershipCoverage.model_validate_json(coverage.model_dump_json())
+        clients = tuple(
+            ESCollectorState.model_validate_json(item.model_dump_json()) for item in clients
+        )
+        if any(
+            item.hostname != coverage.hostname
+            or item.opened_at != coverage.known_from
+            or item.process is None
+            for item in clients
+        ):
+            raise StateError("ES initial inventory requires exact same-host owners at its boundary")
+        candidate = ESCollectorRegistry()
+        for client in clients:
+            candidate.open(client)
+        if len(candidate._states) != len(clients):
+            raise StateError("ES initial inventory repeats a source instance")
+        candidate.declare_complete_membership(coverage)
+        with self._lock:
+            current = {
+                key: value
+                for key, value in self._states.items()
+                if value.hostname == coverage.hostname
+            }
+            if (
+                self._membership_coverage.get(coverage.hostname) == coverage
+                and current == candidate._states
+                and not any(
+                    key in self._pending or key in self._claimed or key in self._closing
+                    for key in current
+                )
+            ):
+                return tuple(current[key] for key in sorted(current))
+            if (
+                current
+                or coverage.hostname in self._membership_coverage
+                or self._states.keys() & candidate._states.keys()
+                or len(self._states) + len(clients) > 128
+                or len(self._membership_coverage) >= 128
+            ):
+                raise StateError("ES initial inventory conflicts with retained history or capacity")
+            states = self._states | candidate._states
+            membership = self._membership_coverage | {coverage.hostname: coverage}
+            self._states = states
+            self._membership_coverage = membership
+            return tuple(candidate._states[key] for key in sorted(candidate._states))
+
     @staticmethod
     def _validate_membership_coverage(
         coverage: ESClientMembershipCoverage, states: tuple[ESCollectorState, ...]

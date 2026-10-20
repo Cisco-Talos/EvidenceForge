@@ -159,7 +159,9 @@ def prepared_es_exec_record(
         raise StateError("Completed exec delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
-        owner.validate_observing_cohort(cohort, collector_process)
+        owner.validate_observing_cohort(
+            cohort, collector_process, observed_at=claimed.observation.observed_at
+        )
         owner.validate_client_observation(before)
         owner.validate_client_observation(after)
         execution = next(

@@ -402,3 +402,7 @@ The frozen execution profile now explicitly selects synthetic successful code-va
 ## Ordered canonical process chains — revision 321
 
 One cohort now owns an authenticated fork birth, one image replacement and the exact replacement's strictly later close (or live exec followed by close). Native thread replacement, audit PID-version allocation, inherited descriptors/CLOEXEC, retained execution history and rollback share the existing canonical transaction. The close's explicit post-exec identity is authenticated with its original lifetime preimage. Read-only native preparation can select each phase. Repeated exec, post-exec child creation, arbitrary activity and session shutdown retain narrower guards. Native mixed/lifecycle/collector/sink publication remains item 4; this State change does not enable a source.
+
+## Modeled collector initialization and lifetime — revision 322
+
+A bounded complete initial inventory can now be atomically initialized from explicit profiles and exact live State owners, including known empty inventories. Partial/invalid initialization and history reset reject. Native preparation admits a row strictly before its collector's later same-cohort transition. Same-execution observations at/after exec, exit or identity change are withheld without counters; those transitions require a distinct live observer. This modeled availability policy does not claim observed current-build self-notification behavior. Native mixed counter/closure/sink publication remains item 4 and source admission/evidence gates remain separate.
