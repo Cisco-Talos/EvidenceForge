@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.events.es_collector import ESCollectorRegistry, ESCollectorState
+from evidenceforge.events.es_membership import ESClientMembershipCoverage
 from evidenceforge.events.observation import ObservationSummary
 from evidenceforge.models.exceptions import StateError
 
@@ -14,7 +15,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "3"
+_SCHEMA_VERSION = "4"
 
 
 class _DispatcherObservationHead(BaseModel):
@@ -26,6 +27,7 @@ class _DispatcherObservationHead(BaseModel):
     source_evidence_version: int = Field(ge=0)
     summaries: list[list[object]] = Field(default_factory=list)
     es_collectors: list[str] = Field(default_factory=list)
+    es_membership: list[str] = Field(default_factory=list)
 
 
 class DispatcherObservationParticipant:
@@ -49,6 +51,7 @@ class DispatcherObservationParticipant:
 
         del sequence
         with self.dispatcher._source_evidence_lock:
+            collectors, membership = self.dispatcher.es_collectors.snapshot_with_membership()
             rows = [
                 [
                     cluster_id,
@@ -68,9 +71,8 @@ class DispatcherObservationParticipant:
                 schema_version=self.checkpoint_schema_version,
                 source_evidence_version=self.dispatcher._source_evidence_version,
                 summaries=rows,
-                es_collectors=[
-                    state.model_dump_json() for state in self.dispatcher.es_collectors.snapshot()
-                ],
+                es_collectors=[state.model_dump_json() for state in collectors],
+                es_membership=[item.model_dump_json() for item in membership],
             )
         return ParticipantSeal(
             head=HeadDraft(
@@ -101,7 +103,7 @@ class DispatcherObservationParticipant:
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint head is invalid"
             ) from error
-        if document.schema_version not in {"1", "2", self.checkpoint_schema_version} or (
+        if document.schema_version not in {"1", "2", "3", self.checkpoint_schema_version} or (
             document.schema_version == "1" and document.es_collectors
         ):
             raise CheckpointCorruptionError(
@@ -112,11 +114,17 @@ class DispatcherObservationParticipant:
             states = tuple(
                 ESCollectorState.model_validate_json(row) for row in document.es_collectors
             )
-            if document.schema_version != "3" and any(
+            if document.schema_version in {"1", "2"} and any(
                 state.process is not None or state.closed_at is not None for state in states
             ):
                 raise ValueError("Older collector head cannot contain attachment or close metadata")
-            collectors.restore(states)
+            if document.schema_version != "4" and document.es_membership:
+                raise ValueError("Older collector head cannot contain complete membership")
+            membership = tuple(
+                ESClientMembershipCoverage.model_validate_json(row)
+                for row in document.es_membership
+            )
+            collectors.restore(states, membership)
         except (StateError, TypeError, ValueError) as error:
             raise CheckpointCorruptionError("dispatcher ES collector state is invalid") from error
         restored: dict[str, dict[str, ObservationSummary]] = {}

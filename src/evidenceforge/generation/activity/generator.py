@@ -142,7 +142,7 @@ from evidenceforge.events.lifecycle import (
     LifecycleEntityRef,
     SessionEndPlan,
 )
-from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.macos_exec_script import MacosExecScript, MacosShebangExecutionIntent
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     NetworkEndpointObservationPlan,
@@ -343,6 +343,7 @@ from evidenceforge.generation.lifecycle_authority import (
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
 from evidenceforge.generation.lifecycle_shadow import LifecycleShadow
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.network_observation import PersistentSmbTrafficRebindAuthority
 from evidenceforge.generation.network_runtime import (
     NetworkPointBatchToken,
@@ -3586,6 +3587,7 @@ class ActivityGenerator:
         runtime_content_manager: RuntimeContentIdentityManager | None = None,
         rdp_session_manager: RdpReconnectStateManager | None = None,
         public_identity_registry: PublicIdentityRegistry | None = None,
+        macos_execution_metadata: MacosExecutionMetadataProducer | None = None,
     ):
         """Initialize activity generator.
 
@@ -3761,6 +3763,7 @@ class ActivityGenerator:
         self._next_sid_reservation_id = 1
         self._sid_reservation_high_water = 0
         self.identity_directory = identity_directory
+        self.macos_execution_metadata = macos_execution_metadata
 
         # IP→System lookup for HostContext resolution on connection events
         self._ip_to_system: dict[str, Any] = {}
@@ -16851,6 +16854,9 @@ class ActivityGenerator:
         new_posix_session: bool = False,
         arguments: tuple[str, ...] | None = None,
         exec_script: MacosExecScript | None = None,
+        macos_launch_kind: Literal["user", "system"] | None = None,
+        macos_terminal: Literal["allocate", "absent"] | None = None,
+        macos_standard_io: Literal["terminal", "null", "inherit"] | None = None,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -16916,6 +16922,9 @@ class ActivityGenerator:
             new_posix_session=new_posix_session,
             arguments=arguments,
             exec_script=exec_script,
+            macos_launch_kind=macos_launch_kind,
+            macos_terminal=macos_terminal,
+            macos_standard_io=macos_standard_io,
             ensure_file_event=ensure_file_event,
             from_storyline=from_storyline,
             suppress_command_file_effect=suppress_command_file_effect,
@@ -16929,6 +16938,48 @@ class ActivityGenerator:
         if bounded_request is None:
             return 0
         return ProcessExecutionActionBundle(self, bounded_request).execute()
+
+    def generate_macos_shebang_process(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        *,
+        parent_pid: int,
+        intent: MacosShebangExecutionIntent,
+        launch_kind: Literal["user", "system"] = "user",
+    ) -> int:
+        """Produce exact script argv/linkage through the ordinary retained process action."""
+        if (
+            type(intent) is not MacosShebangExecutionIntent
+            or _get_os_category(system.os) != "macos"
+        ):
+            raise StateError("Shebang execution requires an exact modeled Mac intent")
+        intent.__post_init__()
+        registry = self.dispatcher.local_artifact_registry
+        record = (
+            registry.resolve_version(intent.script.artifact_version_id)
+            if registry is not None
+            else None
+        )
+        if record is None or MacosExecScript.from_runtime_record(record) != intent.script:
+            raise StateError("Shebang execution lost its exact retained file version")
+        return self.generate_process(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+            process_name=intent.interpreter,
+            command_line=intent.command_line,
+            parent_pid=parent_pid,
+            require_exact_parent=True,
+            arguments=intent.arguments,
+            exec_script=intent.script,
+            macos_launch_kind=launch_kind,
+            macos_standard_io="inherit",
+            suppress_command_file_effect=True,
+        )
 
     def _preflight_bounded_process_source_deadline(
         self,
@@ -25208,6 +25259,9 @@ class ActivityGenerator:
                 require_exact_parent=True,
                 new_posix_session=index == 1,
                 arguments=arguments,
+                macos_launch_kind="user",
+                macos_terminal="allocate" if index == 1 else None,
+                macos_standard_io="terminal" if index == 1 else "null" if index == 0 else "inherit",
             )
             if pid <= 0:
                 return None
@@ -36758,6 +36812,7 @@ class ActivityGenerator:
             host_context=self._build_host_context,
             user_sid=self._get_sid,
             process_credentials=self._process_credentials,
+            macos_execution_metadata=self.macos_execution_metadata,
         )
 
     def _process_activity_timing(self) -> "ProcessActivityTiming":

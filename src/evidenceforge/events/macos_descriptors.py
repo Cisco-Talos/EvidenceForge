@@ -23,6 +23,7 @@ class MacosDescriptorBinding:
     kind: Literal["file", "pipe", "socket"]
     object_id: Annotated[str, Field(strict=True, min_length=1)]
     close_on_exec: Annotated[bool, Field(strict=True)]
+    native_pipe_id: Annotated[int, Field(strict=True, ge=0, lt=2**64)] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -34,6 +35,14 @@ class MacosDescriptorBinding:
             or not self.object_id.strip()
             or "\0" in self.object_id
             or type(self.close_on_exec) is not bool
+            or (
+                self.native_pipe_id is not None
+                and (
+                    self.kind != "pipe"
+                    or type(self.native_pipe_id) is not int
+                    or not 0 <= self.native_pipe_id < 2**64
+                )
+            )
         ):
             raise ValueError("Mac descriptor requires an exact number, object kind and ownership")
 
@@ -50,6 +59,7 @@ class MacosDescriptorTable:
     hostname: Annotated[str, Field(strict=True, min_length=1)]
     observed_at: Annotated[datetime, Field(strict=True)]
     bindings: Annotated[tuple[MacosDescriptorBinding, ...], Field(strict=True, max_length=4096)]
+    native_last_fd: Annotated[int, Field(strict=True, ge=-1, lt=2**31)] | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -74,6 +84,27 @@ class MacosDescriptorTable:
         numbers = tuple(item.fd for item in self.bindings)
         if numbers != tuple(sorted(set(numbers))):
             raise ValueError("Mac descriptor table requires sorted unique descriptor numbers")
+        if self.native_last_fd is not None and (
+            type(self.native_last_fd) is not int or self.native_last_fd != max(numbers, default=-1)
+        ):
+            raise ValueError("Complete native descriptor extent disagrees with its full table")
+        object_pipes: dict[str, int | None] = {}
+        for item in self.bindings:
+            if object_pipes.setdefault(item.object_id, item.native_pipe_id) != item.native_pipe_id:
+                raise ValueError("Shared pipe descriptors require one exact native pipe identity")
+
+    def _with_bindings(
+        self, bindings: tuple[MacosDescriptorBinding, ...]
+    ) -> "MacosDescriptorTable":
+        return replace(
+            self,
+            bindings=bindings,
+            native_last_fd=(
+                max((item.fd for item in bindings), default=-1)
+                if self.native_last_fd is not None
+                else None
+            ),
+        )
 
     def _at(self, observed_at: datetime) -> "MacosDescriptorTable":
         if (
@@ -90,9 +121,8 @@ class MacosDescriptorTable:
 
     def after_exec(self, observed_at: datetime) -> "MacosDescriptorTable":
         """Close only explicitly marked descriptors after successful image replacement."""
-        return replace(
-            self._at(observed_at),
-            bindings=tuple(item for item in self.bindings if not item.close_on_exec),
+        return self._at(observed_at)._with_bindings(
+            tuple(item for item in self.bindings if not item.close_on_exec)
         )
 
     def opened(
@@ -103,17 +133,16 @@ class MacosDescriptorTable:
             item.fd == binding.fd for item in self.bindings
         ):
             raise ValueError("Descriptor open requires an exact binding and unused number")
-        return replace(
-            self._at(observed_at),
-            bindings=tuple(sorted((*self.bindings, binding), key=lambda item: item.fd)),
+        return self._at(observed_at)._with_bindings(
+            tuple(sorted((*self.bindings, binding), key=lambda item: item.fd))
         )
 
     def closed(self, fd: int, *, observed_at: datetime) -> "MacosDescriptorTable":
         """Remove one known descriptor without closing another process's shared reference."""
         if type(fd) is not int or not any(item.fd == fd for item in self.bindings):
             raise ValueError("Descriptor close requires an existing exact number")
-        return replace(
-            self._at(observed_at), bindings=tuple(item for item in self.bindings if item.fd != fd)
+        return self._at(observed_at)._with_bindings(
+            tuple(item for item in self.bindings if item.fd != fd)
         )
 
     def duplicated(
@@ -153,7 +182,7 @@ class MacosDescriptorTable:
             return at
         copied = replace(source, fd=target_fd, close_on_exec=False)
         retained = tuple(item for item in self.bindings if item.fd != target_fd)
-        return replace(at, bindings=tuple(sorted((*retained, copied), key=lambda item: item.fd)))
+        return at._with_bindings(tuple(sorted((*retained, copied), key=lambda item: item.fd)))
 
     def set_close_on_exec(
         self, fd: int, enabled: bool, *, observed_at: datetime

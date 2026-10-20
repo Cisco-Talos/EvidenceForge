@@ -267,6 +267,13 @@ def test_legacy_head_and_records_keep_unknown_membership() -> None:
     document["schema_version"] = "6"
     for name in ("_posix_job_control_reservations", "_posix_job_control_reservation_counts"):
         del document["simple"][name]
+    for name in (
+        "_macos_terminal_sessions",
+        "_macos_terminal_slots",
+        "_macos_terminal_ordinals",
+        "_macos_pipe_counters",
+    ):
+        del document["simple"][name]
     restored = StateManager()
     _restore_head(restored, dumps(document))
     assert restored.get_process_identity(identity.hostname, identity.pid).job_control is None

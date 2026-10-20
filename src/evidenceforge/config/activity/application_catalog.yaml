@@ -2665,6 +2665,7 @@ applications:
     platforms:
       macos:
         image_path: /usr/libexec/syspolicyd
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2685,6 +2686,7 @@ applications:
     platforms:
       macos:
         image_path: /System/Library/PrivateFrameworks/TCC.framework/Support/tccd
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2705,6 +2707,7 @@ applications:
     platforms:
       macos:
         image_path: /usr/libexec/smd
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2725,6 +2728,7 @@ applications:
     platforms:
       macos:
         image_path: /System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2793,6 +2797,7 @@ applications:
     platforms:
       macos:
         image_path: /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
+        executable_format: mach_o
         code_signature:
           signing_id: com.apple.Terminal
           team_id: null
@@ -2820,6 +2825,7 @@ applications:
     platforms:
       macos:
         image_path: /bin/zsh
+        executable_format: mach_o
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2847,6 +2853,7 @@ applications:
     platforms:
       macos:
         image_path: /usr/bin/login
+        executable_format: mach_o
         deployment:
           kind: catalog
           product_id: apple-macos
@@ -2863,6 +2870,7 @@ applications:
     platforms:
       macos:
         image_path: /bin/bash
+        executable_format: mach_o
         deployment:
           kind: catalog
           product_id: apple-macos

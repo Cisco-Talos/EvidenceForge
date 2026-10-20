@@ -119,6 +119,7 @@ _TRANSIENT_EMPTY_FIELDS = (
     "_sid_reservations",
 )
 _REBUILT_FIELDS = (
+    "macos_execution_metadata",
     "_all_system_ips",
     "_db_servers",
     "_dc_hostnames",

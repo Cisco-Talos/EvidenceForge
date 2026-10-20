@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""State v6 recovery with retained immutable allocator segments and v7 writes."""
+"""State v6 recovery with retained immutable allocator segments and v8 writes."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +27,13 @@ class _LegacyStateParticipant(StateManagerParticipant):
         head = loads(seal.head.payload)
         head["schema_version"] = "6"
         for name in ("_posix_job_control_reservations", "_posix_job_control_reservation_counts"):
+            del head["simple"][name]
+        for name in (
+            "_macos_terminal_sessions",
+            "_macos_terminal_slots",
+            "_macos_terminal_ordinals",
+            "_macos_pipe_counters",
+        ):
             del head["simple"][name]
         segments = []
         for segment in seal.segments:
@@ -70,7 +77,7 @@ def test_controller_restores_only_explicitly_compatible_segments(
         phase="collection", completed_simulated_hours=12, next_hour="2026-10-16T00:00:00+00:00"
     )
     manifest = controller.commit(cursor=next_cursor, participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "7"
+    assert manifest.participant_heads[0].schema_version == "8"
     again = StateManager()
     controller.restore_participants(
         recovery=store.recover(), participants=(StateManagerParticipant(again),)

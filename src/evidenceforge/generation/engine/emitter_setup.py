@@ -98,6 +98,10 @@ from evidenceforge.generation.lifecycle_authority import (
     LifecycleMaterializationBatchTransaction,
 )
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.macos_execution_metadata import (
+    MacosExecutionMetadataProducer,
+    MacosLaunchMetadata,
+)
 from evidenceforge.generation.state_manager import (
     MaterializationBatchBuilder,
     ProcessMaterializationPlan,
@@ -1222,6 +1226,23 @@ class EmitterSetupMixin:
             aliases=(),
         )
 
+    @staticmethod
+    def _macos_boot_launch_metadata(
+        hostname: str,
+        member: _BootProcessSpec,
+        provider: MacosExecutionMetadataProducer | None = None,
+    ) -> MacosLaunchMetadata | None:
+        """Produce explicit clean boot-launch facts from the shared frozen owner."""
+        if (
+            type(provider) is not MacosExecutionMetadataProducer
+            or member.os_category != "macos"
+            or member.start_time is None
+        ):
+            return None
+        return provider.deployed_launch(
+            hostname, member.username, at=member.start_time, path=member.image, kind="system"
+        )
+
     def _seed_macos_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Materialize the same catalog boot forest for direct compatibility callers."""
         state = self.state_manager
@@ -1229,6 +1250,13 @@ class EmitterSetupMixin:
         for member in host.processes:
             if member.start_time is not None:
                 state.set_current_time(member.start_time)
+            metadata = EmitterSetupMixin._macos_boot_launch_metadata(
+                host.hostname,
+                member,
+                getattr(
+                    getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                ),
+            )
             plan = state.plan_process_materialization(
                 system=host.hostname,
                 parent_pid=pids[member.parent_alias] if member.parent_alias else 0,
@@ -1242,6 +1270,12 @@ class EmitterSetupMixin:
                 new_posix_session=True,
                 executable_version=member.executable_version,
                 arguments=member.arguments,
+                environment=metadata.environment if metadata else None,
+                execution_directory=metadata.directory if metadata else None,
+                exec_image=metadata.image if metadata else None,
+                exec_script=metadata.script if metadata else None,
+                macos_terminal="absent" if metadata else None,
+                macos_standard_io="null" if metadata else None,
                 logon_id=member.logon_id,
             )
             with state.materialization_guard(plan.expected_version):
@@ -1367,7 +1401,13 @@ class EmitterSetupMixin:
             page_pids: dict[str, dict[str, int]] = {}
             page_machine_ids: dict[str, str] = {}
             for host_spec in page.hosts:
-                page_pids[host_spec.hostname] = self._plan_boot_host_spec(builder, host_spec)
+                page_pids[host_spec.hostname] = self._plan_boot_host_spec(
+                    builder,
+                    host_spec,
+                    getattr(
+                        getattr(self, "activity_generator", None), "macos_execution_metadata", None
+                    ),
+                )
                 if host_spec.machine_id:
                     page_machine_ids[host_spec.hostname] = host_spec.machine_id
             # The page is already fully preflighted. A direct page commit avoids
@@ -1466,6 +1506,7 @@ class EmitterSetupMixin:
     def _plan_boot_host_spec(
         batch_builder: MaterializationBatchBuilder,
         host_spec: _BootHostSpec,
+        metadata_provider: MacosExecutionMetadataProducer | None = None,
     ) -> dict[str, int]:
         """Allocate one exact symbolic host forest into the shared fleet builder."""
 
@@ -1484,6 +1525,9 @@ class EmitterSetupMixin:
                     )
                 parent_pid = pids[member.parent_alias]
                 parent_plan = plans_by_alias.get(member.parent_alias)
+            metadata = EmitterSetupMixin._macos_boot_launch_metadata(
+                host_spec.hostname, member, metadata_provider
+            )
             plan = batch_builder.plan_process(
                 system=host_spec.hostname,
                 fixed_pid=member.fixed_pid,
@@ -1502,6 +1546,12 @@ class EmitterSetupMixin:
                 new_posix_session=member.os_category == "macos",
                 executable_version=member.executable_version,
                 arguments=member.arguments,
+                environment=metadata.environment if metadata else None,
+                execution_directory=metadata.directory if metadata else None,
+                exec_image=metadata.image if metadata else None,
+                exec_script=metadata.script if metadata else None,
+                macos_terminal="absent" if metadata else None,
+                macos_standard_io="null" if metadata else None,
                 start_time=member.start_time,
                 parent_plan=parent_plan,
             )
@@ -1804,6 +1854,11 @@ class EmitterSetupMixin:
                         staged_system_pids[host_spec.hostname] = self._plan_boot_host_spec(
                             batch_builder,
                             host_spec,
+                            getattr(
+                                getattr(self, "activity_generator", None),
+                                "macos_execution_metadata",
+                                None,
+                            ),
                         )
                         if host_spec.machine_id:
                             staged_machine_ids[host_spec.hostname] = host_spec.machine_id

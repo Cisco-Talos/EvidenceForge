@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 316
+current_revision: 319
 history_start_revision: 1
-behavior_surface_sha256: 8c9943aee58fdae3698f7a78b3fff69cc87020f0b8bb68559e3eeaca9b86f94d
+behavior_surface_sha256: 41e5064591d755158ad228d9a06dd9e27e7ab5d3829da1bc3db09484670cd0a5
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2958,3 +2958,30 @@ changes:
       - immutable-effective-config
     formats: []
     summary: Produces installed-file facts lazily from a frozen synthetic profile, exact local account ownership and per-release size while preserving old snapshots without the new policy and existing-source generation behavior.
+  - revision: 317
+    id: bounded-complete-modeled-es-client-membership
+    impact: localized
+    domains:
+      - endpoint-security-collection
+      - checkpoint-membership-knowledge
+    formats: []
+    summary: Produces known negative membership only within an explicitly complete modeled host inventory, retires discarded epoch knowledge on restart, and preserves atomic inventory/counter checkpoints without admitting a native source.
+  - revision: 318
+    id: canonical-macos-terminal-and-execution-metadata-producers
+    impact: localized
+    domains:
+      - terminal-device-lifecycle
+      - canonical-execution-metadata
+      - native-open-object-identity
+      - checkpoint-native-metadata
+    formats:
+      - ecar
+    summary: Produces transactional Mac terminal/pipe objects and frozen launch/exec metadata through canonical State and shared provisioned volumes, preserving unknown legacy facts and native source gates.
+  - revision: 319
+    id: mixed-cohort-native-process-relationship-preparation
+    impact: localized
+    domains:
+      - endpoint-security-preparation
+      - event-time-process-relationships
+    formats: []
+    summary: Prepares selected fork/exec/exit relationships through one read-only mixed-cohort view, preserving strict temporal boundaries, canonical dependency admission and observing-collector guards without enabling native output.

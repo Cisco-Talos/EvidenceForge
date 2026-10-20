@@ -24,6 +24,7 @@ from evidenceforge.generation.actions.scanner_probe import (
     NmapCommandProbePlan,
     NmapCommandProbePlanningProfile,
 )
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.source_timing import SourceTimingPlanningRuntime
 from evidenceforge.generation.timing import TimingRuntime, TimingScope
 from evidenceforge.models.scenario import System, User
@@ -241,6 +242,7 @@ class ProcessIdentityCapabilities:
     host_context: BuildHostContextCapability
     user_sid: GetSidCapability
     process_credentials: ProcessCredentialsCapability
+    macos_execution_metadata: MacosExecutionMetadataProducer | None = None
 
 
 @dataclass(frozen=True)

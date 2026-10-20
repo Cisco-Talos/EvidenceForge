@@ -154,6 +154,7 @@ def _exit_record(
     action = ESAction.model_validate_json(action.model_dump_json())
     state = owner.state
     state.validate_action_cohort_materialization(cohort)
+    owner.validate_observing_cohort(cohort, collector_process)
     owner.validate_client_observation(process)
     terminal = next(
         (item for item in cohort.process_terminations if item.identity == process.process), None

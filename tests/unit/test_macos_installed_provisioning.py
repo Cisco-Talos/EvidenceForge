@@ -358,7 +358,8 @@ def test_real_engine_checkpoint_rebuilds_previously_requested_installed_files(
             seal = GenerationEngineParticipant(first).prepare_checkpoint(1)
             second._initialize()
             GenerationEngineParticipant(second).restore_checkpoint(seal.head.payload, ())
-            assert not second._macos_installed_provisioning_ready
+            # Production launch metadata now requests this deterministic owner during initialization.
+            assert second._macos_installed_provisioning_ready
             rebuilt = second.macos_installed_provisioning
         process = _process(first.deployment_registry, scenario, "MAC-01", "/bin/zsh")
         expected = observed.filesystem.observe(

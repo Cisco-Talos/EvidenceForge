@@ -52,6 +52,7 @@ from evidenceforge.generation.deployment_registry import (
 from evidenceforge.generation.lifecycle_authority import GeneratorLifecycleAuthority
 from evidenceforge.generation.lifecycle_production_adapters import LifecycleProductionAdapter
 from evidenceforge.generation.lifecycle_registry import LifecycleRegistry
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.runtime_content import (
     RuntimeContentIdentityManager,
     runtime_executable_lease_owner,
@@ -166,6 +167,7 @@ class MacosPersistenceActionBundle:
         dispatcher: EventDispatcher,
         deployments: DeploymentContentRegistry,
         content: RuntimeContentIdentityManager,
+        metadata_provider: MacosExecutionMetadataProducer | None = None,
     ) -> None:
         self.state = state
         self.lifecycle = lifecycle
@@ -173,6 +175,7 @@ class MacosPersistenceActionBundle:
         self.dispatcher = dispatcher
         self.deployments = deployments
         self.content = content
+        self.metadata_provider = metadata_provider
         self.services = LifecycleProductionAdapter(lifecycle)
         authority.bind_source_timing_planner(dispatcher.source_timing_planner)
 
@@ -224,6 +227,16 @@ class MacosPersistenceActionBundle:
                 started_at=request.timestamp,
                 action_id=request.action_id,
                 executable_version=version,
+                metadata=self.metadata_provider.launch(
+                    caller.hostname,
+                    job.identity.launchd_job.principal,
+                    at=request.timestamp,
+                    requested_path=job.identity.launchd_job.program,
+                    binary=binary,
+                    kind="system",
+                )
+                if self.metadata_provider is not None
+                else None,
             )
             identity = plan.process.identity
             process_context = _context(identity, self.state)

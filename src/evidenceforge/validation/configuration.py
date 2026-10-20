@@ -1171,6 +1171,9 @@ def _validate_effective_configuration(
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = deepcopy(load_timing_profiles())
     web_session_profiles_data = load_web_session_profiles()
+    from evidenceforge.generation.activity.macos_execution_metadata import (
+        load_macos_execution_metadata_profile,
+    )
     from evidenceforge.generation.activity.macos_installed_files import (
         load_macos_installed_file_profile,
     )
@@ -1178,6 +1181,16 @@ def _validate_effective_configuration(
         load_macos_unified_log_profiles,
     )
 
+    try:
+        load_macos_execution_metadata_profile()
+    except ValidationError as exc:
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "macos_execution_metadata.yaml",
+                f"invalid execution metadata profile: {exc}",
+            )
+        )
     try:
         load_macos_installed_file_profile()
     except ValidationError as exc:

@@ -1,0 +1,32 @@
+# Explicit synthetic launch/device policy, not host inspection or APFS calibration.
+schema_version: "1.0"
+profile: modeled-macos-execution-v1
+terminal:
+  volume_id: modeled-devfs
+  device: 16777217
+  special_device_base: 268435456
+  first_inode: 100000000
+  max_devices: 256
+  permissions: 384 # 0600; ownership comes from the exact local credentials
+  preferred_block_size: 4096
+cpu_subtype: 0 # explicitly selected generic arm64 slice, not inferred from a host
+user_environment:
+  - "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  - "HOME={home}"
+  - "USER={username}"
+  - "LOGNAME={username}"
+  - "SHELL={shell}"
+  - "LANG=en_US.UTF-8"
+root_environment:
+  - "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+  - "HOME=/var/root"
+  - "USER=root"
+  - "LOGNAME=root"
+  - "SHELL=/bin/zsh"
+  - "LANG=en_US.UTF-8"
+directory_first_inode: 1099511627776
+directory_permissions: 493 # 0755
+directory_size_bytes: 128
+directory_allocated_blocks: 0
+directory_age_seconds: 31536000
+first_pipe_id: 1000000 # host-local monotonic synthetic native pipe-object namespace

@@ -3987,6 +3987,57 @@ class MacosProvisioningRange(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosTerminalDeviceProfile(BaseModel, extra="forbid", frozen=True):
+    """Synthetic devfs allocation policy; never a discovered host device map."""
+
+    volume_id: str = Field(min_length=1, max_length=96, pattern=r"^[a-z0-9-]+$")
+    device: int = Field(strict=True, ge=1, lt=2**31)
+    special_device_base: int = Field(strict=True, ge=1, lt=2**31)
+    first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    max_devices: int = Field(strict=True, ge=1, le=4096)
+    permissions: int = Field(strict=True, ge=0, le=0o777)
+    preferred_block_size: int = Field(strict=True, gt=0, lt=2**31)
+
+    @model_validator(mode="after")
+    def bounded_devices(self) -> Self:
+        """Keep the complete synthetic device range representable."""
+        if self.special_device_base + self.max_devices >= 2**31:
+            raise ValueError("Mac terminal device range exceeds signed native device IDs")
+        return self
+
+
+class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
+    """Explicit deterministic launch policy for admitted Mac execution producers."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["modeled-macos-execution-v1"]
+    terminal: MacosTerminalDeviceProfile
+    cpu_subtype: int = Field(strict=True, ge=-(2**31), lt=2**31)
+    user_environment: tuple[str, ...]
+    root_environment: tuple[str, ...]
+    directory_first_inode: int = Field(strict=True, ge=1, lt=2**63)
+    directory_permissions: int = Field(strict=True, ge=0, le=0o777)
+    directory_size_bytes: int = Field(strict=True, ge=0, lt=2**31)
+    directory_allocated_blocks: int = Field(strict=True, ge=0, lt=2**31)
+    directory_age_seconds: int = Field(strict=True, gt=0, lt=2**31)
+    first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
+
+    @field_validator("user_environment", "root_environment")
+    @classmethod
+    def explicit_environment(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Reject malformed assignments and unknown interpolation fields."""
+        from string import Formatter
+
+        allowed = {"username", "home", "shell"}
+        for value in values:
+            if "\0" in value or "=" not in value or not value.split("=", 1)[0]:
+                raise ValueError("Mac launch environment requires NUL-free assignments")
+            for _, name, spec, conversion in Formatter().parse(value):
+                if name is not None and (name not in allowed or spec or conversion):
+                    raise ValueError("Mac launch environment contains an unsupported template")
+        return values
+
+
 class MacosInstalledFileProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit modeled provisioning policy, not native filesystem calibration."""
 

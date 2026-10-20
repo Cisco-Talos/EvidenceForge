@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from inspect import getattr_static
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
 from evidenceforge.events.identity import validate_process_arguments
@@ -283,6 +283,11 @@ class ProcessExecutionRequest:
     new_posix_session: bool = field(default=False, kw_only=True)
     arguments: tuple[str, ...] | None = field(default=None, kw_only=True)
     exec_script: MacosExecScript | None = field(default=None, kw_only=True)
+    macos_launch_kind: Literal["user", "system"] | None = field(default=None, kw_only=True)
+    macos_terminal: Literal["allocate", "absent"] | None = field(default=None, kw_only=True)
+    macos_standard_io: Literal["terminal", "null", "inherit"] | None = field(
+        default=None, kw_only=True
+    )
     requested_endpoint_effects: tuple[PreparedEndpointEffect, ...] = ()
     source: str = "activity_generator"
     effect_plan: ExecutionEffectPlan | None = field(default=None, compare=False, repr=False)
@@ -299,6 +304,24 @@ class ProcessExecutionRequest:
 
     def __post_init__(self) -> None:
         """Freeze caller-authored endpoint consequences into the root intent."""
+
+        if any(
+            value is not None
+            for value in (self.macos_launch_kind, self.macos_terminal, self.macos_standard_io)
+        ):
+            if (
+                platform_for_os(self.system.os) != "macos"
+                or not self.require_exact_parent
+                or self.arguments is None
+                or self.reuse_intent is not None
+                or self.macos_launch_kind not in {"user", "system", None}
+                or self.macos_terminal not in {"allocate", "absent", None}
+                or self.macos_standard_io not in {"terminal", "null", "inherit", None}
+                or (self.macos_terminal is not None and not self.new_posix_session)
+            ):
+                raise ValueError(
+                    "Modeled Mac launch metadata requires a fresh literal exact-parent intent"
+                )
 
         validate_macos_exec_script(
             self.exec_script,
@@ -348,6 +371,14 @@ class ProcessExecutionRequest:
         session_suffix = ":new_posix_session" if self.new_posix_session else ""
         arguments_suffix = f":argv={self.arguments!r}" if self.arguments is not None else ""
         script_suffix = f":script={self.exec_script!r}" if self.exec_script is not None else ""
+        native_suffix = (
+            f":macos={self.macos_launch_kind}:{self.macos_terminal}:{self.macos_standard_io}"
+            if any(
+                value is not None
+                for value in (self.macos_launch_kind, self.macos_terminal, self.macos_standard_io)
+            )
+            else ""
+        )
         endpoint_effect_signature = tuple(
             (
                 effect.spec.instance_key,
@@ -367,7 +398,7 @@ class ProcessExecutionRequest:
             f"{self.suppress_command_file_effect}:{self.allow_existing_browser_reuse}:"
             f"{self.allow_browser_launch_spacing}{concurrency_suffix}{lifecycle_suffix}:"
             f"{self.source_visible_by.isoformat() if self.source_visible_by else ''}:"
-            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}"
+            f"{endpoint_effect_signature}:{self.source}{exact_parent_suffix}{session_suffix}{arguments_suffix}{script_suffix}{native_suffix}"
         )
         return f"process-execution-{seed:016x}"
 

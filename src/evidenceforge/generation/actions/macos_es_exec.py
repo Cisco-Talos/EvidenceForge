@@ -4,7 +4,7 @@
 """Prepare historical exec bytes from one authenticated transition and explicit facts.
 
 This does not enable a source or commit State, artifacts, counters or a native
-sink. Target macOS 26 exec evidence and automatic native FD production stay gated.
+sink. Target macOS 26 exec evidence and native source admission stay gated.
 """
 
 from collections.abc import Iterator
@@ -36,10 +36,9 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
 )
 from evidenceforge.generation.macos_endpoint_security import (
-    prepare_installed_es_process_snapshot,
     prepare_planned_installed_es_process_snapshot,
     prepare_planned_runtime_es_exec_target,
-    prepare_runtime_es_process_snapshot,
+    prepare_planned_runtime_es_source,
     project_runtime_es_exec_script,
 )
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
@@ -160,11 +159,14 @@ def prepared_es_exec_record(
         raise StateError("Completed exec delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
+        owner.validate_observing_cohort(cohort, collector_process)
         owner.validate_client_observation(before)
         owner.validate_client_observation(after)
-        if len(cohort.process_executions) != 1:
+        execution = next(
+            (item for item in cohort.process_executions if item.after == after.process), None
+        )
+        if execution is None:
             raise StateError("Native exec preparation requires one exact execution transition")
-        execution = cohort.process_executions[0]
         at = after.process.execution_started_at
         observation = claimed.observation
         if (
@@ -191,17 +193,18 @@ def prepared_es_exec_record(
             )
         if before_installed_file is not None:
             assert deployments is not None
-            actor = prepare_installed_es_process_snapshot(
+            actor = prepare_planned_installed_es_process_snapshot(
                 state,
                 deployments,
-                process=before.process,
+                cohort=cohort,
+                phase="exec_source",
                 collection=before,
                 metadata=before_installed_file,
                 version=version,
             )
         else:
-            actor = prepare_runtime_es_process_snapshot(
-                state, executables, process=before.process, collection=before, version=version
+            actor = prepare_planned_runtime_es_source(
+                state, executables, cohort=cohort, collection=before, source="exec", version=version
             )
         if after_installed_file is not None:
             assert deployments is not None

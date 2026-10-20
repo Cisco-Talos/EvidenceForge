@@ -29,10 +29,9 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactVersionRegistry,
 )
 from evidenceforge.generation.macos_endpoint_security import (
-    prepare_installed_es_process_snapshot,
     prepare_planned_installed_es_process_snapshot,
     prepare_planned_runtime_es_process_snapshot,
-    prepare_runtime_es_process_snapshot,
+    prepare_planned_runtime_es_source,
 )
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
@@ -68,8 +67,10 @@ def prepared_es_fork_record(
 ) -> Iterator[PreparedMacosForkRecord]:
     """Freeze one actual fork and its counter observation before any canonical commit.
 
-    Only a standalone State-authenticated fork with a retained runtime image or
-    exact installed release is supported. Installed stat must be supplied explicitly. Parent/child collection facts describe its canonical instant;
+    The selected State-authenticated fork requires a retained runtime image or
+    exact installed release. Related mixed-cohort transitions use State's read-only
+    event-time overlay. Installed stat must be supplied explicitly.
+    Parent/child collection facts describe its canonical instant;
     export delay does not move that instant or uptime. The initiating thread is
     supplied explicitly and must be active in the exact parent execution.
 
@@ -116,11 +117,12 @@ def prepared_es_fork_record(
         raise StateError("Completed fork delivery must reuse its retained native bytes")
     with owner.prepared_commit(delivery, collector_process) as claimed:
         state.validate_action_cohort_materialization(cohort)
+        owner.validate_observing_cohort(cohort, collector_process)
         owner.validate_client_observation(parent)
         owner.validate_client_observation(child)
-        if len(cohort.processes) != 1 or cohort.sessions or cohort.session_activity_patches:
-            raise StateError("Native fork preparation requires a standalone fork")
-        birth = cohort.processes[0]
+        birth = next((item for item in cohort.processes if item.identity == child.process), None)
+        if birth is None:
+            raise StateError("Native fork preparation requires its exact selected fork")
         observation = claimed.observation
         at = child.process.started_at
         if (
@@ -144,10 +146,12 @@ def prepared_es_fork_record(
             raise StateError("Native fork preparation requires one exact fork occurrence")
         if type(executables) is DeploymentContentRegistry:
             assert installed_file is not None
-            actor = prepare_installed_es_process_snapshot(
+            actor = prepare_planned_installed_es_process_snapshot(
                 state,
                 executables,
-                process=parent.process,
+                cohort=cohort,
+                phase="fork_source",
+                fork_child=child.process,
                 collection=parent,
                 metadata=installed_file,
                 version=version,
@@ -162,8 +166,14 @@ def prepared_es_fork_record(
                 version=version,
             )
         else:
-            actor = prepare_runtime_es_process_snapshot(
-                state, executables, process=parent.process, collection=parent, version=version
+            actor = prepare_planned_runtime_es_source(
+                state,
+                executables,
+                cohort=cohort,
+                collection=parent,
+                source="fork",
+                fork_child=child.process,
+                version=version,
             )
             target = prepare_planned_runtime_es_process_snapshot(
                 state, executables, cohort=cohort, collection=child, version=version

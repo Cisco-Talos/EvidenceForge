@@ -294,6 +294,50 @@ def project_runtime_es_exec_script(
         raise StateError(f"Incomplete ES script facts: {error}") from error
 
 
+def prepare_planned_runtime_es_source(
+    state: StateManager,
+    artifacts: LocalArtifactVersionRegistry,
+    *,
+    cohort: ActionCohortMaterializationPlan,
+    collection: MacosProcessCollectionObservation,
+    source: Literal["fork", "exec"],
+    version: int,
+    fork_child: ProcessIdentity | None = None,
+) -> ESProcess:
+    """Prepare the performing execution using the same mixed-cohort relationship view.
+
+    The exact fork child or before-exec identity selects its canonical occurrence.
+    This freezes source bytes without publishing any process or collector state.
+    """
+    if (
+        type(state) is not StateManager
+        or type(artifacts) is not LocalArtifactVersionRegistry
+        or type(cohort) is not ActionCohortMaterializationPlan
+        or type(collection) is not MacosProcessCollectionObservation
+        or type(source) is not str
+        or source not in {"fork", "exec"}
+    ):
+        raise StateError("Planned ES source requires exact canonical owners and a transition")
+    collection.__post_init__()
+    with state._lock:
+        if source == "fork":
+            if type(fork_child) is not ProcessIdentity:
+                raise StateError("Planned ES fork source requires its exact selected child")
+            relationships = state.observe_planned_fork_parent_relationships(
+                cohort, child=fork_child
+            )
+        else:
+            relationships = state.observe_planned_execution_relationships(
+                cohort, process=collection.process, source=True
+            )
+        if (
+            relationships.parent.process != collection.process
+            or relationships.parent.observed_at != collection.observed_at
+        ):
+            raise StateError("Planned ES source requires its exact transition observation")
+        return _project_runtime_process(artifacts, relationships, collection, version=version)
+
+
 def prepare_planned_runtime_es_exec_target(
     state: StateManager,
     artifacts: LocalArtifactVersionRegistry,
@@ -317,7 +361,9 @@ def prepare_planned_runtime_es_exec_target(
         raise StateError("Planned ES exec target requires exact canonical owners")
     collection.__post_init__()
     with state._lock:
-        relationships = state.observe_planned_execution_relationships(cohort)
+        relationships = state.observe_planned_execution_relationships(
+            cohort, process=collection.process
+        )
         target = relationships.parent.process
         if collection.process != target or collection.observed_at != target.execution_started_at:
             raise StateError("Planned ES exec target requires its exact execution observation")
@@ -364,7 +410,8 @@ def prepare_planned_installed_es_process_snapshot(
     *,
     cohort: ActionCohortMaterializationPlan,
     collection: MacosProcessCollectionObservation,
-    phase: Literal["birth", "exec", "terminal"],
+    phase: Literal["birth", "exec", "terminal", "exec_source", "fork_source"],
+    fork_child: ProcessIdentity | None = None,
     version: int,
     metadata: MacosFileMetadata | None = None,
     filesystem: MacosInstalledFilesystem | None = None,
@@ -382,7 +429,7 @@ def prepare_planned_installed_es_process_snapshot(
         or type(cohort) is not ActionCohortMaterializationPlan
         or type(collection) is not MacosProcessCollectionObservation
         or type(phase) is not str
-        or phase not in {"birth", "exec", "terminal"}
+        or phase not in {"birth", "exec", "terminal", "exec_source", "fork_source"}
     ):
         raise StateError("Planned installed ES process requires exact canonical owners and phase")
     collection.__post_init__()
@@ -391,8 +438,16 @@ def prepare_planned_installed_es_process_snapshot(
             relationships = state.observe_planned_process_relationships(
                 cohort, process=collection.process
             )
-        elif phase == "exec":
-            relationships = state.observe_planned_execution_relationships(cohort)
+        elif phase in {"exec", "exec_source"}:
+            relationships = state.observe_planned_execution_relationships(
+                cohort, process=collection.process, source=phase == "exec_source"
+            )
+        elif phase == "fork_source":
+            if type(fork_child) is not ProcessIdentity:
+                raise StateError("Planned installed fork source requires its exact selected child")
+            relationships = state.observe_planned_fork_parent_relationships(
+                cohort, child=fork_child
+            )
         else:
             relationships = state.observe_planned_termination_relationships(
                 cohort, process=collection.process

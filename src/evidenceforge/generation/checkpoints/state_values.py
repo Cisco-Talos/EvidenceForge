@@ -36,6 +36,7 @@ from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.macos_terminal import MacosTerminalSession
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
     FileSensorObservation,
@@ -475,6 +476,10 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("hostname", "artifact_version_id", "content_id", "native_path"),
     ),
     "macos-exec-image-v1": (MacosExecImage, ("cpu_subtype", "dyld_exec_path")),
+    "macos-terminal-session-v1": (
+        MacosTerminalSession,
+        ("session", "ordinal", "slot", "native_path", "metadata_json"),
+    ),
     "macos-image-security-v1": (
         MacosImageSecurity,
         ("codesigning_flags", "is_platform_binary", "validation_category"),
@@ -491,11 +496,14 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("platform", "identity_kind", "content_id", "artifact_version_id"),
     ),
     "running-process-v21": (RunningProcess, _RUNNING_PROCESS_FIELDS),
-    "macos-descriptor-binding-v1": (
+    "macos-descriptor-binding-v2": (
         MacosDescriptorBinding,
-        ("fd", "kind", "object_id", "close_on_exec"),
+        ("fd", "kind", "object_id", "close_on_exec", "native_pipe_id"),
     ),
-    "macos-descriptor-table-v1": (MacosDescriptorTable, ("hostname", "observed_at", "bindings")),
+    "macos-descriptor-table-v2": (
+        MacosDescriptorTable,
+        ("hostname", "observed_at", "bindings", "native_last_fd"),
+    ),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
@@ -634,6 +642,12 @@ def decode_state_value(value: object) -> object:
         _tag, record_tag, encoded_fields = _tagged(tagged, length=3)
         if type(record_tag) is not str or type(encoded_fields) is not list:
             raise CheckpointCorruptionError("StateManager checkpoint record is invalid")
+        if record_tag == "macos-descriptor-binding-v1" and len(encoded_fields) == 4:
+            record_tag = "macos-descriptor-binding-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "macos-descriptor-table-v1" and len(encoded_fields) == 3:
+            record_tag = "macos-descriptor-table-v2"
+            encoded_fields = [*encoded_fields, None]
         if record_tag == "active-session" and len(encoded_fields) == 34:
             record_tag = "active-session-v2"
             encoded_fields = [*encoded_fields, None]

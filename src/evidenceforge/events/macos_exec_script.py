@@ -3,6 +3,7 @@
 
 """Explicit shebang-execution linkage, separate from an interpreter's arguments."""
 
+import shlex
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -66,3 +67,53 @@ def validate_macos_exec_script(
     value.__post_init__()
     if value.hostname is not None and value.hostname.casefold() != hostname.casefold():
         raise ValueError("Mac script execution belongs to another host")
+
+
+@dataclass(frozen=True, slots=True)
+class MacosShebangExecutionIntent:
+    """Explicit kernel-script execution intent, distinct from ``shell file``.
+
+    The modeled file owner supplies the shebang interpreter and its literal
+    optional arguments. Neither file bytes, suffixes nor display commands are
+    inspected. The ordinary process action owns retention and publication.
+    """
+
+    script: MacosExecScript
+    interpreter: str
+    interpreter_arguments: tuple[str, ...] = ()
+    script_arguments: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.script) is not MacosExecScript
+            or self.script.artifact_version_id is None
+            or type(self.interpreter) is not str
+            or not self.interpreter.startswith("/")
+            or "\0" in self.interpreter
+            or type(self.interpreter_arguments) is not tuple
+            or type(self.script_arguments) is not tuple
+            or any(
+                type(item) is not str or "\0" in item
+                for item in (*self.interpreter_arguments, *self.script_arguments)
+            )
+        ):
+            raise ValueError(
+                "Shebang intent requires exact retained script and literal interpreter argv"
+            )
+        self.script.__post_init__()
+
+    @property
+    def arguments(self) -> tuple[str, ...]:
+        """Construct kernel-owned interpreter argv from this explicit intent."""
+        self.__post_init__()
+        return (
+            self.interpreter,
+            *self.interpreter_arguments,
+            self.script.native_path,
+            *self.script_arguments,
+        )
+
+    @property
+    def command_line(self) -> str:
+        """Display the exact produced argv without parsing a shell command."""
+        return shlex.join(self.arguments)

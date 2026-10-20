@@ -6,7 +6,7 @@ Inspect the matching packaged YAML and existing overlay before editing; validati
 
 - [Linux activity](#linux-activity)
 - [Mac native logging profile](#mac-native-logging-profile)
-- [Mac installed-file provisioning](#modeled-mac-installed-file-provisioning)
+- [Mac filesystem and execution metadata](#modeled-mac-filesystem-and-execution-metadata)
 - [SMB client and server profiles](#smb-client-and-server-profiles)
 - [Authentication and endpoint noise](#authentication-and-endpoint-noise)
 - [Volume and distribution](#volume-and-distribution)
@@ -19,9 +19,7 @@ Inspect the matching packaged YAML and existing overlay before editing; validati
 
 Deep-merges command roles and models: `common`, persona/shared roles, `storyline_friction`, `workflow_model`, `workflows`, `typo_model`, `package_manager_model`, `keyboard_adjacency`, and `params`.
 
-Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names.
-
-Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered.
+Runtime maps personas to reusable roles, including developer → `dba`/`webadmin` and security analyst → `security`. Do not duplicate pools under persona names. Keep baseline commands inert and legitimate; use packaged placeholders and OS-native paths. Probabilities must be 0-1 and count/range bounds ordered.
 
 ### `systemd_schedules.yaml`
 
@@ -143,8 +141,10 @@ Treat cadence, rate, role, missingness, or safety changes as semantic. Run `efor
 
 `macos_unified_log_profiles.yaml` deep-merges through existing activity overlays and immutable effective configuration. The packaged `macos26-workspace-entry-v1` profile contains the modeled Mach timebase and one static loginwindow callsite/message. Offsets and timing are synthetic profile choices; do not calibrate them from personal logs. Existing timing relationships `macos.workspace_request` and `source.macos_unified_log` own canonical gap and source delay. Collection uses the existing source family and observation policies. No Mac collector flag or top-level scenario block is required. Profile changes do not enable additional native event families.
 
-## Modeled Mac installed-file provisioning
+## Modeled Mac filesystem and execution metadata
 
-`macos_installed_files.yaml` uses the existing deep-mapping activity overlay and frozen effective-config snapshot. Its `modeled-macos-installed-v1` policy produces metadata only when native preparation requests the engine's installed-file owner. Logical sizes follow a bounded log-normal model and remain equal for identical binary content across hosts and workload seeds. Each host owns a separate modeled volume and distinct single-link file objects. Machine files use the resolved local root account; user files require their exact local owner. Unknown accounts remain unavailable.
+`macos_installed_files.yaml` uses the existing deep-mapping activity overlay and frozen effective-config snapshot. Its `modeled-macos-installed-v1` policy produces metadata when native preparation or a supported Mac launch requests the engine's installed-file owner. Logical sizes follow a bounded log-normal model and remain equal for identical binary content across hosts and workload seeds. Each host owns a separate modeled volume and distinct single-link file objects. Machine files use the resolved local root account; user files require their exact local owner. Unknown accounts remain unavailable.
 
-The profile explicitly selects dense block allocation, permissions, flags, generation and pre-window timestamp ranges. These are synthetic model choices, not discovered file sizes, installed inventories, APFS compression or native calibration. No generator-host file is inspected. Preserve range ordering, a size median within the logical-size range, positive sigma and allocation units divisible by 512. Older frozen inputs without this packaged profile keep native stat unavailable instead of reading newer defaults. Existing-source generation allocates no stat objects unless this owner is requested. Provisioning does not admit an ES source, terminal device or additional event family.
+The profile explicitly selects dense block allocation, permissions, flags, generation and pre-window timestamp ranges. These are synthetic model choices, not discovered file sizes, installed inventories, APFS compression or native calibration. No generator-host file is inspected. Preserve range ordering, a size median within the logical-size range, positive sigma and allocation units divisible by 512. Older frozen inputs without this packaged profile keep native stat unavailable instead of reading newer defaults. Other OS paths do not request these Mac owners. Provisioning alone admits no native source or event family.
+
+`macos_execution_metadata.yaml` deep-merges the explicit `modeled-macos-execution-v1` launch policy. `terminal` bounds host-local devfs slots, device IDs, inode allocation, permissions and block size; exact session credentials own UID/GID. Root jobs/boot select absent terminals, local login allocates a character device, and fork/exec reuse session ownership. `user_environment`/`root_environment` are ordered assignments with only `{username}`, `{home}` and `{shell}` placeholders. Directory inode/size/allocation/age fields provision known roots and resolved homes on the installed volume; arbitrary paths stay unknown. `cpu_subtype` explicitly selects a modeled native arm64 slice; it is not inferred from host architecture. `first_pipe_id` starts the transactional host-local pipe namespace. Complete descriptor extents belong to canonical descriptor operations; legacy unknown tables cannot become empty observations. Slot/pipe/inode consumption rolls back on failure and survives checkpoint recovery. These are synthetic model choices, not APFS measurements. Older frozen inputs without this policy remain unknown; no host filesystem or environment is read. This policy does not enable ES output or close native reference gates.

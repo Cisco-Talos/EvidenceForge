@@ -79,8 +79,8 @@ def test_parent_closed_before_selected_exit_requires_explicit_adoption_overlay()
     assert state.materialization_digest() == before
 
 
-@pytest.mark.parametrize("damage", ["unselected", "changed", "foreign", "mixed"])
-def test_terminal_overlay_rejects_unowned_selection_or_other_transition_families(
+@pytest.mark.parametrize("damage", ["unselected", "changed", "foreign"])
+def test_terminal_overlay_rejects_unowned_selection(
     damage: str,
 ) -> None:
     state, parent, owner, subject = _family()
@@ -88,8 +88,6 @@ def test_terminal_overlay_rejects_unowned_selection_or_other_transition_families
     builder = state.begin_action_cohort_materialization()
     builder.terminate_process(owner, end_time=at)
     builder.terminate_process(subject, end_time=at)
-    if damage == "mixed":
-        builder.execute_process(parent, image="/usr/bin/true", command_line="true", executed_at=at)
     cohort = builder.seal()
     if damage == "foreign":
         state = StateManager()

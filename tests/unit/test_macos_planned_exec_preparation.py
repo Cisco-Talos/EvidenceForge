@@ -125,7 +125,7 @@ def test_successful_preparation_cannot_authorize_replacement_after_live_state_ch
     assert prepared.model_dump_json() == encoded
 
 
-def test_planned_exec_rejects_mixed_births_and_retains_explicit_absence() -> None:
+def test_planned_exec_accepts_independent_births_and_retains_explicit_absence() -> None:
     state, _, actor, _ = _setup()
     builder = state.begin_action_cohort_materialization()
     builder.execute_process(
@@ -144,8 +144,11 @@ def test_planned_exec_rejects_mixed_births_and_retains_explicit_absence() -> Non
         os_category="macos",
         start_time=actor.execution_started_at + timedelta(seconds=1),
     )
-    with pytest.raises(StateError, match="standalone"):
-        state.observe_planned_execution_relationships(builder.seal())
+    cohort = builder.seal()
+    before = state.materialization_digest()
+    observed = state.observe_planned_execution_relationships(cohort)
+    assert observed.parent.process == cohort.process_executions[0].after
+    assert state.materialization_digest() == before
     from tests.unit.test_macos_process_relationship_projection import _family
 
     bare_state, _, owner, _ = _family()

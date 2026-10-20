@@ -30,6 +30,10 @@ from evidenceforge.generation.indexes import (
     GroupedTemporalIndex,
     TemporalAllocationIndex,
 )
+from evidenceforge.generation.macos_terminal_devices import (
+    validate_native_pipe_state,
+    validate_terminal_state,
+)
 from evidenceforge.generation.state_manager import (
     _MAX_RETAINED_PROCESS_DESCRIPTOR_TABLES,
     _MAX_RETAINED_PROCESS_DIRECTORIES,
@@ -43,9 +47,15 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "7"
+_SCHEMA_VERSION = "8"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
+_TERMINAL_FIELDS = {
+    "_macos_terminal_sessions",
+    "_macos_terminal_slots",
+    "_macos_terminal_ordinals",
+    "_macos_pipe_counters",
+}
 
 _INCREMENTAL_FIELDS = frozenset(
     {
@@ -345,6 +355,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     if type(document) is not dict or document.get("schema_version") not in {
         _SCHEMA_VERSION,
         _LEGACY_VERSION,
+        "7",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -361,10 +372,13 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
     fresh = StateManager()
     simple = document["simple"]
     legacy = document["schema_version"] == _LEGACY_VERSION
+    missing = _TERMINAL_FIELDS if document["schema_version"] in {"6", "7"} else set()
     if legacy:
-        if type(simple) is not dict or set(simple) != set(_SIMPLE_FIELDS) - _JOB_CONTROL_FIELDS:
+        missing = missing | _JOB_CONTROL_FIELDS
+    if missing:
+        if type(simple) is not dict or set(simple) != set(_SIMPLE_FIELDS) - missing:
             raise CheckpointCorruptionError("Legacy StateManager fields changed")
-        simple = {**simple, **{name: encode_state_value({}) for name in _JOB_CONTROL_FIELDS}}
+        simple = {**simple, **{name: encode_state_value({}) for name in missing}}
     if type(simple) is not dict or set(simple) != set(_SIMPLE_FIELDS):
         raise CheckpointCorruptionError("StateManager checkpoint simple fields changed")
     for name in _SIMPLE_FIELDS:
@@ -462,6 +476,35 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         )
     except (ValueError, TypeError) as error:
         raise CheckpointCorruptionError("StateManager POSIX membership state is invalid") from error
+    try:
+        validate_terminal_state(
+            fresh._macos_terminal_sessions,
+            fresh._macos_terminal_slots,
+            fresh._macos_terminal_ordinals,
+            fresh._posix_job_control_reservations,
+            fresh._pid_os,
+        )
+        validate_native_pipe_state(
+            fresh._macos_pipe_counters,
+            tuple(
+                chain(
+                    fresh._processes_by_object_id.values(),
+                    fresh._ended_processes_by_object_id.values(),
+                )
+            ),
+            fresh._pid_os,
+        )
+        if document["schema_version"] in {"6", "7"} and any(
+            table.native_last_fd is not None
+            or any(binding.native_pipe_id is not None for binding in table.bindings)
+            for process in chain(
+                fresh._processes_by_object_id.values(), fresh._ended_processes_by_object_id.values()
+            )
+            for table in process.descriptor_history
+        ):
+            raise ValueError("Older state head cannot claim native descriptor production")
+    except (ValueError, TypeError) as error:
+        raise CheckpointCorruptionError("StateManager Mac terminal state is invalid") from error
     for host, value in fresh._macos_audit_session_counters.items():
         if (
             type(host) is not str
@@ -822,8 +865,8 @@ class StateManagerParticipant:
     checkpoint_owner = "state-manager"
     checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = (_LEGACY_VERSION,)
-    checkpoint_compatible_segment_versions = (_LEGACY_VERSION,)
+    checkpoint_compatible_head_versions = (_LEGACY_VERSION, "7")
+    checkpoint_compatible_segment_versions = (_LEGACY_VERSION, "7")
     checkpoint_state_fields = STATE_MANAGER_CHECKPOINT_FIELDS
 
     def __init__(self, manager: StateManager) -> None:
@@ -915,7 +958,7 @@ class StateManagerParticipant:
             document = loads(payload)
             if (
                 type(document) is not dict
-                or document.get("schema_version") not in {_SCHEMA_VERSION, _LEGACY_VERSION}
+                or document.get("schema_version") not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

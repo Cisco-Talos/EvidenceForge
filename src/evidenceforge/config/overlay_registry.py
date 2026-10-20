@@ -58,6 +58,12 @@ def _family(
 
 _FAMILIES = (
     _family(
+        "activity/macos_execution_metadata.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Synthetic Mac launch environment, working directories, image slices and terminal devices.",
+    ),
+    _family(
         "activity/macos_installed_files.yaml",
         "deep-mapping",
         "config-host-activity.md",

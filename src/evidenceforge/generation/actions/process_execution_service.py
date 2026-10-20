@@ -967,6 +967,29 @@ class ProcessExecutionService:
                 != request.exec_script
             ):
                 raise StateError("Mac script launch requires its exact prepared retention")
+        provider = self.identity.macos_execution_metadata
+        metadata = None
+        terminal = None
+        standard_io = None
+        if provider is not None and _get_os_category(request.system.os) == "macos":
+            if request.macos_launch_kind is not None:
+                metadata = provider.launch(
+                    request.system.hostname,
+                    launch.actor.username,
+                    at=ensure_utc(launch.time),
+                    requested_path=request.process_name,
+                    binary=binary,
+                    kind=request.macos_launch_kind,
+                    script=request.exec_script,
+                )
+            terminal = (
+                provider.profile.terminal
+                if request.macos_terminal == "allocate"
+                else "absent"
+                if request.macos_terminal == "absent"
+                else None
+            )
+            standard_io = request.macos_standard_io
         action_cohort_builder = (
             self.state_manager.begin_action_cohort_materialization()
             if admission.uses_action_cohort
@@ -994,7 +1017,12 @@ class ProcessExecutionService:
                 executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
                 arguments=request.arguments,
-                exec_script=request.exec_script,
+                exec_script=metadata.script if metadata is not None else request.exec_script,
+                environment=metadata.environment if metadata is not None else None,
+                execution_directory=metadata.directory if metadata is not None else None,
+                exec_image=metadata.image if metadata is not None else None,
+                macos_terminal=terminal,
+                macos_standard_io=standard_io,
             )
             endpoint_activity_frontier = max(
                 ensure_utc(launch.time),
@@ -1030,7 +1058,12 @@ class ProcessExecutionService:
                 executable_version=executable_version,
                 new_posix_session=request.new_posix_session,
                 arguments=request.arguments,
-                exec_script=request.exec_script,
+                exec_script=metadata.script if metadata is not None else request.exec_script,
+                environment=metadata.environment if metadata is not None else None,
+                execution_directory=metadata.directory if metadata is not None else None,
+                exec_image=metadata.image if metadata is not None else None,
+                macos_terminal=terminal,
+                macos_standard_io=standard_io,
             )
             action_cohort_state_plan = None
         process_identity = process_plan.identity

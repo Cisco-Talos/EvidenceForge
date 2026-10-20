@@ -18,7 +18,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from evidenceforge.events.content_identity import canonical_native_path
+from evidenceforge.events.content_identity import BinaryReleaseIdentity, canonical_native_path
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_file import MacosFileMetadata, MacosFileTime
 from evidenceforge.events.macos_installed_file import MacosInstalledFileObservation
@@ -110,7 +110,7 @@ class MacosInstalledFilesystem:
     the existing artifact owner, not this immutable installed-file profile.
     """
 
-    __slots__ = ("_deployments", "_files")
+    __slots__ = ("_deployments", "_files", "_volumes", "_next_inodes")
 
     def __init__(
         self,
@@ -203,6 +203,30 @@ class MacosInstalledFilesystem:
             next_inodes[host, volume_id] = inode + 1
         self._deployments = deployments
         self._files = MappingProxyType(records)
+        self._volumes = MappingProxyType(volume_index)
+        self._next_inodes = MappingProxyType(next_inodes)
+
+    def directory_volume(self, hostname: str, first_inode: int) -> MacosInstalledVolumeSpec:
+        """Share the exact provisioned volume while reserving a distinct directory range."""
+        found = tuple(
+            value for (host, _), value in self._volumes.items() if host == hostname.casefold()
+        )
+        if len(found) != 1 or type(first_inode) is not int:
+            raise StateError("Mac directory provisioning requires one exact host volume")
+        volume = found[0]
+        if first_inode < self._next_inodes[hostname.casefold(), volume.volume_id]:
+            raise StateError("Mac directory inode range overlaps installed files")
+        return MacosInstalledVolumeSpec.model_validate_json(volume.model_dump_json())
+
+    def provisioned_hosts(self) -> tuple[str, ...]:
+        """Return the canonical host names with an explicitly provisioned volume."""
+        return tuple(sorted({host for host, _ in self._volumes}))
+
+    def deployed_binary(
+        self, hostname: str, path: str, principal: str
+    ) -> BinaryReleaseIdentity | None:
+        """Resolve a binary through this filesystem's exact immutable deployment owner."""
+        return self._deployments.resolve_binary(hostname, path, "macos", principal=principal)
 
     def observe(
         self,

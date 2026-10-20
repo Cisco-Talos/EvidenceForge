@@ -65,6 +65,8 @@ class MacosExecDescriptorObservation:
         ):
             raise ValueError("Exec FD observation requires an exact bounded table and native field")
         self.table.__post_init__()
+        if self.table.native_last_fd is not None and self.last_fd != self.table.native_last_fd:
+            raise ValueError("Native descriptor extent contradicts its canonical owner")
         for item in self.descriptors:
             item.__post_init__()
         if tuple((item.fd, item.object_id) for item in self.descriptors) != tuple(
@@ -73,6 +75,8 @@ class MacosExecDescriptorObservation:
             raise ValueError("Exec FD observation must cover every canonical binding exactly once")
         object_tags: dict[str, tuple[int, int | None]] = {}
         for binding, native in zip(self.table.bindings, self.descriptors, strict=True):
+            if binding.native_pipe_id is not None and binding.native_pipe_id != native.pipe_id:
+                raise ValueError("Native pipe identity contradicts its canonical open object")
             if binding.kind != ("pipe" if native.fdtype == 6 else "file"):
                 raise ValueError("Native FD tag contradicts its canonical open-object kind")
             tag = (native.fdtype, native.pipe_id)
@@ -80,3 +84,31 @@ class MacosExecDescriptorObservation:
                 raise ValueError(
                     "Shared open object has conflicting native descriptor observations"
                 )
+
+    @classmethod
+    def from_modeled_table(cls, table: MacosDescriptorTable) -> "MacosExecDescriptorObservation":
+        """Produce native facts from a complete canonical owner, never the wire row.
+
+        Legacy tables lack a native extent and pipe IDs. They remain unknown,
+        rather than being reclassified as complete native observations.
+        """
+        if type(table) is not MacosDescriptorTable or table.native_last_fd is None:
+            raise ValueError("Native descriptor production requires a known complete table extent")
+        table.__post_init__()
+        native = []
+        for binding in table.bindings:
+            if binding.kind == "socket" or (
+                binding.kind == "pipe" and binding.native_pipe_id is None
+            ):
+                raise ValueError(
+                    "Native descriptor production requires supported known open objects"
+                )
+            native.append(
+                MacosNativeDescriptor(
+                    binding.fd,
+                    binding.object_id,
+                    6 if binding.kind == "pipe" else 1,
+                    binding.native_pipe_id,
+                )
+            )
+        return cls(table, tuple(native), table.native_last_fd)

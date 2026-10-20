@@ -21,6 +21,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from evidenceforge.events.es_membership import ESClientMembershipCoverage
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.models.exceptions import StateError
 
@@ -448,6 +449,7 @@ class ESCollectorRegistry:
     def __init__(self) -> None:
         self._lock = RLock()
         self._states: dict[str, ESCollectorState] = {}
+        self._membership_coverage: dict[str, ESClientMembershipCoverage] = {}
         self._pending: dict[str, _Pending | _PendingBatch] = {}
         self._claimed: dict[str, _DeliveryClaim | _BatchClaim] = {}
         self._closing: dict[str, _ClosureClaim] = {}
@@ -466,6 +468,11 @@ class ESCollectorRegistry:
             raise StateError("New ES client connection cannot contain delivered history")
         with self._lock:
             previous = self._states.get(state.source_instance)
+            coverage = self._membership_coverage.get(state.hostname)
+            if coverage is not None:
+                if state.process is None:
+                    raise StateError("Complete ES membership requires exact connection owners")
+                self._validate_membership_transition(state.hostname, state.opened_at, opening=True)
             if (
                 state.source_instance in self._pending
                 or state.source_instance in self._claimed
@@ -481,7 +488,100 @@ class ESCollectorRegistry:
                 or state.opened_at <= (previous.closed_at or previous.last_delivery_at)
             ):
                 raise StateError("ES client restart requires the next same-host connection")
+            # Overwriting an epoch discards its attachment interval. Retire that
+            # history from negative knowledge before exposing the replacement.
+            if coverage is not None and previous is not None:
+                lower = max(coverage.known_from, state.opened_at)
+                if lower >= coverage.known_until:
+                    del self._membership_coverage[state.hostname]
+                else:
+                    self._membership_coverage[state.hostname] = coverage.model_copy(
+                        update={"known_from": lower}
+                    )
             self._states[state.source_instance] = state
+
+    def declare_complete_membership(self, coverage: ESClientMembershipCoverage) -> None:
+        """Declare one explicit complete modeled inventory on a quiescent host.
+
+        Legacy unbound clients and discarded epochs prevent completeness. A
+        declaration is immutable; restart may conservatively shorten its range.
+        """
+        if type(coverage) is not ESClientMembershipCoverage:
+            raise StateError("ES membership requires exact completeness bounds")
+        coverage = ESClientMembershipCoverage.model_validate_json(coverage.model_dump_json())
+        with self._lock:
+            if (
+                coverage.hostname in self._membership_coverage
+                or len(self._membership_coverage) >= 128
+            ):
+                raise StateError("ES membership host is already declared or capacity is exhausted")
+            if any(
+                self._states[key].hostname == coverage.hostname
+                for key in self._pending.keys() | self._claimed.keys() | self._closing.keys()
+            ):
+                raise StateError("ES membership declaration requires quiescent publication")
+            self._validate_membership_coverage(coverage, tuple(self._states.values()))
+            if any(
+                state.hostname == coverage.hostname
+                and state.next_delivery > 0
+                and coverage.known_from <= state.last_delivery_at
+                for state in self._states.values()
+            ):
+                raise StateError("ES membership declaration cannot rewrite delivered history")
+            self._membership_coverage[coverage.hostname] = coverage
+
+    @staticmethod
+    def _validate_membership_coverage(
+        coverage: ESClientMembershipCoverage, states: tuple[ESCollectorState, ...]
+    ) -> None:
+        if any(
+            state.hostname == coverage.hostname
+            and (
+                state.process is None
+                or (state.generation > 1 and coverage.known_from < state.opened_at)
+            )
+            for state in states
+        ):
+            raise StateError(
+                "Complete ES membership cannot include unknown owners or discarded epochs"
+            )
+
+    def _validate_membership_transition(
+        self, hostname: str, at: datetime, *, opening: bool = False
+    ) -> None:
+        """Keep complete inventory transitions after already delivered history."""
+        coverage = self._membership_coverage.get(hostname)
+        delivered = tuple(
+            state.last_delivery_at
+            for state in self._states.values()
+            if state.hostname == hostname and state.next_delivery > 0
+        )
+        if coverage is not None and (
+            at < max((coverage.known_from, *delivered))
+            or (opening and delivered and at <= max(delivered))
+        ):
+            raise StateError("Complete ES membership cannot backdate a client transition")
+
+    def known_client_membership(
+        self, hostname: str, process: ESCollectorProcess, observed_at: datetime
+    ) -> bool | None:
+        """Return exact positive/negative knowledge, or unknown outside coverage."""
+        if (
+            type(process) is not ESCollectorProcess
+            or type(observed_at) is not datetime
+            or observed_at.utcoffset() is None
+        ):
+            raise StateError("ES membership lookup requires exact execution and aware time")
+        process = ESCollectorProcess.model_validate_json(process.model_dump_json())
+        if observed_at < process.execution_started_at:
+            raise StateError("ES membership observation cannot precede its execution")
+        with self._lock:
+            if self.known_connection_for_process(hostname, process, observed_at) is not None:
+                return True
+            coverage = self._membership_coverage.get(hostname)
+            if coverage is not None and coverage.known_from <= observed_at < coverage.known_until:
+                return False
+            return None
 
     def open_connections(self) -> tuple[ESCollectorState, ...]:
         """Inspect explicit open profiles without inferring unmodeled client absence."""
@@ -553,6 +653,7 @@ class ESCollectorRegistry:
                 if current.closed_at == closed_at:
                     return
                 raise StateError("Collector closure cannot rewrite its terminal time")
+            self._validate_membership_transition(expected.hostname, closed_at)
             self._states[expected.source_instance] = after
 
     def _closure_proof(self, states: tuple[ESCollectorState, ...]) -> bytes:
@@ -602,6 +703,8 @@ class ESCollectorRegistry:
             handle, before, after, result, self._closure_proof(result), get_ident()
         )
         with self._lock:
+            for request in requests:
+                self._validate_membership_transition(request.before.hostname, request.closed_at)
             if any(
                 self._states.get(key) != previous
                 or key in self._pending
@@ -643,6 +746,8 @@ class ESCollectorRegistry:
         claim = self._closure_claim(handle)
         if claim.applied:
             return
+        for state in claim.after:
+            self._validate_membership_transition(state.hostname, state.closed_at)
         claim.applied = True
         for state in claim.after:
             self._states[state.source_instance] = state
@@ -1005,6 +1110,12 @@ class ESCollectorRegistry:
             else capability.observations[0]
         )
         digest = hashlib.sha256(b"es-native-client-membership-v1\0")
+        coverage = self._membership_coverage.get(observation.hostname)
+        if coverage is not None:
+            encoded = coverage.model_dump_json().encode("utf-8")
+            digest.update(b":complete-inventory:")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
         excluded = {"last_delivery_at", "next_delivery", "next_global_sequence", "event_counters"}
         for key in sorted(self._states):
             state = self._states[key]
@@ -1420,20 +1531,40 @@ class ESCollectorRegistry:
 
     def snapshot(self) -> tuple[ESCollectorState, ...]:
         """Capture quiescent source state in deterministic instance order."""
+        return self.snapshot_with_membership()[0]
+
+    def snapshot_with_membership(
+        self,
+    ) -> tuple[tuple[ESCollectorState, ...], tuple[ESClientMembershipCoverage, ...]]:
+        """Atomically capture client epochs and their bounded completeness claims."""
         with self._lock:
             if self._pending or self._claimed or self._closing:
                 raise StateError("ES checkpoint requires completed or cancelled publication")
-            return tuple(
+            states = tuple(
                 ESCollectorState.model_validate_json(self._states[key].model_dump_json())
                 for key in sorted(self._states)
             )
+            coverage = tuple(
+                ESClientMembershipCoverage.model_validate_json(
+                    self._membership_coverage[key].model_dump_json()
+                )
+                for key in sorted(self._membership_coverage)
+            )
+            return states, coverage
 
-    def restore(self, states: tuple[ESCollectorState, ...]) -> None:
+    def restore(
+        self,
+        states: tuple[ESCollectorState, ...],
+        membership: tuple[ESClientMembershipCoverage, ...] = (),
+    ) -> None:
         """Validate all client state before replacing a fresh registry."""
         if (
             type(states) is not tuple
             or len(states) > 128
             or any(type(state) is not ESCollectorState for state in states)
+            or type(membership) is not tuple
+            or len(membership) > 128
+            or any(type(item) is not ESClientMembershipCoverage for item in membership)
         ):
             raise StateError("ES checkpoint has invalid client state")
         restored = tuple(
@@ -1442,7 +1573,23 @@ class ESCollectorRegistry:
         keys = tuple(state.source_instance for state in restored)
         if keys != tuple(sorted(set(keys))):
             raise StateError("ES checkpoint clients must be unique and sorted")
+        coverage = tuple(
+            ESClientMembershipCoverage.model_validate_json(item.model_dump_json())
+            for item in membership
+        )
+        hosts = tuple(item.hostname for item in coverage)
+        if hosts != tuple(sorted(set(hosts))):
+            raise StateError("ES checkpoint membership hosts must be unique and sorted")
+        for item in coverage:
+            self._validate_membership_coverage(item, restored)
         with self._lock:
-            if self._states or self._pending or self._claimed or self._closing:
+            if (
+                self._states
+                or self._membership_coverage
+                or self._pending
+                or self._claimed
+                or self._closing
+            ):
                 raise StateError("ES checkpoint requires a fresh collector registry")
             self._states = {state.source_instance: state for state in restored}
+            self._membership_coverage = {item.hostname: item for item in coverage}

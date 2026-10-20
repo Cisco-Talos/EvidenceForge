@@ -53,6 +53,7 @@ from evidenceforge.generation.lifecycle_registry import (
     LifecycleServiceProcessClosureRequest,
     LifecycleSubjectClosureControl,
 )
+from evidenceforge.generation.macos_execution_metadata import MacosLaunchMetadata
 from evidenceforge.generation.runtime_content import RuntimeContentIdentityManager
 from evidenceforge.generation.state_manager import (
     ActionCohortMaterializationPlan,
@@ -290,6 +291,7 @@ def macos_system_job_launch_plan(
     started_at: datetime,
     action_id: str,
     executable_version: ProcessExecutableVersion | None = None,
+    metadata: MacosLaunchMetadata | None = None,
 ) -> MacosSystemJobLaunchPlan:
     """Compose an explicit successful root job launch from its loaded definition.
 
@@ -322,6 +324,12 @@ def macos_system_job_launch_plan(
         start_time=started_at,
         new_posix_session=True,
         executable_version=executable_version,
+        environment=metadata.environment if metadata else None,
+        execution_directory=metadata.directory if metadata else None,
+        exec_image=metadata.image if metadata else None,
+        exec_script=metadata.script if metadata else None,
+        macos_terminal="absent" if metadata else None,
+        macos_standard_io="null" if metadata else None,
     )
     activation = macos_system_job_activation_plan(
         lifecycle_registry=lifecycle_registry,

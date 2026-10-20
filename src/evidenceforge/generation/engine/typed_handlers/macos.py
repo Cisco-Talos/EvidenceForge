@@ -79,6 +79,7 @@ def handle_launch_item(
         dispatcher=dispatcher,
         deployments=dispatcher.deployment_registry,
         content=RuntimeContentIdentityManager(dispatcher.local_artifact_registry),
+        metadata_provider=generator.macos_execution_metadata,
     )
     completed = bundle.execute(request)
     process = completed.process

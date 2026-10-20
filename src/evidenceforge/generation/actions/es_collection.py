@@ -10,6 +10,7 @@ claims an atomic native sink. Unknown legacy owners cannot authorize delivery.
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Literal
 
 from evidenceforge.events.es_collector import (
     ESCollectorClosure,
@@ -25,8 +26,10 @@ from evidenceforge.events.es_collector import (
     PreparedESDeliveryBatchCommit,
     PreparedESDeliveryCommit,
 )
+from evidenceforge.events.es_membership import ESClientMembershipCoverage
 from evidenceforge.events.identity import ProcessIdentity
 from evidenceforge.events.macos_process_observation import MacosProcessCollectionObservation
+from evidenceforge.events.macos_terminal import MacosTerminalObservation
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
@@ -76,6 +79,15 @@ class ESCollectionActionOwner:
             )
             self.collectors.open(bound)
             return bound
+
+    def declare_complete_membership(self, coverage: ESClientMembershipCoverage) -> None:
+        """Declare explicit inventory completeness for an initialized modeled Mac host."""
+        if type(coverage) is not ESClientMembershipCoverage:
+            raise StateError("ES inventory declaration requires exact completeness bounds")
+        with self.state._lock:
+            if self.state._pid_os.get(coverage.hostname) != "macos":
+                raise StateError("ES inventory declaration requires an initialized Mac host")
+            self.collectors.declare_complete_membership(coverage)
 
     def close(
         self,
@@ -184,20 +196,89 @@ class ESCollectionActionOwner:
                 yield prepared
 
     def validate_client_observation(self, observation: MacosProcessCollectionObservation) -> None:
-        """Reject negative client claims contradicted by an exact retained attachment.
+        """Reject supplied facts contradicted by known modeled membership.
 
-        Missing registry membership does not establish a negative fact: external
-        clients may be explicitly modeled without a delivery profile. Canonical
-        process authentication remains with the calling live/planned owner.
+        Outside declared completeness, missing registry membership remains
+        unknown and external clients may be modeled without a delivery profile.
+        Canonical process authentication remains with the calling live/planned
+        owner. Within completeness every client requires an exact profile.
         """
         if type(observation) is not MacosProcessCollectionObservation:
             raise StateError("ES client observation requires exact collection facts")
         observation.__post_init__()
-        known = self.collectors.known_connection_for_process(
+        known = self.collectors.known_client_membership(
             observation.process.hostname, _process(observation.process), observation.observed_at
         )
-        if known is not None and not observation.is_es_client:
-            raise StateError("ES client observation contradicts an exact active attachment")
+        if known is not None and known != observation.is_es_client:
+            raise StateError("ES client observation contradicts known modeled membership")
+        if observation.process.job_control is not None:
+            terminal = self.state.known_macos_terminal(
+                observation.process.job_control.session, observation.observed_at
+            )
+            if terminal is not None and terminal != observation.terminal:
+                raise StateError("ES terminal observation contradicts its canonical session device")
+
+    def validate_observing_cohort(
+        self, cohort: ActionCohortMaterializationPlan, collector: ProcessIdentity
+    ) -> None:
+        """Keep mixed preparation from silently changing its observing execution.
+
+        Collector self-observation needs a separate lifecycle/publication policy.
+        Conservatively reject its own close, exec or identity transition anywhere
+        in the cohort, including a future close after the selected source row.
+        """
+        if (
+            any(
+                item.identity.object_id == collector.object_id
+                for item in cohort.process_terminations
+            )
+            or any(
+                item.target.object_id == collector.object_id for item in cohort.process_executions
+            )
+            or any(
+                self.state._action_process_identity(item.target).object_id == collector.object_id
+                and any(
+                    value is not None
+                    for value in (
+                        item.audit_binding,
+                        item.privilege_drop,
+                        item.service_drop,
+                        item.job_control_change,
+                        item.parentage_change,
+                    )
+                )
+                for item in cohort.process_activity_patches
+            )
+        ):
+            raise StateError("Native preparation cannot transition the same observing collector")
+
+    def observe_process_collection(
+        self,
+        process: ProcessIdentity,
+        *,
+        observed_at: datetime,
+        terminal: Literal["absent"] | MacosTerminalObservation | None = None,
+    ) -> MacosProcessCollectionObservation:
+        """Produce client facts for an exact live execution and known terminal facts.
+
+        A negative result requires explicit inventory completeness at this time.
+        Terminal ownership remains with its separate session/device producer.
+        Planned or historical State authentication remains with native adapters.
+        """
+        with self.state._lock:
+            execution = self._live_process(process, observed_at)
+            known = self.collectors.known_client_membership(
+                process.hostname, execution, observed_at
+            )
+            if known is None:
+                raise StateError("ES process collection requires known client membership")
+            if terminal is None and process.job_control is not None:
+                terminal = self.state.known_macos_terminal(process.job_control.session, observed_at)
+            if terminal is None:
+                raise StateError("ES process collection requires known session terminal facts")
+            observation = MacosProcessCollectionObservation(process, observed_at, known, terminal)
+            self.validate_client_observation(observation)
+            return observation
 
     def prepare(
         self,

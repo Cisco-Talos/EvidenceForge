@@ -15,7 +15,6 @@ from evidenceforge.generation.actions.macos_launch_item import (
 )
 from evidenceforge.generation.checkpoints.state_manager_head import _capture_head, _restore_head
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.exceptions import StateError
 from tests.unit.test_macos_es_exit_preparation import _fixture, _prepare
 from tests.unit.test_macos_launch_activation import _activation, _process, _setup
 from tests.unit.test_macos_process_relationship_projection import _family
@@ -142,7 +141,7 @@ def test_native_exit_freezes_with_surviving_fork_and_retains_exact_retry_bytes(
     assert fixture.owner.collectors.retained_native_projection(fixture.delivery) == frozen
 
 
-def test_terminal_preparation_still_rejects_unrelated_activity_patch() -> None:
+def test_terminal_preparation_accepts_unrelated_activity_bookkeeping() -> None:
     state, _, owner, subject = _family()
     at = subject.started_at + timedelta(seconds=3)
     builder = state.begin_action_cohort_materialization()
@@ -150,8 +149,8 @@ def test_terminal_preparation_still_rejects_unrelated_activity_patch() -> None:
     builder.terminate_process(subject, end_time=at)
     cohort = builder.seal()
     before = state.materialization_digest()
-    with pytest.raises(StateError, match="only child adoptions"):
-        state.observe_planned_termination_relationships(cohort, process=subject)
+    observed = state.observe_planned_termination_relationships(cohort, process=subject)
+    assert observed == state.observe_process_relationships(subject, observed_at=at)
     assert state.materialization_digest() == before
 
 
