@@ -30,3 +30,23 @@ directory_size_bytes: 128
 directory_allocated_blocks: 0
 directory_age_seconds: 31536000
 first_pipe_id: 1000000 # host-local monotonic synthetic native pipe-object namespace
+# Explicit modeled successful validation, not inferred trust or measured flags.
+# CS_VALID | CS_SIGNED | CS_PLATFORM_BINARY; no unmodeled entitlements/debug state.
+# Values: Apple XNU osfmk/kern/cs_blobs.h. Only enumerated native artifacts qualify.
+code_validation:
+  - product_id: apple-macos
+    artifact_names:
+      - Terminal
+      - bash
+      - launchd
+      - login
+      - logind
+      - loginwindow
+      - mds
+      - smd
+      - syspolicyd
+      - tccd
+      - zsh
+    codesigning_flags: 603979777 # 0x24000001
+    is_platform_binary: true
+    validation_category: 1 # explicit modeled platform validation outcome

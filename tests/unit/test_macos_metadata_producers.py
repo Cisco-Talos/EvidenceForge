@@ -662,3 +662,109 @@ def test_setsid_detaches_controlling_terminal_without_closing_inherited_streams(
     old_table = state.process_descriptors_at(child.identity, event_time=at)
     new_table = state.process_descriptors_at(after, event_time=at + timedelta(seconds=1))
     assert new_table.bindings == old_table.bindings
+
+
+def test_validation_policy_is_explicit_and_does_not_create_static_signer_facts(
+    modeled: _Fixture,
+) -> None:
+    from evidenceforge.events.macos_runtime import MacosImageSecurity
+
+    binary = modeled.producer._filesystem.deployed_binary("MAC-01", "/bin/zsh", "alex")
+    expected = MacosImageSecurity(0x24000001, True, 1)
+    assert modeled.producer.image_security(binary) == expected
+    assert binary.code_signature is None
+    metadata = modeled.producer.deployed_launch(
+        "MAC-01", "alex", at=modeled.start, path="/bin/zsh", kind="user"
+    )
+    assert metadata.image_security == expected
+    assert modeled.producer.image_security(None) is None
+    unlisted = replace(binary, key=replace(binary.key, artifact_name="unlisted"))
+    assert modeled.producer.image_security(unlisted) is None
+    assert modeled.producer.image_security(replace(binary, mach_o_image=None)) is None
+    old = modeled.producer.profile.model_dump()
+    old.pop("code_validation")
+    from evidenceforge.config.schemas import MacosExecutionMetadataProfile
+
+    legacy = MacosExecutionMetadataProducer(
+        modeled.producer._filesystem,
+        IdentityDirectory.from_scenario(_scenario()),
+        MacosExecutionMetadataProfile.model_validate(old),
+        window_start=modeled.start,
+        window_end=modeled.end,
+    )
+    assert legacy.image_security(binary) is None
+
+
+def test_runtime_validation_decision_is_bound_to_exact_content_and_exec(modeled: _Fixture) -> None:
+    from evidenceforge.events.content_identity import LocalArtifactBinaryIdentity
+    from evidenceforge.events.macos_runtime import MacosCodeValidationDecision, MacosImageSecurity
+
+    installed = modeled.producer._filesystem.deployed_binary("MAC-01", "/bin/zsh", "alex")
+    runtime = LocalArtifactBinaryIdentity(
+        artifact_version_id="invented-validation-artifact-v1",
+        content_id=installed.content_id,
+        digests=installed.digests,
+        platform="macos",
+        architecture="arm64",
+        artifact_name="invented-worker",
+        mach_o_image=installed.mach_o_image,
+    )
+    decision = MacosCodeValidationDecision(runtime.content_id, MacosImageSecurity(3, False, 7))
+    assert modeled.producer.image_security(runtime) is None
+    assert modeled.producer.image_security(runtime, validation=decision) == decision.security
+    with pytest.raises(StateError, match="exact selected"):
+        modeled.producer.image_security(runtime, validation=replace(decision, content_id="other"))
+    birth = _terminal(modeled)
+    modeled.state.materialize_process(birth)
+    builder = modeled.state.begin_action_cohort_materialization()
+    after = modeled.producer.plan_exec(
+        builder,
+        modeled.state,
+        birth.identity,
+        at=modeled.start + timedelta(seconds=2),
+        image="/tmp/invented-worker",
+        requested_path="/tmp/invented-worker",
+        arguments=("/tmp/invented-worker",),
+        binary=runtime,
+        validation=decision,
+    ).process
+    plan = builder.seal()
+    before = modeled.state.materialization_digest()
+    with modeled.state.prepared_action_cohort_materialization(plan) as prepared:
+        prepared.certify_composite_commit(prepared.expected_result)
+        prepared.apply_provisional()
+        assert (
+            modeled.state.get_process_identity(after.hostname, after.pid).image_security
+            == decision.security
+        )
+    assert modeled.state.materialization_digest() == before
+    modeled.state.materialize_action_cohort(plan)
+    restored = StateManager()
+    _restore_head(restored, _capture_head(modeled.state))
+    assert (
+        restored.get_process_identity(after.hostname, after.pid).image_security == decision.security
+    )
+    builder = restored.begin_action_cohort_materialization()
+    child = builder.fork_process(after, forked_at=modeled.start + timedelta(seconds=3))
+    restored.materialize_action_cohort(builder.seal())
+    assert child.identity.image_security == decision.security
+
+
+@pytest.mark.parametrize("damage", ["platform", "category", "invalid", "duplicates"])
+def test_execution_validation_policy_rejects_contradictions(modeled: _Fixture, damage: str) -> None:
+    from pydantic import ValidationError
+
+    from evidenceforge.config.schemas import MacosExecutionMetadataProfile
+
+    raw = modeled.producer.profile.model_dump()
+    rule = raw["code_validation"][0]
+    if damage == "platform":
+        rule["is_platform_binary"] = False
+    elif damage == "category":
+        rule["validation_category"] = 6
+    elif damage == "invalid":
+        rule["codesigning_flags"] &= ~1
+    else:
+        raw["code_validation"] = (*raw["code_validation"], dict(rule))
+    with pytest.raises(ValidationError, match="coherent|disjoint"):
+        MacosExecutionMetadataProfile.model_validate(raw)

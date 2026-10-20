@@ -327,6 +327,7 @@ def macos_system_job_launch_plan(
         environment=metadata.environment if metadata else None,
         execution_directory=metadata.directory if metadata else None,
         exec_image=metadata.image if metadata else None,
+        image_security=metadata.image_security if metadata is not None else None,
         exec_script=metadata.script if metadata else None,
         macos_terminal="absent" if metadata else None,
         macos_standard_io="null" if metadata else None,

@@ -20,6 +20,7 @@ from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileTime
+from evidenceforge.events.macos_runtime import MacosCodeValidationDecision, MacosImageSecurity
 from evidenceforge.events.process_executable import ProcessExecutableVersion
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
@@ -40,6 +41,7 @@ class MacosLaunchMetadata:
     directory: MacosExecutionDirectory
     image: MacosExecImage | None
     script: MacosExecScript | None
+    image_security: MacosImageSecurity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +157,7 @@ class MacosExecutionMetadataProducer:
         binary: BinaryReleaseIdentity | LocalArtifactBinaryIdentity | None,
         kind: Literal["user", "system"],
         script: MacosExecScript | None = None,
+        validation: MacosCodeValidationDecision | None = None,
     ) -> MacosLaunchMetadata:
         """Produce an explicitly clean direct-launch environment and working directory.
 
@@ -187,7 +190,54 @@ class MacosExecutionMetadataProducer:
             image = MacosExecImage(self.profile.cpu_subtype, requested_path)
             if script is None:
                 script = MacosExecScript()
-        return MacosLaunchMetadata(environment, directory, image, script)
+        return MacosLaunchMetadata(
+            environment,
+            directory,
+            image,
+            script,
+            self.image_security(binary, validation=validation),
+        )
+
+    def image_security(
+        self,
+        binary: BinaryReleaseIdentity | LocalArtifactBinaryIdentity | None,
+        *,
+        validation: MacosCodeValidationDecision | None = None,
+    ) -> MacosImageSecurity | None:
+        """Execute the frozen modeled validation policy for an exact installed image.
+
+        The policy explicitly selects a successful runtime outcome, independently
+        of static signer metadata. It does not create missing signing facts.
+        Runtime artifacts and unlisted installed images retain unknown outcomes.
+        These values are synthetic model choices, never host measurements.
+        """
+        if validation is not None:
+            if (
+                type(validation) is not MacosCodeValidationDecision
+                or type(binary) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
+                or validation.content_id != binary.content_id
+                or binary.mach_o_image is None
+            ):
+                raise StateError(
+                    "Mac validation decision must match the exact selected native image"
+                )
+            validation.__post_init__()
+            return validation.security
+        if (
+            type(binary) is not BinaryReleaseIdentity
+            or binary.key.platform != "macos"
+            or binary.mach_o_image is None
+        ):
+            return None
+        for rule in self.profile.code_validation:
+            if (
+                binary.key.product_id == rule.product_id
+                and binary.key.artifact_name in rule.artifact_names
+            ):
+                return MacosImageSecurity(
+                    rule.codesigning_flags, rule.is_platform_binary, rule.validation_category
+                )
+        return None
 
     def deployed_launch(
         self,
@@ -221,6 +271,7 @@ class MacosExecutionMetadataProducer:
         binary: BinaryReleaseIdentity | LocalArtifactBinaryIdentity,
         environment: tuple[str, ...] | None = None,
         script: MacosExecScript | None = None,
+        validation: MacosCodeValidationDecision | None = None,
     ) -> MacosPreparedExecution:
         """Produce an exact direct image replacement through the existing State builder.
 
@@ -267,5 +318,6 @@ class MacosExecutionMetadataProducer:
             exec_image=MacosExecImage(self.profile.cpu_subtype, requested_path),
             exec_script=script if script is not None else MacosExecScript(),
             executable_version=ProcessExecutableVersion.from_binary(binary),
+            image_security=self.image_security(binary, validation=validation),
         )
         return MacosPreparedExecution(after, descriptors)

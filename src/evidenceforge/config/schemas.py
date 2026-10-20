@@ -4006,6 +4006,29 @@ class MacosTerminalDeviceProfile(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit modeled execution outcomes for a bounded installed artifact set."""
+
+    product_id: str = Field(min_length=1)
+    artifact_names: tuple[str, ...] = Field(min_length=1, max_length=256)
+    codesigning_flags: int = Field(strict=True, ge=0, lt=2**32)
+    is_platform_binary: bool = Field(strict=True)
+    validation_category: int = Field(strict=True, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def coherent_outcome(self) -> Self:
+        """Reject contradictory native outcomes and ambiguous artifact selectors."""
+        if (
+            len(set(self.artifact_names)) != len(self.artifact_names)
+            or any(not name or "/" in name or "\0" in name for name in self.artifact_names)
+            or self.is_platform_binary != bool(self.codesigning_flags & 0x04000000)
+            or self.is_platform_binary != (self.validation_category == 1)
+            or not self.codesigning_flags & 1
+        ):
+            raise ValueError("Mac launch validation requires coherent explicit valid-code outcomes")
+        return self
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4021,6 +4044,17 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     directory_allocated_blocks: int = Field(strict=True, ge=0, lt=2**31)
     directory_age_seconds: int = Field(strict=True, gt=0, lt=2**31)
     first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
+    code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
+
+    @model_validator(mode="after")
+    def unique_validation_selectors(self) -> Self:
+        """Preserve unknown policy in older inputs and reject overlapping rules."""
+        selectors = [
+            (rule.product_id, name) for rule in self.code_validation for name in rule.artifact_names
+        ]
+        if len(selectors) != len(set(selectors)):
+            raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
+        return self
 
     @field_validator("user_environment", "root_environment")
     @classmethod

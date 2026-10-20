@@ -1021,6 +1021,7 @@ class ProcessExecutionService:
                 environment=metadata.environment if metadata is not None else None,
                 execution_directory=metadata.directory if metadata is not None else None,
                 exec_image=metadata.image if metadata is not None else None,
+                image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
             )
@@ -1062,6 +1063,7 @@ class ProcessExecutionService:
                 environment=metadata.environment if metadata is not None else None,
                 execution_directory=metadata.directory if metadata is not None else None,
                 exec_image=metadata.image if metadata is not None else None,
+                image_security=metadata.image_security if metadata is not None else None,
                 macos_terminal=terminal,
                 macos_standard_io=standard_io,
             )

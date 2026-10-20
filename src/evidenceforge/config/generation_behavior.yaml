@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 319
+current_revision: 320
 history_start_revision: 1
-behavior_surface_sha256: 41e5064591d755158ad228d9a06dd9e27e7ab5d3829da1bc3db09484670cd0a5
+behavior_surface_sha256: a290bd609768896c1efc5414bdd0e1ab6a33ab030fac0176195ac287fbd22bcc
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -2985,3 +2985,10 @@ changes:
       - event-time-process-relationships
     formats: []
     summary: Prepares selected fork/exec/exit relationships through one read-only mixed-cohort view, preserving strict temporal boundaries, canonical dependency admission and observing-collector guards without enabling native output.
+  - revision: 320
+    id: modeled-macos-execution-code-validation
+    impact: localized
+    domains:
+      - macos-execution-metadata
+    formats: []
+    summary: Produces explicit frozen-policy code-validation outcomes for listed native images and content-bound runtime execution decisions; unknown policy remains unknown.
