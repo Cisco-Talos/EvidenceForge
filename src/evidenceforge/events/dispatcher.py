@@ -11509,6 +11509,29 @@ class EventDispatcher:
                     raise ValueError(
                         "Native delivery header changed its canonical counters or event time"
                     )
+                connection = self.es_collectors.connection(observation.source_instance)
+                if connection is not None and connection.source_profile is not None:
+                    from evidenceforge.generation.timing.macos import MachTimebase
+
+                    source = connection.source_profile
+                    clock = self.state_manager.get_macos_boot_clock(
+                        observation.hostname,
+                        timebase=MachTimebase(
+                            source.timebase_numerator, source.timebase_denominator
+                        ),
+                    )
+                    coverage = self.es_collectors.complete_membership_coverage(observation.hostname)
+                    if (
+                        parsed.version != source.message_version
+                        or parsed.mach_time != clock.ticks_at(observation.observed_at)
+                        or clock.boot_time != source.boot_time
+                        or clock.boot_uuid != source.boot_uuid
+                        or coverage is None
+                        or not coverage.known_from <= observation.observed_at < coverage.known_until
+                    ):
+                        raise ValueError(
+                            "Native source profile changed its wire, clock or inventory window"
+                        )
                 if event.event_type is EventKind.PROCESS_FORK:
                     _, child = process_fork_identities(event)
                     birth = next(

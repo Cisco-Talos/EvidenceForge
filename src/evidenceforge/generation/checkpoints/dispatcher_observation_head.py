@@ -15,7 +15,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "4"
+_SCHEMA_VERSION = "5"
 
 
 class _DispatcherObservationHead(BaseModel):
@@ -103,7 +103,7 @@ class DispatcherObservationParticipant:
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint head is invalid"
             ) from error
-        if document.schema_version not in {"1", "2", "3", self.checkpoint_schema_version} or (
+        if document.schema_version not in {"1", "2", "3", "4", self.checkpoint_schema_version} or (
             document.schema_version == "1" and document.es_collectors
         ):
             raise CheckpointCorruptionError(
@@ -118,8 +118,12 @@ class DispatcherObservationParticipant:
                 state.process is not None or state.closed_at is not None for state in states
             ):
                 raise ValueError("Older collector head cannot contain attachment or close metadata")
-            if document.schema_version != "4" and document.es_membership:
+            if document.schema_version in {"1", "2", "3"} and document.es_membership:
                 raise ValueError("Older collector head cannot contain complete membership")
+            if document.schema_version != self.checkpoint_schema_version and any(
+                state.source_profile is not None for state in states
+            ):
+                raise ValueError("Older collector head cannot contain native source profiles")
             membership = tuple(
                 ESClientMembershipCoverage.model_validate_json(row)
                 for row in document.es_membership

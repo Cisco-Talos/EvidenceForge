@@ -1,0 +1,16 @@
+# Experimental modeled source admission, not a captured build or clock calibration.
+# A macOS 26-family v10 fork reference does not establish exec/exit or every build.
+# Clock facts reuse the existing explicit native clock policy; no hardware lookup.
+schema_version: "1.0"
+profile: modeled-macos26-arm64-fork-v1
+os_major: 26
+architecture: arm64
+collector_arguments:
+  - /usr/bin/eslogger
+  - fork
+message_version: 10
+event_type: 11
+action_type: 1
+result_type: 0
+auth_result: 0
+clock_profile: macos26-workspace-entry-v1

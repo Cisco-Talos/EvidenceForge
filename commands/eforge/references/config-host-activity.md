@@ -137,9 +137,9 @@ reserved-host allowlists extend. They cannot authorize live credentials/hosts, p
 Treat cadence, rate, role, missingness, or safety changes as semantic. Run `eforge validate-config
 --json` fresh after every edit; validate affected scenarios from the same working directory.
 
-## Mac native logging profile
+## Mac native source profiles
 
-`macos_unified_log_profiles.yaml` deep-merges through existing activity overlays and immutable effective configuration. The packaged `macos26-workspace-entry-v1` profile contains the modeled Mach timebase and one static loginwindow callsite/message. Offsets and timing are synthetic profile choices; do not calibrate them from personal logs. Existing timing relationships `macos.workspace_request` and `source.macos_unified_log` own canonical gap and source delay. Collection uses the existing source family and observation policies. No Mac collector flag or top-level scenario block is required. Profile changes do not enable additional native event families.
+`macos_unified_log_profiles.yaml` deep-merges through existing activity overlays and immutable effective configuration. The packaged `macos26-workspace-entry-v1` profile contains the modeled Mach timebase and one static loginwindow callsite/message. Offsets and timing are synthetic profile choices; do not calibrate them from personal logs. Existing timing relationships `macos.workspace_request` and `source.macos_unified_log` own canonical gap and source delay. Collection uses the existing source family and observation policies. `macos_endpoint_security_profiles.yaml` selects only the modeled macOS 26 arm64 workstation fork/v10 profile, literal privileged `/usr/bin/eslogger fork` activation, and the same explicit clock policy. Its frozen source identity, exact collector execution and finite complete modeled inventory remain bound to checkpointed counters; restored legacy unknown profiles cannot acquire new defaults. This is internal initialization policy: ES is still unregistered, missing required metadata stays unavailable, and changing this file cannot admit exec/exit or close native reference gates. No collector flag or top-level scenario block is added.
 
 ## Modeled Mac filesystem and execution metadata
 

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 324
+current_revision: 325
 history_start_revision: 1
-behavior_surface_sha256: 0ff95ab5725faa9cf953d8eb0068fa11d3b761b94907ea63fedb3e5affb5d0f5
+behavior_surface_sha256: 79edd06bf4bd85931305afcfc11645cf67477438794f1462d5a0a96652ba67f2
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3024,3 +3024,12 @@ changes:
       - endpoint-security-recovery
     formats: []
     summary: Adds an internal exact-only native ES host output adapter using shared barriers, counts, incremental spool recovery and retryable terminal export without registering a generator source.
+  - revision: 325
+    id: frozen-native-es-fork-profile-initialization
+    impact: localized
+    domains:
+      - endpoint-security-collection
+      - endpoint-security-preparation
+      - endpoint-security-recovery
+    formats: []
+    summary: Selects a frozen modeled macOS 26 arm64 fork profile, initializes exact activated collectors and finite membership, and binds source/clock/build identity to resumable counters without enabling CLI output.

@@ -92,11 +92,13 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from evidenceforge.events.identity import ProcessIdentity
     from evidenceforge.generation.checkpoints.models import CheckpointCursor, CheckpointRecovery
     from evidenceforge.generation.checkpoints.participants import (
         IncrementalCheckpointParticipant,
     )
     from evidenceforge.generation.checkpoints.runtime import IncrementalCheckpointController
+    from evidenceforge.generation.macos_es_source import MacosESSource
     from evidenceforge.generation.profiling import GenerationProfiler
 
 _ENGINE_TIMING_NAMESPACE = "shared-timing-v1"
@@ -363,6 +365,52 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                         )
                     self._macos_execution_metadata_ready = True
                 return self._macos_execution_metadata
+
+    def initialize_macos_es_source(self, collector: ProcessIdentity) -> MacosESSource:
+        """Bind an activated collector using this run's frozen host/window policy.
+
+        Existing durable connections are rebound without resetting counters.
+        This hook does not activate a process, register a format or discover
+        host software; the source coordinator must supply canonical activation.
+        """
+        from evidenceforge.config.provider import effective_config_scope
+        from evidenceforge.events.identity import ProcessIdentity
+        from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
+        from evidenceforge.generation.macos_es_source import (
+            initialize_macos_es_source,
+            macos_es_source_instance,
+        )
+
+        if (
+            type(collector) is not ProcessIdentity
+            or self.start_time is None
+            or self.end_time is None
+            or not hasattr(self, "dispatcher")
+        ):
+            raise StateError("Initialize engine and canonical collector before native ES source")
+        system = next(
+            (
+                item
+                for item in self.scenario.environment.systems
+                if item.hostname == collector.hostname
+            ),
+            None,
+        )
+        if system is None:
+            raise StateError("Native ES collector must belong to this run's modeled host")
+        with effective_config_scope(self.compiled_scenario.effective_config):
+            with self.state_manager._lock:
+                return initialize_macos_es_source(
+                    ESCollectionActionOwner(self.state_manager, self.dispatcher.es_collectors),
+                    system,
+                    collector,
+                    known_from=max(self.warmup_start_time, collector.execution_started_at),
+                    known_until=self.end_time,
+                    restoring=self.dispatcher.es_collectors.connection(
+                        macos_es_source_instance(system.hostname)
+                    )
+                    is not None,
+                )
 
     def _report_progress(self, event_type: str, data: dict) -> None:
         """Report progress to callback if registered.

@@ -58,6 +58,12 @@ def _family(
 
 _FAMILIES = (
     _family(
+        "activity/macos_endpoint_security_profiles.yaml",
+        "deep-mapping",
+        "config-host-activity.md",
+        "Bounded modeled Mac ES fork admission and explicit collector subscription.",
+    ),
+    _family(
         "activity/macos_execution_metadata.yaml",
         "deep-mapping",
         "config-host-activity.md",

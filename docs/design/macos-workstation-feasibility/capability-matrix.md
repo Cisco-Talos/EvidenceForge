@@ -233,3 +233,7 @@ The bounded metadata, ordered transaction, collector initialization/lifetime and
 ## Native output lifecycle checkpoint 324
 
 An internal host-output adapter now composes the native exact sinks with standard emitter barriers, counts, incremental spool checkpoints and retryable terminal export. Invented historical fixtures cover partial-publication rejection/recovery, filtered mixed cohorts, collector retirement, aborted checkpoint preparation and fresh-process byte equality. The adapter remains outside the production factory and format catalog. Automatic source activation, supported build/event selection, complete per-profile facts and CLI/manifest/ingestion acceptance remain open; ES-R1/GK-R1 are unchanged.
+
+## Fork profile initialization checkpoint 325
+
+The frozen modeled source policy selects explicit macOS 26 arm64 workstations, v10 fork and literal privileged collector argv. An engine hook initializes the subscription and finite complete modeled inventory for an activated canonical collector, or rebinds its retained counters. Source/profile/configuration/build and shared boot/timebase identities persist in observation head 5; compatible older heads retain unknown policy. Complete native fork preparation uses the selected profile and requires all existing metadata facts; direct lower-level counters cannot bypass its finite window. Automatic collector process activation, normal factory/routing/manifest integration and CLI acceptance remain open. No new target-build capture, exec/exit or Gatekeeper reference gate is closed.

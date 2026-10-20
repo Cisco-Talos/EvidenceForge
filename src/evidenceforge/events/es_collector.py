@@ -22,6 +22,7 @@ from typing import Annotated, Literal, Self
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from evidenceforge.events.es_membership import ESClientMembershipCoverage
+from evidenceforge.events.es_source_profile import ESCollectorSourceProfile
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.models.exceptions import StateError
 
@@ -79,6 +80,7 @@ class ESCollectorState(_Value):
     event_counters: tuple[ESEventCounter, ...] = Field(min_length=1, max_length=256)
     process: ESCollectorProcess | None = None
     closed_at: AwareDatetime | None = None
+    source_profile: ESCollectorSourceProfile | None = None
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
@@ -89,6 +91,10 @@ class ESCollectorState(_Value):
             raise ValueError("ES delivery cannot precede the client connection")
         if self.process is not None and self.opened_at < self.process.execution_started_at:
             raise ValueError("Collector connection cannot precede its owning execution")
+        if self.source_profile is not None and (
+            self.process is None or self.source_profile.boot_time > self.opened_at
+        ):
+            raise ValueError("Native source profile requires an execution after its modeled boot")
         if self.closed_at is not None and self.closed_at < self.last_delivery_at:
             raise ValueError("Collector closure cannot precede delivery")
         return self
@@ -691,6 +697,16 @@ class ESCollectorRegistry:
                 ):
                     return ESCollectorState.model_validate_json(value.model_dump_json())
         return None
+
+    def complete_membership_coverage(self, hostname: str) -> ESClientMembershipCoverage | None:
+        """Read explicit finite completeness without inventing it from registered clients."""
+        with self._lock:
+            coverage = self._membership_coverage.get(hostname)
+            return (
+                ESClientMembershipCoverage.model_validate_json(coverage.model_dump_json())
+                if coverage is not None
+                else None
+            )
 
     def close(self, expected: ESCollectorState, closed_at: datetime) -> None:
         """Close an exact idle connection without allocating a delivery or inferring exit."""

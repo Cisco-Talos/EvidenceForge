@@ -4029,6 +4029,46 @@ class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
         return self
 
 
+class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded modeled fork export policy, independent of decoder admissions."""
+
+    schema_version: Literal["1.0"]
+    profile: Literal["modeled-macos26-arm64-fork-v1"]
+    os_major: Literal[26]
+    architecture: Literal["arm64"]
+    collector_arguments: tuple[str, ...]
+    message_version: Literal[10]
+    event_type: Literal[11]
+    action_type: Literal[1]
+    result_type: Literal[0]
+    auth_result: Literal[0]
+    clock_profile: Literal["macos26-workspace-entry-v1"]
+
+    @field_validator(
+        "os_major",
+        "message_version",
+        "event_type",
+        "action_type",
+        "result_type",
+        "auth_result",
+        mode="before",
+    )
+    @classmethod
+    def exact_discriminants(cls, value: object) -> object:
+        """Reject booleans and coerced numbers at the profile boundary."""
+        if type(value) is not int:
+            raise ValueError("ES generation profile discriminants require exact integers")
+        return value
+
+    @field_validator("collector_arguments")
+    @classmethod
+    def fork_subscription(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep source admission narrower than the historical native codec."""
+        if values != ("/usr/bin/eslogger", "fork"):
+            raise ValueError("The bounded ES profile requires /usr/bin/eslogger fork")
+        return values
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 

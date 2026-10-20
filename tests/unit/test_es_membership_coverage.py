@@ -222,7 +222,7 @@ def test_atomic_checkpoint_retains_complete_inventory_and_legacy_heads_stay_unkn
     dispatcher.es_collectors = owner.collectors
     payload = DispatcherObservationParticipant(dispatcher).prepare_checkpoint(1).head.payload
     document = loads(payload)
-    assert document["schema_version"] == "4"
+    assert document["schema_version"] == "5"
     restored = EventDispatcher(StateManager(), {})
     DispatcherObservationParticipant(restored).restore_checkpoint(payload, ())
     assert (
@@ -230,6 +230,9 @@ def test_atomic_checkpoint_retains_complete_inventory_and_legacy_heads_stay_unkn
         == owner.collectors.snapshot_with_membership()
     )
     other = profile.process.model_copy(update={"object_id": "another"})
+    assert restored.es_collectors.known_client_membership(process.hostname, other, _START) is False
+    document["schema_version"] = "4"
+    DispatcherObservationParticipant(restored).restore_checkpoint(dumps(document), ())
     assert restored.es_collectors.known_client_membership(process.hostname, other, _START) is False
     document["schema_version"] = "3"
     with pytest.raises(CheckpointCorruptionError, match="collector"):
