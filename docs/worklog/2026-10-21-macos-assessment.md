@@ -294,3 +294,118 @@ evidence, not a claim that its original exit status was green. Ruff check/format
 (1,319 files), whitespace and revision-328 behavior checks pass. The installer
 refreshed all 99 generated project skill files. Personal assessment skill and
 its retained replacement files remain byte-identical.
+
+The runtime-catalog join exposed a related launch-policy contract: CPython's
+actual native image is inside Python.app, but that spelling does not make a
+module query a GUI launch. An optional explicit `spawn_rules.launch_kind` owns
+shell versus GUI placement. Baseline shell bootstrap, parent resolution and
+foreground occupancy must consume the same decision; legacy profiles preserve
+their existing path-based fallback. Bounded lifetime matching stays independent
+of launch kind, so an unrecognized command cannot acquire a fabricated close.
+The shared CLI network policy also covers loaded interpreter/runtime basenames,
+requiring explicit network intent for Node/Python/.NET/PowerShell queries and
+avoiding an ambient-ownership escape through a logical module name.
+
+Real-engine catalog acceptance exposed the next owner join: deployment compilation
+already preserves multiple logical installations while selecting one exact
+path/content binding for a shared runtime. Installed Mac stat provisioning must
+consume that chosen physical binding once, rather than allocating a separate
+inode/spec for each logical entry. Conflicting content or distinct physical
+ownership remain errors; logical module names never duplicate one file object.
+
+## Remaining timing-family contracts
+
+The short-HTTP transport floor currently replaces varied OCSP response durations
+with the same worst-case HTTP source-delay bound plus only 0–25ms of slack. The
+network transaction planner owns this whole-family artifact. Move its bounded,
+right-skew close slack to a validated frozen network profile and use the same
+maximum in admission/headroom calculations. Explicit longer caller durations
+remain unchanged; legacy snapshots without the new profile keep their old
+parameters. Do not fix this with an OCSP-emitter timestamp or one benchmark UID.
+Independent user activity also loses fractional time in the shared baseline
+scheduler's integer-second jitter. Preserve its existing interval and per-user
+RNG ownership with fractional jitter in both planning/execution passes; periodic
+service schedules retain their own timing contracts.
+
+Automated guardrail investigation: revision 328 passes all acceptance criteria;
+its 89.76 score reflects distribution/volume/regularity diagnostics rather than a
+new parser or causal failure. One OCSP identity comparison lacks an analyzer row
+for a matching HTTP/file transaction whose connection explicitly reports three
+missed bytes. This is not evidence of mismatched decoded identities; leave the
+evaluator and source selection unchanged pending stronger evidence. No synthetic
+record is added simply to raise that score.
+
+## Loop-2 owner contracts and native-gate decision
+
+The user chose to keep ES exec/exit and Gatekeeper reference gates closed for now.
+The disposable-lab capture proposal is retained but no capture is authorized or run.
+The final routine and slow runs for the uncommitted revision-329 candidate were
+cleanly interrupted before further production edits when the fresh panel exposed
+additional confirmed defects. Their partial pass counts are not completed gates.
+
+The next family fixes consume existing owners rather than adding renderer patches:
+
+- Application-instance policy belongs in the platform catalog and compiled
+  deployment descriptor. Baseline application selection reuses the existing
+  session singleton claim for selected Mac main GUI processes; Windows/Linux
+  defaults and explicitly separate executions retain their current behavior.
+  Both compiled and legacy catalog lookups must agree. Consumers are process,
+  network ownership and endpoint lifecycle evidence. Short-lived forwarding
+  helpers and arbitrary multi-instance launches remain outside this bounded fix.
+- Journal directory identity belongs to the engine's canonical machine-ID map.
+  Generic and service file-effect templates may use that identity only when
+  supplied by their caller. Ambient churn and native housekeeping must agree;
+  optional journal effects without identity are omitted. Random temporary-path
+  hex values keep their existing semantics. Consumers are Linux eCAR file paths
+  and native journald messages, including sibling runtime/persistent paths.
+- Explicit-credential SMB session timing belongs to the action bundle and the
+  committed canonical transport interval. Auth, close and caller lifetime must
+  follow the resolved interval even if source-process admission moved the
+  requested connection time. Native syslog, eCAR and Windows lifecycle rows
+  consume that shared plan; source-local timing remains source-owned.
+
+History/process timing and command-owned file effects are also being traced at
+their shared action owners before any correction. The Chrome-version finding
+is a separate inventory/request binding issue, not a native Mac admission gate.
+
+Confirmed history root cause: the shared source planner moved a backdated command
+to the last delivered session-dependent row. History carries embedded execution
+time, so Bash and zsh now retain that canonical fact while advancing only the
+maximum session-closure frontier. This covers out-of-order activity delivery
+without fabricating execution delays or changing native history serialization.
+Mac process preflight no longer treats execution as evidence that the process
+created its executable; explicit artifact and command/transfer owners retain
+their own file effects. Chrome and Firefox request identity now consumes the
+loaded content-version reference, avoiding fresh path resolution after updates.
+Unknown versions preserve existing behavior. Chromium's reduced version keeps
+the real major and zero minor/build/patch; Firefox's product and rv tokens agree.
+References: https://www.chromium.org/updates/ua-reduction/ and
+https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent/Firefox.
+
+The broader focused gate passed **701 tests, four deselected**. It exposed an HTTP
+reuse sibling: transport-floor slack was being applied a second time to an
+application-only child after parent admission. Reused requests retain their
+existing bounded application duration and immutable physical parent; only a new
+physical transport receives the physical close-floor distribution. The existing
+persistent-HTTP transaction regression now passes without enlarging its parent.
+
+Revision-329 extended acceptance passes **38 tests in 297.09s** across mixed-fleet
+fresh-process/filter equivalence, SSH, root persistence and SMB. The two native
+fork CLI/exact-checkpoint tests separately pass in 40.18s. The routine run exposed
+four narrow RNG doubles lacking the scheduler's new fractional `uniform` draw;
+the 62-test terminal-admission file passes after updating those doubles. That
+routine run was cleanly interrupted and restarted on unchanged production source
+to obtain a complete green gate. No source changed during checkpoint generation.
+The frozen revision-329 surface is
+`dafe0214f71bb625b2ba0c2c4414ff58adce2b9ef4aaf170365c1f2827f59a25`.
+
+The complete final routine run took **998.15s**: **16,176 passed, 50 skipped,
+2,301 deselected, three failures**. All failures were the same fixture contract:
+the platform file-churn test's `SimpleNamespace` did not carry the engine-owned
+machine-ID map. Its repaired fixture supplies an explicit canonical ID and now
+also asserts that the shared selector receives it on all three platforms.
+Production source did not change. Final acceptance uses the full run plus the
+affected-file repair gate, not a claim that the original full exit was green.
+The final repaired platform/journal/skill/manifest gate passes **108 tests, one
+slow deselection**. Ruff check/format (1,323 files), whitespace, behavior digest
+and all 99 config files pass; generated project skills were refreshed.

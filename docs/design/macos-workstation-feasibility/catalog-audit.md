@@ -20,7 +20,7 @@ The initial managed Mac releases become available in the model on 2026-10-15, th
 | `notepadpp` | unavailable | unavailable | Official cataloged Win32 product; unofficial ports are different applications. [Reference](https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/SUPPORTED_SYSTEM.md) |
 | `intellij` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/cask/intellij-idea) |
 | `sublimetext` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/cask/sublime-text) |
-| `msbuild` | unresolved | unavailable | dotnet msbuild is a managed subcommand, not the cataloged MSBuild.exe identity; adapter decision pending. [Reference](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-msbuild) |
+| `msbuild` | supported | prefilled | Bounded SDK MSBuild version/help queries through the same installed native dotnet host/release as dotnet; no MSBuild.exe, build outputs or managed helper tree is inferred. [Reference](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-msbuild) |
 | `dotnet` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/dotnet) |
 | `nodejs` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/node) |
 | `thunderbird` | supported | prefilled | Arm64 application launch; helper, updater and native telemetry lifecycle remain unvalidated. [Distribution](https://formulae.brew.sh/cask/thunderbird); [executable](https://wiki.mozilla.org/MailNews:Logging) |
@@ -29,18 +29,18 @@ The initial managed Mac releases become available in the model on 2026-10-15, th
 | `kubectl` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/kubernetes-cli) |
 | `ssh` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/openssh) |
 | `curl` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/curl) |
-| `pytest` | supported | unavailable | Mac distribution established; executable, helper and command contracts not yet admitted. [Reference](https://formulae.brew.sh/formula/pytest) |
+| `pytest` | supported | prefilled | Explicit selected CPython framework interpreter with its installed pytest module and a bounded version query. No private Homebrew pytest virtualenv or script launcher is reconstructed; shares the interpreter release with pip. [Reference](https://docs.pytest.org/en/stable/how-to/usage.html) |
 | `vim` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/vim) |
 | `nano` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/nano) |
 | `emacs` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/emacs) |
 | `make` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/make) |
 | `gcc` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/gcc) |
-| `npm` | supported | unavailable | Mac distribution established; executable, helper and command contracts not yet admitted. [Reference](https://formulae.brew.sh/formula/node) |
+| `npm` | supported | prefilled | Explicit Node invocation of bundled npm-cli.js for version/prefix queries; shares the Node release and native executable. No native npm binary, shebang wrapper, package install, script effects or dependency tree is invented. [Reference](https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Formula/n/node.rb) |
 | `cargo` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/rust) |
-| `pip` | unresolved | unavailable | Python package command; interpreter/venv ownership and launcher process identity must be modeled first. [Reference](https://pip.pypa.io/en/stable/installation/) |
+| `pip` | supported | prefilled | Explicit selected CPython framework interpreter with its installed pip module for version/list queries. No installer, virtualenv, script launcher, downloaded package or network effect is inferred; shares the interpreter release with pytest. [Reference](https://pip.pypa.io/en/stable/user_guide/) |
 | `sqlcmd` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/sqlcmd) |
 | `wmic` | unavailable | unavailable | The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs. [Reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands) |
-| `powershell_query` | unresolved | unavailable | PowerShell exists on arm64, but this entry authors Windows CIM queries; no direct command-pool reuse. [Reference](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-macos) |
+| `powershell_query` | supported | prefilled | Publisher arm64 pwsh 7.6.6 with bounded Get-Date/Get-Process queries. Native executable path follows the stable package layout; Windows CIM, registry, execution-policy bypass and helper behavior are not reused. [Reference](https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-macos?view=powershell-7.6) |
 | `mysql` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/mysql-client) |
 | `psql` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/libpq) |
 | `redis_cli` | supported | prefilled | Prefilled arm64 variant; native helper/lifecycle verification remains open. [Reference](https://formulae.brew.sh/formula/redis) |
@@ -89,3 +89,18 @@ The native launchd, loginwindow and logind entries explicitly identify their mai
 Chrome now catalogs renderer, GPU and generic utility/network helper executables under its existing `children` field. Their versioned paths follow Chromium’s [bundle construction](https://chromium.googlesource.com/chromium/src/+/HEAD/chrome/BUILD.gn) and [helper roles](https://chromium.googlesource.com/chromium/src/+/main/chrome/installer/mac/signing/parts.py), reviewed 2026-10-16. The commands contain minimal role arguments; sandbox/IPC tokens, Apéritif alternatives and native observations remain unmodeled. These are distinct installed binaries of the same managed release. Changing that release requires updating its versioned helper paths through the existing catalog overlay. No signing flags or Mach-O UUIDs are inferred from bundle membership. Helper intent now survives immutable compilation and uses exact installed-assignment materialization. The Mac GUI baseline selects a bounded subset through existing spawn-rule counts/delays, binds each child to the exact live browser and session, and uses ordinary process publication and session closure. Counts and delays are modeled, not empirically calibrated. Browser IPC, helper-attributed network flows and independent browser-quit orchestration remain outside this profile.
 
 The native administration entries `macos-launchctl` and `macos-plutil` model host-build arm64 installations with explicit list/help command pools and bounded foreground lifetimes. They have no automatic persona selection. Their presence does not register, activate, unload or remove a job or modify a plist. Those effects require the owning action lifecycle. Public vocabulary references and limits are in [the native audit](native-catalog-audit.yaml); neither signing identities nor native messages are inferred.
+
+The five runtime-backed developer/query variants added on 2026-10-21 are available
+from that modeled installation date. Their commands invoke the loaded native
+runtime directly, with bounded foreground profiles and explicit-only network
+intent. Python uses the Homebrew framework executable documented by the
+[formula](https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Formula/p/python@3.14.rb)
+and [CPython framework installation](https://github.com/python/cpython/blob/3.14/Mac/Makefile.in);
+`-m` is module execution, not a shebang script. The model selects those modules
+as part of the logical application installation and does not reproduce Homebrew's
+private pytest virtualenv. Product versions describe the loaded runtime. Module
+package inventories, native exec export and captured signatures remain outside
+these entries. Zscaler remains unavailable in the arm64-only profile: platform
+support alone does not establish a native executable, and its reviewed
+[M1 guidance](https://help.zscaler.com/zscaler-client-connector/supporting-m1-processors)
+uses Rosetta.

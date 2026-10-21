@@ -541,6 +541,7 @@ applications:
     display_name: "Visual Studio Code"
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /Applications/Visual Studio Code.app/Contents/MacOS/Code
         available_from: '2026-10-15'
         deployment:
@@ -612,6 +613,7 @@ applications:
     display_name: "IntelliJ IDEA"
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /Applications/IntelliJ IDEA.app/Contents/MacOS/idea
         available_from: '2026-10-15'
         deployment:
@@ -651,6 +653,7 @@ applications:
     display_name: "Sublime Text"
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /Applications/Sublime Text.app/Contents/MacOS/sublime_text
         available_from: '2026-10-15'
         deployment:
@@ -690,6 +693,21 @@ applications:
   - id: msbuild
     display_name: "MSBuild"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/dotnet/libexec/dotnet
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: dotnet
+          version: 10.0.401
+          build: 10.0.401
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -version
+        - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -help
       windows:
         image_path: 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe'
         deployment:
@@ -722,6 +740,7 @@ applications:
           scope: machine
           architectures:
           - arm64
+        executable_format: mach_o
         command_templates:
         - /opt/homebrew/opt/dotnet/libexec/dotnet --info
         - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
@@ -758,6 +777,7 @@ applications:
           scope: machine
           architectures:
           - arm64
+        executable_format: mach_o
         command_templates:
         - /opt/homebrew/bin/node --version
         - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
@@ -1045,6 +1065,20 @@ applications:
   - id: pytest
     display_name: "pytest"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: python3
+          version: 3.14.8
+          build: 3.14.8
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pytest --version
       linux:
         image_path: "/usr/bin/python3"
         deployment:
@@ -1227,6 +1261,21 @@ applications:
   - id: npm
     display_name: "npm"
     platforms:
+      macos:
+        image_path: /opt/homebrew/bin/node
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: nodejs
+          version: 26.12.0
+          build: 26.12.0
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js --version
+        - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js config get prefix
       windows:
         image_path: 'C:\Program Files\nodejs\npm.cmd'
         deployment:
@@ -1310,6 +1359,21 @@ applications:
   - id: pip
     display_name: "pip"
     platforms:
+      macos:
+        image_path: /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: python3
+          version: 3.14.8
+          build: 3.14.8
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip --version
+        - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip list --format=columns
       linux:
         image_path: "/usr/bin/python3"
         deployment:
@@ -1388,6 +1452,21 @@ applications:
   - id: powershell_query
     display_name: "PowerShell (Query)"
     platforms:
+      macos:
+        image_path: /usr/local/microsoft/powershell/7/pwsh
+        available_from: '2026-10-21'
+        deployment:
+          kind: managed
+          product_id: powershell
+          version: 7.6.6
+          build: 7.6.6
+          scope: machine
+          architectures:
+          - arm64
+        executable_format: mach_o
+        command_templates:
+        - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
+        - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
       windows:
         image_path: 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
         deployment:
@@ -2073,6 +2152,7 @@ applications:
     display_name: "Postman"
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /Applications/Postman.app/Contents/MacOS/Postman
         available_from: '2026-10-15'
         deployment:
@@ -2131,6 +2211,7 @@ applications:
     display_name: "DBeaver"
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /Applications/DBeaver.app/Contents/MacOS/dbeaver
         available_from: '2026-10-15'
         deployment:
@@ -2834,6 +2915,7 @@ applications:
     display_name: terminal
     platforms:
       macos:
+        singleton_per_session: true
         image_path: /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal
         executable_format: mach_o
         code_signature:

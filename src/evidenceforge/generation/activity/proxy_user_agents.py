@@ -4,6 +4,7 @@
 """Proxy User-Agent selection backed by activity YAML config."""
 
 import random
+import re
 from typing import TYPE_CHECKING, Any
 
 from evidenceforge.config import get_activity_directory
@@ -364,6 +365,7 @@ def stable_browser_user_agent_for_process(
     *,
     hostname: str | None = None,
     domain_tags: list[str] | None = None,
+    release_version: str = "",
 ) -> str:
     """Return one browser User-Agent for the lifetime of a canonical process.
 
@@ -385,13 +387,23 @@ def stable_browser_user_agent_for_process(
             f"process_browser_user_agent:{source_key}:{process_image.casefold()}:{process_identity}"
         )
     )
-    return browser_user_agent_for_process(
+    user_agent = browser_user_agent_for_process(
         stable_rng,
         source_system,
         process_image,
         hostname=hostname,
         domain_tags=domain_tags,
     )
+    if re.fullmatch(r"\d+(?:\.\d+)*", release_version):
+        major = release_version.split(".", 1)[0]
+        family = _browser_family_for_process(process_image)
+        if family == "chrome":
+            # Chromium's reduced UA retains the installed major version.
+            user_agent = re.sub(r"Chrome/\d+(?:\.\d+)*", f"Chrome/{major}.0.0.0", user_agent)
+        elif family == "firefox":
+            user_agent = re.sub(r"Firefox/\d+(?:\.\d+)*", f"Firefox/{major}.0", user_agent)
+            user_agent = re.sub(r"rv:\d+(?:\.\d+)*", f"rv:{major}.0", user_agent)
+    return user_agent
 
 
 def pick_proxy_domain_user_agent(

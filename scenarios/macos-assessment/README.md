@@ -40,3 +40,8 @@ The retained `probe_evidence.py` checks visible process birth/dependent/close an
 parent relationships, `/netonly` terminal placement, TLS histories versus matching
 connection payloads, and selected native fork counts. Run it only on evidence
 authorized for inspection. Equal millisecond timestamps are treated as unordered.
+
+`probe_review_families.py` separately checks the second panel's GUI instance
+population, journal directory identity, command-history timing and self-image
+file effects, and records the OCSP duration range. Keeping it separate preserves
+the original hard probe and its historical baseline results.

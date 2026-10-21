@@ -53,6 +53,25 @@ def _base_time() -> datetime:
     return datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("source", ["bash_history", "zsh_history"])
+def test_history_execution_timestamp_survives_out_of_order_delivery(source: str) -> None:
+    planner = SourceTimingPlanner()
+    at = _base_time()
+    lifecycle = ActionLifecycleContext(
+        group_id="interactive-session", canonical_start=at, phase="dependent"
+    )
+    late = OccurrenceBuilder(
+        timestamp=at + timedelta(minutes=8), event_type="zsh_command", lifecycle=lifecycle
+    )
+    early = OccurrenceBuilder(
+        timestamp=at + timedelta(minutes=2), event_type="zsh_command", lifecycle=lifecycle
+    )
+    planner.plan_event(late, source)
+    result = planner.plan_event(early, source)
+    assert result.timestamp == early.timestamp
+    assert planner._latest_session_dependent_times[(source, lifecycle.group_id)] == late.timestamp
+
+
 def _network_context(duration: float = 0.05) -> NetworkTransactionPlan:
     return network_plan(
         src_ip="10.0.0.20",

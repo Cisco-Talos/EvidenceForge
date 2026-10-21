@@ -12,18 +12,21 @@ Canonical state and action bundles own identities, lifecycle, outcomes and corre
 
 Public research records remain under ignored `sample_data/macos/`; committed fixtures must be independently authored. The local findings review note remains outside the checkout pending separate approval. No further personal-log inspection, service changes or live captures are part of implementation.
 
-## Current handoff — revision 328 candidate
+## Current handoff — assessment follow-through
 
-The complete assessment sequence, reviewer changes, frozen benchmark and current
+The complete assessment sequence, reviewer updates, frozen benchmarks and current
 validation are tracked in [the assessment worklog](2026-10-21-macos-assessment.md).
-Revision 327 and the first blind baseline are committed/pushed as `4665c1f7`.
-The supported SSH path now produces three complete modeled fork/v10 ES records
-through the real engine. Shared metadata preserves explicit unauthenticated audit
-origin, responsibility, current directory and image truth; native exec/exit and
-Gatekeeper denial remain reference-gated. The revision-328 routine run completed with 16,145 passes, 50 skips and two
-failures in older expectations/reference budgets; both are fixed and their
-132-test gate passes. Nonempty native CLI/filter/parser and exact resume gates
-pass. Fresh benchmark regeneration and blind reassessment follow this checkpoint.
+Revision 327 (`4665c1f7`) and 328 (`638ba6a4`) are committed and pushed.
+The ordinary SSH path produces three complete modeled fork/v10 records through
+the real engine. Nonempty CLI/parser/filtering/manifest and exact resume gates
+pass; supported/native benchmark runs have identical shared-source bytes.
+Loop 2 passes quantitative acceptance at 89.7644 and the original hard probe has
+zero failures. Fresh blind synthetic-confidence averages 66.5, down from 83.
+Revision 329 addresses the panel's process-population, shared identity and timing
+findings, and completes five bounded runtime-backed developer catalog variants.
+The full routine suite and relevant extended gates are being run on frozen source.
+Native exec/exit (ES-R1) and Gatekeeper denial (GK-R1) remain gated by the user's
+2026-10-21 decision. No capture or personal-log inspection is authorized.
 
 ## Prior handoff — revision 326
 

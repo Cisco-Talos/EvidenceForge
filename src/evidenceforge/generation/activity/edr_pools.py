@@ -817,10 +817,13 @@ def materialize_edr_template(
     host_key: str = "",
     host_os: str = "",
     process_name: str = "",
+    machine_id: str = "",
     occurrence_time: datetime | None = None,
     deployment_registry: _InstalledSoftwareRegistry | None = None,
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
+    if "{machine_id}" in template and re.fullmatch(r"[0-9a-f]{32}", machine_id) is None:
+        raise ValueError("Journal path materialization requires a canonical 32-digit machine ID")
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
     installed_product = _installed_software_product(
         rng,
@@ -848,6 +851,7 @@ def materialize_edr_template(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "machine_id": machine_id,
         "process_prefetch_name": _process_prefetch_name(process_name),
         "os_build": _windows_component_build(host_os, host_key),
         "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
@@ -1073,6 +1077,8 @@ def select_file_side_effect(
     os_category: str,
     rng: random.Random,
     user: str = "SYSTEM",
+    *,
+    machine_id: str = "",
 ) -> tuple[str, str] | None:
     """Return a process-aware file side effect from data-driven EDR profiles."""
     exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
@@ -1104,7 +1110,9 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        raw_path_templates = [str(path) for path in paths]
+        raw_path_templates = [
+            str(path) for path in paths if "{machine_id}" not in str(path) or machine_id
+        ]
         path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
         if not path_templates:
             return None
@@ -1122,6 +1130,7 @@ def select_file_side_effect(
             rng,
             user=user,
             process_name=process_name,
+            machine_id=machine_id,
         )
         if (
             exe in {"bash", "sh"}
@@ -1136,6 +1145,7 @@ def select_file_side_effect(
                 rng,
                 user=user,
                 process_name=process_name,
+                machine_id=machine_id,
             )
         if os_category == "windows" and _is_windows_powershell_history_path(path):
             if not _allows_psreadline_history(exe, command_line, user):
@@ -1150,6 +1160,7 @@ def select_file_side_effect(
                     rng,
                     user=user,
                     process_name=process_name,
+                    machine_id=machine_id,
                 )
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
@@ -1170,12 +1181,16 @@ def select_ambient_file_churn_effect(
     host_ip: str = "",
     host_key: str = "",
     host_os: str = "",
+    machine_id: str = "",
 ) -> tuple[str, str] | None:
     """Return an account-compatible ambient FILE churn action and path."""
     if os_category == "linux" and is_service_account(os_category, user):
-        return select_file_side_effect(process_name, command_line, os_category, rng, user=user)
+        return select_file_side_effect(
+            process_name, command_line, os_category, rng, user=user, machine_id=machine_id
+        )
 
     candidates = file_path_templates_for_user(path_templates, os_category, user)
+    candidates = [path for path in candidates if "{machine_id}" not in path or machine_id]
     if os_category == "windows":
         candidates = file_path_templates_for_process(candidates, process_name)
         candidates = [
@@ -1195,6 +1210,7 @@ def select_ambient_file_churn_effect(
         host_ip=host_ip,
         host_key=host_key,
         host_os=host_os,
+        machine_id=machine_id,
     )
     if os_category == "linux" and user == "root":
         path = path.replace("/home/root/", "/root/")

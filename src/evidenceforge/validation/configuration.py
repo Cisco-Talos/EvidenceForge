@@ -4022,6 +4022,7 @@ def _collect_network_parameter_schema_checks(
     """Validate network parameter families at the original loader and diagnostic boundary."""
     from evidenceforge.config.schemas import (
         DnsTunnelRttConfig,
+        HttpTransportFloorSlackConfig,
         NmapCommandProbeConfig,
         OuiEntry,
         PublicDnsResolverEntry,
@@ -4034,6 +4035,15 @@ def _collect_network_parameter_schema_checks(
 
     net_params = load_network_params()
     if net_params:
+        err = validate_entry(
+            net_params.get("http_transport_floor_slack", {}),
+            HttpTransportFloorSlackConfig,
+            "network_params.yaml (http_transport_floor_slack)",
+        )
+        if err:
+            result.issues.append(
+                Issue("ERROR", "network_params.yaml (http_transport_floor_slack)", err)
+            )
         schema_checks.append((net_params.get("oui_prefixes", []), OuiEntry, "network_params.yaml"))
         schema_checks.append(
             (

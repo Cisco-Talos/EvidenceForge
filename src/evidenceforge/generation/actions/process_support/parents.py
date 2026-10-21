@@ -19,6 +19,7 @@ from evidenceforge.generation.activity.process_helpers import _SYSTEM_ACCOUNTS a
 from evidenceforge.generation.activity.process_helpers import (
     _is_bare_windows_explorer_launch as _is_bare_windows_explorer_launch,
 )
+from evidenceforge.generation.activity.process_helpers import _macos_process_uses_shell
 from evidenceforge.generation.activity.service_process_profiles import (
     ServiceProcessFamily,
     ServiceProcessSpec,
@@ -121,7 +122,7 @@ class ProcessParentResolver:
                 return parent_pid
         session = self.state_manager.get_session(logon_id) if logon_id else None
         ssh_session = session is not None and session.session_kind == "ssh"
-        if logon_id and (ssh_session or ".app/Contents/MacOS/" not in process_name):
+        if logon_id and (ssh_session or _macos_process_uses_shell(process_name)):
             for process in self.state_manager.get_processes_for_session(logon_id):
                 if (
                     process.system == system.hostname

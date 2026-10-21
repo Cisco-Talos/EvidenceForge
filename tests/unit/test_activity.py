@@ -11348,8 +11348,16 @@ class TestActivityGenerator:
             )
         )
 
+    @pytest.mark.parametrize("shift_transport", [False, True])
     def test_runas_netonly_realizes_child_transport_and_target_logon(
-        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+        shift_transport,
     ):
         """A successful RunAs action owns its requested child and remote result."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -11362,6 +11370,18 @@ class TestActivityGenerator:
         activity_gen._ip_to_system[target_system.ip] = target_system
         activity_gen._all_system_ips = [test_system.ip, target_system.ip]
         state_manager.set_current_time(timestamp)
+
+        committed = []
+        original_connection = activity_gen.generate_connection
+
+        def delayed_connection(**kwargs: Any) -> str:
+            if shift_transport:
+                kwargs["time"] += timedelta(seconds=2)
+            uid = original_connection(**kwargs)
+            committed.append(state_manager.get_connection_by_zeek_uid(uid))
+            return uid
+
+        monkeypatch.setattr(activity_gen, "generate_connection", delayed_connection)
 
         activity_gen.generate_explicit_credentials(
             user=test_user,
@@ -11419,6 +11439,9 @@ class TestActivityGenerator:
         assert target_logoff.auth.username == target_logon.auth.username == "admin01"
         assert target_logoff.auth.user_sid == target_logon.auth.user_sid
         assert target_logoff.auth.smb_principal == target_logon.auth.smb_principal == "admin01"
+        assert len(committed) == 1
+        assert target_logon.timestamp > committed[0].start_time
+        assert target_logoff.timestamp > committed[0].close_time
         assert any(
             event.event_type == "process_terminate" and event.process.pid == child.process.pid
             for event in emitted

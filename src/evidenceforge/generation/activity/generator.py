@@ -683,7 +683,11 @@ from .process_helpers import (
 from .process_helpers import (
     _linux_shell_process_reserves_foreground as _linux_shell_process_reserves_foreground,
 )
-from .process_helpers import _posix_foreground_lifetime, _posix_shell_process_reserves_foreground
+from .process_helpers import (
+    _macos_process_uses_shell,
+    _posix_foreground_lifetime,
+    _posix_shell_process_reserves_foreground,
+)
 from .process_helpers import (
     _process_termination_delay_after_activity_seconds as _process_termination_delay_after_activity_seconds,
 )
@@ -16865,9 +16869,9 @@ class ActivityGenerator:
         to matching emitters (Windows 4688, eCAR PROCESS/CREATE). Also emits
         probabilistic EDR file/module/registry events.
 
-        When ensure_file_event=True, always emits at least one FILE/CREATE for
-        the process image (useful for storyline processes where FILE visibility
-        is important for hunting).
+        When ensure_file_event=True, legacy Windows/Linux payload paths may
+        receive FILE/CREATE evidence. Mac execution alone establishes no file
+        write; command-owned and explicitly authored artifact effects own it.
 
         Args:
             user: User creating the process
@@ -28618,7 +28622,7 @@ class ActivityGenerator:
                             username=user.username,
                         )
                         process_name, command_line = source_process_groups[0][0]
-                    if os_category == "macos" and ".app/Contents/MacOS/" not in process_name:
+                    if os_category == "macos" and _macos_process_uses_shell(process_name):
                         if (
                             self.ensure_macos_session_shell(user, system, logon_id, process_time)
                             is None

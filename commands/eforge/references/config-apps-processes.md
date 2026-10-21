@@ -67,7 +67,7 @@ Application entry fields:
 
 - Required: `id`, `display_name`, `platforms`, `categories`, `personas`.
 - Optional selection fields: `system_types`, positive `selection_weight`, `compatibility_group`,
-  `compatibility_option`, and `singleton_per_session`.
+  `compatibility_option`, and `singleton_per_session` (optional per-platform override).
 - Each new platform requires `image_path` plus a typed `deployment`, and may define `pe_metadata`,
   `command_templates`, scoped `command_parameter_pools`, `children`, and `loaded_modules`.
 - Mac main executables may additionally define `code_signature: {signing_id: test.example.editor,
@@ -123,10 +123,10 @@ and runtime signing flags remain separate. Old catalog entries need no changes.
 
 ### `spawn_rules.yaml`
 
-Deep-merges `windows` and `linux` parent mappings. A parent may define command templates, lifetime,
-spawn delay, max children, and child executable names. Parent and child names must resolve through
-application or system-process catalogs. Adding an application does not imply a parent; ask unless the
-user selected one.
+Deep-merges `windows`, `linux` and `macos` parent mappings: command templates, lifetime, spawn delay,
+max children and child executable names. Optional Mac `launch_kind: shell|gui` owns parent/foreground
+placement; absence preserves path classification. Python.app module commands explicitly use a shell.
+Names must resolve through catalogs. Adding an application does not imply a parent; use the user's intent.
 
 ### `process_network_map.yaml`
 

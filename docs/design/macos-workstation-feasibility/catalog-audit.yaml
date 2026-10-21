@@ -1,5 +1,5 @@
 # Independently authored application assessment, not third-party sample records.
-reviewed_on: '2026-10-15'
+reviewed_on: '2026-10-21'
 baseline_ref: 5ce84103fccd630a748cf59ab19808f9fa0699bc
 target: macOS 26 arm64
 applications:
@@ -82,10 +82,10 @@ applications:
   reference: https://formulae.brew.sh/cask/sublime-text
   boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
 - id: msbuild
-  availability: unresolved
-  variant: unavailable
+  availability: supported
+  variant: prefilled
   reference: https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-msbuild
-  boundary: dotnet msbuild is a managed subcommand, not the cataloged MSBuild.exe identity; adapter decision pending.
+  boundary: Bounded SDK MSBuild version/help queries through the same installed native dotnet host/release as dotnet; no MSBuild.exe, build outputs or managed helper tree is inferred.
 - id: dotnet
   availability: supported
   variant: prefilled
@@ -129,9 +129,9 @@ applications:
   boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
 - id: pytest
   availability: supported
-  variant: unavailable
-  reference: https://formulae.brew.sh/formula/pytest
-  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+  variant: prefilled
+  reference: https://docs.pytest.org/en/stable/how-to/usage.html
+  boundary: Explicit selected CPython framework interpreter with its installed pytest module and a bounded version query. No private Homebrew pytest virtualenv or script launcher is reconstructed; shares the interpreter release with pip.
 - id: vim
   availability: supported
   variant: prefilled
@@ -159,19 +159,19 @@ applications:
   boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
 - id: npm
   availability: supported
-  variant: unavailable
-  reference: https://formulae.brew.sh/formula/node
-  boundary: Mac distribution established; executable, helper and command contracts not yet admitted.
+  variant: prefilled
+  reference: https://raw.githubusercontent.com/Homebrew/homebrew-core/master/Formula/n/node.rb
+  boundary: Explicit Node invocation of bundled npm-cli.js for version/prefix queries; shares the Node release and native executable. No native npm binary, shebang wrapper, package install, script effects or dependency tree is invented.
 - id: cargo
   availability: supported
   variant: prefilled
   reference: https://formulae.brew.sh/formula/rust
   boundary: Prefilled arm64 variant; native helper/lifecycle verification remains open.
 - id: pip
-  availability: unresolved
-  variant: unavailable
-  reference: https://pip.pypa.io/en/stable/installation/
-  boundary: Python package command; interpreter/venv ownership and launcher process identity must be modeled first.
+  availability: supported
+  variant: prefilled
+  reference: https://pip.pypa.io/en/stable/user_guide/
+  boundary: Explicit selected CPython framework interpreter with its installed pip module for version/list queries. No installer, virtualenv, script launcher, downloaded package or network effect is inferred; shares the interpreter release with pytest.
 - id: sqlcmd
   availability: supported
   variant: prefilled
@@ -183,10 +183,10 @@ applications:
   reference: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/windows-commands
   boundary: The cataloged Windows executable has no native Mac variant; Mac alternatives require separate IDs.
 - id: powershell_query
-  availability: unresolved
-  variant: unavailable
-  reference: https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-macos
-  boundary: PowerShell exists on arm64, but this entry authors Windows CIM queries; no direct command-pool reuse.
+  availability: supported
+  variant: prefilled
+  reference: https://learn.microsoft.com/en-us/powershell/scripting/install/install-powershell-on-macos?view=powershell-7.6
+  boundary: Publisher arm64 pwsh 7.6.6 with bounded Get-Date/Get-Process queries. Native executable path follows the stable package layout; Windows CIM, registry, execution-policy bypass and helper behavior are not reused.
 - id: mysql
   availability: supported
   variant: prefilled
@@ -258,7 +258,8 @@ applications:
   availability: unresolved
   variant: unavailable
   reference: https://help.zscaler.com/client-connector
-  boundary: Mac product exists; current arm64 release, executable and service/helper contracts need verification.
+  boundary: Mac and Apple-Silicon platform support is documented, but the reviewed M1 guidance uses Rosetta and current native arm64 architecture is unverified. Remains unavailable for this arm64-only scope; no native executable or helper activation is inferred.
+  architecture_reference: https://help.zscaler.com/zscaler-client-connector/supporting-m1-processors
 - id: powerbi_desktop
   availability: unavailable
   variant: unavailable

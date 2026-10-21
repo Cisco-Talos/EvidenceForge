@@ -6902,6 +6902,16 @@ class SourceTimingPlanner:
             return event
         if lifecycle.phase == "dependent":
             key = (format_name, lifecycle.group_id)
+            if format_name in {"bash_history", "zsh_history"}:
+                # History stores the submitted command's execution time. A later
+                # dispatch from another activity must not rewrite that fact to
+                # the session's most recently delivered record. Retain only the
+                # maximum frontier used to order a later session closure.
+                previous = self._latest_session_dependent_times.get(key)
+                self._latest_session_dependent_times[key] = max(
+                    event.timestamp, previous or event.timestamp
+                )
+                return event
             visible_start = self._latest_session_start_times.get(key)
             source_time = event.timestamp
             if visible_start is not None:

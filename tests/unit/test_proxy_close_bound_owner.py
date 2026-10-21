@@ -229,7 +229,7 @@ def test_proxy_close_bound_covers_real_runtime_origin_floor(
 
 @pytest.mark.parametrize(
     ("dst_port", "expected_bound"),
-    [(80, 86_400.031002), (443, 86_404.532002)],
+    [(80, 86_401.506001), (443, 86_406.007001)],
 )
 def test_proxy_close_bound_covers_extreme_http_overlay_on_physical_legs(
     monkeypatch: pytest.MonkeyPatch,
@@ -267,7 +267,7 @@ def test_proxy_close_bound_covers_extreme_http_overlay_on_physical_legs(
     physical_close_seconds = _maximum_physical_close_seconds(request, plan)
 
     assert physical_close_seconds == pytest.approx(
-        86_400.031001,
+        86_401.506,
         abs=1e-9,
     )
     assert bound == expected_bound

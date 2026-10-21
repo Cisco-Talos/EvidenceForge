@@ -874,6 +874,9 @@ class PlatformConfig(BaseModel, extra="forbid"):
         description="Known main-executable image format; absent means unknown, not a script",
     )
     command_templates: list[str] | None = None
+    singleton_per_session: bool | None = Field(
+        default=None, description="Override the application instance policy for this platform"
+    )
     command_parameter_pools: dict[str, list[str]] | None = None
     children: list[str] | None = None
     loaded_modules: list[LoadedModuleEntry] | None = None
@@ -2220,6 +2223,22 @@ class PublicDnsResolverEntry(BaseModel, extra="forbid"):
     ip: IPvAnyAddress
     operator: str
     weight: int = Field(gt=0)
+
+
+class HttpTransportFloorSlackConfig(BaseModel, extra="forbid", frozen=True):
+    """Bounded close-time variation above the short HTTP admission floor."""
+
+    median_ms: float = Field(default=3.6, gt=0, allow_inf_nan=False)
+    sigma: float = Field(default=0.88, gt=0, allow_inf_nan=False)
+    minimum_ms: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    maximum_ms: float = Field(default=25.001, gt=0, le=30_000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        """Keep the median inside the finite modeled resource bound."""
+        if not self.minimum_ms <= self.median_ms <= self.maximum_ms:
+            raise ValueError("HTTP floor slack requires minimum_ms <= median_ms <= maximum_ms")
+        return self
 
 
 class DnsTunnelRttConfig(BaseModel, extra="forbid"):
@@ -3935,6 +3954,10 @@ class SpawnRuleEntry(BaseModel, extra="forbid"):
     children: list[str]
     spawn_delay: list[float] | None = None
     max_children: int | None = None
+    launch_kind: Literal["shell", "gui"] | None = Field(
+        default=None,
+        description="Explicit Mac launch ownership; absent preserves legacy path classification",
+    )
 
 
 class MacosMachTimebaseConfig(BaseModel, extra="forbid", frozen=True):

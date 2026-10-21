@@ -1,0 +1,790 @@
+{
+  "scenario_name": "macos-assessment",
+  "generated_at": "2026-10-20T13:00:00Z",
+  "evaluated_at": "2026-10-21T21:52:59.282098Z",
+  "total_records": 10823,
+  "source_counts": {
+    "bash_history": 48,
+    "ecar": 4259,
+    "macos_endpoint_security": 3,
+    "macos_unified_log": 3,
+    "syslog": 500,
+    "windows_event_security": 637,
+    "windows_event_sysmon": 518,
+    "zeek_conn": 2128,
+    "zeek_dns": 991,
+    "zeek_files": 369,
+    "zeek_http": 24,
+    "zeek_ntp": 12,
+    "zeek_ocsp": 22,
+    "zeek_smb_files": 91,
+    "zeek_smb_mapping": 51,
+    "zeek_ssl": 867,
+    "zeek_x509": 292,
+    "zsh_history": 8
+  },
+  "overall_score": 89.76439559285237,
+  "pillars": [
+    {
+      "number": 1,
+      "name": "Parseability",
+      "weight": 0.3,
+      "score": 100.0,
+      "sub_scores": [
+        {
+          "name": "Spec Conformance",
+          "key": "spec_conformance",
+          "weight": 0.55,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "10823/10823 records pass schema validation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Format Constraints",
+          "key": "format_constraints",
+          "weight": 0.45,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "10823/10823 records pass constraint validation",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 2,
+      "name": "Plausibility",
+      "weight": 0.25,
+      "score": 91.08451825918841,
+      "sub_scores": [
+        {
+          "name": "Value & OS Plausibility",
+          "key": "value_plausibility",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "1185/1185 records pass OS/value plausibility checks",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Co-occurrence Rules",
+          "key": "co_occurrence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "5853/5853 co-occurrence checks pass",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Distribution Fit",
+          "key": "distribution_fit",
+          "weight": 0.15,
+          "score": 82.06599313232205,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "ecar.object: 80; ecar.action: 73; windows_event_security.EventID: 59; zeek_conn.proto: 89; zeek_conn.conn_state: 78; zeek_dns.qtype_name: 94; zeek_dns.rcode_name: 99; zeek_http.method: 77; zeek_http.status_code: 79; zeek_ssl.version: 82; zeek_ssl.established: 93",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Cross-Source Field Agreement",
+          "key": "field_agreement",
+          "weight": 0.15,
+          "score": 99.83079526226734,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "590/591 matched pivot pairs agree",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [
+            "OCSP HTTP request does not match its ocsp.log response identity"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "User Behavioral Diversity",
+          "key": "user_diversity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Avg pairwise similarity: 0.23 across 14 users",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Anomaly Rate",
+          "key": "anomaly_rate",
+          "weight": 0.1,
+          "score": 38.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "19/5000 events anomalous (0.4%), target 1-5%",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "IDS Correlation Integrity",
+          "key": "ids_integrity",
+          "weight": 0.0,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Legacy dataset has no IDS evaluation summary; check skipped",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 3,
+      "name": "Causality",
+      "weight": 0.25,
+      "score": 100.0,
+      "sub_scores": [
+        {
+          "name": "Causal Ordering",
+          "key": "causal_ordering",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "1713/1713 causal pairs correctly ordered",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Event Presence",
+          "key": "event_presence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": 84.21052631578948,
+          "adjusted": true,
+          "details": "16/16 expected-visible storyline events have traces in logs; raw 16/19 (84.2/100), 3 excluded by generation/observation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Indicator Accuracy",
+          "key": "indicator_accuracy",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "48/48 indicator checks correct",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Pivot Linkability",
+          "key": "pivot_linkability",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": true,
+          "details": "16/16 inferred expected-visible narrative edges retain a shared rendered pivot; 0 isolated events, 3 contract-exempt",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Temporal Integrity",
+          "key": "temporal_integrity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": 84.21052631578948,
+          "adjusted": true,
+          "details": "16/16 expected-visible events correctly timed and ordered; raw 16/19 (84.2/100), 3 excluded by generation/observation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Storyline Trace Coverage",
+          "key": "storyline_trace_coverage",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "20/20 expected-visible format-traces found",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Intent Reconciliation",
+          "key": "intent_reconciliation",
+          "weight": 0.0,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "20/20 authored/planner reconciliation assertions pass; 17 intents dispatched canonical events and 17 had visible or delayed source evidence",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Effect Reconciliation",
+          "key": "effect_reconciliation",
+          "weight": 0.0,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Legacy ground truth has no execution-effect reconciliation contract",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        }
+      ],
+      "supplementary": {
+        "host_log_profile": {
+          "ns-build-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 48,
+              "ecar": 792,
+              "syslog": 500
+            }
+          },
+          "ns-mac-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "zsh_history"
+            ],
+            "present_formats": [
+              "ecar",
+              "zsh_history"
+            ],
+            "missing_formats": [
+              "bash_history"
+            ],
+            "volume_by_format": {
+              "ecar": 713,
+              "zsh_history": 5
+            }
+          },
+          "ns-mac-02": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "zsh_history"
+            ],
+            "present_formats": [
+              "ecar",
+              "zsh_history"
+            ],
+            "missing_formats": [
+              "bash_history"
+            ],
+            "volume_by_format": {
+              "ecar": 1249,
+              "zsh_history": 3
+            }
+          },
+          "ns-win-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1505,
+              "windows_event_security": 637
+            }
+          }
+        }
+      }
+    },
+    {
+      "number": 4,
+      "name": "Timing",
+      "weight": 0.2,
+      "score": 59.96633014027628,
+      "sub_scores": [
+        {
+          "name": "Attack Chain Timing",
+          "key": "attack_chain_timing",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "18/18 storyline transitions within bounds",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Human Burstiness",
+          "key": "burstiness",
+          "weight": 0.2,
+          "score": 99.26685730564537,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "CV scores for 5 users (target CV 1.0-3.0)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "System Process Regularity",
+          "key": "system_regularity",
+          "weight": 0.15,
+          "score": 20.79795100727968,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Interval CV: 1.792 (1 service groups, 328 events)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Diurnal Pattern",
+          "key": "diurnal_pattern",
+          "weight": 0.2,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Scenario spans 6.0h across 1 weekday(s) — too short to measure diurnal pattern (needs ≥24h and ≥2 weekdays)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "Volume Adequacy",
+          "key": "volume_adequacy",
+          "weight": 0.2,
+          "score": 0.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Noise:signal 569:1 (target 2000:1 for medium)",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Rate Plausibility",
+          "key": "rate_plausibility",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "2558/2558 timing checks plausible",
+          "sample_findings": [],
+          "unavailable_check_count": 0,
+          "sample_unavailable_findings": [],
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    }
+  ],
+  "categories": [
+    {
+      "key": "source_schema",
+      "name": "Parseability & Source Schema",
+      "score": 100.0,
+      "sub_score_keys": [
+        "spec_conformance",
+        "format_constraints"
+      ],
+      "details": "2/2 configured measures scored"
+    },
+    {
+      "key": "canonical_invariants",
+      "name": "Canonical Cross-Source Invariants",
+      "score": 99.96615905245346,
+      "sub_score_keys": [
+        "value_plausibility",
+        "co_occurrence",
+        "field_agreement",
+        "causal_ordering",
+        "rate_plausibility"
+      ],
+      "details": "5/6 configured measures scored"
+    },
+    {
+      "key": "scenario_completeness",
+      "name": "Declared Scenario Completeness",
+      "score": 100.0,
+      "sub_score_keys": [
+        "intent_reconciliation",
+        "event_presence",
+        "indicator_accuracy",
+        "pivot_linkability",
+        "temporal_integrity",
+        "storyline_trace_coverage"
+      ],
+      "details": "6/7 configured measures scored"
+    },
+    {
+      "key": "distribution_realism",
+      "name": "Distribution & Realism Diagnostics",
+      "score": 62.875828777892444,
+      "sub_score_keys": [
+        "distribution_fit",
+        "user_diversity",
+        "anomaly_rate",
+        "attack_chain_timing",
+        "burstiness",
+        "system_regularity",
+        "volume_adequacy"
+      ],
+      "details": "7/8 configured measures scored"
+    },
+    {
+      "key": "expert_comparison",
+      "name": "Optional Expert Comparison",
+      "score": null,
+      "sub_score_keys": [],
+      "details": "No expert assessment was supplied to this deterministic evaluation run"
+    }
+  ],
+  "acceptance_passed": true,
+  "acceptance_criteria": [
+    {
+      "name": "parseability.spec_conformance",
+      "pillar": "parseability",
+      "sub_score_key": "spec_conformance",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "parseability.format_constraints",
+      "pillar": "parseability",
+      "sub_score_key": "format_constraints",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.value_plausibility",
+      "pillar": "plausibility",
+      "sub_score_key": "value_plausibility",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.field_agreement",
+      "pillar": "plausibility",
+      "sub_score_key": "field_agreement",
+      "threshold": 85.0,
+      "aspirational": 97.0,
+      "actual": 99.83079526226734,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.ids_integrity",
+      "pillar": "plausibility",
+      "sub_score_key": "ids_integrity",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.causal_ordering",
+      "pillar": "causality",
+      "sub_score_key": "causal_ordering",
+      "threshold": 90.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.event_presence",
+      "pillar": "causality",
+      "sub_score_key": "event_presence",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.intent_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "intent_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.effect_reconciliation",
+      "pillar": "causality",
+      "sub_score_key": "effect_reconciliation",
+      "threshold": 100.0,
+      "aspirational": 100.0,
+      "actual": null,
+      "passed": null,
+      "applicable": false,
+      "meets_aspirational": null,
+      "level": "hard"
+    },
+    {
+      "name": "causality.indicator_accuracy",
+      "pillar": "causality",
+      "sub_score_key": "indicator_accuracy",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.pivot_linkability",
+      "pillar": "causality",
+      "sub_score_key": "pivot_linkability",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.temporal_integrity",
+      "pillar": "causality",
+      "sub_score_key": "temporal_integrity",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.storyline_trace_coverage",
+      "pillar": "causality",
+      "sub_score_key": "storyline_trace_coverage",
+      "threshold": 80.0,
+      "aspirational": 95.0,
+      "actual": 100.0,
+      "passed": true,
+      "applicable": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    }
+  ],
+  "aspirational_met": 16,
+  "aspirational_total": 20,
+  "flags": [
+    "Anomaly Rate: 38/100 (19/5000 events anomalous (0.4%), target 1-5%)",
+    "System Process Regularity: 21/100 (Interval CV: 1.792 (1 service groups, 328 events))",
+    "Volume Adequacy: 0/100 (Noise:signal 569:1 (target 2000:1 for medium))"
+  ],
+  "supplementary": {
+    "output_target": "default",
+    "evaluation_capacity": {
+      "files": 25,
+      "corpus_bytes": 5724534,
+      "parsed_records": 10823,
+      "limits_overridden": false
+    },
+    "host_log_profile": {
+      "ns-build-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 48,
+          "ecar": 792,
+          "syslog": 500
+        }
+      },
+      "ns-mac-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "zsh_history"
+        ],
+        "present_formats": [
+          "ecar",
+          "zsh_history"
+        ],
+        "missing_formats": [
+          "bash_history"
+        ],
+        "volume_by_format": {
+          "ecar": 713,
+          "zsh_history": 5
+        }
+      },
+      "ns-mac-02": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "zsh_history"
+        ],
+        "present_formats": [
+          "ecar",
+          "zsh_history"
+        ],
+        "missing_formats": [
+          "bash_history"
+        ],
+        "volume_by_format": {
+          "ecar": 1249,
+          "zsh_history": 3
+        }
+      },
+      "ns-win-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1505,
+          "windows_event_security": 637
+        }
+      }
+    }
+  },
+  "llm_spot_checks": null
+}

@@ -13,7 +13,11 @@ from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
-from evidenceforge.config.schemas import DnsTunnelRttConfig, NmapCommandProbeConfig
+from evidenceforge.config.schemas import (
+    DnsTunnelRttConfig,
+    HttpTransportFloorSlackConfig,
+    NmapCommandProbeConfig,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 _CACHED_DATA: dict[str, Any] | None = None
@@ -85,6 +89,11 @@ _DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge overlay network params into defaults."""
     result = dict(default)
+    if isinstance(overlay.get("http_transport_floor_slack"), dict):
+        result["http_transport_floor_slack"] = {
+            **default.get("http_transport_floor_slack", {}),
+            **overlay["http_transport_floor_slack"],
+        }
     if "oui_prefixes" in overlay:
         result["oui_prefixes"] = extend_list(
             default.get("oui_prefixes", []), overlay["oui_prefixes"]
@@ -185,6 +194,13 @@ def nmap_command_probe_config() -> NmapCommandProbeConfig:
     """Return validated bounded planning settings for nmap process effects."""
 
     return NmapCommandProbeConfig.model_validate(load_network_params().get("nmap_command_probe"))
+
+
+def http_transport_floor_slack_config() -> HttpTransportFloorSlackConfig:
+    """Read frozen HTTP timing policy, retaining exact legacy defaults when absent."""
+    return HttpTransportFloorSlackConfig.model_validate(
+        load_network_params().get("http_transport_floor_slack", {})
+    )
 
 
 def public_ntp_ips() -> list[str]:

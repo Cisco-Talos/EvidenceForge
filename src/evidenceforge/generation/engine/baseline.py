@@ -8504,7 +8504,7 @@ class BaselineMixin:
             assert current_hour is not None
             terminal_activity_plans = []
             for activity_type in activities:
-                jitter = timedelta(seconds=rng.randint(0, 55))
+                jitter = timedelta(seconds=rng.uniform(0, 55))
                 planned_time = event_time + jitter
                 close_bound = self._baseline_user_activity_close_bound_seconds(
                     activity_type=activity_type,
@@ -8574,7 +8574,7 @@ class BaselineMixin:
             jitter = (
                 terminal_activity_plans[activity_index][1]
                 if terminal_activity_plans is not None
-                else timedelta(seconds=rng.randint(0, 55))
+                else timedelta(seconds=rng.uniform(0, 55))
             )
             t = event_time + jitter
             active_session = next(
@@ -9878,6 +9878,7 @@ class BaselineMixin:
                 host_ip=system.ip,
                 host_key=system.hostname,
                 host_os=system.os,
+                machine_id=self._machine_ids.get(system.hostname, ""),
             )
             if file_effect is None:
                 continue

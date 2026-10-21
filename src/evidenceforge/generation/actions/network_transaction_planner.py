@@ -232,7 +232,6 @@ _TLS_GENERATED_CERTIFICATE_CHAIN_MAXIMUM_LENGTH = 3
 _TLS_CERTIFICATE_CLOSE_SLACK_SECONDS = 0.005
 _TLS_CERTIFICATE_MINIMUM_BASE_SECONDS = 1.05
 _TLS_CERTIFICATE_MINIMUM_PER_CERTIFICATE_SECONDS = 0.075
-_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US = 25_001
 _NETWORK_PACKET_OBSERVATION_MAX_SUFFIX_US = 997
 _NTP_RTT_MAXIMUM_US = 300_001
 _NTP_PROCESSING_MAXIMUM_US = 10_001
@@ -294,6 +293,7 @@ def _tls_certificate_duration_floor_bound_seconds() -> float:
 def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
     """Return the configured HTTP minimum and sampled floor slack maximum."""
 
+    from evidenceforge.generation.activity.network_params import http_transport_floor_slack_config
     from evidenceforge.generation.activity.timing_profiles import get_timing_window
 
     timing_window = get_timing_window(
@@ -304,7 +304,7 @@ def _http_completed_duration_floor_bounds_seconds() -> tuple[float, float]:
         default_class="same_observation",
     )
     minimum_seconds = (timing_window.max_ms + 5) / 1_000
-    return minimum_seconds, _HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US / 1_000_000
+    return minimum_seconds, http_transport_floor_slack_config().maximum_ms / 1_000
 
 
 def http_completed_transport_close_bound_seconds(
@@ -1461,12 +1461,18 @@ class NetworkTransactionPlanner:
     def _http_floor_slack_seconds(self, request: NetworkConnectionRequest) -> float:
         """Sample positive source-admission slack above an HTTP duration floor."""
 
+        from evidenceforge.generation.activity.network_params import (
+            http_transport_floor_slack_config,
+        )
+
+        profile = http_transport_floor_slack_config()
+
         return self._timing_runtime.sampler.sample_timedelta(
             TruncatedLognormalDistribution(
-                median=3_600.0,
-                sigma=0.88,
-                minimum=0.0,
-                maximum=float(_HTTP_DURATION_FLOOR_SLACK_MAXIMUM_US),
+                median=profile.median_ms * 1_000,
+                sigma=profile.sigma,
+                minimum=profile.minimum_ms * 1_000,
+                maximum=profile.maximum_ms * 1_000,
             ),
             relationship_key="network.http.duration_floor_slack",
             scope=self._timing_scope(request),
@@ -4269,7 +4275,12 @@ class NetworkTransactionPlanner:
                 resp_bytes = max(resp_bytes or 0, rng.randint(900, 4500))
             duration = self._completed_tls_duration_seconds(request, duration)
 
-        if not facts.suppress_application_side_effects and http is not None and conn_state == "SF":
+        if (
+            not facts.suppress_application_side_effects
+            and http is not None
+            and conn_state == "SF"
+            and not facts.http_application_layer_only
+        ):
             duration = self._completed_http_duration_seconds(request, duration)
 
         dns_owns_duration = (
@@ -4984,12 +4995,20 @@ class NetworkTransactionPlanner:
         process_identity = process.ecar_object_id or (
             f"{process.pid}:{process.start_time.isoformat()}"
         )
+        release_version = ""
+        deployments = getattr(self._executor.dispatcher, "deployment_registry", None)
+        version = getattr(process, "executable_version", None)
+        if deployments is not None and version is not None:
+            binary = deployments.binary_release_by_content_id(version.content_id)
+            if binary is not None:
+                release_version = binary.key.version
         return stable_browser_user_agent_for_process(
             source_system,
             process.image,
             process_identity,
             hostname=hostname,
             domain_tags=domain_tags,
+            release_version=release_version,
         )
 
     def _bind_browser_user_agent_to_process(
@@ -5470,6 +5489,7 @@ class NetworkTransactionPlanner:
             event.http is not None
             and event.network.protocol == "tcp"
             and event.network.conn_state == "SF"
+            and not event.network.application_layer_only
         ):
             event.network.duration = self._completed_http_duration_seconds(
                 request,

@@ -142,6 +142,7 @@ def test_system_file_churn_uses_platform_appropriate_fallback_owner(
     )
     owner = SimpleNamespace(
         state_manager=SimpleNamespace(get_process=lambda *_: process),
+        _machine_ids={"CLIENT": "a" * 32},
         _scaled_randint=lambda *_: 1,
         activity_generator=SimpleNamespace(
             _build_host_context=lambda _: None,
@@ -154,6 +155,7 @@ def test_system_file_churn_uses_platform_appropriate_fallback_owner(
         owner, system, _START, random.Random(3), platform, {"invented": 10}
     )
     assert selected.call_args.args[4] == expected
+    assert selected.call_args.kwargs["machine_id"] == "a" * 32
 
 
 @pytest.mark.slow

@@ -220,6 +220,16 @@ def compile_macos_installed_provisioning(
                 )
                 continue
             for path in installation.image_paths:
+                selected = deployments.installation_for_image(
+                    host, path, "macos", principal=installation.principal
+                )
+                if selected is None:
+                    raise StateError("Mac installed provisioning lost its exact path binding")
+                if selected != installation:
+                    # Logical module/SDK entry points can share one native image.
+                    # The registry already authenticates its single path/content
+                    # binding; only that physical owner receives stat/inode facts.
+                    continue
                 binary = deployments.resolve_binary(
                     host, path, "macos", principal=installation.principal
                 )

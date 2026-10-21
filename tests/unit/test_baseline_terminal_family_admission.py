@@ -1657,6 +1657,10 @@ def test_terminal_user_activity_applies_selected_network_family_bound_before_exe
             return 0
 
         @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
+        @staticmethod
         def choice(values: list[object]) -> object:
             return values[0]
 
@@ -1745,6 +1749,10 @@ def test_terminal_user_activity_recomputes_rendered_bound_after_startup_pacing(
             return 0
 
         @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
+        @staticmethod
         def choice(values: list[object]) -> object:
             return values[0]
 
@@ -1826,6 +1834,10 @@ def test_terminal_user_activity_does_not_create_unowned_local_session(
         def randint(_minimum: int, _maximum: int) -> int:
             return 0
 
+        @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
+
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
     system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")
     end_time = _WINDOW_START + timedelta(minutes=10)
@@ -1882,6 +1894,10 @@ def test_terminal_user_activity_omits_families_without_owner_deadlines(
         @staticmethod
         def randint(_minimum: int, _maximum: int) -> int:
             return 0
+
+        @staticmethod
+        def uniform(_minimum: float, _maximum: float) -> float:
+            return 0.0
 
     user = User(username="analyst", full_name="Alicia Analyst", email="analyst@example.test")
     system = System(hostname="WS-01", ip="10.0.0.20", os="Windows 11", type="workstation")

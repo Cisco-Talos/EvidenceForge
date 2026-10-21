@@ -1,0 +1,40 @@
+{
+  "journal_paths": 4,
+  "history_matches": 8,
+  "mac_self_image_creates": 2,
+  "gui_max_instances": {
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 9,
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea": 9,
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Sublime Text.app/Contents/MacOS/sublime_text": 11,
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Postman.app/Contents/MacOS/Postman": 6,
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Visual Studio Code.app/Contents/MacOS/Code": 7,
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/DBeaver.app/Contents/MacOS/dbeaver": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 8,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/DBeaver.app/Contents/MacOS/dbeaver": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea": 11,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Visual Studio Code.app/Contents/MacOS/Code": 12,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Postman.app/Contents/MacOS/Postman": 8,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Sublime Text.app/Contents/MacOS/sublime_text": 5
+  },
+  "ocsp_duration_range_seconds": 0.014674999999999994,
+  "failures": [
+    "NS-BUILD-01.northstar.example: invalid journal machine ID 220BEDEF",
+    "NS-BUILD-01.northstar.example: invalid journal machine ID 93130CAF",
+    "NS-BUILD-01.northstar.example: invalid journal machine ID 2D7C223E",
+    "NS-BUILD-01.northstar.example: invalid journal machine ID 2F4A56F2",
+    "NS-BUILD-01.northstar.example: journal sources disagree on machine identity",
+    "NS-MAC-01.northstar.example: execution creates its own image /opt/homebrew/opt/curl/bin/curl",
+    "NS-MAC-01.northstar.example: execution creates its own image /usr/local/libexec/northstar-maintenance",
+    "NS-MAC-01.northstar.example: embedded history start differs by 329.340s",
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal: 9 concurrent main processes",
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea: 9 concurrent main processes",
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Sublime Text.app/Contents/MacOS/sublime_text: 11 concurrent main processes",
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Postman.app/Contents/MacOS/Postman: 6 concurrent main processes",
+    "NS-MAC-01.northstar.example:maya.chen:0xbadcc45:/Applications/Visual Studio Code.app/Contents/MacOS/Code: 7 concurrent main processes",
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal: 8 concurrent main processes",
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea: 11 concurrent main processes",
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Visual Studio Code.app/Contents/MacOS/Code: 12 concurrent main processes",
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Postman.app/Contents/MacOS/Postman: 8 concurrent main processes",
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Sublime Text.app/Contents/MacOS/sublime_text: 5 concurrent main processes"
+  ]
+}

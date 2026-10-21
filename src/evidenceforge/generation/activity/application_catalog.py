@@ -786,7 +786,8 @@ def is_singleton_application_image(image_path: str, os_category: str) -> bool:
                 and len(normalized) > len(prefix) + len(suffix)
             )
         if matches:
-            return bool(app.get("singleton_per_session"))
+            override = platform.get("singleton_per_session")
+            return bool(app.get("singleton_per_session") if override is None else override)
     return False
 
 

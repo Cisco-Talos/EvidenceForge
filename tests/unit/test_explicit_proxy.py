@@ -232,6 +232,33 @@ def test_process_bound_browser_agent_ignores_destination_and_caller_rng() -> Non
     assert "Edg/" not in first
 
 
+@pytest.mark.parametrize(
+    ("image", "version", "token"),
+    [
+        ("chrome.exe", "120.0.6099.225", "Chrome/120.0.0.0"),
+        ("firefox.exe", "126.0.2", "Firefox/126.0"),
+    ],
+)
+def test_process_browser_agent_consumes_loaded_release_version(
+    image: str, version: str, token: str
+) -> None:
+    from evidenceforge.generation.activity.proxy_user_agents import (
+        stable_browser_user_agent_for_process,
+    )
+
+    host = System(hostname="WS-02", ip="10.0.1.21", os="Windows 11", type="workstation")
+    first = stable_browser_user_agent_for_process(
+        host, image, "loaded-process", release_version=version
+    )
+    second = stable_browser_user_agent_for_process(
+        host, image, "loaded-process", release_version=version, hostname="other.example"
+    )
+    assert first == second
+    assert token in first
+    if image == "firefox.exe":
+        assert "rv:126.0" in first
+
+
 def test_authoritative_browser_pid_reuses_agent_across_incoming_versions() -> None:
     """Authoritative-PID rendering projects one stable version from its browser owner."""
     generator, emitters = _generator(

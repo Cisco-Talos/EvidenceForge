@@ -526,6 +526,8 @@ macos:
       - docker
       - git
       - node
+      - Python
+      - pwsh
       - kubectl
       - vim
       - nano
@@ -551,6 +553,8 @@ macos:
       - docker
       - git
       - node
+      - Python
+      - pwsh
       - kubectl
       - vim
       - nano
@@ -578,6 +582,8 @@ macos:
     command_templates:
     - /opt/homebrew/opt/dotnet/libexec/dotnet --info
     - /opt/homebrew/opt/dotnet/libexec/dotnet --list-sdks
+    - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -version
+    - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -help
     lifetime: short
     children: []
 
@@ -585,6 +591,8 @@ macos:
     command_templates:
     - /opt/homebrew/bin/node --version
     - /opt/homebrew/bin/node /Users/{username}/Projects/{project}/scripts/check.js
+    - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js --version
+    - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js config get prefix
     lifetime: short
     children: []
 
@@ -791,5 +799,21 @@ macos:
   plutil:
     command_templates:
     - /usr/bin/plutil -help
+    lifetime: short
+    children: []
+
+  Python:
+    launch_kind: shell
+    command_templates:
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pytest --version
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip --version
+    - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip list --format=columns
+    lifetime: short
+    children: []
+
+  pwsh:
+    command_templates:
+    - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
+    - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
     lifetime: short
     children: []

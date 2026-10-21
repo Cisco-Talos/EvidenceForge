@@ -343,7 +343,13 @@ class ProcessPreflightPlanner:
             "psexesvc.exe",
             "healthmonitorsvc.exe",
         }
-        if request.ensure_file_event and not bundle_owned_service_payload:
+        if (
+            request.ensure_file_event
+            and not bundle_owned_service_payload
+            and os_category != "macos"
+        ):
+            # A Mac execution does not establish installation or a self-write.
+            # Its files require explicit command/artifact effects below.
             lower_path = process_name.lower()
             windows_path = lower_path.replace("/", "\\")
             is_system_binary = (

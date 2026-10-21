@@ -249,7 +249,11 @@ def _compiled_application_descriptor(
             (name, tuple(values))
             for name, values in sorted((platform_config.command_parameter_pools or {}).items())
         ),
-        singleton_per_session=application.singleton_per_session,
+        singleton_per_session=(
+            platform_config.singleton_per_session
+            if platform_config.singleton_per_session is not None
+            else application.singleton_per_session
+        ),
         selection_ordinal=selection_ordinal,
         child_commands=tuple(
             (

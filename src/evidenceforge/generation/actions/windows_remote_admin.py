@@ -671,6 +671,10 @@ class ExplicitCredentialUseActionBundle:
         )
         target_username = self._request.target_username.split("\\")[-1].split("@", 1)[0]
         target_user = self._executor._user_model_for_username(target_username)
+        transport = self._executor.state_manager.get_connection_by_zeek_uid(transport_id)
+        if transport is None or transport.close_time is None:
+            raise StateError("Explicit-credential SMB transport has no committed interval")
+        connection_time = transport.start_time
         target_logon_time = connection_time + timedelta(milliseconds=40)
         target_logon_id = self._executor.generate_logon(
             target_user,
@@ -687,7 +691,7 @@ class ExplicitCredentialUseActionBundle:
             lifecycle_group_id=f"{self._request.stable_id}:target_logon",
             source="windows_explicit_credentials",
         )
-        network_close = connection_time + timedelta(seconds=duration)
+        network_close = transport.close_time
         target_logoff_time = network_close + timedelta(milliseconds=20)
         self._executor.generate_logoff(
             target_user,

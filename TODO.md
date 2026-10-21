@@ -543,6 +543,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   See the [assessment](docs/design/macos-workstation-feasibility.md),
   [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md) and
   [implementation handoff](docs/worklog/2026-10-15-macos-workstation-implementation.md).
+  Native ES exec/exit and Gatekeeper denial remain explicitly gated by the user's
+  2026-10-21 decision; no native lab capture is pending. The frozen mixed-fleet
+  benchmark, reviewer updates and bounded acceptance are tracked in the
+  [assessment worklog](docs/worklog/2026-10-21-macos-assessment.md).
 
 - [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
   suitable test host is available. User explicitly deferred account creation on

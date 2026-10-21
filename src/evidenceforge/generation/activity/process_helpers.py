@@ -251,13 +251,23 @@ def _posix_foreground_lifetime(
     return _linux_foreground_lifetime(process_name, command_line)
 
 
+def _macos_process_uses_shell(process_name: str) -> bool:
+    """Read explicit launch ownership before the legacy application-path fallback."""
+    from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+    profile = get_parent_config("macos", process_name.rsplit("/", 1)[-1])
+    if profile.get("launch_kind") is not None:
+        return profile["launch_kind"] == "shell"
+    return ".app/Contents/MacOS/" not in process_name
+
+
 def _posix_shell_process_reserves_foreground(
     os_category: str, process_name: str, command_line: str
 ) -> bool:
     """Recognize shell occupancy without importing Linux daemon policy into Mac."""
     if os_category != "macos":
         return _linux_shell_process_reserves_foreground(process_name, command_line)
-    if ".app/Contents/MacOS/" in process_name or not command_line.strip():
+    if not _macos_process_uses_shell(process_name) or not command_line.strip():
         return False
     # Following output still occupies a Mac foreground shell. Only explicit
     # background intent releases it; an unknown end is never a fabricated exit.

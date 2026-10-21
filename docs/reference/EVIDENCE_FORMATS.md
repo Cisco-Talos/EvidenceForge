@@ -673,8 +673,8 @@ boot/timebase and counter heads survive checkpoint recovery through existing own
 
 The Mac SSH startup coordinator routes its actual fork phases through this source. Required
 static signatures, execution validation, audit relationships, terminal and executable/file facts
-must all be known. Built-in SSH helper profiles do not yet supply every required fact; selecting
-this format for such a fork fails before its canonical commit with a metadata diagnostic.
+must all be known. The bounded built-in SSH path supplies these facts and produces nonempty
+fork output; unsupported or incomplete paths fail before commit with a metadata diagnostic.
 Ordinary aggregate process starts never become fork records. A run without eligible forks may
 produce no native file. Format discovery alone does not establish a nonempty accepted CLI dataset.
 
@@ -685,4 +685,4 @@ policy owns collection windows, missingness and export delay; native occurrence 
 remain canonical. Exact publication shares State, lifecycle, retained artifacts and the existing
 source journal, so a partial sink failure resumes frozen bytes without allocating another fork or
 counter. SOF-ELK and Splunk targets preserve these native bytes; external SIEM normalization and
-current-build fidelity remain unvalidated. ES-R1 and GK-R1 remain open.
+current-build fidelity remain unvalidated. ES-R1 and GK-R1 remain gated by user decision.

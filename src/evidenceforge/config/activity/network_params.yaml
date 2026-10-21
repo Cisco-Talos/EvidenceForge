@@ -8,6 +8,14 @@
 #
 # Authoring reference: commands/eforge/references/config-dns-network.md
 
+# Modeled right-skew TCP/HTTP close variation after short source-admission floors.
+# These bounds are synthetic policy, not measured network calibration.
+http_transport_floor_slack:
+  median_ms: 180
+  sigma: 1.1
+  minimum_ms: 2
+  maximum_ms: 1500
+
 oui_prefixes:
   - prefix: "D4:BE:D9"
     vendor: "Dell"

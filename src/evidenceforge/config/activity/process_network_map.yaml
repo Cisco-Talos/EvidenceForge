@@ -119,7 +119,7 @@ mappings:
 
   # CLI queries may be local or use configured APIs. Their executable alone
   # never authorizes an unrelated HTTPS connection or ambient PID attribution.
-  - exe: [git, npm, cargo, docker, kubectl]
+  - exe: [git, npm, cargo, docker, kubectl, node, Python, python3, dotnet, pwsh]
     service: ssl
     port: 443
     external: true

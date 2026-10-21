@@ -1,0 +1,119 @@
+EvidenceForge Data Quality Evaluation
+Output directory: /private/tmp/eforge-macos-assessment-20261021-loop2-328
+Scenario comparison: 
+scenarios/macos-assessment/revisions/02-native/source/scenario.yaml
+✓ Verified authoritative bundle: macos-assessment
+
+  Dim 4: Timing                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:01
+  Parsed 10,823 records from 18 sources ━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+
+=== EvidenceForge Data Quality Report ===
+Scenario: macos-assessment
+Evaluated: 2026-10-21T21:52:59Z
+Total records: 10,823 across 18 sources
+  (bash_history: 48, ecar: 4,259, macos_endpoint_security: 3, macos_unified_log:
+3, syslog: 500, windows_event_security: 637, windows_event_sysmon: 518, 
+zeek_conn: 2,128, zeek_dns: 991, zeek_files: 369, zeek_http: 24, zeek_ntp: 12, 
+zeek_ocsp: 22, zeek_smb_files: 91, zeek_smb_mapping: 51, zeek_ssl: 867, 
+zeek_x509: 292, zsh_history: 8)
+
+Overall Quality Score: 90/100
+Aspirational targets: 16/20 (80%)
+
+Evaluation Categories:
+  Parseability & Source Schema:           100/100
+  Canonical Cross-Source Invariants:      100/100
+  Declared Scenario Completeness:         100/100
+  Distribution & Realism Diagnostics:     63/100
+  Optional Expert Comparison:             N/A
+
+Pillar Scores:
+  1. Parseability:                        100/100
+     Spec Conformance:                    100/100  [min:100 PASS] [asp:100 met]
+       10823/10823 records pass schema validation
+     Format Constraints:                  100/100  [min:100 PASS] [asp:100 met]
+       10823/10823 records pass constraint validation
+  2. Plausibility:                        91/100
+     Value & OS Plausibility:             100/100  [min:95 PASS] [asp:99 met]
+       1185/1185 records pass OS/value plausibility checks
+     Co-occurrence Rules:                 100/100
+       5853/5853 co-occurrence checks pass
+     Distribution Fit:                    82/100
+       ecar.object: 80; ecar.action: 73; windows_event_security.EventID: 59; 
+zeek_conn.proto: 89; zeek_conn.conn_state: 78; zeek_dns.qtype_name: 94; 
+zeek_dns.rcode_name: 99; zeek_http.method: 77; zeek_http.status_code: 79; 
+zeek_ssl.version: 82; zeek_ssl.established: 93
+     Cross-Source Field Agreement:        100/100  [min:85 PASS] [asp:97 met]
+       590/591 matched pivot pairs agree
+     User Behavioral Diversity:           100/100
+       Avg pairwise similarity: 0.23 across 14 users
+     Anomaly Rate:                        38/100
+       19/5000 events anomalous (0.4%), target 1-5%
+     IDS Correlation Integrity:           N/A
+  3. Causality:                           100/100
+     Causal Ordering:                     100/100  [min:90 PASS] [asp:99 met]
+       1713/1713 causal pairs correctly ordered
+     Event Presence:                      100/100  [min:85 PASS] [asp:95 met] 
+raw:84
+       16/16 expected-visible storyline events have traces in logs; raw 16/19 
+(84.2/100), 3 excluded by generation/observation contract
+     Indicator Accuracy:                  100/100  [min:85 PASS] [asp:95 met]
+       48/48 indicator checks correct
+     Pivot Linkability:                   100/100  [min:80 PASS] [asp:95 met]
+       16/16 inferred expected-visible narrative edges retain a shared rendered 
+pivot; 0 isolated events, 3 contract-exempt
+     Temporal Integrity:                  100/100  [min:85 PASS] [asp:95 met] 
+raw:84
+       16/16 expected-visible events correctly timed and ordered; raw 16/19 
+(84.2/100), 3 excluded by generation/observation contract
+     Storyline Trace Coverage:            100/100  [min:80 PASS] [asp:95 met]
+       20/20 expected-visible format-traces found
+     Intent Reconciliation:               100/100  [min:100 PASS] [asp:100 met]
+       20/20 authored/planner reconciliation assertions pass; 17 intents 
+dispatched canonical events and 17 had visible or delayed source evidence
+     Effect Reconciliation:               N/A
+  4. Timing:                              60/100
+     Attack Chain Timing:                 100/100
+       18/18 storyline transitions within bounds
+     Human Burstiness:                    99/100
+       CV scores for 5 users (target CV 1.0-3.0)
+     System Process Regularity:           21/100
+       Interval CV: 1.792 (1 service groups, 328 events)
+     Diurnal Pattern:                     N/A
+     Volume Adequacy:                     0/100
+       Noise:signal 569:1 (target 2000:1 for medium)
+     Rate Plausibility:                   100/100
+       2558/2558 timing checks plausible
+
+Acceptance: PASS (all hard requirements met)
+
+All acceptance criteria:
+  PASS parseability.spec_conformance: 100.0 vs min 100  aspirational: 100
+  PASS parseability.format_constraints: 100.0 vs min 100  aspirational: 100
+  PASS plausibility.value_plausibility: 100.0 vs min 95  aspirational: 99
+  PASS plausibility.field_agreement: 99.8 vs min 85  aspirational: 97
+  N/A plausibility.ids_integrity: N/A vs min 100  aspirational: 100
+  PASS causality.causal_ordering: 100.0 vs min 90  aspirational: 99
+  PASS causality.event_presence: 100.0 vs min 85  aspirational: 95
+  PASS causality.intent_reconciliation: 100.0 vs min 100  aspirational: 100
+  N/A causality.effect_reconciliation: N/A vs min 100  aspirational: 100
+  PASS causality.indicator_accuracy: 100.0 vs min 85  aspirational: 95
+  PASS causality.pivot_linkability: 100.0 vs min 80  aspirational: 95
+  PASS causality.temporal_integrity: 100.0 vs min 85  aspirational: 95
+  PASS causality.storyline_trace_coverage: 100.0 vs min 80  aspirational: 95
+
+Flags:
+  - Anomaly Rate: 38/100 (19/5000 events anomalous (0.4%), target 1-5%)
+  - System Process Regularity: 21/100 (Interval CV: 1.792 (1 service groups, 328
+events))
+  - Volume Adequacy: 0/100 (Noise:signal 569:1 (target 2000:1 for medium))
+
+Host Log Profile (informational):
+  ns-build-01: all expected formats present
+  ns-mac-01: missing formats: bash_history
+  ns-mac-02: missing formats: bash_history
+  ns-win-01: all expected formats present
+
+Sample failures (Cross-Source Field Agreement):
+  OCSP HTTP request does not match its ocsp.log response identity
+

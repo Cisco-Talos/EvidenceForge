@@ -1,5 +1,13 @@
 # macOS mixed-fleet assessment
 
+Latest complete round: [loop 2](loop-2/REPORT.md), revision 328. Quantitative
+acceptance passes at **89.7644**, and the original hard probe has zero failures.
+The fresh blind mean is **66.5**, down from **83** (lower is more production-like).
+Three reviewers judge Synthetic and one Inconclusive; unchanged reports and
+report-only deliberation are retained. Revision-329 follow-through addresses the
+confirmed process-population, identity and timing families before another round.
+Native exec/exit and Gatekeeper denial remain gated by user decision.
+
 ## Loop 1: supported sources
 
 The frozen supported-source revision generated 11,409 records in 17 source
