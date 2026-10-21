@@ -15083,6 +15083,36 @@
       "test_files": [
         "tests/unit/test_macos_workspace_logging.py"
       ]
+    },
+    {
+      "definition": "src/evidenceforge/config/formats/macos_endpoint_security.yaml",
+      "emitter_class": "MacosEndpointSecurityEmitter",
+      "emitter_file": "src/evidenceforge/generation/emitters/macos_endpoint_security.py",
+      "emitter_line": 24,
+      "evaluator_files": [
+        "src/evidenceforge/evaluation/native_codecs.py",
+        "src/evidenceforge/evaluation/parsers/macos_native.py",
+        "src/evidenceforge/evaluation/validation_routes.py"
+      ],
+      "format": "macos_endpoint_security",
+      "occurrence_builder_fields_consumed": [],
+      "path_classification": "intentional_adapter",
+      "path_review": {
+        "assessment": "The ordinary event queue is explicitly rejected. The source admits supported canonical fork occurrences before State commit and publishes authenticated nested native records through the exact journal and shared host-output lifecycle; exec and exit remain gated.",
+        "classification": "intentional_adapter",
+        "owner": "MacosEsSource collection admission and authenticated exact native publication"
+      },
+      "review_status": "path_review_complete",
+      "supported_event_types": [],
+      "test_files": [
+        "tests/integration/test_format_definitions.py",
+        "tests/unit/test_macos_es_source_integration.py",
+        "tests/unit/test_macos_es_source_profile.py",
+        "tests/unit/test_macos_native_ingestion.py",
+        "tests/unit/test_macos_native_output_lifecycle.py",
+        "tests/unit/test_source_deployment_compiler.py",
+        "tests/unit/test_zeek_format_accuracy.py"
+      ]
     }
   ],
   "method": "python-ast-static-inventory",

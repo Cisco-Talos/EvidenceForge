@@ -1,0 +1,102 @@
+{
+  "scope": "Fresh loop-1 generated evidence only; equal millisecond timestamps treated as unordered",
+  "process_records": 1002,
+  "process_operations": {
+    "exec": 4,
+    "service_drop": 1,
+    "audit_bind": 1,
+    "privilege_drop": 1,
+    "job_control": 1,
+    "fork": 3
+  },
+  "mac_process_extensions": [
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 390,
+      "operation": "exec"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 391,
+      "operation": "exec"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 392,
+      "operation": "exec"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 393,
+      "operation": "service_drop"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 394,
+      "operation": "audit_bind"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 395,
+      "operation": "privilege_drop"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 396,
+      "operation": "exec"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 397,
+      "operation": "job_control"
+    }
+  ],
+  "visible_lifecycle_violations": [
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 392,
+      "birth_line": 399,
+      "process_id": "54f5c1e1-773d-4259-8050-40ea65da994d",
+      "transition_ms": 1792508879799,
+      "birth_ms": 1792508881165,
+      "issue": "visible process transition precedes visible creation of the same lifetime"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 393,
+      "birth_line": 399,
+      "process_id": "54f5c1e1-773d-4259-8050-40ea65da994d",
+      "transition_ms": 1792508879802,
+      "birth_ms": 1792508881165,
+      "issue": "visible process transition precedes visible creation of the same lifetime"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 395,
+      "birth_line": 402,
+      "process_id": "d02c24bf-76dd-4824-ba7e-c4ca2db41938",
+      "transition_ms": 1792508880480,
+      "birth_ms": 1792508881168,
+      "issue": "visible process transition precedes visible creation of the same lifetime"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 396,
+      "birth_line": 400,
+      "process_id": "66aae7eb-161b-4a17-be68-864186b66ed5",
+      "transition_ms": 1792508880505,
+      "birth_ms": 1792508881165,
+      "issue": "visible process transition precedes visible creation of the same lifetime"
+    },
+    {
+      "file": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 397,
+      "birth_line": 400,
+      "process_id": "66aae7eb-161b-4a17-be68-864186b66ed5",
+      "transition_ms": 1792508880505,
+      "birth_ms": 1792508881165,
+      "issue": "visible process transition precedes visible creation of the same lifetime"
+    }
+  ],
+  "passed": false
+}

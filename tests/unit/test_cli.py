@@ -53,7 +53,7 @@ from evidenceforge.cli.commands import (
     _GenerationSpeedColumn,
     app,
 )
-from evidenceforge.composition import compile_scenario
+from evidenceforge.composition import compile_scenario, with_runtime_scenario
 from evidenceforge.events.artifacts_manifest import ARTIFACTS_MANIFEST_FILENAME
 from evidenceforge.events.collection_profile import COLLECTION_PROFILE_FILENAME
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
@@ -725,6 +725,43 @@ class TestEvalCommand:
         assert result.exit_code == EXIT_SUCCESS, result.stdout
         assert mock_engine_class.call_args.kwargs["scenario"] is compiled.scenario
         assert mock_engine_class.call_args.kwargs["effective_config"] is compiled.effective_config
+
+    @pytest.mark.parametrize("changed", [False, True])
+    def test_eval_compares_ordered_runtime_formats_without_masking_source_drift(
+        self, tmp_path: Path, changed: bool
+    ) -> None:
+        bundle = tmp_path / "bundle"
+        bundle.mkdir()
+        (bundle / "GENERATION_MANIFEST.json").write_text("{}", encoding="utf-8")
+        compiled = compile_scenario("tests/fixtures/scenarios/minimal.yaml")
+        runtime = compiled.scenario.model_copy(deep=True)
+        runtime.output.logs = [{"format": "zeek"}, {"format": "windows"}]
+        compiled = with_runtime_scenario(compiled, runtime)
+        candidate = compiled
+        if changed:
+            altered = runtime.model_copy(deep=True)
+            altered.environment.description += " A changed environment."
+            candidate = with_runtime_scenario(compiled, altered)
+        manifest = {
+            "compiled_sha256": compiled.digests["compiled_sha256"],
+            "generation_seed": compiled.scenario.generation_seed,
+            "formats": ["windows", "zeek"],
+        }
+        with (
+            patch("evidenceforge.cli.commands.verify_generation_bundle", return_value=manifest),
+            patch(
+                "evidenceforge.cli.commands.compile_scenario",
+                side_effect=[compiled, candidate],
+            ),
+            patch("evidenceforge.evaluation.engine.EvaluationEngine") as mock_engine,
+            patch("evidenceforge.evaluation.report.format_text_report"),
+        ):
+            result = runner.invoke(
+                app,
+                ["eval", str(bundle), "--scenario", "tests/fixtures/scenarios/minimal.yaml"],
+            )
+        assert result.exit_code == (EXIT_SCHEMA_VALIDATION if changed else EXIT_SUCCESS)
+        assert mock_engine.called is not changed
 
     def test_eval_reports_include_conflict_as_schema_validation(self, tmp_path):
         """eforge eval should treat include conflicts as scenario validation errors."""

@@ -444,8 +444,9 @@ class TestLoadAllFormats:
         """Test that all format definitions load successfully."""
         formats = load_all_formats()
 
-        # Existing formats plus the bounded zsh history projection.
-        assert len(formats) == 27
+        # Includes bounded history and both experimental native Mac sources.
+        assert len(formats) == 28
+        assert "macos_endpoint_security" in formats
         assert "macos_unified_log" in formats
         assert "windows_event_security" in formats
         assert "zeek_conn" in formats

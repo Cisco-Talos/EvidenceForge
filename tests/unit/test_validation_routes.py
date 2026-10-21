@@ -25,7 +25,7 @@ def test_every_parser_schema_and_emitter_has_an_owner() -> None:
     routes.validate_route_inventory()
     native = {r.validator for r in routes.VALIDATION_ROUTES if r.kind == "native"}
     # Registered codec-backed emitters retain the stricter native codec owner.
-    emitted_codecs = {"macos_unified_log"}
+    emitted_codecs = {"macos_unified_log", "macos_endpoint_security"}
     assert native | emitted_codecs == set(load_all_formats()) == set(_build_emitter_classes())
     for source in emitted_codecs:
         assert routes.get_validation_route(source).kind == "native_codec"

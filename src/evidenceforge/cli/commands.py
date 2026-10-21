@@ -2922,9 +2922,11 @@ def eval_cmd(
                     generation_seed=int(manifest["generation_seed"]),
                 )
                 candidate_scenario = candidate.scenario.model_copy(deep=True)
-                candidate_scenario.output.logs = [
-                    {"format": value} for value in manifest.get("formats", [])
-                ]
+                # The manifest lists a sorted inventory; the resolved runtime
+                # scenario retains authored order when no filter was applied.
+                # Compare against that verified runtime selection/order rather
+                # than changing an otherwise identical scenario's digest.
+                candidate_scenario.output.logs = [dict(log) for log in scenario.output.logs]
                 candidate = with_runtime_scenario(candidate, candidate_scenario)
                 if candidate.digests.get("compiled_sha256") != manifest.get("compiled_sha256"):
                     if not allow_scenario_mismatch:

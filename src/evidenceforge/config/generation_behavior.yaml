@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 326
+current_revision: 327
 history_start_revision: 1
-behavior_surface_sha256: 5cb2c51b628d1eb4ea56af607f15bedfba504a11d381969f27c4c43b6de3e1d2
+behavior_surface_sha256: d5bbc2a7815378d94fd93cf6372372765759674b4b978a7ea987d82588ab3f4d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3043,3 +3043,18 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Activate the modeled canonical collector and route complete fork observations through the selected native source and exact journal.
+  - revision: 327
+    id: mixed-fleet-remote-session-profile-and-terminal-admission
+    impact: localized
+    domains:
+      - deployment-user-profile-eligibility
+      - remote-session-runtime-content
+      - ssh-source-terminal-publication
+    formats:
+      - ecar
+      - syslog
+      - windows_event_security
+      - windows_event_sysmon
+      - bash_history
+      - zsh_history
+    summary: Compiles exact remote-session target profiles without broadening desktop software placement and admits authenticated Windows Security/Sysmon SSH client teardown sinks.

@@ -8887,20 +8887,27 @@ class EventDispatcher:
         self,
         projection: _PreparedProjection,
     ) -> tuple[LogEmitter, ...]:
-        """Require concrete exact eCAR/Syslog sinks or one suppressed warm-up."""
+        """Require authenticated endpoint sinks for each selected SSH close source."""
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+        from evidenceforge.generation.emitters.windows import (
+            WindowsEventEmitter,
+            _supports_windows_exact_projection_publication,
+        )
 
         if self._ssh_terminal_projection_is_exact_omission(projection):
             return ()
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
+            "windows_event_security": WindowsEventEmitter,
+            "windows_event_sysmon": SysmonEventEmitter,
         }
         participants: list[LogEmitter] = []
         participant_ids: set[int] = set()
-        target_counts = {"ecar": 0, "syslog": 0}
+        target_counts = dict.fromkeys(exact_types_by_format, 0)
         for format_name, emitter in self._exact_projection_targets(projection):
             emitter_type = type(emitter)
             expected_type = exact_types_by_format.get(format_name)
@@ -8911,10 +8918,12 @@ class EventDispatcher:
             )
             supported = expected_type is emitter_type and (
                 marker is True
-                if emitter_type is EcarEmitter
+                if emitter_type in {EcarEmitter, WindowsEventEmitter}
                 else type(marker) is property
                 and getattr(emitter, "supports_exact_projection_publication", None) is True
             )
+            if supported and emitter_type is WindowsEventEmitter:
+                supported = _supports_windows_exact_projection_publication(emitter)
             if not supported:
                 raise EventContractError(
                     f"Exact SSH terminal target {format_name!r} is unsupported before State"
@@ -8923,14 +8932,11 @@ class EventDispatcher:
             if id(emitter) not in participant_ids:
                 participant_ids.add(id(emitter))
                 participants.append(emitter)
-        if target_counts["ecar"] > 1:
-            raise EventContractError(
-                "Exact SSH terminal projection permits at most one eCAR target"
-            )
-        if target_counts["syslog"] > 1:
-            raise EventContractError(
-                "Exact SSH terminal projection permits at most one Syslog target"
-            )
+        for format_name, count in target_counts.items():
+            if count > 1:
+                raise EventContractError(
+                    f"Exact SSH terminal projection permits at most one {format_name} target"
+                )
         if not participants:
             raise EventContractError(
                 "Exact SSH terminal projection requires one durable source target"
@@ -8945,6 +8951,8 @@ class EventDispatcher:
 
         from evidenceforge.generation.emitters.ecar import EcarEmitter
         from evidenceforge.generation.emitters.syslog import SyslogEmitter
+        from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
+        from evidenceforge.generation.emitters.windows import WindowsEventEmitter
 
         if self._projection_is_exact_warmup_suppressed(projection):
             return True
@@ -8953,6 +8961,8 @@ class EventDispatcher:
         exact_types_by_format: dict[str, type[LogEmitter]] = {
             "ecar": EcarEmitter,
             "syslog": SyslogEmitter,
+            "windows_event_security": WindowsEventEmitter,
+            "windows_event_sysmon": SysmonEventEmitter,
         }
         if any(
             type(item) is not tuple

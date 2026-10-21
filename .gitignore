@@ -71,6 +71,9 @@ checkpoints/
 scenarios/*
 !scenarios/COVERAGE-TEST-PROMPT.md
 !scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md
+!scenarios/macos-assessment/
+scenarios/macos-assessment/output/
+scenarios/macos-assessment/data/
 !scenarios/branch-office-example/
 scenarios/branch-office-example/*
 !scenarios/branch-office-example/scenario.yaml

@@ -951,6 +951,26 @@ def compile_deployment_registry(
                     profile_root=_profile_root(user.username, activity_platform),
                 ),
             )
+    # Remote session eligibility is broader than local application placement.
+    # Compile the target profile without installing the user's desktop software
+    # there; runtime command/file publication still requires this exact owner.
+    for system in sorted(
+        scenario.environment.systems,
+        key=lambda item: item.hostname.casefold(),
+    ):
+        platform = infer_system_platform(system)
+        if platform is None:
+            continue
+        for user in world_model.get_ssh_admin_users(system):
+            profiles_by_owner.setdefault(
+                (system.hostname.casefold(), user.username.casefold(), platform),
+                UserProfileIdentity(
+                    hostname=system.hostname,
+                    principal=user.username,
+                    platform=platform,
+                    profile_root=_profile_root(user.username, platform),
+                ),
+            )
     users_by_name = {
         user.username.casefold(): user for user in scenario.environment.users if user.enabled
     }
@@ -959,7 +979,10 @@ def compile_deployment_registry(
     }
     authored_events = tuple(scenario.storyline or ()) + tuple(scenario.red_herrings)
     for authored in sorted(authored_events, key=lambda item: item.id):
-        if not any(event.type == "process" for event in authored.events):
+        if not any(
+            event.type in {"process", "logon", "ssh_session", "rdp_session"}
+            for event in authored.events
+        ):
             continue
         user = users_by_name.get(authored.actor.casefold())
         system = systems_by_name.get(authored.system.casefold())

@@ -17,6 +17,12 @@ def render_record(tmp_path: Path, case: dict) -> str:
     name = case["format"]
     definition = load_format(name)
     fields = dict(case["fields"])
+    if name == "macos_endpoint_security":
+        from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+
+        # Native ES has no dictionary-emission API. Exercise its strict codec;
+        # authenticated source/sink publication is covered by native source tests.
+        return decode_endpoint_security_record(json.dumps(fields)).to_ndjson()
     for key in ("timestamp", "TimeCreated", "ts"):
         if name != "macos_unified_log" and isinstance(fields.get(key), str):
             fields[key] = datetime.fromisoformat(fields[key].replace("Z", "+00:00"))

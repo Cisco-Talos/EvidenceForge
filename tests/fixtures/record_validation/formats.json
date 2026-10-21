@@ -469,5 +469,167 @@
         ]
       }
     }
+  },
+  {
+    "format": "macos_endpoint_security",
+    "fields": {
+      "schema_version": 1,
+      "version": 10,
+      "event_type": 11,
+      "action_type": 1,
+      "action": {
+        "result": {
+          "result_type": 0,
+          "result": {
+            "auth": 0
+          }
+        }
+      },
+      "time": "2026-10-19T12:30:00.123456789Z",
+      "mach_time": 24000000,
+      "seq_num": 7,
+      "global_seq_num": 19,
+      "thread": {
+        "thread_id": 90001
+      },
+      "process": {
+        "audit_token": [
+          501,
+          501,
+          20,
+          501,
+          20,
+          1200,
+          100001,
+          11200
+        ],
+        "parent_audit_token": [
+          501,
+          501,
+          20,
+          501,
+          20,
+          1190,
+          100001,
+          11190
+        ],
+        "responsible_audit_token": [
+          501,
+          501,
+          20,
+          501,
+          20,
+          1100,
+          100001,
+          11100
+        ],
+        "ppid": 1190,
+        "original_ppid": 1190,
+        "group_id": 1190,
+        "session_id": 1100,
+        "codesigning_flags": 0,
+        "is_platform_binary": false,
+        "is_es_client": false,
+        "executable": {
+          "path": "/usr/local/bin/example",
+          "path_truncated": false,
+          "stat": {
+            "st_dev": 123,
+            "st_mode": 33261,
+            "st_nlink": 1,
+            "st_ino": 9001,
+            "st_uid": 501,
+            "st_gid": 20,
+            "st_rdev": 0,
+            "st_atimespec": "2026-10-19T12:30:00.123456789Z",
+            "st_mtimespec": "2026-10-19T12:30:00.123456789Z",
+            "st_ctimespec": "2026-10-19T12:30:00.123456789Z",
+            "st_birthtimespec": "2026-10-19T12:30:00.123456789Z",
+            "st_size": 4096,
+            "st_blocks": 8,
+            "st_blksize": 4096,
+            "st_flags": 0,
+            "st_gen": 0
+          }
+        },
+        "tty": null,
+        "start_time": "2026-10-19T12:29:59.123456Z",
+        "signing_id": null,
+        "team_id": null,
+        "cdhash": "0000000000000000000000000000000000000000",
+        "cs_validation_category": 0
+      },
+      "event": {
+        "fork": {
+          "child": {
+            "audit_token": [
+              501,
+              501,
+              20,
+              501,
+              20,
+              1201,
+              100001,
+              11201
+            ],
+            "parent_audit_token": [
+              501,
+              501,
+              20,
+              501,
+              20,
+              1200,
+              100001,
+              11200
+            ],
+            "responsible_audit_token": [
+              501,
+              501,
+              20,
+              501,
+              20,
+              1100,
+              100001,
+              11100
+            ],
+            "ppid": 1200,
+            "original_ppid": 1200,
+            "group_id": 1190,
+            "session_id": 1100,
+            "codesigning_flags": 0,
+            "is_platform_binary": false,
+            "is_es_client": false,
+            "executable": {
+              "path": "/usr/local/bin/example",
+              "path_truncated": false,
+              "stat": {
+                "st_dev": 123,
+                "st_mode": 33261,
+                "st_nlink": 1,
+                "st_ino": 9001,
+                "st_uid": 501,
+                "st_gid": 20,
+                "st_rdev": 0,
+                "st_atimespec": "2026-10-19T12:30:00.123456789Z",
+                "st_mtimespec": "2026-10-19T12:30:00.123456789Z",
+                "st_ctimespec": "2026-10-19T12:30:00.123456789Z",
+                "st_birthtimespec": "2026-10-19T12:30:00.123456789Z",
+                "st_size": 4096,
+                "st_blocks": 8,
+                "st_blksize": 4096,
+                "st_flags": 0,
+                "st_gen": 0
+              }
+            },
+            "tty": null,
+            "start_time": "2026-10-19T12:29:59.123456Z",
+            "signing_id": null,
+            "team_id": null,
+            "cdhash": "0000000000000000000000000000000000000000",
+            "cs_validation_category": 0
+          }
+        }
+      }
+    }
   }
 ]
