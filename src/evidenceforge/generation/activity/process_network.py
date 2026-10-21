@@ -60,6 +60,7 @@ def _build_canonical_exe_index() -> dict[str, dict[str, Any]]:
             "service": entry.get("service", ""),
             "external": entry.get("external", True),
             "dns_tags": entry.get("dns_tags", []),
+            "ambient": entry.get("ambient", True),
         }
         for exe in entry.get("exe", []):
             result[exe] = info  # last wins
@@ -82,7 +83,8 @@ def get_service_to_exes() -> dict[str, list[str]]:
     """Build service→exe inverse index. Returns dict mapping service name to exe list.
 
     Cached after first call. Derived from the same canonical per-exe index
-    as get_exe_to_service(), so forward and inverse always agree.
+    as get_exe_to_service(). Explicit-intent-only entries are ineligible for
+    generic ownership; their direct canonical network actions remain available.
     """
     global _CACHED_SERVICE_TO_EXES
     if _CACHED_SERVICE_TO_EXES is not None:
@@ -90,9 +92,22 @@ def get_service_to_exes() -> dict[str, list[str]]:
     exe_index = _build_canonical_exe_index()
     result: dict[str, list[str]] = {}
     for exe, info in exe_index.items():
+        if not info["ambient"]:
+            continue
         service = info["service"]
         if service not in result:
             result[service] = []
         result[service].append(exe.lower())
     _CACHED_SERVICE_TO_EXES = result
     return result
+
+
+def ambient_network_allowed(executable: str) -> bool:
+    """Read canonical ambient eligibility without inferring unknown executables."""
+    name = executable.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    names = {name, name.removesuffix(".exe")}
+    return all(
+        info.get("ambient", True)
+        for exe, info in get_exe_to_service().items()
+        if exe.casefold() in names
+    )

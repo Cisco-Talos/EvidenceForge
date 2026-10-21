@@ -161,7 +161,10 @@ def _ecar_non_windows_session_type(event: CanonicalOccurrence) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
     if _is_linux_smb_event(event):
         return "smb"
-    if event.event_type == "ssh_session":
+    if event.event_type == "ssh_session" or (
+        event.auth is not None
+        and (event.auth.session_kind == "ssh" or event.auth.auth_protocol == "ssh")
+    ):
         return "ssh"
     if event.event_type == "failed_logon":
         source_ip = _ecar_session_source_ip(event)
@@ -188,7 +191,14 @@ def _ecar_session_source_ip(event: CanonicalOccurrence) -> str:
     if not source_ip or source_ip == "-":
         return "-"
     host = event.dst_host
-    if host is not None and source_ip == getattr(host, "ip", ""):
+    if (
+        host is not None
+        and source_ip == getattr(host, "ip", "")
+        and not (
+            event.auth is not None
+            and (event.auth.session_kind == "ssh" or event.auth.auth_protocol == "ssh")
+        )
+    ):
         return "-"
     return source_ip
 

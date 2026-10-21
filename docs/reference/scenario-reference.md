@@ -1974,7 +1974,8 @@ A file write does not register or activate a job. Bootstrap retains the current 
 
 Experimental `output.logs: [{format: macos_endpoint_security}]` selects modeled macOS 26 arm64
 fork/v10 output, with canonical collector activation and no new authored event type. Complete
-static/runtime process, audit, terminal and file facts are mandatory. Built-in SSH helpers still
-have metadata gaps and selected native output rejects their incomplete forks before commit.
+static/runtime process, audit, terminal and file facts are mandatory. Built-in SSH helpers
+now consume shared modeled metadata for supported forks. Incomplete or legacy unknown facts
+still reject selected native output before commit.
 Ordinary `process` events do not assert a fork; a run may have no eligible native rows. Existing
 source overrides govern collection windows/missingness. This is not full native ES validation.

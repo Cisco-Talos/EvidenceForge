@@ -132,7 +132,7 @@ user selected one.
 
 Appends `mappings`. Each mapping associates an executable with a network service/port behavior used
 for process-to-network correlation. Add one only when the application actually owns that traffic.
-Avoid duplicate executables because runtime indexing is last-wins.
+Avoid duplicate executables: runtime indexing is last-wins. `ambient` defaults to true; false requires concrete network intent for launch correlation and generic attribution, including configured application lists. Parsed endpoints and explicit canonical connection/PID intent remain valid. Local CLI queries cannot justify unrelated SaaS traffic.
 
 ### `system_processes.yaml`
 

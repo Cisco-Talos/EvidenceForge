@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 327
+current_revision: 328
 history_start_revision: 1
-behavior_surface_sha256: d5bbc2a7815378d94fd93cf6372372765759674b4b978a7ea987d82588ab3f4d
+behavior_surface_sha256: e5c0520ae90c350ab1a8db9ad832324732878682b3e595cd4dfcbe38532fb30c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3058,3 +3058,27 @@ changes:
       - bash_history
       - zsh_history
     summary: Compiles exact remote-session target profiles without broadening desktop software placement and admits authenticated Windows Security/Sysmon SSH client teardown sinks.
+  - revision: 328
+    id: macos-assessment-process-session-and-transport-contracts
+    impact: localized
+    domains:
+      - endpoint-process-source-timing
+      - macos-ssh-execution-metadata
+      - macos-unauthenticated-audit-origin
+      - posix-record-validation
+      - authentication-session-placement
+      - failed-ssh-mechanism-and-tuple
+      - tls-handshake-accounting
+      - process-ambient-network-admission
+    formats:
+      - ecar
+      - macos_endpoint_security
+      - windows_event_security
+      - windows_event_sysmon
+      - syslog
+      - zeek_conn
+      - zeek_ssl
+      - zeek_x509
+      - zeek_files
+      - zeek_ocsp
+    summary: Supplies modeled SSH native fork metadata and preserves final process births, credential terminal placement, failed SSH tuples, TLS handshake accounting and explicit-intent CLI network ownership.

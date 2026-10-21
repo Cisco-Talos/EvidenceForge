@@ -1,6 +1,10 @@
 # Explicit synthetic launch/device policy, not host inspection or APFS calibration.
 schema_version: "1.0"
 profile: modeled-macos-execution-v1
+# Explicit model selection; older frozen profiles retain unknown audit origin.
+# XNU bsd/bsm/audit.h and bsd/security/audit/audit_session.c define this origin.
+system_audit_origin: default_unattributed
+system_responsibility: none # clean service launch with no other responsible lifetime
 terminal:
   volume_id: modeled-devfs
   device: 16777217
@@ -44,6 +48,11 @@ code_validation:
       - loginwindow
       - mds
       - smd
+      - ssh
+      - sshd
+      - sshd-auth
+      - sshd-keygen-wrapper
+      - sshd-session
       - syspolicyd
       - tccd
       - zsh

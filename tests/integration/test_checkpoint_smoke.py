@@ -96,6 +96,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
     persistence_active: bool = False,
     persistence_group: bool = False,
     history_spillage: bool = False,
+    endpoint_forks: bool = False,
 ) -> None:
     scenario_path = (
         Path("scenarios/macos-workstation-example/scenario.yaml")
@@ -138,6 +139,11 @@ def test_short_generation_checkpoint_suspension_and_resume(
                 "events": [{"type": "logon", "logon_type": 2}],
             },
         )
+    if endpoint_forks:
+        scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
+        for system in scenario_data["environment"]["systems"]:
+            if system["os"].startswith("macOS"):
+                system["os_build"] = "25A354"
     if native:
         scenario_data["output"]["logs"].append({"format": "macos_unified_log"})
         scenario_data["storyline"] = [
@@ -407,6 +413,21 @@ def test_short_generation_checkpoint_suspension_and_resume(
     )
     resumed_files = deterministic_bundle_files(output)
     assert resumed_files == deterministic_bundle_files(control)
+    if endpoint_forks:
+        from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
+
+        rows = [
+            json.loads(line)
+            for name, content in resumed_files.items()
+            if name.endswith("/macos_endpoint_security.ndjson")
+            for line in content.splitlines()
+        ]
+        assert len(rows) == 6
+        for row in rows:
+            decode_endpoint_security_record(json.dumps(row))
+            assert row["version"] == 10 and row["event_type"] == 11
+        sequences = [row["seq_num"] for row in rows]
+        assert sequences == list(range(sequences[0], sequences[0] + 6))
     if denied_launch or failed_exec:
         assert b"invented-blocked-helper" not in b"".join(
             content for name, content in resumed_files.items() if name.startswith("data/")

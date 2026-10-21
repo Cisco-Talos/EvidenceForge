@@ -3330,6 +3330,11 @@ class ProcessNetworkEntry(BaseModel, extra="forbid"):
     port: int
     external: bool
     dns_tags: list[str] | None = None
+    ambient: bool = Field(
+        default=True,
+        strict=True,
+        description="Allow ambient connections and generic process ownership without an endpoint",
+    )
 
 
 # --- ProcessAccess Patterns ---
@@ -4085,6 +4090,8 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     directory_age_seconds: int = Field(strict=True, gt=0, lt=2**31)
     first_pipe_id: int = Field(strict=True, ge=1, lt=2**63)
     code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
+    system_audit_origin: Literal["default_unattributed"] | None = None
+    system_responsibility: Literal["none"] | None = None
 
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:

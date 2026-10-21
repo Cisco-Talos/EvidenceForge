@@ -256,7 +256,7 @@ fields:
   - name: operation
     type: string
     required: false
-    description: "EvidenceForge process operation: fork, exec, audit_bind, privilege_drop or service_drop"
+    description: "EvidenceForge process operation: fork, exec, audit_bind, privilege_drop, service_drop or job_control"
 
   - name: execution_id
     type: string
@@ -692,6 +692,8 @@ validators:
       - TERMINATE
     - - PROCESS
       - OPEN
+    - - PROCESS
+      - MODIFY
     - - FILE
       - CREATE
     - - FILE
@@ -772,3 +774,166 @@ validators:
       - MODIFY
     - - SERVICE
       - DELETE
+- id: ecar.process.modify
+  message: PROCESS/MODIFY requires a supported exact POSIX transition
+  severity: error
+  when:
+  - &id001
+    op: compare
+    field: object
+    relation: eq
+    value: PROCESS
+  - &id002
+    op: compare
+    field: action
+    relation: eq
+    value: MODIFY
+  checks:
+  - op: membership
+    field: operation
+    values:
+    - exec
+    - audit_bind
+    - privilege_drop
+    - service_drop
+    - job_control
+  - op: presence
+    field: execution_id
+  - op: presence
+    field: previous_execution_id
+  - op: presence
+    field: image_path
+  - op: presence
+    field: previous_image_path
+  - op: presence
+    field: command_line
+  - op: presence
+    field: previous_command_line
+- id: ecar.process.exec
+  message: Image replacement changes execution identity
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: compare
+    field: operation
+    relation: eq
+    value: exec
+  checks:
+  - op: compare
+    field: execution_id
+    relation: ne
+    other_field: previous_execution_id
+- id: ecar.process.stable-execution
+  message: Credential and job-control changes preserve execution and image
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: membership
+    field: operation
+    values:
+    - audit_bind
+    - privilege_drop
+    - service_drop
+    - job_control
+  checks:
+  - op: compare
+    field: execution_id
+    relation: eq
+    other_field: previous_execution_id
+  - op: compare
+    field: image_path
+    relation: eq
+    other_field: previous_image_path
+  - op: compare
+    field: command_line
+    relation: eq
+    other_field: previous_command_line
+- id: ecar.process.credentials
+  message: Credential transitions require explicit before/after principals and IDs
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: membership
+    field: operation
+    values:
+    - audit_bind
+    - privilege_drop
+    - service_drop
+  checks:
+  - op: presence
+    field: process_principal
+  - op: presence
+    field: previous_process_principal
+  - op: presence
+    field: real_uid
+  - op: presence
+    field: effective_uid
+  - op: presence
+    field: real_gid
+  - op: presence
+    field: effective_gid
+  - op: presence
+    field: previous_real_uid
+  - op: presence
+    field: previous_effective_uid
+  - op: presence
+    field: previous_real_gid
+  - op: presence
+    field: previous_effective_gid
+- id: ecar.process.audit-origin
+  message: Authenticated transitions require a known audit origin
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: membership
+    field: operation
+    values:
+    - audit_bind
+    - privilege_drop
+  checks:
+  - op: presence
+    field: audit_uid
+  - op: presence
+    field: audit_session_id
+- id: ecar.process.audit-retained
+  message: Privilege drop preserves the authenticated audit origin
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: compare
+    field: operation
+    relation: eq
+    value: privilege_drop
+  checks:
+  - op: presence
+    field: previous_audit_uid
+  - op: presence
+    field: previous_audit_session_id
+  - op: compare
+    field: audit_uid
+    relation: eq
+    other_field: previous_audit_uid
+  - op: compare
+    field: audit_session_id
+    relation: eq
+    other_field: previous_audit_session_id
+- id: ecar.process.job-control
+  message: Job-control transitions require explicit resulting membership
+  severity: error
+  when:
+  - *id001
+  - *id002
+  - op: compare
+    field: operation
+    relation: eq
+    value: job_control
+  checks:
+  - op: presence
+    field: process_group_id
+  - op: presence
+    field: posix_session_id

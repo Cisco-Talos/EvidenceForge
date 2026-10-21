@@ -12,7 +12,20 @@ Canonical state and action bundles own identities, lifecycle, outcomes and corre
 
 Public research records remain under ignored `sample_data/macos/`; committed fixtures must be independently authored. The local findings review note remains outside the checkout pending separate approval. No further personal-log inspection, service changes or live captures are part of implementation.
 
-## Current handoff — revision 326
+## Current handoff — revision 328 candidate
+
+The complete assessment sequence, reviewer changes, frozen benchmark and current
+validation are tracked in [the assessment worklog](2026-10-21-macos-assessment.md).
+Revision 327 and the first blind baseline are committed/pushed as `4665c1f7`.
+The supported SSH path now produces three complete modeled fork/v10 ES records
+through the real engine. Shared metadata preserves explicit unauthenticated audit
+origin, responsibility, current directory and image truth; native exec/exit and
+Gatekeeper denial remain reference-gated. The revision-328 routine run completed with 16,145 passes, 50 skips and two
+failures in older expectations/reference budgets; both are fixed and their
+132-test gate passes. Nonempty native CLI/filter/parser and exact resume gates
+pass. Fresh benchmark regeneration and blind reassessment follow this checkpoint.
+
+## Prior handoff — revision 326
 
 Items 1–4 are committed and pushed as `fbbff2fd`, `d27f5ff0`, `d5136fc3` and `239b0041`. The requested push was repeated and origin was already up to date. The supported ordered Mac process cohort composes State, lifecycle, runtime image/script retention, collector counters/closure and the existing exact durable source journal. Partial source writes resume the frozen journal without repeating canonical allocation, closure or counters, including after a new collector epoch replaces the terminated observer.
 

@@ -1,6 +1,6 @@
 # macOS native evidence: metadata map and remaining gates
 
-Updated 2026-10-21. Target: modeled macOS 26 arm64 workstations. This is the implementation plan supplement for native evidence, not a claim that ES generation is available. Public source material remains ignored under `sample_data/macos/`; tests and examples are independently authored. No further local-log inspection or capture is authorized without asking the user first.
+Updated 2026-10-21. Target: modeled macOS 26 arm64 workstations. Bounded fork/v10 ES source selection is registered; the revision-328 candidate supplies the supported SSH metadata producers and passes a nonempty real-engine route test. Full CLI assessment/acceptance is pending in the assessment worklog. This does not admit native exec/exit or Gatekeeper denial. Public source material remains ignored under `sample_data/macos/`; tests and examples are independently authored. No further local-log inspection or capture is authorized without asking the user first.
 
 ## Public evidence search outcome
 
@@ -118,6 +118,12 @@ Remaining acceptance: complete authored persistence orchestration. Canonical par
 The group-unload implementation extends the authenticated service/process closure composite rather than looping over individual closes. Its preparation must bind an exact group lifetime and member set, detect membership changes before commit, close service bindings with those exact process identities, and preserve the shared rollback/recovery boundary. Cover a leader that exits before unload, members joining/leaving before preparation, stale membership after preparation, numeric-ID reuse, an external descendant in a different group, and injected failure before/after publication. Revision 222 composes exact parent-exit adoption for surviving outside-group children; unknown parentage or a missing explicit system adopter still rejects.
 
 ## Capture fallback requiring separate approval
+
+A concrete [bounded lab proposal and independently authored harmless probes](native-reference-capture/README.md)
+are retained for future review. Both probe sources compile with strict warnings;
+they have not been executed and no native capture has begun. On 2026-10-21 the
+user chose to keep native exec/exit and Gatekeeper denial gated for now. No capture
+or lab action is authorized; independent engineering and assessment continue.
 
 If a qualifying public trace remains unavailable, propose a disposable macOS 26 arm64 lab with invented accounts and files. Do not start this work under the current authorization. Record the exact build, architecture, collection commands, subscriptions, timebase and privacy/redaction settings before a bounded capture. Collector access or Full Disk Access must be explicitly approved for that lab; do not reuse personal logs or application inventories.
 

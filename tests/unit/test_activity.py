@@ -11309,7 +11309,10 @@ class TestActivityGenerator:
         assert session is not None
         assert session.username == test_user.username
         assert session.session_kind == "new_credentials"
-        assert session.session_id == 0
+        caller = state_manager.get_session_at(
+            explicit.auth.subject_logon_id, new_credentials.timestamp
+        )
+        assert session.session_id == caller.session_id > 0
         assert new_credentials.auth.source_ip == "-"
         assert new_credentials.auth.subject_username == test_user.username
         assert new_credentials.auth.subject_logon_id == explicit.auth.subject_logon_id
@@ -17240,7 +17243,8 @@ def test_tcp_success_history_uses_varied_completed_flow_shapes():
     assert len(histories) > 1
 
 
-def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):
+@pytest.mark.parametrize("seed", range(12))
+def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch, seed):
     """Failed TLS handshakes should keep byte counts aligned with Zeek history."""
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -17273,7 +17277,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
         hostname="example.com",
         dns=None,
         dst_ip="93.184.216.34",
-        rng=random.Random(4),
+        rng=random.Random(seed),
     )
 
     assert event.protocol.ssl is not None
@@ -17283,6 +17287,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
     assert "D" in event.network.history
     if event.network.resp_bytes:
         assert "d" in event.network.history
+    assert ("S" in event.protocol.ssl.ssl_history) == (event.network.resp_bytes > 0)
     assert 0 < event.network.orig_bytes < 1200
     assert 0 <= event.network.resp_bytes < 55000
     assert event.network.orig_pkts >= 1

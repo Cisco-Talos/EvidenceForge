@@ -2539,6 +2539,10 @@ applications:
     platforms:
       macos:
         image_path: /usr/bin/ssh
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.ssh
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2556,6 +2560,10 @@ applications:
     platforms:
       macos:
         image_path: /usr/libexec/sshd-keygen-wrapper
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-keygen-wrapper
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2572,6 +2580,10 @@ applications:
     platforms:
       macos:
         image_path: /usr/sbin/sshd
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2588,6 +2600,10 @@ applications:
     platforms:
       macos:
         image_path: /usr/libexec/sshd-session
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-session
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2604,6 +2620,10 @@ applications:
     platforms:
       macos:
         image_path: /usr/libexec/sshd-auth
+        executable_format: mach_o
+        code_signature:
+          signing_id: com.apple.sshd-auth
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build

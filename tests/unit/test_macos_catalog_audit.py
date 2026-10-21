@@ -228,7 +228,9 @@ def test_mac_receiver_catalog_preserves_split_roles_without_baseline_activation(
             app, "macos", platform, platform.image_path, None, "arm64", "26.0"
         )
         assert release.key.product_id == "apple-macos"
-        assert release.code_signature is None
+        assert release.code_signature.signing_id == platform.code_signature.signing_id
+        assert release.code_signature.team_id is None
+        assert release.mach_o_image.architecture == "arm64"
         assert entry["behavior"] == "ssh_receiver_bundle"
         assert entry["references"] and all(
             url.startswith("https://github.com/apple-oss-distributions/")

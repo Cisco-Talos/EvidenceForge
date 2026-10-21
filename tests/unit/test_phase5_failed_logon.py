@@ -189,6 +189,34 @@ class TestFailedLogonWindows:
 class TestFailedLogonLinux:
     """Test failed logon on Linux."""
 
+    def test_self_directed_ssh_failure_preserves_tuple_and_mechanism(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        from evidenceforge.generation.emitters.ecar import (
+            _ecar_non_windows_session_type,
+            _ecar_session_source_ip,
+        )
+
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            test_user, linux_system, timestamp, logon_type=3, source_ip=linux_system.ip
+        )
+        events = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+        failure = next(event for event in events if event.event_type == "failed_logon")
+        assert failure.auth.auth_protocol == failure.auth.session_kind == "ssh"
+        assert failure.auth.source_ip == linux_system.ip and failure.auth.source_port > 0
+        assert _ecar_non_windows_session_type(failure) == "ssh"
+        assert _ecar_session_source_ip(failure) == linux_system.ip
+        messages = [
+            call.args[0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None
+        ]
+        assert any(
+            f"from {failure.auth.source_ip} port {failure.auth.source_port} ssh2" in message
+            for message in messages
+        )
+
     def test_emits_syslog_failed_password(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):

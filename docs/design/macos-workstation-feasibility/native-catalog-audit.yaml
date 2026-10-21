@@ -189,3 +189,19 @@ administration_applications:
   - https://beta.splunkresearch.com/endpoint/c11f2b57-92c1-4cd2-b46c-064eafb833ac/
   - https://github.com/swiftlang/swift-corelibs-foundation/tree/main/Sources/plutil
   boundary: Native path vocabulary and a help-only command pool. No automatic baseline selection, plist modification or native artifact output. The publisher's osquery detection does not validate EvidenceForge Splunk ingestion or current eslogger fields.
+
+modeled_ssh_security:
+  reviewed_on: '2026-10-21'
+  references:
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/xcconfigs/base.xcconfig
+  - https://github.com/apple-oss-distributions/OpenSSH/blob/main/OpenSSH.xcodeproj/project.pbxproj
+  signing_identifiers:
+    macos-ssh: com.apple.ssh
+    macos-sshd-keygen-wrapper: com.apple.sshd-keygen-wrapper
+    macos-sshd: com.apple.sshd
+    macos-sshd-session: com.apple.sshd-session
+    macos-sshd-auth: com.apple.sshd-auth
+  boundary: Apple build target naming supplies identifier vocabulary. Static CodeDirectory hashes, host-build
+    release identities and successful validation are explicitly synthetic model choices, not current-build
+    measurements or developer-build trust. The supported metadata-complete SSH path may emit fork/v10;
+    native exec/exit and policy-denial evidence remain gated.

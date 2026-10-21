@@ -183,10 +183,8 @@ def process_credential_identities(
             or new.real_uid == 0
             or new.real_uid != new.effective_uid
             or new.real_gid != new.effective_gid
-            or old.audit_uid is not None
-            or old.audit_session_id is not None
-            or new.audit_uid is not None
-            or new.audit_session_id is not None
+            or not old.has_no_authenticated_audit_origin
+            or (old.audit_uid, old.audit_session_id) != (new.audit_uid, new.audit_session_id)
             or after.principal != "_sshd"
             or event.timestamp <= before.execution_started_at
         ):

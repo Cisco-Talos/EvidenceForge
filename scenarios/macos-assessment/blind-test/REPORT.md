@@ -55,6 +55,14 @@ repair concrete cross-source or contract failures before texture work. P2
 attribution has strong score leverage across behavior families; none of these
 priorities licenses sample-specific host, PID, destination or timestamp patches.
 
+Family-loop classification: process ordering, Linux normalization, TLS accounting/
+history and CLI network ownership are `sibling_defect` findings in existing shared
+families. NewCredentials terminal placement is a `new_family` contract defect.
+OCSP/application timing texture are `new_family` leads; shell-history timing remains
+`false_positive_or_unproven` pending an occurrence/persistence interpretation.
+The bounded eCAR validator change is `source_native_single_schema`; its purpose
+is contract coverage, separately from the source-timing family repair.
+
 ## Quantitative comparison
 
 Automated score: **89.99/100**, acceptance **FAIL**. All records parse; eight eCAR

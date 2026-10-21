@@ -1756,8 +1756,7 @@ _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 # message-type codes, not conn.log-style originator/responder direction flags;
 # established TLS rows should include "S" for the ServerHello.
 _SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
-    ("CSXKNGIFIFD", 34),  # ECDHE full handshake plus encrypted app data
-    ("CSXNGIFIFD", 18),  # RSA/static-key full handshake
+    ("CSXKNGIFIFD", 52),  # all modeled full TLS 1.2 ciphers use ECDHE
     ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
     ("CSXKNGIFIFL", 10),  # established then alert/close
 )
@@ -11345,7 +11344,7 @@ class ActivityGenerator:
         )
         if not ssl_established:
             orig_bytes = rng.randint(90, 260)
-            resp_bytes = rng.randint(40, 180) if rng.random() < 0.55 else 0
+            resp_bytes = rng.randint(40, 180) if "S" in ssl_hist else 0
             history = "ShADd" if resp_bytes else "ShAD"
             orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
                 orig_bytes,
@@ -13139,7 +13138,7 @@ class ActivityGenerator:
                     payload_bytes=1,
                 ),
             )
-        if os_category == "linux" and source_ip not in {"", "-", request.system.ip}:
+        if os_category == "linux" and auth_source_ip not in {"", "-"}:
             canonical_transport_close = time + _FAILED_LINUX_SSH_CLOSE_HEADROOM
             headroom = max(
                 headroom,
@@ -13343,10 +13342,10 @@ class ActivityGenerator:
             user_sid = self._get_sid(effective_username)
             failure_reason = "%%2313"
 
-        remote_linux_source = (
-            _get_os_category(system.os) == "linux"
-            and auth_source_ip not in (None, "-")
-            and auth_source_ip != system.ip
+        remote_linux_source = _get_os_category(system.os) == "linux" and auth_source_ip not in (
+            None,
+            "",
+            "-",
         )
         is_windows_remote_auth = (
             _get_os_category(system.os) == "windows"
@@ -13421,6 +13420,8 @@ class ActivityGenerator:
                     source_ip if remote_linux_source and source_ip is not None else auth_source_ip
                 ),
                 source_port=linux_ssh_source_port or failed_profile["source_port"],
+                auth_protocol="ssh" if remote_linux_source else "",
+                session_kind="ssh" if remote_linux_source else "",
                 auth_package=failed_profile["auth_package"],
                 logon_process=failed_profile["logon_process"],
                 lm_package=failed_profile["lm_package"],
@@ -27821,6 +27822,9 @@ class ActivityGenerator:
         )
         command_http_url = _extract_http_url_from_command(command_line)
 
+        if not conn_info.get("ambient", True) and not command_target and not command_http_url:
+            return
+
         # Only emit ~60% of ambient app launches. Commands that name a concrete
         # remote endpoint should leave a matching socket attempt every time.
         if not command_target and not command_http_url and rng.random() > 0.60:
@@ -29777,6 +29781,7 @@ class ActivityGenerator:
             source_ip="-",
             source_port=0,
             session_kind="new_credentials",
+            session_id=caller_session.session_id,
             logon_guid_required=True,
             lifecycle_group_id=lifecycle_id,
             parent_lifecycle_group_id=caller_session.lifecycle_group_id,

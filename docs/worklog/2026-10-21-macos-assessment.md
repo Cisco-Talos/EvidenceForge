@@ -138,7 +138,76 @@ before/after identities and operation-specific facts. Unsupported operations and
 inconsistent execution identities/images must still fail. Validator repair alone
 does not resolve the source-visible lifecycle defect or improve the frozen data.
 
-## Next engineering joins after the frozen baseline
+Native SSH metadata family: the frozen execution profile and canonical launch/exec
+producer own system audit origin, responsibility, environment, directory, image
+and validation choices. Boot, SSH wrapper launch and all SSH image replacements
+must consume those owners. A selected explicit XNU default audit origin is
+`AU_DEFAUDITID=uint32(-1), AU_DEFAUDITSID=0`, independent of an authenticated user;
+older inputs with no policy stay unknown. Root admission and service privilege
+drop must preserve that exact distinction and never manufacture authentication.
+Primary vocabulary references (not current-host measurements):
+https://github.com/apple-oss-distributions/xnu/blob/main/bsd/bsm/audit.h and
+https://github.com/apple-oss-distributions/xnu/blob/main/bsd/security/audit/audit_session.c.
+OpenSSH helper signing identifiers follow Apple's target-name vocabulary above;
+hashes, signatures and successful validation are explicit synthetic model facts.
+No private receiver renderer or native-row completion defaults are permitted.
+Fork-only SSH startup may leave socket descriptor observations unknown; native
+exec requires its existing strict descriptor contract and separate ES-R1 gate.
+
+Cross-platform assessment contracts: NewCredentials owns a new authentication
+LUID while preserving the caller's terminal session, without a second desktop
+bootstrap. Failed-logon generation owns SSH mechanism and the single source tuple
+for Linux network attempts, including self-directed SSH; the full existing SSH
+failure lifecycle must render both views. eCAR should honor those explicit facts
+rather than reclassifying same-host addresses as console input. Canonical TLS
+construction owns both handshake progress and connection byte/packet accounting;
+ServerHello requires responder payload, and all currently modeled full TLS 1.2
+ciphers use ECDHE, requiring its key-exchange step. Fix these shared owners before
+source rendering; preserve local console failures and TLS resumption/1.3 behavior.
+
+Process/network ownership family: the process-network map owns whether an
+executable may generate ambient traffic or be selected to own it. Destination-
+bound CLI tools require a concrete parsed endpoint or an explicit canonical
+connection/PID; neither a generic HTTPS role nor an already running CLI is enough.
+Both forward correlation and inverse WorldPlanner attribution, including exact
+application lists and compatibility entry, consume the same policy. Defaults
+preserve old configurations; packaged Git/package/container/Kubernetes CLI entries
+opt out of ambient traffic. Explicit authored/command-owned network intent stays
+available. This prevents sibling local queries from inheriting unrelated SaaS
+connections without matching specific hosts or reviewer commands.
+
+## Revision 328 candidate and native benchmark preparation
+
+- The real engine's ordinary successful SSH path produces three strict native
+  fork/v10 records, with output selected or filtered independently of canonical
+  State. Shared metadata supplies wrapper launch, each image replacement and
+  current-directory observations at fork. Login shell HOME/USER/directory select
+  the resolved account; transport socket descriptor observations remain unknown.
+- Root admission, startup retention and credential projection accept only legacy
+  unknown or explicit XNU default unauthenticated origins. Service drops preserve
+  the exact origin; authentication adopts the modeled user ASID/AUID later.
+- Focused validation: 335 metadata/boot/source/record tests; 531 activity/auth/TLS
+  tests; 56 final targeted producer/ordering/ownership tests pass. Five selected
+  slow native source/output/Windows SSH cases pass (11.12s). The complete routine
+  suite is running unsandboxed against frozen implementation.
+- `validate-config --json`: 99 files, no errors/warnings. Ruff and formatting pass
+  (1,317 files), as do whitespace and behavior-against-HEAD checks. Candidate
+  revision 328 digest: `e5c0520ae90c350ab1a8db9ad832324732878682b3e595cd4dfcbe38532fb30c`.
+- Fresh baseline family probe independently reproduces 42 failures: five process
+  transitions before birth, one child before parent birth, three NewCredentials
+  terminal mismatches, 30 ECDHE histories missing key exchange and three
+  ServerHello-without-payload cases. Persisted under loop 1; no old data changed.
+- Native coverage is a separate CLI-created draft, UUID
+  `9066de90-8a34-4cb9-a70c-645254ff53ed`, at `revisions/02-native/`. Same seed,
+  environment, activities and window; adds ES explicitly. Validation has no errors,
+  the same intentional firewall warning and four informational pivot advisories.
+- Capture proposal and two independent C probes are prepared under
+  `docs/design/macos-workstation-feasibility/native-reference-capture/`.
+  Both compile with `-std=c11 -Wall -Wextra -Werror -pedantic`; neither ran. No
+  native logs, local captures, settings, permissions or services were inspected or
+  changed. The asynchronous lab/reference question remains pending.
+
+## Historical engineering joins identified after the frozen baseline
 
 Native fork admission still needs the real SSH metadata producers. Keep static
 signing separate from runtime validation, known unauthenticated audit origin
@@ -164,3 +233,64 @@ must preserve legacy unknown state and distinguish explicit model facts. SSH
 launchd-inetd standard I/O refers to the transport, so do not label it /dev/null to
 satisfy a complete descriptor requirement. Fork notifications do not require an
 invented complete exec descriptor table. Native ES exec remains separately gated.
+
+## Native reference decision and final revision-328 gates
+
+On 2026-10-21 the user explicitly chose **keep those native features gated for
+now** for ES-R1 and GK-R1. No capture, local-log inspection, collector activation,
+permission change or lab execution is authorized. The proposal and unexecuted
+probe sources remain a future option; these evidence gates are a declared scope
+boundary for the current sequence rather than pending implementation permission.
+
+The earlier routine process ended before its final result could be recovered from
+the tool session. Three stale test expectations found during that run were fixed
+and passed their focused gates: Type 9 terminal placement, modeled SSH signing
+selectors, and the native-format witness census/extension. A fresh complete
+routine run is now executing against frozen production source. Two additional
+slow gates exercise nonempty native output through the CLI, parser, source
+filtering, fresh-process determinism and exact checkpoint suspension/resume.
+
+Both new slow gates pass (44.59s): nonempty ordinary CLI fork output, fresh hash
+seeds, ES-only filtering, strict ingestion, and exact suspended/resumed output
+including six forks across the recovery boundary. The broad run found two further
+bounded integration expectations: the self-directed SSH test must select the
+failed-auth occurrence rather than a later lifecycle row, and canonical skill
+references exceeded their existing line budgets. Both are corrected; the complete
+affected gate passes 132 tests with one existing skip. No production source was
+edited while the broad suite or checkpoint generators ran.
+
+## Bounded developer-catalog contract for the next checkpoint
+
+The remaining developer variants must name the actual loaded native runtime:
+MSBuild through the existing .NET SDK host, npm through Node plus the bundled
+`npm-cli.js`, pytest/pip through one selected CPython framework executable with
+explicit `-m` module arguments, and platform-appropriate PowerShell queries through
+the publisher's arm64 `pwsh`. A logical application installation selects its
+module; it does not reconstruct a Homebrew private virtualenv, shebang wrapper,
+shell script, filesystem inventory or native exec record. Shared runtimes retain
+one product/release/content identity across logical applications. Query templates
+must have bounded foreground lifetimes and no inferred package/network effects.
+Generic network attribution must honor logical application identity as well as
+the runtime basename, so an npm module cannot become an ambient browser owner
+merely because its executable is Node.
+
+Primary sources: the Homebrew `python@3.14` and `node` formulae, CPython's
+`Mac/Makefile.in`/`Mac/Tools/pythonw.c`, pytest invocation and pip user-guide
+documentation, and Microsoft's `dotnet-msbuild` and macOS PowerShell installation
+documentation. These establish static invocation vocabulary and distributions;
+they are not host inventory or native capture. New variants use an explicit
+2026-10-21 availability boundary, preserving the frozen October-20 benchmark's
+application population. Current Zscaler Mac/Apple-Silicon support does not by itself
+prove a native arm64 executable; its old M1 reference explicitly used Rosetta.
+Keep that variant unavailable pending qualifying native-architecture evidence.
+
+Revision-328 final gate: the full routine run completed in 992.72s with **16,145
+passed, 50 skipped, 2,299 deselected and two failures**. Both failures were the
+already-corrected self-directed SSH occurrence selector and reference line-budget
+contract; the final affected gate passes **132 tests, one existing skip**. The
+separate session/catalog/reference gate passes 37 tests. No production source
+changed after the complete run began. This is a full run plus focused repair
+evidence, not a claim that its original exit status was green. Ruff check/format
+(1,319 files), whitespace and revision-328 behavior checks pass. The installer
+refreshed all 99 generated project skill files. Personal assessment skill and
+its retained replacement files remain byte-identical.

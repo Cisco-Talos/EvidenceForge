@@ -1214,7 +1214,8 @@ class MaterializationBatchPlan:
             or identity.audit_pid_version is None
             or identity.execution_ordinal != 0
             or identity.principal != "root"
-            or identity.credentials != PosixProcessCredentials(0, 0, 0, 0)
+            or identity.credentials is None
+            or not identity.credentials.is_unattributed_root
             or identity.started_at > session.audit_origin.created_at
         ):
             return hold_until
@@ -3564,7 +3565,12 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             normalized.execution_ordinal,
             normalized.credentials,
             PosixProcessCredentials(
-                service_account.uid, service_account.uid, service_account.gid, service_account.gid
+                service_account.uid,
+                service_account.uid,
+                service_account.gid,
+                service_account.gid,
+                normalized.credentials.audit_uid,
+                normalized.credentials.audit_session_id,
             ),
             normalized.principal,
             service_account.account_name,
@@ -10622,7 +10628,8 @@ class StateManager:
             and parent_pid == 0
             and type(fixed_pid) is int
             and fixed_pid == 1
-            and credentials == PosixProcessCredentials(0, 0, 0, 0)
+            and credentials is not None
+            and credentials.is_unattributed_root
         )
         if (
             (requested or new_group)

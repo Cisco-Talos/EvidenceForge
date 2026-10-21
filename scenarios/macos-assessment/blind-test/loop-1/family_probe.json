@@ -1,0 +1,263 @@
+{
+  "scope": "Rendered benchmark evidence; equal millisecond timestamps are unordered",
+  "process_rows": 1002,
+  "transitions": 8,
+  "netonly_children": 3,
+  "tls_rows": 812,
+  "native_forks": 0,
+  "failures": [
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 392,
+      "invariant": "process observation precedes explicit visible birth",
+      "identity": "54f5c1e1-773d-4259-8050-40ea65da994d"
+    },
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 393,
+      "invariant": "process observation precedes explicit visible birth",
+      "identity": "54f5c1e1-773d-4259-8050-40ea65da994d"
+    },
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 395,
+      "invariant": "process observation precedes explicit visible birth",
+      "identity": "d02c24bf-76dd-4824-ba7e-c4ca2db41938"
+    },
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 396,
+      "invariant": "process observation precedes explicit visible birth",
+      "identity": "66aae7eb-161b-4a17-be68-864186b66ed5"
+    },
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 397,
+      "invariant": "process observation precedes explicit visible birth",
+      "identity": "66aae7eb-161b-4a17-be68-864186b66ed5"
+    },
+    {
+      "source": "NS-MAC-02.northstar.example/ecar.json",
+      "line": 400,
+      "invariant": "child birth precedes explicit visible parent birth",
+      "identity": "66aae7eb-161b-4a17-be68-864186b66ed5"
+    },
+    {
+      "source": "NS-WIN-01.northstar.example/windows_event_sysmon.xml",
+      "line": 607011,
+      "invariant": "netonly child changed terminal session (line is EventRecordID)",
+      "identity": "{725f90bb-6dfe-6ad7-6a00-0010b18cdd48}"
+    },
+    {
+      "source": "NS-WIN-01.northstar.example/windows_event_sysmon.xml",
+      "line": 607390,
+      "invariant": "netonly child changed terminal session (line is EventRecordID)",
+      "identity": "{725f90bb-88f6-6ad7-d100-0010f01a47d6}"
+    },
+    {
+      "source": "NS-WIN-01.northstar.example/windows_event_sysmon.xml",
+      "line": 607395,
+      "invariant": "netonly child changed terminal session (line is EventRecordID)",
+      "identity": "{725f90bb-88fd-6ad7-2000-0010a058bdd7}"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 9,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CYWk4ifm6jNUgyjxeR"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 20,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CYsDXWFApa8iEMrHxT"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 32,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CezXbGmqGDoawX9ia8"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 33,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "C2zB6WCwdYjDuSfoNh"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 60,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "C8FlsGOLL0lGB8lqLp"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 63,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "C5Jwd6VUFf0rhf1NRZ"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 108,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CDYwpayGf6bzTmduzV"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 150,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CkkvuGrd1gUBqIjnCJr"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 156,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CQ5xjyP1XpAiUdDEsQd"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 172,
+      "invariant": "ServerHello without responder payload",
+      "identity": "CBogTHFyiqA1QvXD01"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 230,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CUQs6BJNGlOJhyRfhb"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 235,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CEkOFpEOfWyaTh9EAk"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 269,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CUULMfoJ68xXBMUKjF"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 372,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CQ705I9CFfkZOadqzK"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 381,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "C9iafOVOpmqJwUcuE"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 383,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "Csji7LaBJpfNDcmIot"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 387,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CrEuM2S8MAdIgMdNKo"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 510,
+      "invariant": "ServerHello without responder payload",
+      "identity": "CaVbA17hzF74FSRRs5f"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 512,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "C563REKNbcoqZMBzHc4"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 540,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "Cm7LS6QC15G7Qxfmve"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 543,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CYWAHHwQRkCLNbR5XAa"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 564,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CjJnB82C1uGhPlbxbO"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 567,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CDAzfQAkiKko6CP0an"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 594,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CRvNnjnl9oXLLVSRJIN"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 630,
+      "invariant": "ServerHello without responder payload",
+      "identity": "Ch9Uy8CfGxqibd8XqK"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 644,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "Cbg8FTPE4XgUnuap1x"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 651,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CMK2TEnZWMaX5S9YwF"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 681,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CMUH6xxu8F78ZeLGOB"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 688,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CK5m63m5zfehFq5CWm4"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 695,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CRaCpO05y2C6R4ryql"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 719,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CuaHimnzwsBOlQRB4Y"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 742,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CHYOLMZ8PFMlA3zgPy"
+    },
+    {
+      "source": "office-span/ssl.json",
+      "line": 744,
+      "invariant": "full ECDHE handshake lacks server key exchange",
+      "identity": "CtG8Stw5oWDlKXCKqB"
+    }
+  ],
+  "passed": false
+}

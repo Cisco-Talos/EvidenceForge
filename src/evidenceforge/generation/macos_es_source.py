@@ -203,6 +203,7 @@ def prepared_macos_es_fork_publication(
             or process.credentials.audit_session_id is None
             or process.audit_pid_version is None
             or process.parentage is None
+            or process.responsibility is None
             or process.job_control is None
             or getattr(binary, "code_signature", None) is None
             or terminal is None

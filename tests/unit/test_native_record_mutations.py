@@ -152,7 +152,7 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
             ".xml"
             if name.startswith("windows_")
             else ".ndjson"
-            if name == "macos_unified_log"
+            if name in {"macos_unified_log", "macos_endpoint_security"}
             else ".json"
         )
         path = tmp_path / (name + extension)
@@ -164,7 +164,9 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         obj = json.loads(rendered[(name, case.get("variant"))])
         container = obj["properties"] if name == "ecar" and field.name not in obj else obj
         container[field.name] = {"wrong": "type"}
-        extension = ".ndjson" if name == "macos_unified_log" else ".json"
+        extension = (
+            ".ndjson" if name in {"macos_unified_log", "macos_endpoint_security"} else ".json"
+        )
         with (tmp_path / (name + extension)).open("a") as stream:
             stream.write(json.dumps(obj) + "\n")
         expected[name] = expected.get(name, 0) + 1
@@ -185,7 +187,8 @@ def test_malformed_native_records_complete_all_pillars(tmp_path: Path) -> None:
         )
         path.write_text(raw + "\n")
         expected[name] = len(list(get_parser(name).parse_file(path)))
-    assert len(expected) == 26
+    assert len(expected) == 27
+    assert {"macos_unified_log", "macos_endpoint_security"} <= expected.keys()
     result = CliRunner().invoke(
         app,
         [

@@ -169,6 +169,21 @@ class PosixProcessCredentials:
 
         return (self.real_uid, self.real_gid, self.audit_uid, self.audit_session_id)
 
+    @property
+    def has_no_authenticated_audit_origin(self) -> bool:
+        """Distinguish legacy unknown or explicit XNU default from an authenticated origin."""
+        return (self.audit_uid, self.audit_session_id) in {(None, None), (2**32 - 1, 0)}
+
+    @property
+    def is_unattributed_root(self) -> bool:
+        """Return whether this is root with legacy unknown or modeled default audit origin."""
+        return (self.real_uid, self.effective_uid, self.real_gid, self.effective_gid) == (
+            0,
+            0,
+            0,
+            0,
+        ) and self.has_no_authenticated_audit_origin
+
 
 @dataclass(frozen=True, slots=True)
 class MacosProcessAuditBinding:
@@ -312,10 +327,9 @@ class MacosProcessServiceDrop:
             or self.after.real_uid == 0
             or self.after.real_uid != self.after.effective_uid
             or self.after.real_gid != self.after.effective_gid
-            or self.before.audit_uid is not None
-            or self.before.audit_session_id is not None
-            or self.after.audit_uid is not None
-            or self.after.audit_session_id is not None
+            or not self.before.has_no_authenticated_audit_origin
+            or (self.before.audit_uid, self.before.audit_session_id)
+            != (self.after.audit_uid, self.after.audit_session_id)
         ):
             raise ValueError(
                 "Service privilege drop must adopt a nonroot service without authenticated origin"

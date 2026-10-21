@@ -22,7 +22,6 @@ from evidenceforge.events.dispatcher import (
     PreparedActionCohortCapability,
 )
 from evidenceforge.events.identity import (
-    PosixProcessCredentials,
     ProcessIdentity,
     validate_process_arguments,
 )
@@ -45,6 +44,7 @@ from evidenceforge.generation.deployment_registry import (
     LocalArtifactPublishToken,
 )
 from evidenceforge.generation.identity import IdentityDirectory, MacAccount
+from evidenceforge.generation.macos_execution_metadata import MacosExecutionMetadataProducer
 from evidenceforge.generation.runtime_content import runtime_executable_lease_owner
 from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan, StateManager
 from evidenceforge.models.exceptions import StateError
@@ -158,7 +158,8 @@ def resolve_macos_ssh_receiver_environment(
         or parent.started_at > started_at
         or parent.image != launchd.image_path
         or parent.principal != "root"
-        or parent.credentials != PosixProcessCredentials(0, 0, 0, 0)
+        or parent.credentials is None
+        or not parent.credentials.is_unattributed_root
     ):
         raise StateError("Mac SSH receiver requires its live modeled launchd parent")
     return MacosSshReceiverEnvironment(
@@ -210,7 +211,8 @@ class MacosSshReceiverStartupRequest:
             or self.receiver.command_line != self.wrapper.command_templates[0]
             or self.receiver.execution_ordinal != 0
             or self.receiver.principal != "root"
-            or self.receiver.credentials != PosixProcessCredentials(0, 0, 0, 0)
+            or self.receiver.credentials is None
+            or not self.receiver.credentials.is_unattributed_root
             or self.service_account.host != self.receiver.hostname
             or self.service_account.account_name != "_sshd"
             or self.service_account.scope != "well_known"
@@ -264,6 +266,7 @@ class MacosSshReceiverStartup:
         state: StateManager,
         dispatcher: EventDispatcher,
         host: HostContext,
+        metadata: MacosExecutionMetadataProducer | None = None,
     ) -> None:
         request.__post_init__()
         receiver = request.receiver
@@ -291,6 +294,7 @@ class MacosSshReceiverStartup:
         self._request = request
         self._state = state
         self._dispatcher = dispatcher
+        self._metadata = metadata
         # Detach mutable presentation context from the caller.
         self._host = replace(host, roles=list(host.roles))
         self._phase = 0
@@ -393,14 +397,44 @@ class MacosSshReceiverStartup:
                 if phase == shell_exec
                 else macos_ssh_command_arguments(descriptor)
             )
-            after = builder.execute_process(
-                before,
-                image=descriptor.image_path,
-                command_line=shlex.join(arguments),
-                arguments=arguments,
-                executed_at=timestamp,
-                executable_version=executable_version,
-            )
+            if self._metadata is not None:
+                if type(binary) not in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
+                    raise StateError("Mac SSH exec metadata requires its exact deployed binary")
+                launch = (
+                    self._metadata.deployed_launch(
+                        before.hostname,
+                        before.principal,
+                        at=timestamp,
+                        path=descriptor.image_path,
+                        kind="user",
+                    )
+                    if phase == shell_exec
+                    else None
+                )
+                after = self._metadata.plan_exec(
+                    builder,
+                    self._state,
+                    before,
+                    at=timestamp,
+                    image=descriptor.image_path,
+                    requested_path=descriptor.image_path,
+                    arguments=arguments,
+                    binary=binary,
+                    environment=launch.environment if launch else None,
+                    execution_directory=launch.directory if launch else None,
+                    # The inetd transport owns SSH standard I/O. Unknown socket
+                    # descriptors cannot become a fabricated native exec table.
+                    observe_descriptors=False,
+                ).process
+            else:
+                after = builder.execute_process(
+                    before,
+                    image=descriptor.image_path,
+                    command_line=shlex.join(arguments),
+                    arguments=arguments,
+                    executed_at=timestamp,
+                    executable_version=executable_version,
+                )
             session_identity = None
             if phase == shell_exec:
                 session_identity = self._state.get_session_identity(after.logon_id)
@@ -430,7 +464,12 @@ class MacosSshReceiverStartup:
             )
             root = f"process-job-control:{after.execution_id}:{timestamp.isoformat()}"
         elif phase in {2, 7, 9}:
-            after = builder.fork_process(before, forked_at=timestamp).identity
+            birth = (
+                self._metadata.plan_fork(builder, self._state, before, at=timestamp)
+                if self._metadata is not None
+                else builder.fork_process(before, forked_at=timestamp)
+            )
+            after = birth.identity
             event = process_fork_occurrence(
                 host=self._host,
                 parent=before,

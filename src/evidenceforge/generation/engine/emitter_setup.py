@@ -1317,7 +1317,9 @@ class EmitterSetupMixin:
                 username=member.username,
                 integrity_level=member.integrity_level,
                 os_category=host.os_category,
-                credentials=PosixProcessCredentials(0, 0, 0, 0),
+                credentials=metadata.credentials
+                if metadata
+                else PosixProcessCredentials(0, 0, 0, 0),
                 new_posix_session=True,
                 executable_version=member.executable_version,
                 arguments=member.arguments,
@@ -1326,6 +1328,7 @@ class EmitterSetupMixin:
                 exec_image=metadata.image if metadata else None,
                 image_security=metadata.image_security if metadata is not None else None,
                 exec_script=metadata.script if metadata else None,
+                responsibility=metadata.responsibility if metadata else None,
                 macos_terminal="absent" if metadata else None,
                 macos_standard_io="null" if metadata else None,
                 logon_id=member.logon_id,
@@ -1590,7 +1593,9 @@ class EmitterSetupMixin:
                 integrity_level=member.integrity_level,
                 os_category=member.os_category,
                 credentials=(
-                    PosixProcessCredentials(0, 0, 0, 0)
+                    metadata.credentials
+                    if metadata
+                    else PosixProcessCredentials(0, 0, 0, 0)
                     if member.os_category == "macos" and member.username == "root"
                     else None
                 ),
@@ -1603,6 +1608,7 @@ class EmitterSetupMixin:
                 exec_image=metadata.image if metadata else None,
                 image_security=metadata.image_security if metadata is not None else None,
                 exec_script=metadata.script if metadata else None,
+                responsibility=metadata.responsibility if metadata else None,
                 macos_terminal="absent" if metadata else None,
                 macos_standard_io="null" if metadata else None,
                 start_time=member.start_time,

@@ -21,7 +21,10 @@ from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_dns_resolver_ips, public_ntp_ips
-from evidenceforge.generation.activity.process_network import get_service_to_exes
+from evidenceforge.generation.activity.process_network import (
+    ambient_network_allowed,
+    get_service_to_exes,
+)
 from evidenceforge.generation.activity.ssh_identity import (
     baseline_ssh_auth_method,
     baseline_ssh_client_key,
@@ -1590,6 +1593,8 @@ class WorldPlanner:
                     continue
                 if descriptor.executable.casefold() in _SHELL_EXES:
                     continue
+                if not ambient_network_allowed(descriptor.executable):
+                    continue
                 if is_server_admin and server_excluded_categories.intersection(
                     descriptor.categories
                 ):
@@ -1818,7 +1823,9 @@ class WorldPlanner:
         if not compatible_exes:
             return -1
         compatible_exes = [
-            exe for exe in compatible_exes if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES
+            exe
+            for exe in compatible_exes
+            if exe.rsplit("/", 1)[-1].lower() not in _SHELL_EXES and ambient_network_allowed(exe)
         ]
         if not compatible_exes:
             return -1

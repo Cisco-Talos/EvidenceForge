@@ -197,7 +197,8 @@ class TestLogonIdSystemScoping:
         assert type9 is not None
         assert type9.username == local_user.username
         assert type9.source_ip == "-"
-        assert type9.session_id == 0
+        caller = state_manager.get_session(caller_logon_id)
+        assert type9.session_id == caller.session_id > 0
         assert type9.logon_guid != "{00000000-0000-0000-0000-000000000000}"
         controller = state_manager.get_process(system.hostname, type9.process_tree_root or -1)
         assert controller is not None

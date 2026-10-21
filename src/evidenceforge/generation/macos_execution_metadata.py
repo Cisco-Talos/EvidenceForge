@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Literal
 
 from evidenceforge.config.schemas import MacosExecutionMetadataProfile
 from evidenceforge.events.content_identity import BinaryReleaseIdentity, LocalArtifactBinaryIdentity
-from evidenceforge.events.identity import ProcessIdentity, validate_process_arguments
+from evidenceforge.events.identity import (
+    PosixProcessCredentials,
+    ProcessIdentity,
+    validate_process_arguments,
+)
 from evidenceforge.events.macos_exec_descriptors import MacosExecDescriptorObservation
 from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
@@ -22,6 +26,7 @@ from evidenceforge.events.macos_execution_directory import MacosExecutionDirecto
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileTime
 from evidenceforge.events.macos_runtime import MacosCodeValidationDecision, MacosImageSecurity
 from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
 from evidenceforge.models.exceptions import StateError
@@ -29,6 +34,7 @@ from evidenceforge.models.exceptions import StateError
 if TYPE_CHECKING:
     from evidenceforge.generation.state_manager import (
         ActionCohortMaterializationBuilder,
+        ProcessMaterializationPlan,
         StateManager,
     )
 
@@ -42,6 +48,8 @@ class MacosLaunchMetadata:
     image: MacosExecImage | None
     script: MacosExecScript | None
     image_security: MacosImageSecurity | None = None
+    credentials: PosixProcessCredentials | None = None
+    responsibility: ProcessResponsibility | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +57,7 @@ class MacosPreparedExecution:
     """Canonical replacement intent plus its produced post-exec descriptor observation."""
 
     process: ProcessIdentity
-    descriptors: MacosExecDescriptorObservation
+    descriptors: MacosExecDescriptorObservation | None
 
 
 class MacosExecutionMetadataProducer:
@@ -196,6 +204,18 @@ class MacosExecutionMetadataProducer:
             image,
             script,
             self.image_security(binary, validation=validation),
+            (
+                PosixProcessCredentials(0, 0, 0, 0, 2**32 - 1, 0)
+                if kind == "system" and self.profile.system_audit_origin == "default_unattributed"
+                else PosixProcessCredentials(0, 0, 0, 0)
+                if kind == "system"
+                else None
+            ),
+            (
+                ProcessResponsibility(None)
+                if kind == "system" and self.profile.system_responsibility == "none"
+                else None
+            ),
         )
 
     def image_security(
@@ -258,6 +278,29 @@ class MacosExecutionMetadataProducer:
             kind=kind,
         )
 
+    def plan_fork(
+        self,
+        builder: ActionCohortMaterializationBuilder,
+        state: StateManager,
+        parent: ProcessIdentity,
+        *,
+        at: datetime,
+    ) -> ProcessMaterializationPlan:
+        """Observe the current modeled directory for an exact canonical fork.
+
+        The parent's launch snapshot is not a current-directory observation.
+        Unknown current state stays unavailable, even if its old launch had a path.
+        """
+        if type(parent) is not ProcessIdentity or builder._manager is not state:
+            raise StateError("Mac fork producer requires the exact canonical State builder")
+        current = state.process_directory_at(parent, event_time=at)
+        if current is None:
+            raise StateError("Mac fork producer requires known current directory state")
+        directory = self.directory(parent.hostname, current.native_path, at)
+        if directory.metadata.canonical_json() != current.metadata.canonical_json():
+            raise StateError("Mac fork working directory no longer matches its provisioned object")
+        return builder.fork_process(parent, forked_at=at, execution_directory=directory)
+
     def plan_exec(
         self,
         builder: ActionCohortMaterializationBuilder,
@@ -272,25 +315,34 @@ class MacosExecutionMetadataProducer:
         environment: tuple[str, ...] | None = None,
         script: MacosExecScript | None = None,
         validation: MacosCodeValidationDecision | None = None,
+        execution_directory: MacosExecutionDirectory | None = None,
+        observe_descriptors: bool = True,
     ) -> MacosPreparedExecution:
         """Produce an exact direct image replacement through the existing State builder.
 
-        Inheritance uses current event-time canonical state. A missing directory,
-        environment, full descriptor extent or native pipe identity rejects;
-        no launch default is substituted for unknown inherited execution facts.
+        Inheritance uses current event-time canonical state. A missing directory
+        or environment rejects. Native exec callers additionally require a full
+        descriptor observation; fork-only startup may explicitly leave it unknown.
+        No launch default substitutes for unknown inherited execution facts.
         Publication, file retention and native collector composition remain with
         the caller's existing action transaction.
         """
-        if type(process) is not ProcessIdentity or builder._manager is not state:
+        if (
+            type(process) is not ProcessIdentity
+            or builder._manager is not state
+            or type(observe_descriptors) is not bool
+        ):
             raise StateError("Mac exec producer requires the exact canonical State builder")
         validate_process_arguments(arguments, command_line=shlex.join(arguments))
         known_environment = environment if environment is not None else process.environment
-        current_directory = state.process_directory_at(process, event_time=at)
+        current_directory = (
+            execution_directory
+            if execution_directory is not None
+            else state.process_directory_at(process, event_time=at)
+        )
         table = state.process_descriptors_at(process, event_time=at)
-        if known_environment is None or current_directory is None or table is None:
-            raise StateError(
-                "Mac exec producer requires known inherited environment, directory and descriptors"
-            )
+        if known_environment is None or current_directory is None:
+            raise StateError("Mac exec producer requires known inherited environment and directory")
         directory = self.directory(process.hostname, current_directory.native_path, at)
         if directory.metadata.canonical_json() != current_directory.metadata.canonical_json():
             raise StateError("Mac exec working directory no longer matches its provisioned object")
@@ -306,7 +358,13 @@ class MacosExecutionMetadataProducer:
             != binary
         ):
             raise StateError("Mac exec producer requires its exact installed image placement")
-        descriptors = MacosExecDescriptorObservation.from_modeled_table(table.after_exec(at))
+        if observe_descriptors and table is None:
+            raise StateError("Mac exec producer requires known inherited descriptors")
+        descriptors = (
+            MacosExecDescriptorObservation.from_modeled_table(table.after_exec(at))
+            if observe_descriptors and table is not None
+            else None
+        )
         after = builder.execute_process(
             process,
             image=image,

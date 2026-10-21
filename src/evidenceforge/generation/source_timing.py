@@ -4639,6 +4639,39 @@ class SourceTimingPlanner:
     ) -> None:
         """Publish the final visible dependent frontier after all source constraints."""
 
+        if family == "ecar" and event.event_type in _PROCESS_START_EVENT_TYPES:
+            # Session/transport/execution constraints run after the preliminary
+            # birth planner. Publish the admitted birth, not its earlier sample,
+            # before another occurrence can consume this process's frontier.
+            # In a fork the actor is the parent; the subject owns this birth.
+            identity = self._subject_process_identity(event)
+            process = event.process
+            if process is None:
+                return
+            object_id, _lifecycle_id = self._process_scope_ids(
+                event,
+                identity,
+                hostname=hostname,
+                pid=process.pid,
+                started_at=identity.started_at
+                if identity
+                else process.start_time or event.timestamp,
+            )
+            key = (family, source_instance, object_id)
+            self._runtime_process_create_times[key] = timestamp
+            previous = self._process_dependent_create_times.get(key)
+            self._process_dependent_create_times[key] = (
+                max(previous, timestamp) if previous is not None else timestamp
+            )
+            if identity is not None:
+                self._ecar_process_create_times[identity.object_id] = timestamp
+            self._ensure_plan(event).finalized_times[
+                ecar_process_render_key("create", hostname)
+            ] = timestamp
+            self._record_process_create_dependency(
+                event, family, source_instance, object_id, timestamp
+            )
+            return
         if event.event_type in _PROCESS_START_EVENT_TYPES | _PROCESS_END_EVENT_TYPES:
             return
         scope = self._runtime_endpoint_process_scope(

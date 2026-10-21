@@ -60,7 +60,6 @@ from evidenceforge.events.dispatcher import (
 )
 from evidenceforge.events.identity import (
     EventIdentityPlan,
-    PosixProcessCredentials,
     ProcessIdentity,
     SessionIdentity,
 )
@@ -2231,6 +2230,7 @@ class _SshReceiverStartupBinding:
                     state=executor.state_manager,
                     dispatcher=executor.dispatcher,
                     host=prepared.plan.target_host.materialize(),
+                    metadata=getattr(executor, "macos_execution_metadata", None),
                 )
             while self._coordinator.result is None:
                 self._coordinator.advance()
@@ -4315,12 +4315,23 @@ class SshSessionActionBundle:
                 receiver_start
             )
         receiver_executable_version = None
+        receiver_metadata = None
         if environment is not None:
             binary = executor.dispatcher.resolve_process_binary_identity(
                 request.target_system.hostname, "root", environment.wrapper.image_path, "macos"
             )
             if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}:
                 receiver_executable_version = ProcessExecutableVersion.from_binary(binary)
+            provider = getattr(executor, "macos_execution_metadata", None)
+            if provider is not None:
+                receiver_metadata = provider.launch(
+                    request.target_system.hostname,
+                    "root",
+                    at=receiver_start,
+                    requested_path=environment.wrapper.image_path,
+                    binary=binary,
+                    kind="system",
+                )
         receiver_plan = batch_builder.plan_process(
             system=request.target_system.hostname,
             parent_pid=receiver_parent_pid,
@@ -4331,10 +4342,17 @@ class SshSessionActionBundle:
             username="root",
             integrity_level="System",
             os_category="macos" if environment else "linux",
-            credentials=PosixProcessCredentials(0, 0, 0, 0) if environment else None,
+            credentials=environment.parent.credentials if environment else None,
             new_posix_session=environment is not None,
             executable_version=receiver_executable_version,
             arguments=macos_ssh_command_arguments(environment.wrapper) if environment else None,
+            environment=receiver_metadata.environment if receiver_metadata else None,
+            execution_directory=receiver_metadata.directory if receiver_metadata else None,
+            exec_image=receiver_metadata.image if receiver_metadata else None,
+            exec_script=receiver_metadata.script if receiver_metadata else None,
+            image_security=receiver_metadata.image_security if receiver_metadata else None,
+            responsibility=receiver_metadata.responsibility if receiver_metadata else None,
+            macos_terminal="absent" if receiver_metadata else None,
             logon_id=session_plan.identity.logon_id,
             lifecycle_group_id=stable_uuid(
                 "ssh-deferred-receiver-lifecycle",
