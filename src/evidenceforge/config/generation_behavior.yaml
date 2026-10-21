@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 329
+current_revision: 330
 history_start_revision: 1
-behavior_surface_sha256: dafe0214f71bb625b2ba0c2c4414ff58adce2b9ef4aaf170365c1f2827f59a25
+behavior_surface_sha256: a40fa1256a66c2ebee26c2488808bc3193ca88bbb23050d60b662395c09c1247
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3109,3 +3109,19 @@ changes:
       - zeek_files
       - zeek_ocsp
     summary: Adds bounded Mac runtime commands and GUI reuse, shared file and journal identity, committed SMB timing, exact history times, loaded browser versions, profiled HTTP close variation and fractional scheduling.
+  - revision: 330
+    id: local-red-herring-world-placement
+    impact: localized
+    domains:
+      - baseline-local-process-actor-selection
+      - world-model-user-placement
+      - runtime-user-artifact-ownership
+      - macos-terminal-bootstrap-main-process-reuse
+    formats:
+      - ecar
+      - windows_event_security
+      - windows_event_sysmon
+      - syslog
+      - bash_history
+      - zsh_history
+    summary: Selects local red-herring process actors from canonical world placement and reuses an eligible session Terminal main process during shell bootstrap without backdating future parents.

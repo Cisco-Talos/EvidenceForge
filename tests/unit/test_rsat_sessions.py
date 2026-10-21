@@ -285,7 +285,7 @@ class TestRsatSessionTiming:
         monkeypatch.setattr(
             baseline_module,
             "generate_suspicious_cli",
-            lambda *_args: {
+            lambda *_args, **_kwargs: {
                 "user": user,
                 "system": system,
                 "time": base_time,

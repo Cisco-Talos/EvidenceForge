@@ -14,11 +14,11 @@ implementation, input, manifest and per-file hashes in its loop provenance.
 | Source filtering does not change shared truth | Revision-328 supported/native shared data bytes match; CLI filter tests | Pass |
 | Fresh-process deterministic native output | `tests/integration/test_macos_es_cli.py` | Pass |
 | Exact native checkpoint suspend/resume | Same integration file; six retained fork rows | Pass |
-| Mixed-fleet, SSH, system-job and SMB acceptance | 38 relevant extended tests | Pass |
+| Mixed-fleet, SSH, system-job, SMB and native fork recovery | 40 relevant extended tests on revision 330 | Pass |
 | Existing lifecycle/session/TLS hard probe | `loop-2/family_probe.json` | Zero failures |
 | Catalog completion within evidence bounds | All 67 original IDs assessed; 48 prefilled Mac variants; runtime module and actual-engine tests | Complete; unsupported entries stay unavailable |
 | Assessment-driven owner fixes | Revision 329, focused tests, next fresh loop and review-family probe | Final validation in progress |
-| Complete routine regression suite | Full run plus 108 passing affected-file/skill/manifest tests; exact results in worklog | Validated with focused fixture repairs |
+| Complete routine regression suite | Full revision-330 run plus 92 passing affected placement/RSAT tests; exact results in worklog | Validated with focused fixture repairs |
 
 The following boundaries remain explicit:
 

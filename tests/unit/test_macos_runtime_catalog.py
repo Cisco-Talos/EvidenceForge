@@ -124,6 +124,43 @@ def test_mac_storyline_execution_does_not_invent_its_own_file_create(
     assert all(row["properties"]["file_path"] != image for row in creates)
 
 
+@pytest.mark.parametrize("future", [False, True])
+def test_shell_bootstrap_reuses_only_an_eligible_existing_terminal_main(
+    tmp_path: Path, future: bool
+) -> None:
+    scenario = _scenario()
+    scenario.output.logs = [{"format": "ecar"}]
+    engine = GenerationEngine(scenario, tmp_path, generation_seed=330)
+    try:
+        engine._initialize()
+        generator = engine.activity_generator
+        user, system = scenario.environment.users[0], scenario.environment.systems[0]
+        logon = generator.generate_logon(user, system, engine.start_time + timedelta(minutes=1))
+        at = engine.start_time + timedelta(minutes=6)
+        image = application_descriptor("macos-terminal")["platforms"]["macos"]["image_path"]
+        terminal = generator.generate_process(
+            user,
+            system,
+            at + timedelta(minutes=2 if future else -2),
+            logon,
+            image,
+            image,
+            parent_pid=1,
+        )
+        shell = generator.ensure_macos_session_shell(user, system, logon, at)
+        session = engine.state_manager.get_session(logon)
+        if future:
+            assert shell is None and session.session_shell_pid is None
+        else:
+            assert shell is not None and session.process_tree_root == terminal
+        terminals = [
+            p for p in engine.state_manager.get_processes_for_session(logon) if p.image == image
+        ]
+        assert len(terminals) == 1 and terminals[0].pid == terminal
+    finally:
+        engine._close_emitters()
+
+
 @pytest.mark.parametrize("application", ["msbuild", "npm", "pytest", "pip", "powershell_query"])
 def test_mac_runtime_catalog_uses_bounded_direct_native_invocations(application: str) -> None:
     platform = application_descriptor(application)["platforms"]["macos"]

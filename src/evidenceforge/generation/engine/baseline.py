@@ -6795,6 +6795,7 @@ class BaselineMixin:
                     self.scenario.environment.domain or "corp.local",
                     self.activity_generator.timing_runtime,
                     event_ordinal,
+                    world_model=getattr(self, "world_model", None),
                 )
                 if result:
                     if not self._baseline_pass_admits(current_hour, start=result["time"]):
@@ -7083,6 +7084,7 @@ class BaselineMixin:
                         self.scenario.environment.domain or "corp.local",
                         self.activity_generator.timing_runtime,
                         event_ordinal,
+                        world_model=getattr(self, "world_model", None),
                     )
                 else:
                     result = gen_fn(
@@ -7092,6 +7094,7 @@ class BaselineMixin:
                         current_hour,
                         self.activity_generator.timing_runtime,
                         event_ordinal,
+                        world_model=getattr(self, "world_model", None),
                     )
                 if result and self._baseline_pass_admits(
                     current_hour,

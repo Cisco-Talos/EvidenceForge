@@ -30,10 +30,12 @@ Configurable via baseline_activity.suspicious_noise:
   low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr
 """
 
+from __future__ import annotations
+
 import logging
 import random
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from evidenceforge.generation.activity.application_catalog import (
     get_apps_for_persona,
@@ -55,7 +57,58 @@ from evidenceforge.utils.platforms import platform_for_os
 
 from .suspicious_benign_config import pick_suspicious_dns_host, pick_unusual_connection
 
+if TYPE_CHECKING:
+    from evidenceforge.generation.world_model import WorldModel
+
 logger = logging.getLogger(__name__)
+
+
+def _pick_local_activity_pair(
+    rng: random.Random,
+    users: list[User],
+    systems: list[System],
+    world_model: WorldModel | None,
+    *,
+    platform: str | None = None,
+) -> tuple[User, System] | None:
+    """Select local process intent from the canonical user's activity placement."""
+    hosts = {
+        system.hostname: system
+        for system in systems
+        if platform is None or _get_os_category(system) == platform
+    }
+    candidates: list[tuple[User, list[System]]] = []
+    for user in users:
+        if world_model is not None:
+            placement = world_model.user_for(user.username)
+            local = (
+                [
+                    hosts[system.hostname]
+                    for system in placement.activity_systems
+                    if system.hostname in hosts
+                ]
+                if placement is not None
+                else []
+            )
+        else:
+            # Direct helper callers lack a compiled world. Explicit placement
+            # still constrains them; only genuinely unplaced users may fall back.
+            local = [
+                system
+                for system in hosts.values()
+                if system.assigned_user == user.username or system.hostname == user.primary_system
+            ]
+            explicitly_placed = bool(user.primary_system) or any(
+                system.assigned_user == user.username for system in systems
+            )
+            if not local and not explicitly_placed:
+                local = list(hosts.values())
+        if local:
+            candidates.append((user, local))
+    if not candidates:
+        return None
+    user, local = rng.choice(candidates)
+    return user, rng.choice(local)
 
 
 class _SuspiciousBenignTimingRuntime(Protocol):
@@ -299,11 +352,14 @@ def generate_suspicious_cli(
     ad_domain: str = "corp.local",
     timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
     timing_ordinal: int = 0,
+    *,
+    world_model: WorldModel | None = None,
 ) -> dict | None:
     """Generate a suspicious CLI command from a non-attacker user."""
-    user = rng.choice(users)
-    system_candidates = [s for s in systems if s.assigned_user == user.username]
-    system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
+    pair = _pick_local_activity_pair(rng, users, systems, world_model)
+    if pair is None:
+        return None
+    user, system = pair
 
     os_cat = _get_os_category(system)
     offset = timedelta(
@@ -554,11 +610,14 @@ def generate_temp_dir_execution(
     current_hour: datetime,
     timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
     timing_ordinal: int = 0,
+    *,
+    world_model: WorldModel | None = None,
 ) -> dict | None:
     """Generate a process execution from a temp directory (benign installer/update)."""
-    user = rng.choice(users)
-    system_candidates = [s for s in systems if s.assigned_user == user.username]
-    system = rng.choice(system_candidates) if system_candidates else rng.choice(systems)
+    pair = _pick_local_activity_pair(rng, users, systems, world_model)
+    if pair is None:
+        return None
+    user, system = pair
 
     os_cat = _get_os_category(system)
     offset = timedelta(
@@ -632,6 +691,8 @@ def generate_unusual_powershell(
     ad_domain: str = "corp.local",
     timing_runtime: _SuspiciousBenignTimingRuntime | None = None,
     timing_ordinal: int = 0,
+    *,
+    world_model: WorldModel | None = None,
 ) -> dict | None:
     """Generate PowerShell with suspicious-looking flags (benign admin scripts)."""
     # Only Windows systems
@@ -639,9 +700,10 @@ def generate_unusual_powershell(
     if not windows_systems:
         return None
 
-    user = rng.choice(users)
-    system_candidates = [s for s in windows_systems if s.assigned_user == user.username]
-    system = rng.choice(system_candidates) if system_candidates else rng.choice(windows_systems)
+    pair = _pick_local_activity_pair(rng, users, systems, world_model, platform="windows")
+    if pair is None:
+        return None
+    user, system = pair
 
     offset = timedelta(
         seconds=_sample_hourly_placement_seconds(

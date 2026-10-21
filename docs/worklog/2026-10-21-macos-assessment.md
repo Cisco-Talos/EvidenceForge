@@ -409,3 +409,73 @@ affected-file repair gate, not a claim that the original full exit was green.
 The final repaired platform/journal/skill/manifest gate passes **108 tests, one
 slow deselection**. Ruff check/format (1,323 files), whitespace, behavior digest
 and all 99 config files pass; generated project skills were refreshed.
+
+Revision 329 was committed/pushed as `9ab9f74b`. Fresh loop-3 generation stopped
+at collection hour 1: the unusual-PowerShell red-herring helper selected a Mac
+user and an unrelated Windows host, then attempted a user artifact with no
+compiled profile. A checkpoint and a separate fresh diagnostic attempt retain
+the failure. Only this invocation's command output was examined; no existing
+host logs were read. The stricter runtime owner correctly rejected the action.
+
+The follow-up family invariant belongs to WorldModel local activity placement:
+local CLI, temporary execution and unusual PowerShell noise must select a user
+and target together from that user's canonical activity systems. Platform-specific
+filtering narrows those pairs; it must not move a Mac user onto an arbitrary
+Windows host. All three helpers share one selector and baseline passes its
+WorldModel. Standalone compatibility calls retain unplaced-user fallback while
+respecting explicit placement. Remote authentication/noise keeps its distinct
+semantics. The consumers are canonical sessions, process and runtime-artifact
+owners; no emitter or exact-profile validation is weakened.
+
+The fresh verification bundle completes with three native forks and zero original
+hard-probe failures. The review-family probe drops from 18 findings to one:
+Terminal shell bootstrap still creates a second main process after an earlier
+GUI application launch. The shared terminal/session owner must reuse an exact
+same-user/session/image Terminal process already alive and source-ready before
+its login child. A future or not-ready Terminal cannot become a backdated parent;
+optional shell materialization stays unavailable until that owner is eligible.
+Baseline and terminal bootstrap therefore share the same main-process population
+policy without changing explicit multi-session semantics. The remaining probe
+also verifies the corrected history/journal/self-write families; OCSP duration
+range grows from 0.014675s to 0.974040s.
+
+The final revision-330 verification bundle is at
+`/private/tmp/eforge-macos-assessment-20261021-330-verification2` (fresh hourly
+checkpoints, CLI exit 0). Both probes now have **zero failures**: three native
+forks, ten matched Mac history submissions and one represented journal path.
+Focused local-placement/terminal/argument/auth/manifest acceptance passes **91
+tests**; the earlier suspicious-family gate passes 131. Lint/format passes.
+The final behavior surface is
+`a40fa1256a66c2ebee26c2488808bc3193ca88bbb23050d60b662395c09c1247`.
+The complete suite and relevant native/mixed-fleet slow checks run on this frozen
+source before the follow-up commit; the next official panel will use a fresh
+post-commit generation rather than this verification bundle.
+
+Verification quantitative acceptance passes at **89.2567**, 10,870 records;
+parseability and causality are both 100. The sub-90 guardrail was checked:
+distribution fit, anomaly-rate diagnostics, process regularity and small-window
+volume explain the overall score; no acceptance criterion fails. The approximately
+0.51-point movement from loop 2 is not a new parse/causal regression. Do not change
+the evaluator or add evidence merely to raise this aggregate.
+
+The final native fork recovery and mixed-fleet deterministic/filter slow gate
+passes **four tests in 125.46s**. Verification data was generated before the
+follow-up commit only to validate the fixes; it will not be sent to reviewers.
+The four-specialty panel will receive a fresh post-commit neutral data tree.
+The intended curl download's `FILE/CREATE` remains present after removing the
+unsupported self-image write. Final SSH/persistence/SMB slow acceptance is also
+being repeated on revision 330 rather than relying solely on revision 329.
+
+Revision-330 extended acceptance is complete: the remaining **36 SSH, persistence
+and SMB tests pass in 215.86s**, giving 40 relevant passing extended cases on the
+final source. The complete routine run exposed two older test doubles: a truthy
+MagicMock primary-system value excluded its actor from local placement, and a
+suspicious-CLI stub rejected the new optional world-model keyword. Both fixtures
+now express their intended contract; **92 affected placement/RSAT/command tests
+pass**. Production source is unchanged during this final routine run.
+
+The complete revision-330 routine run finished in **1,022.60s** with **16,192
+passed, 50 skipped, 2,301 deselected and those two already-repaired fixture
+failures**. The 92-test affected gate is green on the repaired fixtures. This is
+full-run plus focused-repair evidence, not a claim that the original full command
+returned success. All 40 relevant slow cases pass on the same production source.

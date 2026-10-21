@@ -283,6 +283,8 @@ class TestSuspiciousPowerShell:
         user = MagicMock()
         user.username = "testuser"
         user.persona = "default"
+        user.primary_system = system.hostname
+        system.assigned_user = user.username
 
         from datetime import datetime
 

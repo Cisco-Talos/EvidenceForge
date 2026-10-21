@@ -25249,7 +25249,28 @@ class ActivityGenerator:
             return None
         parent_pid = 1
         terminal_pid: int | None = None
+        terminal_processes = [
+            process
+            for process in self.state_manager.get_processes_for_session(logon_id)
+            if process.image == launches[0][0] and process.username == user.username
+        ]
+        existing_terminal = next(
+            (
+                process
+                for process in terminal_processes
+                if self._is_pid_active_at(target_system, process.pid, start)
+                and self._process_source_bound_visible_by(
+                    system=target_system, pid=process.pid, deadline=start + gap.value
+                )
+            ),
+            None,
+        )
+        if terminal_processes and existing_terminal is None:
+            return None
         for index, (image, command, arguments) in enumerate(launches):
+            if index == 0 and existing_terminal is not None:
+                terminal_pid = parent_pid = existing_terminal.pid
+                continue
             pid = self.generate_process(
                 user=user,
                 system=target_system,
