@@ -16,7 +16,8 @@ Public research records remain under ignored `sample_data/macos/`; committed fix
 
 The complete assessment sequence, reviewer updates, frozen benchmarks and current
 validation are tracked in [the assessment worklog](2026-10-21-macos-assessment.md).
-Revision 327 (`4665c1f7`) and 328 (`638ba6a4`) are committed and pushed.
+Revisions 327 (`4665c1f7`), 328 (`638ba6a4`), 329 (`9ab9f74b`) and 330
+(`23e7e13e`) are committed and pushed.
 The ordinary SSH path produces three complete modeled fork/v10 records through
 the real engine. Nonempty CLI/parser/filtering/manifest and exact resume gates
 pass; supported/native benchmark runs have identical shared-source bytes.
@@ -24,7 +25,15 @@ Loop 2 passes quantitative acceptance at 89.7644 and the original hard probe has
 zero failures. Fresh blind synthetic-confidence averages 66.5, down from 83.
 Revision 329 addresses the panel's process-population, shared identity and timing
 findings, and completes five bounded runtime-backed developer catalog variants.
-The full routine suite and relevant extended gates are being run on frozen source.
+Revision 330 also binds local red-herring actors to WorldModel placement and
+reuses an eligible Terminal main process during shell bootstrap. All 40 relevant
+extended cases pass; the complete routine run and 92-test fixture repair gate
+are documented in the focused worklog. Fresh post-commit loop 3 passes quantitative
+acceptance (89.2567, 10,870 records), and both probes have zero failures. Its
+independent panel is complete: all four judge Synthetic, mean 66.75. The agreed
+implementation/assessment sequence is complete; the final report records broader
+quality findings, including two confirmed pre-existing network packet/history
+contradictions. Deterministic acceptance is not a broad authenticity pass.
 Native exec/exit (ES-R1) and Gatekeeper denial (GK-R1) remain gated by the user's
 2026-10-21 decision. No capture or personal-log inspection is authorized.
 

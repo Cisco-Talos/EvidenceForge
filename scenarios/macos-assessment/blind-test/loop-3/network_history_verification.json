@@ -1,0 +1,28 @@
+{
+  "scope": "Fresh loop-3 TCP records only; conservative minimum counts distinct observed SYN/SYN-ACK, pure ACK and data classes; no FIN/reset assumptions.",
+  "finding_classification": "sibling_defect",
+  "owner": "src/evidenceforge/generation/network_observation.py:NetworkObservationPlanner._lose_direction",
+  "loss_method_unchanged_since_branch_base": true,
+  "branch_base": "5ce84103",
+  "failures": [
+    {
+      "line": 589,
+      "uid": "CWHOUUAw0jRZ9JWpv",
+      "history": "ShADadrGg",
+      "direction": "originator",
+      "packets": 2,
+      "minimum_distinct_syn_pure_ack_data": 3,
+      "missed_bytes": 23
+    },
+    {
+      "line": 1219,
+      "uid": "C6xhOnMb2hjbXBGZH",
+      "history": "DdAG",
+      "direction": "originator",
+      "packets": 1,
+      "minimum_distinct_syn_pure_ack_data": 2,
+      "missed_bytes": 1
+    }
+  ],
+  "primary_reference": "https://docs.zeek.org/en/v6.1.1/scripts/base/protocols/conn/main.zeek.html"
+}

@@ -1,0 +1,10 @@
+{
+  "scope": "Rendered benchmark evidence; equal millisecond timestamps are unordered",
+  "process_rows": 732,
+  "transitions": 8,
+  "netonly_children": 1,
+  "tls_rows": 937,
+  "native_forks": 3,
+  "failures": [],
+  "passed": true
+}

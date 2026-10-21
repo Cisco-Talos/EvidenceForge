@@ -7,6 +7,20 @@ to guide behavior/catalog work, and finish acceptance/documentation. Commits and
 pushes are checkpoints, not requests to stop. Existing local logs remain off limits
 without asking; fresh synthetic output from these runs is authorized for review.
 
+## Current completion boundary
+
+The agreed finite sequence is complete through behavior revision 330, commit
+`23e7e13e`. The final post-commit assessment passes deterministic acceptance at
+89.2567 with 10,870 records; both targeted probes have zero failures. Four new
+reviewers judge Synthetic, mean synthetic-confidence 66.75: essentially flat
+from 66.5 in loop 2, below the initial 83. Full reports, unchanged reviewer
+submissions, provenance, scores, limitations and the three-loop dashboard are in
+[the assessment report](../../scenarios/macos-assessment/blind-test/REPORT.md).
+This completes the planned implementation and measurement, not broad authenticity.
+Native ES exec/exit and Gatekeeper denial remain deferred by user decision; no
+capture approval is pending. The chronology below preserves earlier checkpoint
+status and must not be read as the current remaining-work list.
+
 ## Initial benchmark and reviewer preparation
 
 - Starting implementation: `72870121` on `codex/macos-workstation-support`.
@@ -479,3 +493,61 @@ passed, 50 skipped, 2,301 deselected and those two already-repaired fixture
 failures**. The 92-test affected gate is green on the repaired fixtures. This is
 full-run plus focused-repair evidence, not a claim that the original full command
 returned success. All 40 relevant slow cases pass on the same production source.
+
+Revision 330 was committed/pushed as `23e7e13e`. Official loop-3 generation at
+`/private/tmp/eforge-macos-assessment-20261021-loop3-330` completes with hourly
+checkpoints. Its 24 files / 5,626,515 bytes are byte-identical to verification2.
+Human and JSON eval both exit 0: 89.2567, 10,870 records, all acceptance criteria
+pass. Both retained probes have zero failures, including three native forks.
+Input and all data/manifest hashes are saved under `blind-test/loop-3/`.
+Only its `data/` tree was copied to `/private/tmp/field-study-20261021-c/dataset`.
+Four new isolated reviewers are assessing that neutral tree with the complete
+current briefing and one persona each; they have no prior results or code context.
+
+## Final post-fix panel and acceptance reconciliation
+
+The four c reviewers completed unchanged reports with Synthetic verdicts. Their
+synthetic-confidence scores are Threat 64, Detection 67, Network 68, Host/EDR 68;
+mean 66.75, mean verdict confidence 82.5 and spread four. No deliberation trigger
+fires. Report hashes and isolation details accompany the official loop-3 scores.
+The 0.25-point movement is flat, not evidence of another realism-score gain.
+Selected family regressions cleared, but new reviewers expose additional concerns.
+
+The strongest new finding is shared network capture-loss accounting. An independent
+conservative check confirms conn rows 589 (`ShADadrGg`, two originator packets)
+and 1219 (`DdAG`, one originator packet) cannot represent all their distinct
+observed SYN/pure-ACK/data classes. Zeek's primary history definition corroborates
+the distinction. The reviewer reports 16 deficits including FIN/reset cases; only
+the two conservative examples are independently asserted. The exact
+`NetworkObservationPlanner._lose_direction` method is unchanged from branch base
+`5ce84103`. It subtracts packet counts independently of retained history classes;
+a future fix must coordinate observed packet truth rather than pad emitter counts.
+No production source was changed after the frozen revision-330 gates or panel.
+
+Three reviewers independently identify a 14-process Windows birth pileup. Other
+findings include SMB service-type and NTP reference-ID semantics (corroborated by
+primary definitions), recurring Mac local-query lifetimes, and qualified HTTP
+owner/remote-auth transport/job-control/module/retry leads. All are classified
+and ranked in `loop-3/REPORT.md`; uncertainty and valid collection alternatives
+are retained. No narrative-design or sparse-source penalty enters the synthesis.
+
+The roadmap now records completion of the bounded modeled implementation and
+assessment separately from user-deferred native evidence gates and new general
+quality follow-ups. This is the finite end of the agreed sequence, not a claim
+that every source is indistinguishable from production. The personal reviewer
+files were edited directly; the retained replacement copies match installed bytes.
+No existing local log inspection, native capture or host-service change occurred.
+
+Final documentation checks pass: Ruff check, Ruff format (1,324 Python files),
+whitespace, local Markdown references, all three canonical score means, dashboard
+SVG XML and unchanged reviewer-report hashes. Both frozen scenario input hashes
+match; every official data-file and manifest hash matches loop-3 provenance.
+Installed personal reviewer files match the retained replacement copies. Behavior
+surface validation still reports revision 330 and
+`a40fa1256a66c2ebee26c2488808bc3193ca88bbb23050d60b662395c09c1247`.
+No full-suite rerun is needed for this documentation-only closure.
+
+The staged whitespace check caught Rich console padding in the newly added eval
+text captures. Trailing padding and blank terminal lines were trimmed; evaluator
+JSON and the four expert reports remain unchanged. The staged check is repeated
+before commit.

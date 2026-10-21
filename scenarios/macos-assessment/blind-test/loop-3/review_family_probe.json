@@ -1,0 +1,26 @@
+{
+  "journal_paths": 1,
+  "history_matches": 10,
+  "mac_self_image_creates": 0,
+  "gui_max_instances": {
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbb4634d:/Applications/Postman.app/Contents/MacOS/Postman": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbb4634d:/Applications/Sublime Text.app/Contents/MacOS/sublime_text": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbb4634d:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbb4634d:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbb4634d:/Applications/Visual Studio Code.app/Contents/MacOS/Code": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/Applications/Visual Studio Code.app/Contents/MacOS/Code": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/Applications/Postman.app/Contents/MacOS/Postman": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/Applications/Sublime Text.app/Contents/MacOS/sublime_text": 1,
+    "NS-MAC-01.northstar.example:maya.chen:0xbade452:/Applications/DBeaver.app/Contents/MacOS/dbeaver": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/DBeaver.app/Contents/MacOS/dbeaver": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Visual Studio Code.app/Contents/MacOS/Code": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Sublime Text.app/Contents/MacOS/sublime_text": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/Postman.app/Contents/MacOS/Postman": 1,
+    "NS-MAC-02.northstar.example:owen.patel:0x7bc49c1:/Applications/IntelliJ IDEA.app/Contents/MacOS/idea": 1
+  },
+  "ocsp_duration_range_seconds": 0.97404,
+  "failures": []
+}

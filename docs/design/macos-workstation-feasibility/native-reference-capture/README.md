@@ -1,8 +1,10 @@
 # Proposed bounded native reference capture
 
-**Status: prepared for review; capture is not authorized or running.** This closes
-the remaining reference questions ES-R1 and GK-R1, not general workstation
-calibration. The Mac fork/v10 benchmark can run independently.
+**Status: deferred by user on 2026-10-21; capture is not authorized or running.**
+The user chose to keep native exec/exit and Gatekeeper features gated. This
+proposal is retained for a future explicit request and would address ES-R1 and
+GK-R1; it supplies no reference evidence by itself. The Mac fork/v10 benchmark
+runs independently.
 
 ## Required lab and permission
 

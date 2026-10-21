@@ -2,7 +2,7 @@
 
 **Status:** 2.2.0a4 prerelease published and verified; stable target 2.2.0
 **Started:** 2026-03-11
-**Last Roadmap Review:** 2026-10-14
+**Last Roadmap Review:** 2026-10-21
 
 This file is the durable roadmap and backlog. It is not a session worklog. Use
 tracked files under [docs/worklog](docs/worklog) for multi-session effort notes,
@@ -71,6 +71,20 @@ Current goal: fix analyst-rejection issues and finish remaining quality work
 without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
+
+- [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
+  The Mac benchmark independently confirms two contradictions; 16 rows are reported.
+  The loss method is unchanged from the branch base. Repair the network observation owner,
+  covering HTTP/TLS/SMB and partial/closed flows; see the
+  [final assessment](scenarios/macos-assessment/blind-test/loop-3/REPORT.md).
+- [ ] **P1** Investigate the repeated Windows process-birth readiness floor, then bounded
+  Mac utility duration texture through their activity and timing owners. The final panel
+  identifies 14 Windows births in two milliseconds and recurring 13–42 second query
+  lifetimes; retain startup, network-I/O and collection alternatives. See the same assessment.
+- [ ] **P1/P2** Correct native SMB service-type and NTP reference-ID semantics through the
+  protocol facts/projection owners after qualifying the exporter contract. Keep broader
+  HTTP owner and remote-auth visibility findings as qualified leads, not assumed defects.
+  See the same assessment for primary references, scope and remaining uncertainty.
 
 - [x] **P1** Include verified published Schema 3 industry/organization packs in CLI discovery
   and dependency locking, with exact references, isolated integrity findings and consistent
@@ -536,17 +550,17 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Medium-Term
 
-- [ ] Implement the approved macOS 26 arm64 **modeled workstation** scope for mixed-fleet
-  hunting and native log investigation, using existing configuration semantics and per-capability
-  evidence gates. Filesystem artifacts, native binary log containers, Intel/Rosetta, sleep/wake,
-  roaming and Mac SMB serving are excluded. Experimental coverage is not full native validation.
-  See the [assessment](docs/design/macos-workstation-feasibility.md),
-  [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md) and
-  [implementation handoff](docs/worklog/2026-10-15-macos-workstation-implementation.md).
-  Native ES exec/exit and Gatekeeper denial remain explicitly gated by the user's
-  2026-10-21 decision; no native lab capture is pending. The frozen mixed-fleet
-  benchmark, reviewer updates and bounded acceptance are tracked in the
+- [x] Implement and assess the bounded macOS 26 arm64 **modeled workstation** scope,
+  including mixed-fleet benchmarks, reviewer updates, modeled SSH fork/v10, catalog and
+  owner-level repairs, filtering and exact recovery. Experimental engineering acceptance
+  is not full native fidelity or an authenticity pass. See the
+  [acceptance record](scenarios/macos-assessment/ACCEPTANCE.md) and
   [assessment worklog](docs/worklog/2026-10-21-macos-assessment.md).
+- [ ] **Deferred by user, 2026-10-21:** qualify native ES exec/exit (ES-R1) and native
+  Gatekeeper denial (GK-R1) before enabling those exports. No lab capture is pending.
+  Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and Mac SMB
+  serving remain outside the bounded scope. See the
+  [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md).
 
 - [ ] Validate Studio account isolation with genuinely separate OS accounts on macOS when a
   suitable test host is available. User explicitly deferred account creation on

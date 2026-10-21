@@ -1,88 +1,77 @@
 # macOS mixed-fleet assessment
 
-Latest complete round: [loop 2](loop-2/REPORT.md), revision 328. Quantitative
-acceptance passes at **89.7644**, and the original hard probe has zero failures.
-The fresh blind mean is **66.5**, down from **83** (lower is more production-like).
-Three reviewers judge Synthetic and one Inconclusive; unchanged reports and
-report-only deliberation are retained. Revision-329 follow-through addresses the
-confirmed process-population, identity and timing families before another round.
-Native exec/exit and Gatekeeper denial remain gated by user decision.
+The agreed finite sequence is complete through revision 330 (`23e7e13e`): frozen
+supported/native benchmark revisions, updated assessment reviewers, bounded native
+fork integration, owner-level repairs, regression/recovery checks and a fresh
+post-fix expert panel. Native ES exec/exit and Gatekeeper denial remain gated by
+the user's October 21 decision. No capture is pending.
 
-## Loop 1: supported sources
+The final run passes deterministic acceptance at **89.2567**, **10,870 records**,
+with 100% parseability and causality. The original lifecycle probe and selected
+review-family probe have zero failures; the latter cleared 18 prior findings.
+Three modeled fork/v10 rows are present. This is **not an authenticity pass**:
+all four final reviewers judge Synthetic, with mean synthetic-confidence **66.75**.
+A separate conservative check confirms two newly reported packet/history
+contradictions in a pre-existing shared network loss routine.
 
-The frozen supported-source revision generated 11,409 records in 17 source
-families. Native Endpoint Security was not selected. Four isolated reviewers
-received only a neutral copy of the fresh evidence, the complete platform-aware
-briefing, and their own persona. No scenario, ground truth, evaluation results,
-implementation notes or other reviewers' findings were supplied.
+## Assessment trend
 
-All four reviewers returned **Synthetic**. Average standalone synthetic-confidence
-was **83/100** (lower is better); average verdict confidence was **92.75/100**.
-The score spread was two points. No deliberation trigger fired.
+Lower **synthetic-confidence scores** mean more production-like. Verdict
+confidence is a separate measure and is never used as the loop score.
 
-## Independent expert summaries
+| Loop | Automated eval | Threat | Detection | Network | Host/EDR | Mean synthetic-confidence score | Interpretation | Deliberated score | Rolling mean, up to 5 loops |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
+| [1](loop-1/REPORT.md) | 89.9919 FAIL | 82 | 82 | 84 | 84 | 83.00 | confidently synthetic | N/A | 83.00 (n=1) |
+| [2](loop-2/REPORT.md) | 89.7644 PASS | 67 | 57 | 64 | 78 | 66.50 | likely synthetic | N/A | 74.75 (n=2) |
+| [3](loop-3/REPORT.md) | 89.2567 PASS | 64 | 67 | 68 | 68 | 66.75 | likely synthetic | N/A | 72.08 (n=3) |
 
-- **Threat hunter:** Synthetic, verdict confidence 94, synthetic-confidence 82.
-  Identified Mac fork/transition inversions and unrelated SaaS/browser destinations
-  attributed to Docker and kubectl commands. Praised SSH, SMB and Type 9 credential
-  correlation. Shell-history discrepancies were weaker leads requiring an owner
-  and timing investigation, not established impossibilities.
-- **Detection engineer:** Synthetic, confidence 90, synthetic-confidence 82.
-  Independently found the Mac chronology defect, `/netonly` children in Session 0,
-  and Linux SSH failures normalized as local logins. Windows schema fidelity,
-  process identifiers, session pairing and Zeek references were convincing.
-- **Network forensics:** Synthetic, confidence 94, synthetic-confidence 84.
-  Found three ServerHello histories without responder payload, full TLS 1.2 ECDHE
-  histories missing key exchange, and tightly clustered OCSP durations. DNS type
-  diversity, TLS visibility, SMB accounting and tuple joins were convincing.
-- **Host/EDR forensics:** Synthetic, confidence 93, synthetic-confidence 84.
-  Independently confirmed the Mac, Windows and Linux session defects. Repeated
-  subsecond phase preservation across unrelated application launches was a weaker
-  texture concern. Stable hashes, Windows session bootstrap, Linux operational
-  variety and Mac execution/credential identity were strengths.
+Loop 2's verdict disagreement triggered report-only deliberation; there were no
+revised reviewer scores. Loop 3 is unanimous, average verdict confidence 82.5,
+score spread four; no deliberation trigger fires. The final 0.25-point increase
+is essentially flat: targeted defects cleared, while the panel exposed new
+source semantics and timing issues. Standalone reviews do not prove the causal
+score contribution of individual fixes.
 
-Unchanged expert reports and machine-readable scores are in `loop-1/`.
+[Assessment effectiveness dashboard](assessment-effectiveness-dashboard-last-3-loops.svg).
 
-## Prioritized improvements
+## What completed
 
-| Priority | Finding and status | Owner and concrete repair |
-|---|---|---|
-| P0 | Confirmed: five Mac process transitions precede explicit visible forks across three identities. A production-timing fixture reproduces all five. | SourceTimingPlanner must publish the final source-visible process birth after session and parent constraints, and use that frontier for execution, credential, job-control and child observations. Preserve canonical State identity and source-local missingness. |
-| P1 | Confirmed rule coverage gap: eight supported PROCESS/MODIFY records fail evaluation. | Add the five bounded POSIX operations to the eCAR format contract with operation-specific identity/field checks; arbitrary MODIFY must continue to fail. This is separate from fixing actual timing. |
-| P1 | Strong repeated contract gap: three `/netonly` children use terminal Session 0 while their callers occupy Session 1. | The NewCredentials/process owner must preserve caller terminal placement while allocating the distinct authentication LUID and outbound identity. Verify native Security and Sysmon projections together. |
-| P1 | Strong repeated contract gap: two Linux SSH failures lose their native mechanism and source tuple in eCAR. | Authentication generation must own explicit SSH failure semantics, including self-directed SSH. Carry the same canonical facts into both source views. |
-| P1 | Confirmed same-UID inconsistency: three TLS summaries report ServerHello but matching connection counters have no responder payload. | Canonical network/TLS outcome construction must coordinate handshake progress and directional payload/packet accounting. Do not patch a rendered SSL row. |
-| P2 | Repeated process-attribution concern: `docker ps/images` and `kubectl get pods` own unrelated external SaaS/browser traffic. | Command-aware network intent and process ownership must require a legitimate transport/destination. Local Docker enumeration must not invent external HTTPS; Kubernetes needs a modeled API destination. Review forward generation and inverse owner selection together. |
-| P2 | TLS 1.2 ECDHE full-handshake histories omit the key-exchange step. | Verify the selected source's history vocabulary against primary references, then coordinate history with cipher/resumption/capture facts in canonical protocol construction. |
-| P3 | OCSP connection lifetimes occupy an unusually narrow approximately 460 ms band. | Inspect canonical OCSP/transport duration ownership and replace any fixed close floor with scoped path/client timing variation while retaining packet/protocol causality. |
-| P3 | Independent application launches repeatedly retain an integer-second phase. | Inspect baseline application scheduling and command readiness. Keep periodic system activity, but add scoped subsecond variation where independent user activity owns timing. |
-| P4 | Shell history appears several minutes after some process starts; foreground editor readiness also constrained initial authoring. | Investigate history admission/finish semantics and baseline foreground lifetimes before classifying these as defects. History persistence and occurrence time are different facts. |
+- Separate immutable Schema 3 benchmark revisions and input/bundle/file provenance.
+- Installed platform-aware personal assessment skill and all four reviewer personas;
+  tracked patch plus retained original/replacement copies.
+- Supported-source baseline and complete modeled SSH fork/v10 metadata through the
+  ordinary CLI, parser, manifests, filtering and exact checkpoint recovery.
+- Canonical lifecycle, netonly terminal placement, Linux SSH failure semantics,
+  TLS accounting/history, CLI network ownership, GUI singleton reuse, journal
+  machine identity, embedded history time, command-owned file effects, loaded
+  browser version, physical HTTP timing and local actor-placement repairs.
+- Catalog audit of all 67 original IDs, including five additional bounded runtime
+  variants, for 48 prefilled Mac variants; unsupported entries remain unavailable.
+- Forty relevant extended tests on final source. The complete routine run plus
+  the repaired-fixture gate is recorded precisely in the worklog; no successful
+  original full-suite exit is claimed. Ruff/format and 99 configuration checks pass.
 
-P0 comes first because it makes a represented lifecycle impossible. P1 items
-repair concrete cross-source or contract failures before texture work. P2
-attribution has strong score leverage across behavior families; none of these
-priorities licenses sample-specific host, PID, destination or timestamp patches.
+## Remaining quality work
 
-Family-loop classification: process ordering, Linux normalization, TLS accounting/
-history and CLI network ownership are `sibling_defect` findings in existing shared
-families. NewCredentials terminal placement is a `new_family` contract defect.
-OCSP/application timing texture are `new_family` leads; shell-history timing remains
-`false_positive_or_unproven` pending an occurrence/persistence interpretation.
-The bounded eCAR validator change is `source_native_single_schema`; its purpose
-is contract coverage, separately from the source-timing family repair.
+The [loop-3 synthesis](loop-3/REPORT.md) ranks all findings, preserves collection
+qualifications, records owners and distinguishes verified contradictions from
+leads. The highest priorities are:
 
-## Quantitative comparison
+| Priority | Finding | Status / owning layer |
+| --- | --- | --- |
+| P0 | Gap-marked TCP packet/history accounting | Two independently confirmed rows, 16 reported; shared network observation loss, unchanged since branch base. |
+| P1 | Windows process births compressed to one readiness floor | Three independent reviewers, 14 processes; activity/readiness and source timing investigation. |
+| P1–P2 | Native SMB service and NTP reference-ID semantics | Whole-family findings corroborated by primary references; protocol facts and source-native projection. |
+| P2 | Mac local-query lifetime texture | Repeated 13–42 second utility lifetimes; command/activity duration policy. |
+| P2–P4 | Service-owned HTTP, unmatched remote-auth tuples, Mac job-control defaults, module/retry texture | Qualified leads; confirm owner and collection contracts before changing output. |
 
-Automated score: **89.99/100**, acceptance **FAIL**. All records parse; eight eCAR
-rows fail the obsolete object/action rule. Canonical invariants and declared
-completeness score 100, but the source-visible fork inversions escaped those
-checks. The expert panel also found session placement, normalization and TLS
-accounting issues that are not represented by the aggregate score. Timing scores
-61 and field agreement 697/699 independently indicate remaining quality work;
-diagnostic volume/anomaly scores are not acceptance targets to game.
+These are explicit follow-up quality items, not hidden prerequisites to the
+completed bounded implementation. General analyst-indistinguishability has not
+been reached. Earlier TLS companion/closure partitioning remains an investigation
+lead; valid IPv6 spelling alone remains unproven.
 
-The two Unified Log records and absent native ES were not penalized. The reviewers
-correctly treated normalized eCAR and native macOS exports as distinct contracts.
-Generation/evaluation provenance, the frozen initial evaluation, and a bounded
-fresh-evidence chronology probe are retained in `loop-1/`. Future fixes must be
-assessed on a fresh bundle without modifying revision 01 or this baseline.
+See [bounded acceptance](../ACCEPTANCE.md), the
+[assessment worklog](../../../docs/worklog/2026-10-21-macos-assessment.md) and the
+[capability matrix](../../../docs/design/macos-workstation-feasibility/capability-matrix.md)
+for engineering scope and deferred evidence gates. No existing personal logs,
+history, inventories or host services were inspected or changed.
