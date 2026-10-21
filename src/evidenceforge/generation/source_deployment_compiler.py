@@ -147,6 +147,11 @@ def _drafts_for_hosts(
         platform = source_platform_for_os(system.os)
         by_family: dict[str, list[SourceFormatDescriptor]] = {}
         for descriptor in host_descriptors:
+            if descriptor.name == "macos_endpoint_security":
+                from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+                if select_macos_es_profile(system) is None:
+                    continue
             if descriptor.applies_to_host(platform, _roles(system)):
                 by_family.setdefault(descriptor.family, []).append(descriptor)
         for family, descriptors in sorted(by_family.items()):

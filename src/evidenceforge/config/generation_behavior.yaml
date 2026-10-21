@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 325
+current_revision: 326
 history_start_revision: 1
-behavior_surface_sha256: 79edd06bf4bd85931305afcfc11645cf67477438794f1462d5a0a96652ba67f2
+behavior_surface_sha256: 5cb2c51b628d1eb4ea56af607f15bedfba504a11d381969f27c4c43b6de3e1d2
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3033,3 +3033,13 @@ changes:
       - endpoint-security-recovery
     formats: []
     summary: Selects a frozen modeled macOS 26 arm64 fork profile, initializes exact activated collectors and finite membership, and binds source/clock/build identity to resumable counters without enabling CLI output.
+  - revision: 326
+    id: macos-native-fork-source-integration
+    impact: localized
+    domains:
+      - macos-collector-activation
+      - macos-native-source-routing
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Activate the modeled canonical collector and route complete fork observations through the selected native source and exact journal.

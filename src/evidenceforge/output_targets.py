@@ -135,6 +135,12 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "ndjson",
         notes="Experimental workspace-entry export; external SIEM ingestion is not validated.",
     ),
+    "macos_endpoint_security": TargetFormatPolicy(
+        "macos_endpoint_security",
+        "ndjson",
+        "ndjson",
+        notes="Experimental modeled v10 fork export; external SIEM ingestion is not validated.",
+    ),
     "snort_alert": TargetFormatPolicy("snort_alert", "fast_alert", "fast_alert"),
     "cisco_asa": TargetFormatPolicy(
         "cisco_asa",

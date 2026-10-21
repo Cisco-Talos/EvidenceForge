@@ -758,5 +758,5 @@ class TestSampleDataFieldValidation:
         from evidenceforge.formats import load_all_formats
 
         formats = load_all_formats()
-        assert len(formats) == 27
-        assert {"macos_unified_log", "zsh_history"} <= formats.keys()
+        assert len(formats) == 28
+        assert {"macos_unified_log", "macos_endpoint_security", "zsh_history"} <= formats.keys()

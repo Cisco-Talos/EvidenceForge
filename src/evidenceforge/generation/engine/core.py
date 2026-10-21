@@ -1228,6 +1228,24 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
         self._seed_system_process_trees()
 
+        # Source bindings are rebuilt from the dispatcher/State checkpoint
+        # owners on demand; no engine-local counter or process cache is added.
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        installed = self.macos_installed_provisioning
+        self.dispatcher.macos_installed_filesystem = (
+            installed.filesystem if installed is not None else None
+        )
+        for system in self.scenario.environment.systems:
+            if select_macos_es_profile(system) is None:
+                continue
+            collector = self.state_manager.get_process_identity(
+                system.hostname, self._system_pids[system.hostname]["eslogger"]
+            )
+            if collector is None:
+                raise StateError("Native ES activation lost its canonical collector")
+            self.initialize_macos_es_source(collector)
+
         # Pass per-host boot datetimes to Sysmon emitter for ProcessGUID realism
         if "windows_event_sysmon" in self.emitters:
             _boot_times = {

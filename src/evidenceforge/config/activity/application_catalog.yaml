@@ -2515,6 +2515,24 @@ applications:
     system_types: [server, domain_controller, workstation]
 
   # macOS system and workstation applications; deployment remains catalog-driven.
+  # Activated only by the frozen native source policy, never persona noise.
+  - id: macos-eslogger
+    display_name: macOS Endpoint Security Collector
+    platforms:
+      macos:
+        image_path: /usr/bin/eslogger
+        executable_format: mach_o
+        deployment:
+          kind: catalog
+          release_policy: host_build
+          scope: machine
+          product_id: apple-macos
+          architectures: [arm64]
+        command_templates:
+          - /usr/bin/eslogger fork
+    categories: [macos_collector]
+    personas: []
+    system_types: [workstation]
   # Explicit SSH bundle actor; never selected as independent baseline noise.
   - id: macos-ssh
     display_name: macOS OpenSSH Client

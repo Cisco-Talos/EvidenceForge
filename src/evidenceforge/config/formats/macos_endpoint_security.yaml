@@ -1,0 +1,41 @@
+# Complete nested native fields are validated by the native_codec route.
+name: macos_endpoint_security
+version: '1.0'
+description: 'Experimental modeled macOS 26 arm64 eslogger v10 fork notifications;
+  complete canonical process metadata required; exec/exit unavailable'
+category: host
+fields:
+  - name: schema_version
+    type: integer
+    required: true
+    description: Native export schema version
+  - name: version
+    type: integer
+    required: true
+    description: Selected ES message version (10)
+  - name: event_type
+    type: integer
+    required: true
+    description: Selected fork notification (11)
+  - name: time
+    type: string
+    required: true
+    description: Canonical occurrence time in UTC with native precision
+  - name: mach_time
+    type: integer
+    required: true
+    description: Explicit modeled host boot clock ticks
+  - name: seq_num
+    type: integer
+    required: true
+    description: Collector-owned per-event counter
+  - name: global_seq_num
+    type: integer
+    required: true
+    description: Collector-owned global counter
+output:
+  format: json
+  file_extension: .ndjson
+  encoding: utf-8
+  template: '{{ native_json }}'
+validators: []

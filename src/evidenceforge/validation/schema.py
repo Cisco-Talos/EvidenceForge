@@ -2866,6 +2866,7 @@ class ScenarioValidator:
     def _validate_output_formats(self) -> None:
         """Validate output.logs format names."""
         from evidenceforge.events.dispatcher import FORMAT_GROUPS
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
 
         # Accept both group names (zeek, windows) and individual format names (zeek_conn)
         known_output_formats = set(FORMAT_GROUPS.keys()) | {
@@ -2873,6 +2874,8 @@ class ScenarioValidator:
             "syslog",
             "bash_history",
             "zsh_history",
+            "macos_endpoint_security",
+            "macos_unified_log",
             "snort_alert",
             "cisco_asa",
             "web_access",
@@ -2883,6 +2886,18 @@ class ScenarioValidator:
 
         for idx, log_spec in enumerate(self.scenario.output.logs):
             fmt = log_spec.get("format", "")
+            if fmt == "macos_endpoint_security" and not any(
+                select_macos_es_profile(system) is not None
+                for system in self.scenario.environment.systems
+            ):
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"output.logs.{idx}.format",
+                        message="Native ES requires a frozen macOS 26 arm64 workstation profile",
+                        suggestion="Use an explicit supported workstation or omit this format.",
+                    )
+                )
             if fmt and fmt not in known_output_formats:
                 self.issues.append(
                     ValidationIssue(

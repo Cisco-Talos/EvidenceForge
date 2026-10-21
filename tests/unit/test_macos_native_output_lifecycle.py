@@ -27,8 +27,8 @@ from tests.unit.test_macos_native_sink_publication import _prepare
 def _output(
     root: Path, *, checkpoint: bool = False, threaded: bool = False
 ) -> MacosEndpointSecurityEmitter:
-    # This explicit private definition is intentionally absent from the source
-    # catalog and loader. Historical codec coverage is not a generation profile.
+    # This explicit test definition exercises historical output contracts.
+    # The registered production source separately admits only modeled v10 forks.
     definition = FormatDefinition.model_validate(
         {
             "name": "macos_endpoint_security",

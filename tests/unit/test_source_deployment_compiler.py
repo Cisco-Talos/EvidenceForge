@@ -155,6 +155,7 @@ def test_default_catalog_is_complete_and_expands_existing_groups() -> None:
         "bash_history",
         "zsh_history",
         "macos_unified_log",
+        "macos_endpoint_security",
         "proxy_access",
         "web_access",
         "zeek_conn",

@@ -704,3 +704,10 @@ The internal `process_audit_bind`, `process_privilege_drop` and `process_service
 The bounded macOS workstation SSH receiver reuses `ssh_session` and existing process/session contexts. Distinct fork, exec, audit adoption, service/user credential changes and termination remain bundle-owned canonical phases. The shared continuation owns startup recovery and terminal execution for automatic or paired authored logout; SCP/SFTP receiver helpers are not yet admitted. This adds no authored event type or native log-format claim.
 
 The internal `macos_workspace_request` kind carries `MacosWorkspaceRequest`, source Host, explicit identity roles and a dependent session lifecycle. It represents entry into workspace launch, not completion. Its subject is the interactive session; its optional actor is the canonical loginwindow writer. Source preparation freezes exact execution/thread/image/boot facts independently of collection. The experimental `macos_unified_log` emitter is its only consumer; no authored event type or scenario field is added.
+
+The experimental `macos_endpoint_security` source renders only complete authenticated Mac
+`process_fork` transitions through the exact canonical cohort journal. Canonical boot activation
+owns the modeled privileged collector; the dispatcher registry owns its finite profile/counters.
+No new authored event, generic process-create conversion, native exec/exit admission or host
+collector invocation is introduced. Missing required metadata remains an explicit admission error
+when native output is selected.

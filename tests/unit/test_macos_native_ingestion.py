@@ -135,7 +135,7 @@ def test_native_ingestion_uses_existing_record_size_and_utf8_limits(
             list(get_parser(source).parse_file(path))
 
 
-def test_native_discovery_keeps_es_generation_unavailable(tmp_path: Path) -> None:
+def test_native_discovery_retains_explicit_codecs_for_registered_sources(tmp_path: Path) -> None:
     from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
 
     folder = tmp_path / "invented-mac.example"
@@ -146,7 +146,7 @@ def test_native_discovery_keeps_es_generation_unavailable(tmp_path: Path) -> Non
     validate_route_inventory()
     for source in ("macos_unified_log", "macos_endpoint_security"):
         assert get_validation_route(source).kind == "native_codec"
-        assert (source in _build_emitter_classes()) == (source == "macos_unified_log")
+        assert source in _build_emitter_classes()
         assert not get_parser(source).can_parse(Path("arbitrary.json"))
 
 

@@ -1,6 +1,6 @@
 # macOS native evidence: metadata map and remaining gates
 
-Updated 2026-10-20. Target: modeled macOS 26 arm64 workstations. This is the implementation plan supplement for native evidence, not a claim that ES generation is available. Public source material remains ignored under `sample_data/macos/`; tests and examples are independently authored. No further local-log inspection or capture is authorized without asking the user first.
+Updated 2026-10-21. Target: modeled macOS 26 arm64 workstations. This is the implementation plan supplement for native evidence, not a claim that ES generation is available. Public source material remains ignored under `sample_data/macos/`; tests and examples are independently authored. No further local-log inspection or capture is authorized without asking the user first.
 
 ## Public evidence search outcome
 
@@ -430,3 +430,28 @@ The engine initialization hook requires an already activated exact canonical pri
 The shared native clock policy supplies the explicit modeled timebase. Source profile/configuration digest, authored build, architecture, wire version and canonical boot identity/timebase remain bound to the collector epoch in dispatcher observation head 5. Heads 1–4 remain readable with absent source-profile knowledge; older labels cannot smuggle in the new facts. Changed profile/build/clock/window and incomplete legacy bindings reject without resetting counters. Copied runtime bindings cannot substitute a historical wire version or another clock ratio. Reservation and direct native preparation enforce the finite source window; canonical publication independently rechecks the retained wire version, Mach time, boot and explicit coverage. A changed canonical boot invalidates the binding. Unknown required process/file/security metadata remains unavailable.
 
 Normal source-factory selection, automatic canonical collector process activation, event routing, manifests/Studio discovery and CLI/parser/ingestion acceptance remain next. The internal source initializer and strict v10 preparation are not public CLI admission. ES-R1/GK-R1 and excluded capability families remain unchanged.
+
+## Canonical collector activation and fork routing — revision 326
+
+The exact boot fleet now activates a catalog-backed privileged `/usr/bin/eslogger fork` on
+supported modeled hosts independently of output selection. Initial source inventory is bound at
+the finite generation window; State/lifecycle and dispatcher checkpoints retain the process and
+counters. Installed file facts remain rebuilt from frozen inputs. No host collector, service
+change or local record inspection occurs.
+
+The normal format catalog/factory, host routing, source deployment and output-target policy now
+register `macos_endpoint_security` for the modeled fork/v10 profile. Unsupported host profiles
+reject before activation. The Mac SSH startup owner passes actual authenticated forks through
+complete native preparation and the existing exact journal. Complete filtered, dropped and
+out-of-window deliveries preserve counter semantics without fabricated rows; source-summary and
+intent reporting commit with the same transaction. Native source failure resumes frozen bytes
+without repeating canonical allocation or counters.
+
+Required signing, runtime validation, audit/parent/group, terminal and file facts must all be
+known. Existing built-in SSH helpers still have missing facts; selected native output fails
+before those forks commit. Unselected unavailable native projections create neither rows nor
+invented loss counters. The CLI selection/empty-manifest smoke check is distinct from a nonempty
+CLI acceptance dataset. Complete invented-fact production-route tests and fresh-process tests do
+not fill missing built-in metadata or establish current-build fidelity. Next: complete the
+supported fork-producing metadata path and nonempty CLI/parser/checkpoint acceptance. ES-R1,
+GK-R1 and the excluded families remain unchanged.

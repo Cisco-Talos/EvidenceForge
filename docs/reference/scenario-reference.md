@@ -1971,3 +1971,10 @@ This typed event supports explicit root-owned stages on modeled macOS 26 arm64 w
 | `process_ref` | Activate-only reference for the resulting process. |
 | `exit_code` | Optional normal completed exit status, 0–255; exit only. |
 A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. GUI agents, automatic activation/respawn, and native launchd/ES serialization are outside this profile. An executable example is in `scenarios/macos-persistence-example/scenario.yaml`.
+
+Experimental `output.logs: [{format: macos_endpoint_security}]` selects modeled macOS 26 arm64
+fork/v10 output, with canonical collector activation and no new authored event type. Complete
+static/runtime process, audit, terminal and file facts are mandatory. Built-in SSH helpers still
+have metadata gaps and selected native output rejects their incomplete forks before commit.
+Ordinary `process` events do not assert a fork; a run may have no eligible native rows. Existing
+source overrides govern collection windows/missingness. This is not full native ES validation.

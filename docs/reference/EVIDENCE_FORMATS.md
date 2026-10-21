@@ -42,6 +42,8 @@ output/
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
       ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
+      macos_endpoint_security.ndjson       # Experimental modeled v10 fork notifications
+      macos_unified_log.ndjson             # Experimental workspace-entry export
       syslog.log                           # Linux syslog (default/splunk target; RFC5424)
       bash_history/<username>.bash_history # Per-user explicit Bash history (Linux/Mac)
       zsh_history/<username>.zsh_history   # Experimental Mac extended incremental history
@@ -659,3 +661,28 @@ The experimental Mac SSH receiver projects canonical login/logout, flow and help
 `macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The macOS 26 arm64 profile renders only `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]`. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
 
 The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Optional source/backtrace fields stay absent; no completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
+
+### Experimental macOS Endpoint Security NDJSON
+
+`macos_endpoint_security` selects the modeled macOS 26 arm64 workstation profile and writes
+`<host>/macos_endpoint_security.ndjson` for actual authenticated forks with complete required
+metadata. The canonical boot fleet activates one privileged `/usr/bin/eslogger fork` process,
+independently of output filtering. This is a modeled process; EvidenceForge never runs the host
+collector or discovers local clients. The finite single-client inventory, selected wire version,
+boot/timebase and counter heads survive checkpoint recovery through existing owners.
+
+The Mac SSH startup coordinator routes its actual fork phases through this source. Required
+static signatures, execution validation, audit relationships, terminal and executable/file facts
+must all be known. Built-in SSH helper profiles do not yet supply every required fact; selecting
+this format for such a fork fails before its canonical commit with a metadata diagnostic.
+Ordinary aggregate process starts never become fork records. A run without eligible forks may
+produce no native file. Format discovery alone does not establish a nonempty accepted CLI dataset.
+
+Message version 10/event 11 is the only generation pair. Existing historical decoder admissions
+do not enable exec/exit, file events or a different current-build profile. Complete filtered or
+source-dropped observations retain collector counters without exporting rows. The normal source
+policy owns collection windows, missingness and export delay; native occurrence wall/Mach times
+remain canonical. Exact publication shares State, lifecycle, retained artifacts and the existing
+source journal, so a partial sink failure resumes frozen bytes without allocating another fork or
+counter. SOF-ELK and Splunk targets preserve these native bytes; external SIEM normalization and
+current-build fidelity remain unvalidated. ES-R1 and GK-R1 remain open.

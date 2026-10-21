@@ -538,25 +538,31 @@ class MacosSshReceiverStartup:
         retentions: tuple[LocalArtifactPublishToken, ...],
     ) -> PreparedActionCohortBatch:
         dispatcher = self._dispatcher
-        with dispatcher.source_timing_planner.prepared_planning() as timing:
-            carrier = dispatcher.prepare_action_cohort_projection(
-                event,
-                source_timing_preparation=timing,
+        from evidenceforge.generation.macos_es_source import prepared_macos_es_fork_publication
+
+        with prepared_macos_es_fork_publication(dispatcher, plan, event) as native:
+            with dispatcher.source_timing_planner.prepared_planning() as timing:
+                carrier = dispatcher.prepare_action_cohort_projection(
+                    event,
+                    source_timing_preparation=timing,
+                )
+            dispatch = dispatcher.bind_action_cohort_projection(
+                carrier,
+                state_plan=plan,
+                artifact_publications=retentions,
             )
-        dispatch = dispatcher.bind_action_cohort_projection(
-            carrier,
-            state_plan=plan,
-            artifact_publications=retentions,
-        )
-        effects = ExecutionEffectPlan(
-            ActionAnchor("process_execution", root, source="ssh_receiver"), ()
-        )
-        return dispatcher.prepare_action_cohort_batch(
-            root,
-            plan,
-            (dispatch,),
-            (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
-            (),
-            (),
-            exact_projection=True,
-        )
+            effects = ExecutionEffectPlan(
+                ActionAnchor("process_execution", root, source="ssh_receiver"), ()
+            )
+            return dispatcher.prepare_action_cohort_batch(
+                root,
+                plan,
+                (dispatch,),
+                (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+                (),
+                (),
+                exact_projection=True,
+                es_delivery=native.delivery if native is not None else None,
+                es_collector_process=native.collector if native is not None else None,
+                es_native_sink=native.sink if native is not None else None,
+            )

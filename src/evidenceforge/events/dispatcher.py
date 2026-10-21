@@ -148,6 +148,7 @@ if TYPE_CHECKING:
         LifecycleShadow,
         LifecycleShadowViolationSummary,
     )
+    from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.persistent_smb_projection import (
         PersistentSmbProjectionCommittedMemberRecovery,
@@ -1461,6 +1462,8 @@ class EventDispatcher:
         self._source_evidence_version = 0
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self.es_collectors = ESCollectorRegistry()
+        # Immutable file facts rebuilt from frozen run inputs, never a cursor.
+        self.macos_installed_filesystem: MacosInstalledFilesystem | None = None
         self._latest_network_uid = ""
         self._latest_network_identifiers_by_format: dict[str, str] = {}
         self._recent_network_identifiers: deque[tuple[str, dict[str, str]]] = deque(
@@ -10249,10 +10252,33 @@ class EventDispatcher:
             owned_effect_plans=owned_effect_plans,
         )
 
-        observation_deltas = tuple(
-            delta
+        native_observations: tuple[ESCollectorObservation, ...] = ()
+        if es_delivery is not None:
+            if type(es_delivery) is ESDeliveryPreparation:
+                native_observations = (es_delivery.observation,)
+            elif type(es_delivery) is ESDeliveryBatchPreparation:
+                native_observations = es_delivery.observations
+            else:
+                raise EventContractError("Native source reporting requires an exact delivery")
+        observation_deltas_by_member = tuple(
+            self._action_cohort_projection_observation_deltas(prepared._projection)
+            + tuple(
+                _ActionCohortObservationDelta(
+                    cluster_id=prepared._occurrence.storyline_cluster_id,
+                    source="macos_endpoint_security",
+                    status=observation.status,
+                    timestamp=observation.observed_at,
+                )
+                for observation in native_observations
+                if prepared._occurrence.storyline_cluster_id
+                and observation.observed_at == prepared._occurrence.timestamp
+                and observation.occurrence_id
+                == self._es_process_occurrence(prepared._occurrence)[0]
+            )
             for prepared in dispatches
-            for delta in self._action_cohort_projection_observation_deltas(prepared._projection)
+        )
+        observation_deltas = tuple(
+            delta for member in observation_deltas_by_member for delta in member
         )
         observation_digest = self._action_cohort_observation_digest(observation_deltas)
 
@@ -10264,7 +10290,9 @@ class EventDispatcher:
                     "Attributed action-cohort batch requires the bound intent ledger"
                 )
             intent_deltas: list[IntentOccurrenceDelta | IntentObservationDelta] = []
-            for prepared in dispatches:
+            for prepared, member_observations in zip(
+                dispatches, observation_deltas_by_member, strict=True
+            ):
                 intent_deltas.append(
                     IntentOccurrenceDelta(
                         authored_intent_id,
@@ -10279,9 +10307,7 @@ class EventDispatcher:
                         delta.status,
                         delta.timestamp,
                     )
-                    for delta in self._action_cohort_projection_observation_deltas(
-                        prepared._projection
-                    )
+                    for delta in member_observations
                 )
             intent_request = IntentExecutionBatchRequest(tuple(intent_deltas))
 
@@ -11395,6 +11421,24 @@ class EventDispatcher:
         )
         return native
 
+    @staticmethod
+    def _es_process_occurrence(event: CanonicalOccurrence) -> tuple[str, int]:
+        """Use the canonical process transition's exact native occurrence key."""
+        from evidenceforge.events.process import (
+            process_exec_identities,
+            process_exit_identity,
+            process_fork_identities,
+        )
+
+        if event.event_type is EventKind.PROCESS_FORK:
+            _, identity = process_fork_identities(event)
+            return f"process-fork:{identity.object_id}", 11
+        if event.event_type is EventKind.PROCESS_EXEC:
+            _, identity = process_exec_identities(event)
+            return f"process-exec:{identity.execution_id}", 9
+        identity = process_exit_identity(event)
+        return f"process-exit:{identity.object_id}", 15
+
     def _validate_action_cohort_es_batch_values(
         self,
         record: _PreparedActionCohortBatchRecord,
@@ -11403,11 +11447,6 @@ class EventDispatcher:
         collector: ProcessIdentity,
     ) -> str:
         """Match every available frozen delivery to its exact canonical cohort member."""
-        from evidenceforge.events.process import (
-            process_exec_identities,
-            process_exit_identity,
-            process_fork_identities,
-        )
         from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner
 
         owner = ESCollectionActionOwner(self.state_manager, registry)
@@ -11429,15 +11468,8 @@ class EventDispatcher:
             )
         self._require_multi_process_projection(record)
         for event, observation in zip(events, delivery.observations, strict=True):
-            if event.event_type is EventKind.PROCESS_FORK:
-                _, identity = process_fork_identities(event)
-                occurrence_id, event_type = f"process-fork:{identity.object_id}", 11
-            elif event.event_type is EventKind.PROCESS_EXEC:
-                _, identity = process_exec_identities(event)
-                occurrence_id, event_type = f"process-exec:{identity.execution_id}", 9
-            else:
-                identity = process_exit_identity(event)
-                occurrence_id, event_type = f"process-exit:{identity.object_id}", 15
+            occurrence_id, event_type = self._es_process_occurrence(event)
+            identity = event.identity_plan.subject
             owner.validate_observing_cohort(
                 record.state_plan, collector, observed_at=observation.observed_at
             )

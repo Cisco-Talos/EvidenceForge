@@ -143,6 +143,7 @@ class FormatKind(StrEnum):
     CISCO_ASA = "cisco_asa"
     ECAR = "ecar"
     MACOS_UNIFIED_LOG = "macos_unified_log"
+    MACOS_ENDPOINT_SECURITY = "macos_endpoint_security"
     PROXY_ACCESS = "proxy_access"
     SNORT_ALERT = "snort_alert"
     SYSLOG = "syslog"

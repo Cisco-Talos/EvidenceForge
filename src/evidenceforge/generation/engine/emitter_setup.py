@@ -284,9 +284,13 @@ def _has_dhcp_event(step: object) -> bool:
 
 def _build_emitter_classes() -> dict:
     """Build emitter class map at call time (supports test patching of module-level names)."""
+    from evidenceforge.generation.emitters.macos_endpoint_security import (
+        MacosEndpointSecurityEmitter,
+    )
     from evidenceforge.generation.emitters.macos_unified_log import MacosUnifiedLogEmitter
 
     return {
+        "macos_endpoint_security": MacosEndpointSecurityEmitter,
         "macos_unified_log": MacosUnifiedLogEmitter,
         "windows_event_security": WindowsEventEmitter,
         "windows_event_sysmon": SysmonEventEmitter,
@@ -339,6 +343,7 @@ _ZEEK_FORMATS = _ZEEK_FORMAT_NAMES
 # Network sensor formats get per-sensor dirs; host-based formats get per-host FQDN dirs
 _SENSOR_FORMATS = _ZEEK_FORMATS | {"snort_alert", "cisco_asa"}
 _HOST_FORMATS = {
+    "macos_endpoint_security",
     "macos_unified_log",
     "windows_event_security",
     "windows_event_sysmon",
@@ -396,6 +401,17 @@ class EmitterSetupMixin:
 
         requested = {log["format"] for log in self.scenario.output.logs if "format" in log}
         formats_to_generate = expand_formats(requested)
+
+        if "macos_endpoint_security" in formats_to_generate:
+            from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+            if not any(
+                select_macos_es_profile(system) is not None
+                for system in self.scenario.environment.systems
+            ):
+                raise StateError(
+                    "Native ES output requires a frozen macOS 26 arm64 workstation profile"
+                )
 
         emitter_classes = _build_emitter_classes()
 
@@ -1217,6 +1233,41 @@ class EmitterSetupMixin:
             )
         if not processes or processes[0].alias != "launchd":
             raise StateError("Mac boot catalog must begin with the macos-launchd application")
+        # Collection is part of the modeled host, independent of which output
+        # formats are exported. The same fleet transaction owns its activation.
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        profile = select_macos_es_profile(system)
+        if profile is not None:
+            descriptor = (
+                deployment.application_descriptor("macos-eslogger", "macos")
+                if type(deployment) is DeploymentContentRegistry
+                else None
+            )
+            if descriptor is None or descriptor.image_path != profile.collector_arguments[0]:
+                raise StateError("Native ES activation requires its compiled collector application")
+            binary = deployment.resolve_binary(
+                system.hostname, descriptor.image_path, "macos", principal="root"
+            )
+            if type(binary) is not BinaryReleaseIdentity:
+                raise StateError("Native ES activation requires its exact deployed collector")
+            elapsed += rng.uniform(0.05, 1.9)
+            processes.append(
+                _BootProcessSpec(
+                    alias="eslogger",
+                    parent_alias="launchd",
+                    fixed_pid=None,
+                    image=descriptor.image_path,
+                    command_line=shlex.join(profile.collector_arguments),
+                    arguments=profile.collector_arguments,
+                    username="root",
+                    integrity_level="System",
+                    os_category="macos",
+                    logon_id="",
+                    start_time=boot_time + timedelta(seconds=elapsed) if boot_time else None,
+                    executable_version=ProcessExecutableVersion.from_binary(binary),
+                )
+            )
         return _BootHostSpec(
             hostname=system.hostname,
             os_category="macos",

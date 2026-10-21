@@ -8,6 +8,8 @@ names and the generator host cannot establish an ES connection. The normal
 source factory remains responsible for requesting activation and routing events.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import re
@@ -15,6 +17,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from evidenceforge.config.schemas import MacosEndpointSecurityProfile
 from evidenceforge.events.es_collector import (
@@ -50,6 +53,209 @@ from evidenceforge.generation.state_manager import ActionCohortMaterializationPl
 from evidenceforge.generation.timing.macos import MachTimebase, MacosBootClock
 from evidenceforge.models.exceptions import StateError
 from evidenceforge.models.scenario import System
+
+if TYPE_CHECKING:
+    from evidenceforge.events.base import OccurrenceBuilder
+    from evidenceforge.events.dispatcher import EventDispatcher
+    from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+
+
+@dataclass(frozen=True, slots=True)
+class MacosESForkPublication:
+    """Frozen native ownership passed to the existing exact cohort publisher."""
+
+    delivery: ESDeliveryPreparation
+    collector: ProcessIdentity
+    sink: ExternalSortedLineWriter | None
+
+
+@contextmanager
+def prepared_macos_es_fork_publication(
+    dispatcher: EventDispatcher,
+    cohort: ActionCohortMaterializationPlan,
+    event: OccurrenceBuilder,
+) -> Iterator[MacosESForkPublication | None]:
+    """Route actual canonical forks through the selected source and exact journal.
+
+    Rebuild bindings from durable owners on every call, including after restore.
+    Missing required metadata cannot become padded native records. Unselected
+    sources need no projection of unavailable facts; selected sources fail with
+    an actionable error before the fork commits.
+    """
+    from evidenceforge.events.collection_policy import CollectionCapability, ProjectionAdmission
+    from evidenceforge.generation.emitters.macos_endpoint_security import (
+        MacosEndpointSecurityEmitter,
+    )
+    from evidenceforge.generation.source_deployment_compiler import exact_source_instance_id
+
+    if (
+        event.event_type != "process_fork"
+        or event.src_host is None
+        or event.src_host.os_category != "macos"
+    ):
+        yield None
+        return
+    state = dispatcher.state_manager
+    emitter = dispatcher.emitters.get("macos_endpoint_security")
+    connection = dispatcher.es_collectors.connection(
+        macos_es_source_instance(event.src_host.hostname)
+    )
+    if connection is None or connection.source_profile is None:
+        if emitter is not None:
+            raise StateError("Native ES fork requires an activated macOS 26 arm64 source profile")
+        yield None
+        return
+    profile = load_macos_endpoint_security_profile()
+    coverage = dispatcher.es_collectors.complete_membership_coverage(connection.hostname)
+    if profile is None or coverage is None or connection.process is None:
+        raise StateError("Native ES fork lost its frozen source policy or complete inventory")
+    stamp = connection.source_profile
+    source = MacosESSource(
+        ESCollectionActionOwner(state, dispatcher.es_collectors),
+        profile,
+        connection.source_instance,
+        coverage,
+        stamp,
+        MacosBootClock(
+            connection.hostname,
+            stamp.boot_time,
+            stamp.boot_uuid,
+            MachTimebase(stamp.timebase_numerator, stamp.timebase_denominator),
+        ),
+    )
+    source.connection()
+    if (
+        connection.closed_at is not None
+        or not coverage.known_from <= event.timestamp < coverage.known_until
+    ):
+        yield None
+        return
+    assert event.identity_plan is not None
+    parent, child = event.identity_plan.actor, event.identity_plan.subject
+    if type(parent) is not ProcessIdentity or type(child) is not ProcessIdentity:
+        raise StateError("Native ES fork requires exact canonical parent and child identities")
+    dispatcher.state_manager.validate_action_cohort_materialization(cohort)
+    decision = ObservationDecision("filtered" if emitter is None else "visible")
+    deployment = dispatcher.collection_deployment
+    if emitter is not None and deployment is not None:
+        instance = exact_source_instance_id("macos_endpoint_security", parent.hostname)
+        ordinal = deployment.ordinal_for_instance(instance)
+        if ordinal is None:
+            decision = ObservationDecision("filtered")
+        else:
+            envelope = deployment.projection_envelope_by_ordinal(
+                occurrence_id=f"process-fork:{child.object_id}",
+                target_id=f"macos_endpoint_security:host:{ordinal}",
+                source_ordinal=ordinal,
+                canonical_time=event.timestamp,
+                requested_capabilities=CollectionCapability.PROCESS,
+            )
+            if not envelope.admitted:
+                decision = ObservationDecision(
+                    "out_of_window"
+                    if envelope.admission is ProjectionAdmission.OUTSIDE_COLLECTION_WINDOW
+                    else "filtered"
+                )
+            else:
+                policy = deployment.policy_by_ordinal(ordinal)
+                decision = dispatcher.observation_policy.decide_projection(
+                    "macos_endpoint_security",
+                    event,
+                    source_instance=instance,
+                    source_hostname=parent.hostname,
+                    missingness=policy.missingness_for("macos_endpoint_security"),
+                    format_specific="macos_endpoint_security" in policy.format_missingness,
+                )
+    exported_at = event.timestamp + decision.delay
+    if (
+        dispatcher.output_start_time is not None and exported_at < dispatcher.output_start_time
+    ) or (dispatcher.output_end_time is not None and exported_at >= dispatcher.output_end_time):
+        decision = ObservationDecision("out_of_window")
+    # These facts are explicitly optional in canonical State. Do not substitute
+    # a static signature for runtime validation or an absent terminal for unknown.
+    observations: list[MacosProcessCollectionObservation] = []
+    executables = (
+        dispatcher.deployment_registry
+        if parent.executable_version is not None
+        and parent.executable_version.identity_kind == "installed_release"
+        else dispatcher.local_artifact_registry
+    )
+    missing = executables is None
+    for process in (parent, child):
+        binary = (
+            dispatcher.resolve_loaded_process_binary_identity(process)
+            if process.executable_version is not None
+            else None
+        )
+        terminal = (
+            state.known_macos_terminal(process.job_control.session, event.timestamp)
+            if process.job_control is not None
+            else None
+        )
+        known = dispatcher.es_collectors.known_client_membership(
+            process.hostname, _process(process), event.timestamp
+        )
+        if (
+            process.image_security is None
+            or process.image_security.validation_category is None
+            or process.credentials is None
+            or process.credentials.audit_uid is None
+            or process.credentials.audit_session_id is None
+            or process.audit_pid_version is None
+            or process.parentage is None
+            or process.job_control is None
+            or getattr(binary, "code_signature", None) is None
+            or terminal is None
+            or known is None
+        ):
+            missing = True
+        else:
+            observations.append(
+                MacosProcessCollectionObservation(process, event.timestamp, known, terminal)
+            )
+    if missing:
+        if emitter is not None and decision.status in {"visible", "delayed"}:
+            raise StateError(
+                "macos_endpoint_security cannot render this fork: complete static signing, "
+                "execution validation, audit, parent/group, terminal and executable facts are "
+                "required. Supply explicit modeled metadata or omit this experimental format."
+            )
+        yield None
+        return
+    delivery = source.prepare_fork(cohort, child, decision=decision)
+    if delivery is None:
+        yield None
+        return
+    try:
+        collector = state.get_process_identity_by_object_id(connection.process.object_id)
+        if collector is None or parent.primary_thread is None:
+            raise StateError("Native ES fork lost its exact collector or performing thread")
+        with source.prepared_fork_record(
+            executables,
+            cohort=cohort,
+            delivery=delivery,
+            parent=observations[0],
+            child=observations[1],
+            thread=parent.primary_thread,
+            installed_filesystem=(
+                dispatcher.macos_installed_filesystem
+                if type(executables) is DeploymentContentRegistry
+                else None
+            ),
+        ):
+            pass
+        if emitter is not None and type(emitter) is not MacosEndpointSecurityEmitter:
+            raise StateError("Native ES routing requires the exact native host-output adapter")
+        sink = (
+            emitter.native_sink(event.src_host)
+            if emitter is not None and decision.status in {"visible", "delayed"}
+            else None
+        )
+        yield MacosESForkPublication(delivery, collector, sink)
+    except BaseException:
+        if dispatcher.es_collectors.owns_pending_delivery(delivery):
+            dispatcher.es_collectors.cancel(delivery)
+        raise
 
 
 def select_macos_es_profile(system: System) -> MacosEndpointSecurityProfile | None:

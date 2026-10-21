@@ -391,6 +391,12 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
             frozenset({"macos"}),
         ),
         _host(
+            "macos_endpoint_security",
+            "macos_endpoint_security",
+            CollectionCapability.PROCESS | CollectionCapability.COHERENT_ACTOR,
+            frozenset({"macos"}),
+        ),
+        _host(
             "proxy_access",
             "proxy",
             CollectionCapability.AUTHENTICATION
