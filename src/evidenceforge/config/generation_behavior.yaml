@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 330
+current_revision: 331
 history_start_revision: 1
-behavior_surface_sha256: a40fa1256a66c2ebee26c2488808bc3193ca88bbb23050d60b662395c09c1247
+behavior_surface_sha256: cd9d0f7153193e362af02c3d025de3242c8446262accb7b678c666ade20cda95
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3125,3 +3125,10 @@ changes:
       - bash_history
       - zsh_history
     summary: Selects local red-herring process actors from canonical world placement and reuses an eligible session Terminal main process during shell bootstrap without backdating future parents.
+  - revision: 331
+    id: capability-aware-endpoint-coverage-validation
+    impact: none
+    domains:
+      - scenario-evidence-coverage-validation
+    formats: []
+    summary: Replaces OS format expectations with effective per-host endpoint coverage notes and action-specific visibility warnings; shares the unchanged native workspace profile predicate. Rendered generation behavior is unchanged.

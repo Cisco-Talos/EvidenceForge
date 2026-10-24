@@ -97,15 +97,6 @@ _OS_BOUND_FORMATS: dict[str, tuple[str, ...]] = {
     "zsh_history": ("macos",),
 }
 
-# Reverse: OS → expected host-local formats
-_OS_EXPECTED_FORMATS: dict[str, set[str]] = {
-    "windows": {"windows_event_security", "windows_event_sysmon"},
-    "linux": {"syslog", "bash_history"},
-    # History depends on an explicitly modeled interactive shell and collection
-    # profile; Mac endpoint activity does not require both shell-history formats.
-    "macos": {"ecar"},
-}
-
 # Event types that are Windows-specific
 _WINDOWS_EVENT_TYPES = {
     "service_installed",
@@ -144,7 +135,7 @@ class ValidationIssue:
     """Represents a validation issue found in a scenario.
 
     Attributes:
-        severity: "error" (blocks generation) or "warning" (informational)
+        severity: "error" (blocks generation), "warning", or "info" (coverage note)
         field_path: Dot-separated path to the problematic field
         message: Human-readable description of the issue
         suggestion: Optional actionable suggestion to fix the issue
@@ -246,7 +237,6 @@ class ScenarioValidator:
         self._validate_red_herring_references()
         self._validate_storyline_actor_work_hours()
         self._validate_noise_feasibility()
-        self._validate_storyline_format_coverage()
         self._validate_storyline_os_plausibility()
         self._validate_spillage_events()
         self._validate_adversarial_payload_events()
@@ -2996,7 +2986,7 @@ class ScenarioValidator:
         return formats
 
     def _validate_format_os_compatibility(self) -> None:
-        """Check that OS-bound formats have matching systems and vice versa."""
+        """Reject incompatible OS formats and describe effective endpoint coverage."""
         expanded_formats = self._get_expanded_formats()
         os_categories = {
             system.hostname: _get_os_category(system.os)
@@ -3021,24 +3011,20 @@ class ScenarioValidator:
                     )
                 )
 
-        # Warning: system OS has no corresponding format in output
-        for hostname, os_cat in os_categories.items():
-            if os_cat == "unknown":
-                continue
-            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
-            if expected and not (expected & expanded_formats):
-                self.issues.append(
-                    ValidationIssue(
-                        severity="warning",
-                        field_path="output.logs",
-                        message=(
-                            f"System '{hostname}' is {os_cat} but no {os_cat} log formats in output"
-                        ),
-                        suggestion=(
-                            f"Add a {os_cat} format group (e.g., {', '.join(sorted(expected))})"
-                        ),
-                    )
-                )
+        # Collection coverage is independent of OS compatibility. Network-only
+        # exercises are valid; specific invisible actions are diagnosed by the
+        # shared behavior reachability contracts instead of demanding OS bundles.
+        from evidenceforge.validation.evidence_reachability import analyze_host_endpoint_coverage
+
+        self.issues.extend(
+            ValidationIssue(
+                severity=finding.severity,
+                field_path=finding.field_path,
+                message=finding.message,
+                suggestion=finding.suggestion,
+            )
+            for finding in analyze_host_endpoint_coverage(self.scenario)
+        )
 
     def _validate_segment_sensor_coverage(self) -> None:
         """Check that network segments with systems have sensor coverage."""
@@ -3274,41 +3260,6 @@ class ScenarioValidator:
                     suggestion="Consider increasing intensity to 'high'",
                 )
             )
-
-    def _validate_storyline_format_coverage(self) -> None:
-        """Check storyline systems have appropriate format coverage."""
-        if not self.scenario.storyline:
-            return
-
-        expanded_formats = self._get_expanded_formats()
-        checked_systems: set[str] = set()
-
-        for idx, event in enumerate(self.scenario.storyline):
-            hostname = event.system
-            if hostname in checked_systems or hostname not in self.hostnames:
-                continue
-            checked_systems.add(hostname)
-
-            system = self._get_system(hostname)
-            if not system:
-                continue
-
-            os_cat = _get_os_category(system.os)
-            expected = _OS_EXPECTED_FORMATS.get(os_cat, set())
-            missing = expected - expanded_formats
-            if missing:
-                self.issues.append(
-                    ValidationIssue(
-                        severity="warning",
-                        field_path=f"storyline.{idx}.system",
-                        message=(
-                            f"[{event.id}] Storyline system '{hostname}' ({os_cat}) "
-                            f"expects formats {sorted(missing)} but they "
-                            f"are not in output.logs"
-                        ),
-                        suggestion="Add the missing formats to output.logs",
-                    )
-                )
 
     def _validate_storyline_os_plausibility(self) -> None:
         """Check storyline event types are plausible for target system OS."""

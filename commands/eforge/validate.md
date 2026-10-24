@@ -87,6 +87,13 @@ Inspect only the implicated authored fragment rather than loading every include 
 - Repair and revalidate errors before warnings. Warnings do not block generation; after errors
   reach zero, group warnings by cause and identify intentional exceptions.
 - Info notes are observations, not warnings. Mention them only when useful.
+- Endpoint coverage is evaluated per host from effective source deployment, capabilities,
+  enablement, missingness, and collection windows. No OS requires every native format or a
+  particular endpoint format: eCAR applies across Windows, Linux, and macOS. Missing endpoint
+  collection is informational; network/application-only exercises are valid. Specific authored
+  behavior with no supported evidence projection remains a warning (or an error when a runtime
+  prerequisite requires it). A limited native or history source does not imply complete process,
+  session, or file coverage, and format selection does not guarantee rows.
 - On a clean pass, state that the scenario is valid; summarize counts or topology only if useful or
   requested.
 - Resource forecasts are advisory and model the 24-hour checkpoint default; pass the intended `--checkpoint-hours` value (`0` disables it) when overriding that cadence.

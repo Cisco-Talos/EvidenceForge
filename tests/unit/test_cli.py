@@ -383,6 +383,31 @@ class TestVersionCommand:
 class TestValidateCommand:
     """Tests for 'eforge validate' command."""
 
+    @pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 26"])
+    def test_validate_network_only_output_reports_endpoint_info_without_warnings(
+        self, scenarios_dir: Path, tmp_path: Path, os_name: str
+    ) -> None:
+        scenario_data = yaml.safe_load((scenarios_dir / "minimal.yaml").read_text())
+        scenario_data["environment"]["systems"][0]["os"] = os_name
+        scenario_data["output"]["logs"] = [{"format": "zeek_conn"}]
+        scenario_file = tmp_path / "scenario.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+
+        assert result.exit_code == EXIT_SUCCESS, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["valid"] is True
+        assert payload["severity_counts"]["error"] == 0
+        assert payload["severity_counts"]["warning"] == 0
+        notes = [
+            issue
+            for issue in payload["issues"]
+            if "no observable host endpoint source" in issue["message"]
+        ]
+        assert len(notes) == 1
+        assert notes[0]["severity"] == "info"
+
     def test_validate_rejects_behavior_with_no_possible_evidence_projection(
         self,
         scenarios_dir: Path,

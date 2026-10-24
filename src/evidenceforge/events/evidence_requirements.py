@@ -98,8 +98,11 @@ def _event_contract(
     capabilities: CollectionCapability,
     suggestion: str,
     source_scope: EvidenceSourceScope = EvidenceSourceScope.TARGET_HOST,
+    companion_kinds: tuple[EventKind, ...] = (),
 ) -> BehaviorEvidenceContract:
     consumers = EVENT_KIND_CONTRACTS[event_kind].emitter_consumers
+    for companion_kind in companion_kinds:
+        consumers |= EVENT_KIND_CONTRACTS[companion_kind].emitter_consumers
     return BehaviorEvidenceContract(
         behavior_id=behavior_id,
         label=label,
@@ -181,6 +184,14 @@ def _host_event_contracts() -> dict[str, BehaviorEvidenceContract]:
             event_kind=EventKind.PROCESS_CREATE,
             capabilities=CollectionCapability.PROCESS,
             suggestion=process_guidance,
+        ),
+        "ssh_session": _event_contract(
+            behavior_id="authored_ssh_session",
+            label="authored SSH authentication/session evidence",
+            event_kind=EventKind.SSH_SESSION,
+            companion_kinds=(EventKind.SYSLOG,),
+            capabilities=CollectionCapability.SESSION,
+            suggestion="Enable ecar on the receiver, or syslog for a Linux SSH receiver.",
         ),
         "create_remote_thread": _event_contract(
             behavior_id="authored_remote_thread",

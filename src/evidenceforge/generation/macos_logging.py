@@ -73,6 +73,17 @@ def prepare_unified_log_observation(
         raise StateError(f"Invalid Unified Log writer facts: {error}") from error
 
 
+def workspace_request_profile_available(os_name: str) -> bool:
+    """Return whether the OS label has the bounded native workspace profile."""
+    return (
+        re.fullmatch(
+            r"(?:(?:macos|mac os x|os x)\s+26(?:\.\d+)*|darwin\s+25(?:\.\d+)*)",
+            os_name.strip().casefold(),
+        )
+        is not None
+    )
+
+
 def prepare_workspace_request(
     state: StateManager,
     deployment: DeploymentContentRegistry | None,
@@ -89,13 +100,7 @@ def prepare_workspace_request(
     ):
         raise StateError("Workspace request requires its exact active session")
     writer = state.get_process_identity_at(session.hostname, writer_pid, requested_at)
-    if (
-        re.fullmatch(
-            r"(?:(?:macos|mac os x|os x)\s+26(?:\.\d+)*|darwin\s+25(?:\.\d+)*)",
-            os_name.strip().casefold(),
-        )
-        is None
-    ):
+    if not workspace_request_profile_available(os_name):
         return MacosWorkspaceRequest(session, requested_at, writer, None, "profile_unavailable")
     if writer is None:
         return MacosWorkspaceRequest(session, requested_at, None, None, "writer_unavailable")

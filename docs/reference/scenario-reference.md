@@ -1879,6 +1879,15 @@ file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
 syslog, with `eforge generate --target default|sof-elk|splunk`; do not encode a parser
 target in scenario YAML.
 
+Windows, Linux, and macOS do not require a particular endpoint format or every format in an OS
+group. Validation checks each host's effective collection deployment, including source
+applicability, capabilities, enablement, missingness, and collection windows. No observable
+endpoint source produces an informational note; network/application-only exercises are valid.
+Specific authored actions without a supported evidence projection still produce actionable
+reachability findings. eCAR is an endpoint alternative on all three platforms. Native and shell
+history sources have narrower coverage: selecting one does not imply complete process, session,
+or file visibility, guarantee records, or waive native-source eligibility and evidence gates.
+
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 `zeek` and concrete `zeek_*` outputs require a `type: network` sensor whose
