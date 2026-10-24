@@ -70,6 +70,7 @@ test("origin badges are graphical and explain their color on keyboard focus", as
 });
 
 function guidedSetup(selectedDetail: AssetDetail, choices: Record<string, string[]> = {}) {
+  sessionStorage.setItem(`studio-assets:${item.id}`, JSON.stringify({ category: selectedDetail.category }));
   const request = vi.fn(async (path: string, method?: string) => {
     if (method === "POST") return { path: "/workspace/scenario.yaml" };
     const params = new URLSearchParams(path.split("?")[1]);
@@ -127,6 +128,62 @@ test("application platform dictionaries show nested fields and save exact nested
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   await user.click(screen.getByRole("button", { name: "Save draft" }));
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ value: expect.objectContaining({ platforms: { ...application.value.platforms as object, windows: { ...((application.value.platforms as Record<string, object>).windows), image_path: "C:\\Browser\\browser-v2.exe" } } }) }), 180000);
+});
+
+test.each(["applications", "processes"])("%s can add a Mac platform while preserving Windows and Linux definitions", async (category) => {
+  const platforms = { windows: { image_path: "C:\\Tools\\tool.exe", deployment: { kind: "legacy_static" } }, linux: { image_path: "/usr/bin/tool", deployment: { kind: "legacy_static" } } };
+  const application: AssetDetail = { ...detail, category, identity_field: "id", schema_document: schemas.application, summary: { ...detail.summary!, id: "tool", key: "tool", name: "Tool" }, value: { id: "tool", display_name: "Tool", categories: ["user_app"], personas: ["developer"], platforms } };
+  const request = guidedSetup(application);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Tool" }));
+  await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
+  expect(screen.getByText("Add a Windows, Linux or macOS definition, then fill in its executable fields.")).toBeVisible();
+  await user.selectOptions(screen.getByRole("combobox", { name: "New Platforms entry" }), "macos");
+  await user.click(screen.getByRole("button", { name: "Add platform" }));
+  await user.type(screen.getByRole("textbox", { name: "Platforms / macOS / Image Path *" }), "/Applications/Tool.app/Contents/MacOS/Tool");
+  await user.click(screen.getByRole("button", { name: "Review changes" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ category, value: expect.objectContaining({ platforms: { ...platforms, macos: { image_path: "/Applications/Tool.app/Contents/MacOS/Tool" } } }) }), 180000);
+});
+
+const macHost: AssetDetail = { ...detail, category: "systems", identity_field: "hostname", schema_document: schemas.system, summary: { ...detail.summary!, id: "mac", key: "MAC-01", name: "MAC-01" }, value: { hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 26", os_build: "25A354", architecture: "arm64", type: "workstation", services: [] } };
+
+test("new Mac hosts expose build and architecture fields and explain native coverage", async () => {
+  const request = guidedSetup({ ...macHost, summary: null });
+  const user = userEvent.setup();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Add asset…" })).toBeEnabled());
+  await user.click(screen.getByRole("button", { name: "Add asset…" }));
+  await user.click(await screen.findByRole("button", { name: "Continue with system" }));
+  await user.type(screen.getByRole("textbox", { name: "Hostname *" }), "MAC-01");
+  await user.type(screen.getByRole("textbox", { name: "Ip *" }), "10.0.0.2");
+  await user.type(screen.getByRole("textbox", { name: "Os *" }), "macOS 26");
+  await user.selectOptions(screen.getByRole("combobox", { name: "Type" }), "workstation");
+  await user.click(screen.getByText("Os Build", { exact: false, selector: "summary" }));
+  await user.click(screen.getByRole("button", { name: "Set Os Build" }));
+  await user.type(screen.getByRole("textbox", { name: "Os Build" }), "25A354");
+  await user.click(screen.getByText("Architecture", { exact: false, selector: "summary" }));
+  await user.click(screen.getByRole("button", { name: "Set Architecture" }));
+  await user.selectOptions(screen.getByRole("combobox", { name: "Architecture" }), "arm64");
+  expect(screen.getByText(/Native exec\/exit and Gatekeeper-denial records remain unavailable/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Review changes" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ asset_id: null, category: "systems", value: expect.objectContaining({ hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 26", os_build: "25A354", architecture: "arm64", type: "workstation" }) }), 180000);
+});
+
+test("editing a Mac host retains OS metadata and leaves engine validation authoritative", async () => {
+  const request = guidedSetup(macHost);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "MAC-01" }));
+  await user.click(screen.getByRole("button", { name: "Customize in scenario…" }));
+  expect(screen.getByRole("combobox", { name: "Architecture" })).toHaveValue("arm64");
+  const ip = screen.getByRole("textbox", { name: "Ip *" });
+  await user.clear(ip); await user.type(ip, "10.0.0.3");
+  request.mockRejectedValueOnce(new Error("Native source requires an explicit OS build"));
+  await user.click(screen.getByRole("button", { name: "Review changes" }));
+  await user.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Native source requires an explicit OS build");
+  expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ value: { ...macHost.value, ip: "10.0.0.3" } }), 180000);
+  expect(screen.getByRole("button", { name: "Back to edit" })).toBeEnabled();
 });
 
 test("Add Asset explains the selected type and blocks missing required fields", async () => {

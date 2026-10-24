@@ -20,6 +20,8 @@ function logTypeLabel(format: string): string {
   if (format === "windows_event_security") return "Windows Security events";
   if (format === "windows_event_sysmon" || format === "sysmon") return "Sysmon";
   if (format === "ecar") return "EDR (eCAR)";
+  if (format === "macos_unified_log") return "macOS Unified Log";
+  if (format === "macos_endpoint_security") return "macOS Endpoint Security";
   if (format === "zeek") return "Zeek";
   if (format.startsWith("zeek_")) return `Zeek · ${format.slice(5).replace(/_/g, " ")}`;
   return format.replace(/_/g, " ");

@@ -31,8 +31,8 @@ const categoryGuides: Record<string, { title: string; description: string }> = {
   systems: { title: "System", description: "Give the computer a unique hostname and address, choose its type, then add roles and hosted services." },
   network_identities: { title: "Network identity", description: "Give this identity a unique ID and at least one hostname or IP address." },
   dns: { title: "DNS entry", description: "Define a domain and its address pool, then choose the tags used to select it." },
-  applications: { title: "Application", description: "Define the application's ID, display name and eligible users, then add a Windows or Linux executable definition." },
-  processes: { title: "Process definition", description: "Define an executable with a unique application ID, eligibility and a Windows or Linux platform definition." },
+  applications: { title: "Application", description: "Define the application's ID, display name and eligible users, then add a Windows, Linux or macOS executable definition." },
+  processes: { title: "Process definition", description: "Define an executable with a unique application ID, eligibility and a Windows, Linux or macOS platform definition." },
   persona_catalog: { title: "Persona", description: "Name a reusable behavior profile and describe its work hours, activities and browsing intensity." },
   process_catalog: { title: "Process profile", description: "Choose built-in executables, or add custom executable definitions with platform-specific paths and commands." },
   application_catalog: { title: "Application profile", description: "Choose existing persona and process profiles. Optional connections refer to destination profiles." },
@@ -93,6 +93,7 @@ function AssetEditor({ detail, isPack, api, itemId, onCancel, onSaved, restoreAl
   return <form className="asset-editor" aria-label={detail.summary ? `Edit ${detail.summary.name}` : `Add ${guide?.title.toLowerCase() || "asset"}`} noValidate onSubmit={(event) => { event.preventDefault(); void review(); }}>
     <h3>{converting ? `${detail.category === "stale_accounts" ? "Mark as stale" : "Restore as user"}: ${detail.summary?.name}` : detail.summary ? `${isPack || detail.summary.origin.kind === "scenario" ? "Edit" : "Customize"} ${detail.summary.name}` : `Add ${guide?.title.toLowerCase() || "asset"}`}</h3>
     <p className="asset-editor-guidance">{!detail.summary && guide?.description} {allocateVersion ? "Saving creates a new pack version. Existing scenarios keep their selected version." : "Changes stay in this draft until you publish."}</p>
+    {detail.category === "systems" && typeof value.os === "string" && /macos|mac os|darwin|os x/i.test(value.os) && <p className="asset-inheritance-guide">Modeled macOS support is experimental. Native sources require a macOS 26 arm64 workstation with an explicit OS build. Native Endpoint Security currently provides fork records, and Unified Log covers loginwindow workspace entry. Native exec/exit and Gatekeeper-denial records remain unavailable.</p>}
     {converting && <p className="asset-inheritance-guide">{detail.category === "stale_accounts" ? "This account will become stale credentials used for failed logons. Its user details are retained for restoration. Review the date, reason and affected relationships before saving." : "This account will become a regular user. Saved user details are filled in when available; choose Active or Disabled and review its system, groups and persona."}</p>}
     {!reviewing ? <>
       <p className="muted">Fields marked * are required. Choose references from the available assets; optional fields can use their defaults.</p>

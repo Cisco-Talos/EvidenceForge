@@ -14,6 +14,12 @@ Public research records remain under ignored `sample_data/macos/`; committed fix
 
 ## Current handoff — assessment follow-through
 
+Studio UI follow-through on 2026-10-24 completes the Mac software platform picker,
+host guidance, native-source labels and NDJSON highlighting. All 347 UI tests and
+60 relevant backend tests pass; build, type and lint checks pass. See the
+[Studio integration worklog](2026-10-24-macos-studio-ui.md). Native evidence gates
+remain unchanged.
+
 The complete assessment sequence, reviewer updates, frozen benchmarks and current
 validation are tracked in [the assessment worklog](2026-10-21-macos-assessment.md).
 Revisions 327 (`4665c1f7`), 328 (`638ba6a4`), 329 (`9ab9f74b`) and 330

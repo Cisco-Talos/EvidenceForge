@@ -83,58 +83,6 @@
     "title": "User",
     "type": "object"
   },
-  "group": {
-    "description": "Group definition (simplified for Phase 1).\n\nRepresents a user group in the simulated environment.\n\nAttributes:\n    name: Group name\n    description: Optional group description\n    members: List of usernames in this group\n    permissions: Optional list of permissions (Phase 1: stored as strings)",
-    "properties": {
-      "name": {
-        "title": "Name",
-        "type": "string"
-      },
-      "description": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "title": "Description"
-      },
-      "members": {
-        "items": {
-          "type": "string"
-        },
-        "title": "Members",
-        "type": "array",
-        "x-asset-choices": "users",
-        "x-asset-custom": false
-      },
-      "permissions": {
-        "anyOf": [
-          {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "title": "Permissions",
-        "x-asset-choices": "permissions",
-        "x-asset-custom": true
-      }
-    },
-    "required": [
-      "name"
-    ],
-    "title": "Group",
-    "type": "object"
-  },
   "application": {
     "$defs": {
       "ApplicationDeploymentEntry": {
@@ -404,6 +352,37 @@
         "title": "LoadedModuleEntry",
         "type": "object"
       },
+      "MacCodeSignatureEntry": {
+        "additionalProperties": false,
+        "description": "Explicit signer facts for the cataloged main executable, not its helpers.",
+        "properties": {
+          "signing_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Signing Id",
+            "type": "string"
+          },
+          "team_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Team Id"
+          }
+        },
+        "required": [
+          "signing_id"
+        ],
+        "title": "MacCodeSignatureEntry",
+        "type": "object"
+      },
       "PlatformConfig": {
         "additionalProperties": false,
         "description": "Per-OS platform config within an application entry.",
@@ -471,6 +450,31 @@
             "default": null,
             "title": "Pe Metadata"
           },
+          "code_signature": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MacCodeSignatureEntry"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "executable_format": {
+            "anyOf": [
+              {
+                "const": "mach_o",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Known main-executable image format; absent means unknown, not a script",
+            "title": "Executable Format"
+          },
           "command_templates": {
             "anyOf": [
               {
@@ -485,6 +489,19 @@
             ],
             "default": null,
             "title": "Command Templates"
+          },
+          "singleton_per_session": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Override the application instance policy for this platform",
+            "title": "Singleton Per Session"
           },
           "command_parameter_pools": {
             "anyOf": [
@@ -562,7 +579,8 @@
         "propertyNames": {
           "enum": [
             "windows",
-            "linux"
+            "linux",
+            "macos"
           ]
         },
         "minProperties": 1
@@ -649,6 +667,111 @@
       "personas"
     ],
     "title": "ApplicationEntry",
+    "type": "object"
+  },
+  "system": {
+    "description": "System definition (simplified for Phase 1).\n\nRepresents a computer system (workstation, server, domain controller)\nin the simulated environment.\n\nAttributes:\n    hostname: Hostname (RFC 1123 compliant)\n    ip: IPv4 or IPv6 address\n    os: Operating system name/version (e.g., \"Windows 10\", \"Linux Ubuntu 20.04\")\n    type: System type (workstation|server|domain_controller)\n    os_build: Optional exact OS build identity\n    architecture: Optional host CPU architecture\n    assigned_user: Username of assigned user (for workstations)\n    services: List of running services (e.g., [\"IIS\", \"SSH\", \"SQL Server\"])",
+    "properties": {
+      "hostname": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9.-]*$",
+        "title": "Hostname",
+        "type": "string"
+      },
+      "ip": {
+        "title": "Ip",
+        "type": "string"
+      },
+      "os": {
+        "title": "Os",
+        "type": "string"
+      },
+      "os_build": {
+        "anyOf": [
+          {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Optional exact OS build identity, such as '10.0.22631.3880' or '6.8.0-45-generic'.",
+        "title": "Os Build"
+      },
+      "architecture": {
+        "anyOf": [
+          {
+            "enum": [
+              "x86",
+              "x64",
+              "arm64"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Optional host CPU architecture used for deployment and binary identity.",
+        "title": "Architecture"
+      },
+      "type": {
+        "pattern": "^(workstation|server|domain_controller)$",
+        "title": "Type",
+        "type": "string"
+      },
+      "assigned_user": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Assigned User",
+        "x-asset-choices": "users",
+        "x-asset-custom": false
+      },
+      "services": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Services",
+        "type": "array",
+        "x-asset-choices": "services",
+        "x-asset-custom": true
+      },
+      "roles": {
+        "description": "System roles: forward_proxy, web_server, dns_server, mail_server, etc.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Roles",
+        "type": "array",
+        "x-asset-choices": "roles",
+        "x-asset-custom": true
+      },
+      "public_hostnames": {
+        "description": "Public DNS names for internet-facing services (e.g., 'ehr-portal.example.com'). Used for TLS SNI / HTTP Host in external inbound traffic.",
+        "items": {
+          "type": "string"
+        },
+        "title": "Public Hostnames",
+        "type": "array"
+      }
+    },
+    "required": [
+      "hostname",
+      "ip",
+      "os",
+      "type"
+    ],
+    "title": "System",
     "type": "object"
   }
 }

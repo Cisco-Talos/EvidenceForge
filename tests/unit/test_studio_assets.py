@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,11 @@ from typing import Any
 import pytest
 import yaml
 
-from evidenceforge.composition.models import DestinationCatalogEntry, PackReference
+from evidenceforge.composition.models import CustomProcess, DestinationCatalogEntry, PackReference
 from evidenceforge.composition.packs import PackRepository
+from evidenceforge.config.schemas import ApplicationEntry
 from evidenceforge.models.exceptions import PackError
+from evidenceforge.models.scenario import System, User
 from evidenceforge.studio.assets import (
     AssetEdit,
     Inventory,
@@ -39,6 +42,61 @@ def test_structured_service_definitions_keep_their_nested_fields() -> None:
     assert next(iter(data["services"]["patternProperties"].values()))["$ref"].endswith(
         "DestinationService"
     )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "model", "category"),
+    [
+        ("user", User, "users"),
+        ("application", ApplicationEntry, "applications"),
+        ("system", System, "systems"),
+    ],
+)
+def test_frontend_schema_fixtures_match_the_live_editor(
+    fixture: str, model: type[User | ApplicationEntry | System], category: str
+) -> None:
+    path = Path(__file__).parents[2] / "desktop-ui/tests/fixtures/asset-schemas.json"
+    assert json.loads(path.read_text())[fixture] == _editor_schema(model, category)
+
+
+def test_runtime_platform_choices_share_the_typed_process_vocabulary() -> None:
+    expected = CustomProcess.model_json_schema()["properties"]["platforms"]["propertyNames"]
+    assert "macos" in expected["enum"]
+    for category in ("applications", "processes"):
+        platforms = _editor_schema(ApplicationEntry, category)["properties"]["platforms"]
+        assert platforms["propertyNames"] == expected
+
+
+def test_macos_host_add_and_edit_preserve_build_architecture_and_other_hosts(
+    tmp_path: Path,
+) -> None:
+    source = source_file(tmp_path)
+    original = yaml.safe_load(source.read_text())["environment"]["systems"]
+    inventory = build_inventory(source, tmp_path, False)
+    host = {
+        "hostname": "MAC-01",
+        "ip": "10.0.0.2",
+        "os": "macOS 26",
+        "os_build": "25A354",
+        "architecture": "arm64",
+        "type": "workstation",
+    }
+    save_asset(
+        source,
+        tmp_path,
+        inventory,
+        AssetEdit(revision=inventory.revision, category="systems", key="MAC-01", value=host),
+    )
+    current = build_inventory(source, tmp_path, False)
+    save_asset(source, tmp_path, current, edit_for(current, "systems", "MAC-01", services=["ssh"]))
+    saved = yaml.safe_load(source.read_text())["environment"]["systems"]
+    assert saved[:-1] == original
+    assert saved[-1] == {**host, "services": ["ssh"]}
+    restored = build_inventory(source, tmp_path, False)
+    row = next(row for row in restored.rows["systems"] if row.key == "MAC-01")
+    value = restored.detail("systems", row.id).value
+    assert {key: value[key] for key in host} == host
+    assert value["services"] == ["ssh"]
 
 
 def organization(root: Path) -> Path:

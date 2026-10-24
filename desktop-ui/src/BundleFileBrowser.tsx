@@ -21,7 +21,7 @@ export function bundleFileUrl(jobId: string, path: string, kind: FileKind = "job
 }
 
 function languageFor(path: string, text: string): string {
-  if (/\.(json|jsonl)$/i.test(path)) return "json";
+  if (/\.(json|jsonl|ndjson)$/i.test(path)) return "json";
   if (/\.(yaml|yml)$/i.test(path)) return "yaml";
   if (/\.(md|markdown)$/i.test(path)) return "markdown";
   if (/\.(eml|email)$/i.test(path)) return "email";

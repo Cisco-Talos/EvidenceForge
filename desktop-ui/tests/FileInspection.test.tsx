@@ -50,6 +50,21 @@ test("an unavailable declaration line is reported without highlighting a differe
   expect(document.querySelector(".matched-line")).toBeNull();
 });
 
+test.each(["macos_unified_log.ndjson", "macos_endpoint_security.ndjson"])("native output %s is displayed as JSON without changing records", async (filename) => {
+  const path = `data/MAC-01/${filename}`;
+  const text = '{"time":"2026-10-20T13:00:00Z","event_type":11}\n{"time":"2026-10-20T13:00:01Z","event_type":11}';
+  const readTextPreview = vi.fn(async () => ({ text, truncated: false, binary: false }));
+  render(<BundleFileBrowser jobId="mac-run" files={{ root: "/bundle", files: [{ path, size: text.length }], truncated: false }} api={{ readTextPreview } as unknown as StudioApi} onClose={vi.fn()} onError={vi.fn()} />);
+  const preview = await screen.findByLabelText(`Preview of ${path}`);
+  expect(preview).toHaveClass("language-json");
+  const lines = preview.querySelectorAll(".bundle-source-line");
+  expect(lines).toHaveLength(2);
+  expect(lines[0].lastElementChild?.textContent).toBe(text.split("\n")[0]);
+  expect(lines[1].lastElementChild?.textContent).toBe(text.split("\n")[1]);
+  expect(preview.querySelector(".syntax-key")).toHaveTextContent('"time"');
+  expect(readTextPreview).toHaveBeenCalledWith(`/v1/jobs/mac-run/files/${path}`);
+});
+
 test("validation findings and repair are directly visible", async () => {
   const result = { report: { valid: false, scenario: { name: "Example" }, issues: [{ severity: "error", field_path: "users.0", message: "Unknown host", suggestion: "Select an existing host" }] } } as ValidationResult;
   const onFix = vi.fn();
