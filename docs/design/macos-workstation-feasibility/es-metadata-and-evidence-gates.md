@@ -4,6 +4,14 @@ Updated 2026-10-24. Target: modeled macOS 26 arm64 workstations. Revision 328 su
 
 ## Public evidence search outcome
 
+The private reference-acquisition kit no longer pins the OS major to 26. The
+user authorized a macOS 27 experiment; actual OS/build and matched message
+versions stay in private provenance. This expands acquisition only. Fixed
+reports classify observed wire headers, and unsupported profiles remain
+unqualified rather than being coerced into v10. Native generator admission and
+the macOS 26-specific evidence gates remain unchanged; evidence from 27 does not
+establish 26 fidelity by assertion.
+
 The focused search covered Apple Developer documentation and forums, version-labeled Mullvad eslogger fixtures, Mac Monitor's source and release notes, and a build-labeled public Gatekeeper research report. It found useful semantic evidence but no qualifying complete macOS 26 denial capture or new target-version exec/exit fixture. This is a bounded search result, not a claim that no such public evidence exists.
 
 | Reference | What it establishes | What it does not establish |

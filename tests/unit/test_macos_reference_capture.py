@@ -110,10 +110,11 @@ def test_candidate_checks_pass_complete_invented_experiment_without_opening_gate
     assert all(
         value == "PASS"
         for key, value in data.items()
-        if key not in {"kit_version", "reference_review", "gate_status", "error"}
+        if key not in {"kit_version", "reference_review", "gate_status", "error", "wire_profile"}
     )
     assert report.reference_review == "REQUIRED"
     assert report.gate_status == "NOT_EVALUATED"
+    assert report.wire_profile == "V10_CANDIDATE"
     # Candidate validation cannot change the production v10 event allowlist.
     with pytest.raises(ValidationError):
         decode_endpoint_security_record(json.dumps(rows[1]))
@@ -197,8 +198,64 @@ def test_unknown_candidate_shapes_do_not_become_reference_passes(change: str) ->
     else:
         row["time"] = "2026-99-99T12:00:00.123456789Z"
     report = kit.analyze(_tracker(rows), controls, True)
-    assert report.candidate_v10_shapes == "FAIL"
+    if change == "version":
+        assert report.wire_profile == "MIXED"
+        assert report.message_shapes == "INCONCLUSIVE"
+        assert report.candidate_v10_shapes == "INCONCLUSIVE"
+        assert report.error == "WIRE_PROFILE"
+    elif change == "boolean":
+        assert report.wire_profile == "INVALID"
+        assert report.message_shapes == "FAIL"
+    else:
+        assert report.message_shapes == "FAIL"
+        assert report.candidate_v10_shapes == "FAIL"
     assert _SECRET not in report.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("schema", "version", "profile"),
+    [
+        (1, 11, "V11_UNQUALIFIED"),
+        (1, 12, "OTHER_UNQUALIFIED"),
+        (1, 9, "OTHER_UNQUALIFIED"),
+        (2, 10, "SCHEMA_UNQUALIFIED"),
+        (1, True, "INVALID"),
+        (1, 0, "INVALID"),
+    ],
+)
+def test_observed_versions_are_preserved_without_unqualified_native_passes(
+    schema: int, version: object, profile: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(_raw: bytes) -> bool:
+        pytest.fail("An unqualified wire profile must not enter the v10 validator")
+
+    monkeypatch.setattr(kit, "_candidate_shape", forbidden)
+    rows, controls = _experiment()
+    for row in rows:
+        row["schema_version"] = schema
+        row["version"] = version
+        row["new_private_field"] = _SECRET
+    tracker = _tracker(rows)
+    assert tracker.records == rows
+    report = kit.analyze(tracker, controls, True)
+    assert report.kit_version == 2
+    assert report.wire_profile == profile
+    assert report.error == "WIRE_PROFILE"
+    assert report.message_shapes == ("FAIL" if profile == "INVALID" else "INCONCLUSIVE")
+    assert report.candidate_v10_shapes == "INCONCLUSIVE"
+    assert report.gate_status == "NOT_EVALUATED"
+    assert report.fork_exec_exit_linkage == "PASS"
+    assert _SECRET not in report.model_dump_json()
+
+
+def test_foreign_executable_cannot_enter_tracked_process_family() -> None:
+    rows, _controls = _experiment()
+    tracker = kit.StreamFilter(100, _PROBE)
+    assert tracker.accept(json.dumps(rows[0]).encode())
+    rows[1]["process"]["executable"]["path"] = f"/Users/{_SECRET}/foreign"
+    with pytest.raises(kit.PrivateCaptureError, match="^DATA$"):
+        tracker.accept(json.dumps(rows[1]).encode())
+    assert len(tracker.records) == 1
 
 
 @pytest.mark.parametrize(
@@ -315,7 +372,7 @@ def test_capture_from_checkout_is_rejected_before_host_checks(
         (0, "Darwin", "arm64", "26.0", "ROOT_USER"),
         (123, _SECRET, "arm64", "26.0", "OS_FAMILY"),
         (123, "Darwin", _SECRET, "26.0", "PYTHON_ARCH"),
-        (123, "Darwin", "arm64", f"25.{_SECRET}", "OS_MAJOR"),
+        (123, "Darwin", "arm64", f"25.{_SECRET}", "OS_VERSION"),
     ],
 )
 def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
@@ -353,8 +410,12 @@ def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
     assert report.gate_status == "NOT_EVALUATED"
 
 
+@pytest.mark.parametrize("version", ["26.0", "27.0.1", "15.7", "28.987654321"])
 def test_successful_preflight_never_builds_collects_or_writes_data(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    version: str,
 ) -> None:
     def forbidden(*_args: object, **_kwargs: object) -> None:
         pytest.fail("Preflight must not build, collect or create output")
@@ -362,7 +423,7 @@ def test_successful_preflight_never_builds_collects_or_writes_data(
     def fake_version(args: list[str], cwd: Path) -> bytes:
         assert args == ["/usr/bin/sw_vers", "-productVersion"]
         assert cwd == tmp_path
-        return f"26.{_SECRET}".encode()
+        return version.encode()
 
     tmp_path.chmod(0o700)
     monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
@@ -378,6 +439,7 @@ def test_successful_preflight_never_builds_collects_or_writes_data(
     output = capsys.readouterr()
     assert not output.err
     assert _SECRET not in output.out
+    assert version not in output.out
     report = kit.Report.model_validate_json(output.out)
     assert report.error == "NONE"
     assert report.target_platform == "PASS"
@@ -440,13 +502,34 @@ def test_report_cannot_include_native_fields_or_free_text() -> None:
         kit.Report.model_validate({"error": _SECRET})
 
 
+def test_unqualified_wire_report_is_not_a_success_exit(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = kit.Report(error="WIRE_PROFILE", wire_profile="V11_UNQUALIFIED")
+    monkeypatch.setattr(kit, "capture", lambda: report)
+    assert kit.main(["capture", "--private-run"]) == 1
+    exported = kit.Report.model_validate_json(capsys.readouterr().out)
+    assert exported.message_shapes == "INCONCLUSIVE"
+    assert exported.gate_status == "NOT_EVALUATED"
+
+
+def test_legacy_fixed_report_remains_readable() -> None:
+    report = kit.Report.model_validate({"kit_version": 1, "error": "OS_MAJOR"})
+    assert report.wire_profile == "NOT_OBSERVED"
+    assert report.message_shapes == "INCONCLUSIVE"
+
+
 @pytest.mark.parametrize(
-    "failure", [None, "malformed", "interrupted", "read_error", "startup", "partial"]
+    "failure", [None, "malformed", "interrupted", "read_error", "startup", "partial", "unqualified"]
 )
 def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
 ) -> None:
     rows, controls = _experiment()
+    if failure == "unqualified":
+        for row in rows:
+            row["version"] = 11
+            row["new_private_field"] = "INVENTED_RELATED_ONLY"
     ambient = deepcopy(rows[0])
     ambient["process"] = _process_view(999)
     ambient["private_extra"] = _SECRET
@@ -530,7 +613,7 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
             raise OSError(_SECRET)
 
         monkeypatch.setattr(kit.os, "read", broken_read)
-    if failure not in (None, "partial"):
+    if failure not in (None, "partial", "unqualified"):
         with pytest.raises((ValueError, KeyboardInterrupt, OSError)):
             kit._collect(tmp_path, _PROBE)
         assert source_file.closed
@@ -545,4 +628,10 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
         "FAIL" if failure == "partial" else "PASS"
     )
     assert collector.returncode == 0
+    report = kit.analyze(tracker, observed, complete)
+    if failure == "unqualified":
+        assert b"INVENTED_RELATED_ONLY" in retained
+        assert "INVENTED_RELATED_ONLY" not in report.model_dump_json()
+        assert report.wire_profile == "V11_UNQUALIFIED"
+        assert report.message_shapes == "INCONCLUSIVE"
     assert (tmp_path / "probe-events.jsonl").stat().st_mode & 0o777 == 0o600

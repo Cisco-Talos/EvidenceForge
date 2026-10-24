@@ -21,8 +21,14 @@ the exact probe family, using PID version and start time as well as PID. Raw
 matched rows and provenance remain private outside Git; the agent receives only
 human-reviewed fixed check codes. A candidate field check does not open a gate.
 The human-only `preflight` command distinguishes root-user, OS-family,
-Python-process-architecture and OS-major mismatches using fixed codes without
+Python-process-architecture and malformed version-output errors using fixed codes without
 compiling, collecting, writing data or disclosing actual platform values.
+Reference acquisition no longer requires OS major 26; macOS 27 can be tested
+privately. The actual build stays in private provenance. Matched message headers
+select the candidate check; unsupported or mixed versions remain unqualified,
+without rewriting records, claiming cross-version equivalence or opening a
+production source gate. The version-2 fixed report explains this distinction;
+see PRIVATE-RUN.md for `wire_profile` and `WIRE_PROFILE` outcomes.
 
 ## Required lab and permission
 

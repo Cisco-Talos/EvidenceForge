@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import platform
+import re
 import selectors
 import shutil
 import signal
@@ -68,6 +69,17 @@ type ErrorCode = Literal[
     "OS_FAMILY",
     "PYTHON_ARCH",
     "OS_MAJOR",
+    "OS_VERSION",
+    "WIRE_PROFILE",
+]
+type WireProfile = Literal[
+    "NOT_OBSERVED",
+    "V10_CANDIDATE",
+    "V11_UNQUALIFIED",
+    "OTHER_UNQUALIFIED",
+    "SCHEMA_UNQUALIFIED",
+    "MIXED",
+    "INVALID",
 ]
 
 
@@ -83,11 +95,13 @@ class Report(BaseModel):
     """The entire export vocabulary: no strings supplied by the host or records."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    kit_version: Literal[1] = 1
+    kit_version: Literal[1, 2] = 2
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     error: ErrorCode = "NONE"
     target_platform: Check = "INCONCLUSIVE"
+    wire_profile: WireProfile = "NOT_OBSERVED"
+    message_shapes: Check = "INCONCLUSIVE"
     probe_controls: Check = "INCONCLUSIVE"
     bounded_delivery: Check = "INCONCLUSIVE"
     candidate_v10_shapes: Check = "INCONCLUSIVE"
@@ -122,7 +136,7 @@ class PrivateProvenance(BaseModel):
     """Private collection context; never included in the public report."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    kit_version: Literal[1] = 1
+    kit_version: Literal[2] = 2
     os_version: str
     os_build: str
     architecture: Literal["arm64"] = "arm64"
@@ -131,6 +145,8 @@ class PrivateProvenance(BaseModel):
     collector: tuple[str, ...] = ("/usr/bin/eslogger", "fork", "exec", "exit")
     source_sha256: str
     binary_sha256: str
+    wire_profile: WireProfile
+    message_versions: tuple[int, ...]
     preservation: str = "Only exact probe family retained; raw matched rows unmodified; ambient rows discarded in memory."
 
 
@@ -246,12 +262,35 @@ class StreamFilter:
         self.probe = str(probe)
         self.root: Identity | None = None
         self.live: dict[int, Identity] = {}
+        self.executables: dict[int, str] = {}
         self.records: list[dict[str, object]] = []
         self.last_sequence: dict[int, int] = {}
         self.last_global: int | None = None
         self.sequence_ok = True
         self.shapes_ok = True
         self.total = 0
+
+    @property
+    def wire_profile(self) -> WireProfile:
+        """Classify matched headers without exporting native values or coercing versions."""
+        if not self.records:
+            return "NOT_OBSERVED"
+        profiles: set[tuple[int, int]] = set()
+        for record in self.records:
+            schema, version = record.get("schema_version"), record.get("version")
+            if type(schema) is not int or type(version) is not int or schema <= 0 or version <= 0:
+                return "INVALID"
+            profiles.add((schema, version))
+        if len(profiles) != 1:
+            return "MIXED"
+        schema, version = next(iter(profiles))
+        if schema != 1:
+            return "SCHEMA_UNQUALIFIED"
+        if version == 10:
+            return "V10_CANDIDATE"
+        if version == 11:
+            return "V11_UNQUALIFIED"
+        return "OTHER_UNQUALIFIED"
 
     def accept(self, raw: bytes) -> bool:
         """Inspect in local memory; false means discard without saving the record."""
@@ -292,8 +331,11 @@ class StreamFilter:
                 return False
             self.root = identity
             self.live[identity.pid] = identity
+            self.executables[identity.pid] = self.probe
         if self.live.get(identity.pid) != identity:
             return False
+        if _executable(process) != self.executables[identity.pid]:
+            raise PrivateCaptureError("DATA")
 
         event = _mapping(record.get("event"))
         if event_type == 11:
@@ -304,6 +346,7 @@ class StreamFilter:
             if child_identity.pid in self.live or _executable(child) != self.probe:
                 raise PrivateCaptureError("DATA")
             self.live[child_identity.pid] = child_identity
+            self.executables[child_identity.pid] = self.probe
         elif event_type == 9:
             target = _mapping(_mapping(event.get("exec")).get("target"))
             target_identity = _identity(target)
@@ -315,11 +358,17 @@ class StreamFilter:
             ):
                 raise PrivateCaptureError("DATA")
             self.live[identity.pid] = target_identity
+            self.executables[identity.pid] = str(_executable(target))
         else:
             del self.live[identity.pid]
+            del self.executables[identity.pid]
         if len(self.records) >= MAX_RETAINED:
             raise PrivateCaptureError("DATA")
-        self.shapes_ok &= _candidate_shape(raw)
+        # Only select a full candidate validator for its actual known header.
+        # Unknown versions remain acquisition evidence, not inputs to a v10 codec.
+        schema, version = record.get("schema_version"), record.get("version")
+        if type(schema) is int and schema == 1 and type(version) is int and version == 10:
+            self.shapes_ok &= _candidate_shape(raw)
         self.records.append(record)
         return True
 
@@ -431,11 +480,21 @@ def analyze(tracker: StreamFilter, controls: list[Control], complete: bool) -> R
         if case == "failed_exec":
             failed_ok &= not execs and len(exits) == 1
     delivery = complete and controls_ok and linkage and not tracker.live
+    profile = tracker.wire_profile
+    shapes: Check = "INCONCLUSIVE"
+    if profile == "V10_CANDIDATE":
+        shapes = "PASS" if tracker.shapes_ok else "FAIL"
+    elif profile == "INVALID":
+        shapes = "FAIL"
+    unqualified = profile not in ("NOT_OBSERVED", "V10_CANDIDATE")
     return Report(
+        error="WIRE_PROFILE" if unqualified else "NONE",
         target_platform="PASS",
+        wire_profile=profile,
+        message_shapes=shapes,
         probe_controls="PASS" if controls_ok else "FAIL",
         bounded_delivery="PASS" if delivery else "FAIL",
-        candidate_v10_shapes="PASS" if tracker.records and tracker.shapes_ok else "FAIL",
+        candidate_v10_shapes=shapes if profile == "V10_CANDIDATE" else "INCONCLUSIVE",
         fork_exec_exit_linkage="PASS" if linkage else "FAIL",
         controlled_exec_inputs="PASS" if inputs_ok else "FAIL",
         controlled_descriptors="PASS" if descriptors_ok else "FAIL",
@@ -603,8 +662,8 @@ def _check_target(kit: Path) -> str:
     if kit.stat().st_mode & 0o077:
         raise PrivateCaptureError("LOCATION")
     version = _quiet_command(["/usr/bin/sw_vers", "-productVersion"], kit).decode().strip()
-    if version.split(".")[0] != "26":
-        raise PrivateCaptureError("OS_MAJOR")
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", version) is None:
+        raise PrivateCaptureError("OS_VERSION")
     return version
 
 
@@ -648,6 +707,16 @@ def capture() -> Report:
         ended=datetime.now(UTC).isoformat(),
         source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
         binary_sha256=hashlib.sha256(probe.read_bytes()).hexdigest(),
+        wire_profile=tracker.wire_profile,
+        message_versions=tuple(
+            sorted(
+                {
+                    row["version"]
+                    for row in tracker.records
+                    if type(row.get("version")) is int and row["version"] > 0
+                }
+            )
+        ),
     )
     with _private_file(work / "private-provenance.json") as output:
         output.write(provenance.model_dump_json(indent=2).encode() + b"\n")
@@ -683,7 +752,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         report = preflight() if args.command == "preflight" else capture()
         _emit(report)
-        return 0 if all(value != "FAIL" for value in report.model_dump().values()) else 1
+        return (
+            0
+            if report.error == "NONE"
+            and all(value != "FAIL" for value in report.model_dump().values())
+            else 1
+        )
     except PrivateCaptureError as error:
         _emit(Report(error=error.code))
     except KeyboardInterrupt:

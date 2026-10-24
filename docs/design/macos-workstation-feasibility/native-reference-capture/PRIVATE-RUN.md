@@ -14,8 +14,9 @@ unchanged while performing and reviewing the experiment.
 
 - Use a standalone Terminal window, **not Codex's terminal**. Capture is never
   run through agent tools. The Python script itself must run as your normal user.
-- The supported target is macOS 26 on Apple Silicon. The checker records the
-  exact version/build privately and rejects other platform families.
+- Reference acquisition accepts Apple Silicon macOS without pinning the OS
+  major version. The checker records the actual OS/build privately. This does
+  not declare macOS 26 and 27 equivalent or enable a production source profile.
 - Command Line Tools must already be installed. `eslogger` needs superuser access
   and Terminal needs Full Disk Access. If these are absent, stop; the kit does not
   install tools or change permissions. Review any permission changes yourself.
@@ -52,14 +53,15 @@ review the report, then share only its text or its fixed `error` code.
 | `ROOT_USER` | The Python process runs as root; run it as your normal user |
 | `OS_FAMILY` | This Python process does not identify its OS family as Darwin |
 | `PYTHON_ARCH` | This Python process does not identify its architecture as arm64; this can include a process under Rosetta and does not identify the physical CPU |
-| `OS_MAJOR` | The OS major version does not match this kit's macOS 26 profile |
+| `OS_VERSION` | The local version command did not return a numeric version; its actual output stays private |
 | `LOCATION` | The kit location fails its private-directory/outside-Git checks |
 | `NONE`, with `target_platform: PASS` | Target prechecks pass; no collection or evidence acceptance is implied |
 
-Do not bypass an OS or architecture mismatch or paste `sw_vers`, `uname`, user
+Do not bypass an OS-family or architecture mismatch or paste `sw_vers`, `uname`, user
 IDs, interpreter paths from your configuration, or other system inventories.
-These fixed codes suffice to choose the next step. The older ambiguous
-`PLATFORM` code remains readable for reports from the original kit.
+These fixed codes suffice to choose the next step. The older `PLATFORM` and
+`OS_MAJOR` codes remain readable for previous reports; this kit no longer
+requires macOS 26. Its report carries `kit_version: 2`.
 
 ## Run once after preflight passes
 
@@ -125,9 +127,36 @@ embedded in a diagnostic. A shape mismatch stays private; do not paste its
 Pydantic validation error. We can investigate using independently invented
 examples and the already-public field vocabulary.
 
-`candidate_v10_shapes` tests the existing known process/exec/exit field models
-inside a **candidate** v10 envelope. It is not an assertion that unseen native
-records conform, a complete API survey, or production v10 exec/exit admission.
+The report's `wire_profile` is determined from the matched records' actual
+schema/message headers, never inferred from the OS major and never rewritten:
+
+| Fixed profile label | Meaning |
+| --- | --- |
+| `V10_CANDIDATE` | All matched headers select the known schema-1/message-10 candidate |
+| `V11_UNQUALIFIED` | Matched headers select schema 1/message 11; its full wire contract is unqualified |
+| `OTHER_UNQUALIFIED` | A different positive message version was observed; no arbitrary native number is exported |
+| `SCHEMA_UNQUALIFIED` | The serialization schema differs from the known schema |
+| `MIXED` | Matched records contain different schema/message pairs |
+| `INVALID` | A header lacks valid positive integer discriminants |
+| `NOT_OBSERVED` | No safely matched probe records were retained |
+
+`message_shapes` selects validation by that observed profile. Only
+`V10_CANDIDATE` has an implemented full candidate layout today. Newer,
+mixed and unknown profiles yield `INCONCLUSIVE` with fixed `error: WIRE_PROFILE`;
+invalid discriminants yield a failed shape check. The legacy
+`candidate_v10_shapes` field is inconclusive outside the v10 candidate. No
+unknown record is coerced into v10 or accepted because its OS looks similar.
+
+**WIRE_PROFILE is not a reason to repeat collection.** If scoped records were
+retained, they remain private and unmodified for local qualification. Share
+only the reviewed report. Controlled lifecycle/exit/argv checks can pass while
+full wire qualification remains inconclusive. If the identity/path layout
+cannot be safely scoped, records are discarded and delivery checks fail.
+
+These checks are not an assertion that unseen native records conform, a complete
+API survey, or production exec/exit admission. The private provenance includes
+the actual OS/build and observed message versions. A macOS 27 experiment is
+macOS 27 evidence; shared checks do not establish macOS 26 native fidelity.
 The fixed report always says `reference_review: REQUIRED` and
 `gate_status: NOT_EVALUATED`, even if every check passes. Review exact build
 scope, field absence/null semantics and retained evidence privately before

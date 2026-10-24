@@ -106,3 +106,47 @@ The updated code-only kit is staged at
 executed. Like the original path, it becomes human-only after handoff: agents
 must not inspect it or run preflight/capture. All original private files are
 untouched. Await only the user's reviewed fixed code/report.
+
+## Reference acquisition across OS majors
+
+The user disclosed that their workstation uses macOS 27 and authorized removing
+the capture tool's exact OS-major restriction, while retaining version-aware
+validation. This supersedes the prior acquisition-only macOS 26 requirement;
+production generation profiles and evidence admission are unchanged.
+
+The version-2 kit accepts a numeric local macOS version after the existing
+Darwin, arm64, normal-user and private-outside-Git guards. The actual OS/build
+and matched native message versions stay in private provenance. It never
+changes a captured header to match a candidate model or infers a wire version
+from OS major. The fixed public `wire_profile` classifies only matched headers;
+`message_shapes` invokes the known v10 candidate check only for that profile.
+V11/other/mixed/unknown-schema records remain `INCONCLUSIVE`, with fixed
+`WIRE_PROFILE`; invalid discriminants fail. Native qualification never passes
+for an unsupported profile and the CLI does not return a success status for an
+unqualified wire report. Legacy version-1 fixed reports remain readable.
+
+Unknown full wire layouts may still yield safely scoped reference records and
+independent lifecycle/status checks. Their matched original bytes remain
+private for local qualification; WIRE_PROFILE alone is not a reason to collect
+again. If incarnation/path ownership cannot be established, records are not
+retained. Every tracked source executable is now also checked against its
+execution-owned path before retention, in addition to PID/version/start time.
+
+Tests use invented v10, v11, other/mixed headers, extra private canaries and
+invalid discriminants. They prove exact retained bytes, no unqualified shape
+pass, distinct fixed reports, no public canary leakage, and acquisition-only
+preflight on multiple simulated OS majors. No live checks, collectors, native
+probes, private files, permission changes or OS upgrades were run by the agent.
+No captured records, raw examples or evidence fixtures are committed.
+
+Validation: all 115 selected tests pass (76 private-kit and 39 existing native
+contract tests). Full Ruff check and format check pass for 1,328 Python files;
+git diff whitespace check passes. New-version tests forbid invoking the v10
+validator at all, and the mocked filter-to-file experiment proves unknown v11
+headers/extra fields survive byte-for-byte only in the scoped private output.
+
+Version-2 code-only kit:
+`/private/tmp/eforge-native-reference-kit-sw9_ioqo`. Its static `--help` loads
+with the documented interpreter. It becomes human-only after handoff, just like
+the earlier kit directories; agents must not inspect contents or execute live
+preflight/capture. Earlier private directories remain untouched.
