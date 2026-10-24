@@ -45,7 +45,7 @@ The later research acquisition adds only the pinned report's README, paper HTML 
 
 ## Initial ES field-to-owner map
 
-This maps the implemented wire types in `formats/macos_endpoint_security.py`, not every Apple API event. All fields below are required by the currently admitted wire profiles unless optionality is stated. Historical v6 supports exec/fork/create/rename, v9 supports exec/exit, and v10 supports fork only. These are decoder admissions, not generation support. Do not expand the version/event table merely because an API field exists.
+This maps the implemented wire types in `formats/macos_endpoint_security.py`, not every Apple API event. All fields below are required by the currently admitted wire profiles unless optionality is stated. Historical v6 supports exec/fork/create/rename, v9 supports exec/exit, and v10 supports fork only. The privately reviewed macOS 27/message-11 subset supports fork, exec with explicitly null entitlements, and exit; named audit tokens and numeric signing categories are required. Nonnull entitlements, full hashes and other v11 families remain unsupported. These are decoder admissions, not generation support. Do not expand the version/event table merely because an API field exists. The user has authorized replacing the active macOS 26 generation profile with macOS 27 while retaining a multi-profile catalog and rejecting macOS 26 in current scenario validation; see the [implementation handoff](../../worklog/2026-10-24-macos27-native-process-profile.md).
 
 | Native fields | Canonical owner / existing facts | Remaining work and acceptance |
 | --- | --- | --- |

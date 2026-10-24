@@ -79,7 +79,7 @@ def _process(version: int, pid: int = 1200, ppid: int = 1190) -> dict[str, objec
         "team_id": None,
         "cdhash": "0" * 40,
     }
-    if version == 10:
+    if version in {10, 11}:
         result["cs_validation_category"] = 0
     return result
 
@@ -105,8 +105,10 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
             "image_cputype": 16777228,
             "image_cpusubtype": 0,
         }
-        if version == 9:
+        if version in {9, 11}:
             event["dyld_exec_path"] = "/usr/bin/id"
+        if version == 11:
+            event["entitlements"] = None
     elif family == "exit":
         event = {"stat": 256}
     elif family == "create":
@@ -147,6 +149,9 @@ def _record(version: int = 10, family: str = "fork") -> dict[str, object]:
         (9, "exec"),
         (9, "exit"),
         (10, "fork"),
+        (11, "fork"),
+        (11, "exec"),
+        (11, "exit"),
     ],
 )
 def test_versioned_native_record_roundtrips_without_new_fields(version: int, family: str) -> None:

@@ -1,12 +1,14 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Version-bounded eslogger notification contracts from public references.
+"""Version-bounded eslogger notification contracts from reviewed references.
 
 These are wire records, not canonical process or file state. Version 6 and 9
-profiles describe historical references; only version 10 fork has a target-build
-reference so far. Unsupported combinations fail closed. The action result in a
-notification is not an authorization callback or a synthetic policy decision.
+profiles describe historical references; version 10 covers fork. The privately
+reviewed macOS 27/message-11 profile covers fork, exec with null entitlements,
+and exit. Decoder admission does not enable generator sources or establish
+macOS 26 fidelity. Unsupported combinations fail closed. A notification result
+is not an authorization callback or a synthetic policy decision.
 """
 
 from datetime import datetime
@@ -226,8 +228,17 @@ class ESExec(_Record):
     dyld_exec_path: str | None = None
 
 
+class ESExecV11(ESExec):
+    """Reviewed v11 exec subset; nonnull entitlement exports remain unqualified."""
+
+    dyld_exec_path: str = Field(description="Required native execution path")
+    entitlements: None = Field(
+        description="Required null member in the reviewed no-entitlements export subset"
+    )
+
+
 class ESExecEvent(_Record):
-    exec: ESExec
+    exec: ESExecV11 | ESExec
 
 
 class ESExit(_Record):
@@ -306,10 +317,10 @@ class ESRenameEvent(_Record):
 
 
 class EndpointSecurityRecord(_Record):
-    """Only public-reference message/event combinations, with exact wire optionality."""
+    """Only reviewed message/event combinations, with exact wire optionality."""
 
     schema_version: Literal[1]
-    version: Literal[6, 9, 10]
+    version: Literal[6, 9, 10, 11]
     event_type: Literal[9, 11, 13, 15, 25]
     action_type: Literal[1]
     action: ESAction
@@ -331,7 +342,7 @@ class EndpointSecurityRecord(_Record):
     @model_validator(mode="after")
     def supported_profile(self) -> Self:
         """Do not silently promote a historical reference to a current-build family."""
-        allowed = {6: {9, 11, 13, 25}, 9: {9, 15}, 10: {11}}
+        allowed = {6: {9, 11, 13, 25}, 9: {9, 15}, 10: {11}, 11: {9, 11, 15}}
         if self.event_type not in allowed[self.version]:
             raise ValueError("Unsupported Endpoint Security message-version/event-family pair")
         expected = {
@@ -348,8 +359,10 @@ class EndpointSecurityRecord(_Record):
             processes.append(self.event.fork.child)
         elif isinstance(self.event, ESExecEvent):
             processes.append(self.event.exec.target)
+            if (self.version == 11) != (type(self.event.exec) is ESExecV11):
+                raise ValueError("Exec entitlements presence disagrees with the selected profile")
             has_dyld = "dyld_exec_path" in self.event.exec.model_fields_set
-            if (self.version == 6 and has_dyld) or (self.version == 9 and not has_dyld):
+            if (self.version == 6 and has_dyld) or (self.version in {9, 11} and not has_dyld):
                 raise ValueError("Exec dyld path presence disagrees with the selected profile")
             if has_dyld and self.event.exec.dyld_exec_path is None:
                 raise ValueError("The selected exec profile requires a string dyld path")
@@ -362,7 +375,7 @@ class EndpointSecurityRecord(_Record):
                 if (self.version == 10) != isinstance(token, tuple):
                     raise ValueError("Audit-token representation disagrees with message version")
             has_category = "cs_validation_category" in process.model_fields_set
-            if (self.version == 10) != has_category:
+            if (self.version in {10, 11}) != has_category:
                 raise ValueError("Code-signing category presence disagrees with message version")
             if has_category and process.cs_validation_category is None:
                 raise ValueError("The selected process profile requires a numeric signing category")
