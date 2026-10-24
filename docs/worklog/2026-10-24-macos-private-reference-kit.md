@@ -150,3 +150,57 @@ Version-2 code-only kit:
 with the documented interpreter. It becomes human-only after handoff, just like
 the earlier kit directories; agents must not inspect contents or execute live
 preflight/capture. Earlier private directories remain untouched.
+
+## Delivery/readiness troubleshooting — kit version 3
+
+The user shared only a fixed version-2 report: platform and independent probe
+controls passed, while the wire profile was NOT_OBSERVED and delivery/linkage
+checks failed. This establishes zero retained native records, not a failure of
+the harmless commands or a known cause of missing evidence. No private output,
+old kit directory, native stream or host inventory was inspected. Inspection
+of source identified a half-second sleep followed by immediately running all
+four cases, which could miss every test during a slower collector startup.
+The old matcher also recognized only array tokens and literal executable paths.
+These are source-level weaknesses; the actual cause on the user's workstation
+has not been established.
+
+The updated helper waits up to 10 seconds for a known probe warm-up fork and
+its child exit before releasing the four cases. At most eight harmless warm-up
+children can be requested, at least one second apart. Once a root fork is seen,
+the checker waits for its matching exit rather than sending more requests.
+Pre-barrier warm-up records are processed only in memory. Delayed warm-up rows
+after the barrier remain inside the same strictly bounded, exact private probe
+family. The existing 15-second experiment deadline, record/byte limits and
+bounded collector/probe cleanup remain. If readiness fails, unrun case checks
+are INCONCLUSIVE; delivery fails. Fixed stream/identity/image/readiness checks
+make the next report useful without native values, counts or error snippets.
+
+Acquisition identity recognition now accepts explicit full eight-word array,
+named and val-wrapper audit tokens and explicit string/timeval birth forms.
+No missing words, booleans, partial births, PID-only or prefix matches are
+accepted. The human-run helper samples device/inode identity only for the newly
+compiled probe and planned true utility; native paths never trigger filesystem
+lookups. Exact object ownership handles path aliases while the full incarnation
+and tracked ancestry checks remain. These acquisition adapters do not alter
+the production codec, qualify new native layouts, rewrite raw records or open
+ES-R1/GK-R1. Full unknown wire versions remain INCONCLUSIVE/WIRE_PROFILE.
+
+Verification uses only invented inputs and mocked child/collector processes.
+It covers delayed readiness, bounded timeout, missing warm-up exit, absent
+stream, unrecognized identity, executable mismatch, explicit token/birth forms,
+owned aliases and refusal to resolve arbitrary native paths, alongside the
+existing raw-byte retention, unrelated-record exclusion, controls and cleanup
+contracts. The C source is checked for syntax/warnings only and is never run
+by the agent. Earlier handed-off kit directories remain off-limits.
+
+Validation: all 139 selected tests pass (100 private-kit and 39 existing native
+contract tests). Full Ruff check and format checks pass for 1,328 Python files;
+git diff whitespace check passes. The C probe passes C11 syntax/warning checks
+with `-Wall -Wextra -Werror -fsyntax-only`, without being executed.
+
+Version-3 code-only kit:
+`/private/tmp/eforge-native-reference-kit-6onosyh6`. Only preparation and its
+isolated static `--help` were run. This new directory becomes human-only at
+handoff: agents must not inspect it, run preflight/capture, or revisit older
+private kit locations. The user will run it privately and may share only their
+reviewed fixed report. No captured logs or private provenance enter Git.

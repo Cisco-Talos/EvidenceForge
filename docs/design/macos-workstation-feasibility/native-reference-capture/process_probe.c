@@ -26,10 +26,34 @@ int main(int argc, char **argv) {
     if (argc != 1) {
         return 2;
     }
-    alarm(10);
-    char ready;
-    if (read(STDIN_FILENO, &ready, 1) != 1 || ready != 'G') {
-        return 2;
+    alarm(30);
+    for (;;) {
+        char command;
+        if (read(STDIN_FILENO, &command, 1) != 1) {
+            return 2;
+        }
+        if (command == 'G') {
+            break;
+        }
+        if (command != 'R') {
+            return 2;
+        }
+        /* A bounded harmless warm-up; no exec or control-output records. */
+        pid_t warmup = fork();
+        if (warmup < 0) {
+            return 2;
+        }
+        if (warmup == 0) {
+            _exit(0);
+        }
+        int status = 0;
+        pid_t waited;
+        do {
+            waited = waitpid(warmup, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+        if (waited != warmup || status != 0) {
+            return 2;
+        }
     }
     const char *cases[] = {"exit7", "signal", "failed_exec", "apple_true"};
     for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {

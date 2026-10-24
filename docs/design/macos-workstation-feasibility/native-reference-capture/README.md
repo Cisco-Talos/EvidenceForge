@@ -27,8 +27,17 @@ Reference acquisition no longer requires OS major 26; macOS 27 can be tested
 privately. The actual build stays in private provenance. Matched message headers
 select the candidate check; unsupported or mixed versions remain unqualified,
 without rewriting records, claiming cross-version equivalence or opening a
-production source gate. The version-2 fixed report explains this distinction;
+production source gate. The version-3 fixed report explains this distinction;
 see PRIVATE-RUN.md for `wire_profile` and `WIRE_PROFILE` outcomes.
+
+The version-3 kit waits for an observed warm-up fork/exit before starting the
+four cases, replacing the old half-second startup assumption. Fixed checks
+distinguish stream delivery, full probe identity, exact executable ownership and
+readiness without exporting native values. Acquisition recognizes explicit
+array/named/val audit tokens and string/timeval births; executable aliases must
+match file objects sampled only for the two planned test images. Unknown full
+wire layouts remain unqualified. No earlier private directory may be inspected
+or modified by an agent during troubleshooting; prepare a fresh code-only kit.
 
 ## Required lab and permission
 
@@ -49,6 +58,7 @@ Do not disable Gatekeeper, SIP, quarantine enforcement or trust checks.
 - `process_probe.c`: harmless fork/exec, normal exit 7, SIGTERM termination,
   returning failed-exec and Apple `/usr/bin/true` controls. Its stdout is a private
   JSON protocol containing only case, PID and independently observed wait/errno.
+  Before the cases, a bounded parent-controlled warm-up can fork/reap without exec.
 - `launch_marker.c`: harmless app executable whose sole effect is creating one
   caller-specified marker file. A marker proves that code actually ran; its
   absence alone never proves a policy denial.

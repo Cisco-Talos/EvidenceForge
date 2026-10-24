@@ -49,6 +49,8 @@ MAX_LINE_BYTES = 1_048_576
 MAX_RECORDS = 100_000
 MAX_RETAINED = 32
 CAPTURE_SECONDS = 15.0
+READINESS_SECONDS = 10.0
+MAX_READINESS_PROBES = 8
 SAFE_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
 SOURCES = (
     Path(__file__).resolve().parents[1]
@@ -95,11 +97,15 @@ class Report(BaseModel):
     """The entire export vocabulary: no strings supplied by the host or records."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    kit_version: Literal[1, 2] = 2
+    kit_version: Literal[1, 2, 3] = 3
     reference_review: Literal["REQUIRED"] = "REQUIRED"
     gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
     error: ErrorCode = "NONE"
     target_platform: Check = "INCONCLUSIVE"
+    stream_delivery: Check = "INCONCLUSIVE"
+    probe_identity_seen: Check = "INCONCLUSIVE"
+    probe_image_seen: Check = "INCONCLUSIVE"
+    collector_ready: Check = "INCONCLUSIVE"
     wire_profile: WireProfile = "NOT_OBSERVED"
     message_shapes: Check = "INCONCLUSIVE"
     probe_controls: Check = "INCONCLUSIVE"
@@ -113,13 +119,30 @@ class Report(BaseModel):
     sequence_continuity: Check = "INCONCLUSIVE"
 
 
+class NativeStartTime(BaseModel):
+    """Explicit timeval-shaped process birth; no PID-only fallback."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    tv_sec: int = Field(ge=0)
+    tv_usec: int = Field(ge=0, lt=1_000_000)
+
+
 class Identity(BaseModel):
     """Private process incarnation, never exported or reduced to a PID alone."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
     pid: int = Field(gt=0)
     pidversion: int = Field(ge=0)
-    start_time: str
+    start_time: str | NativeStartTime
+
+
+class OwnedImage(BaseModel):
+    """A known test image, with optional privately sampled file-object identity."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    path: str
+    device: int | None = None
+    inode: int | None = None
 
 
 class Control(BaseModel):
@@ -136,7 +159,7 @@ class PrivateProvenance(BaseModel):
     """Private collection context; never included in the public report."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-    kit_version: Literal[2] = 2
+    kit_version: Literal[3] = 3
     os_version: str
     os_build: str
     architecture: Literal["arm64"] = "arm64"
@@ -211,18 +234,62 @@ def _mapping(value: object) -> dict[str, object]:
     return value
 
 
-def _identity(process: object) -> Identity:
-    view = _mapping(process)
-    token = view.get("audit_token")
+def _audit_words(token: object) -> tuple[int, ...]:
+    """Read explicit array, C-val or named audit-token forms without guessing IDs."""
+    if isinstance(token, dict):
+        names = ("auid", "euid", "egid", "ruid", "rgid", "pid", "asid", "pidversion")
+        if set(token) == {"val"}:
+            token = token["val"]
+        elif set(token) == set(names):
+            token = [token[name] for name in names]
+        else:
+            raise PrivateCaptureError("DATA")
     if not isinstance(token, list) or len(token) != 8:
         raise PrivateCaptureError("DATA")
     if any(type(word) is not int or not 0 <= word <= 0xFFFFFFFF for word in token):
         raise PrivateCaptureError("DATA")
+    return tuple(token)
+
+
+def _identity(process: object) -> Identity:
+    view = _mapping(process)
+    token = _audit_words(view.get("audit_token"))
     return Identity(pid=token[5], pidversion=token[7], start_time=view.get("start_time"))
 
 
-def _executable(process: object) -> object:
-    return _mapping(_mapping(process).get("executable")).get("path")
+def _tokens_match(first: object, second: object, *, credentials_only: bool = False) -> bool:
+    try:
+        left, right = _audit_words(first), _audit_words(second)
+    except PrivateCaptureError:
+        return False
+    return left[:7] == right[:7] if credentials_only else left == right
+
+
+def _owned_images(probe: Path) -> dict[str, OwnedImage]:
+    """Read only the newly compiled probe and the explicitly planned true image."""
+    result: dict[str, OwnedImage] = {}
+    for path in (probe, Path("/usr/bin/true")):
+        metadata = path.stat()
+        result[str(path)] = OwnedImage(
+            path=str(path), device=metadata.st_dev & 0xFFFFFFFF, inode=metadata.st_ino
+        )
+    return result
+
+
+def _matches_image(process: object, image: OwnedImage) -> bool:
+    executable = _mapping(_mapping(process).get("executable"))
+    if executable.get("path_truncated") is not False:
+        return False
+    if image.device is None and image.inode is None:
+        return executable.get("path") == image.path
+    metadata = _mapping(executable.get("stat"))
+    device, inode = metadata.get("st_dev"), metadata.get("st_ino")
+    return (
+        type(device) is int
+        and type(inode) is int
+        and device & 0xFFFFFFFF == image.device
+        and inode == image.inode
+    )
 
 
 def _candidate_shape(raw: bytes) -> bool:
@@ -257,9 +324,19 @@ def _candidate_shape(raw: bytes) -> bool:
 class StreamFilter:
     """Retain only the probe's exact fork/exec/exit identities before disk writes."""
 
-    def __init__(self, root_pid: int, probe: Path) -> None:
+    def __init__(
+        self, root_pid: int, probe: Path, images: dict[str, OwnedImage] | None = None
+    ) -> None:
         self.root_pid = root_pid
         self.probe = str(probe)
+        self.images = (
+            images
+            if images is not None
+            else {
+                str(probe): OwnedImage(path=str(probe)),
+                "/usr/bin/true": OwnedImage(path="/usr/bin/true"),
+            }
+        )
         self.root: Identity | None = None
         self.live: dict[int, Identity] = {}
         self.executables: dict[int, str] = {}
@@ -269,6 +346,18 @@ class StreamFilter:
         self.sequence_ok = True
         self.shapes_ok = True
         self.total = 0
+        self.probe_identity_seen = False
+        self.probe_image_seen = False
+        self.tests_started = False
+
+    @property
+    def root_idle(self) -> bool:
+        """A root fork and its child exit were observed before starting the cases."""
+        return (
+            self.root is not None
+            and self.live.get(self.root_pid) == self.root
+            and len(self.live) == 1
+        )
 
     @property
     def wire_profile(self) -> WireProfile:
@@ -292,7 +381,7 @@ class StreamFilter:
             return "V11_UNQUALIFIED"
         return "OTHER_UNQUALIFIED"
 
-    def accept(self, raw: bytes) -> bool:
+    def accept(self, raw: bytes, *, retain: bool = True) -> bool:
         """Inspect in local memory; false means discard without saving the record."""
         self.total += 1
         if self.total > MAX_RECORDS:
@@ -322,11 +411,15 @@ class StreamFilter:
             # Unsupported ambient shapes cannot become retained records. Missing
             # probe identities will make the bounded lifecycle checks fail.
             return False
+        if identity.pid == self.root_pid:
+            self.probe_identity_seen = True
+            if _matches_image(process, self.images[self.probe]):
+                self.probe_image_seen = True
         if self.root is None:
             if (
                 event_type != 11
                 or identity.pid != self.root_pid
-                or _executable(process) != self.probe
+                or not _matches_image(process, self.images[self.probe])
             ):
                 return False
             self.root = identity
@@ -334,34 +427,41 @@ class StreamFilter:
             self.executables[identity.pid] = self.probe
         if self.live.get(identity.pid) != identity:
             return False
-        if _executable(process) != self.executables[identity.pid]:
+        if not _matches_image(process, self.images[self.executables[identity.pid]]):
             raise PrivateCaptureError("DATA")
 
         event = _mapping(record.get("event"))
         if event_type == 11:
-            if identity != self.root or _executable(process) != self.probe:
+            if identity != self.root or not _matches_image(process, self.images[self.probe]):
                 raise PrivateCaptureError("DATA")
             child = _mapping(_mapping(event.get("fork")).get("child"))
             child_identity = _identity(child)
-            if child_identity.pid in self.live or _executable(child) != self.probe:
+            if child_identity.pid in self.live or not _matches_image(
+                child, self.images[self.probe]
+            ):
                 raise PrivateCaptureError("DATA")
             self.live[child_identity.pid] = child_identity
             self.executables[child_identity.pid] = self.probe
         elif event_type == 9:
             target = _mapping(_mapping(event.get("exec")).get("target"))
             target_identity = _identity(target)
+            target_image = next(
+                (key for key, image in self.images.items() if _matches_image(target, image)), None
+            )
             if (
                 identity == self.root
                 or target_identity.pid != identity.pid
                 or target_identity.start_time != identity.start_time
-                or _executable(target) not in (self.probe, "/usr/bin/true")
+                or target_image is None
             ):
                 raise PrivateCaptureError("DATA")
             self.live[identity.pid] = target_identity
-            self.executables[identity.pid] = str(_executable(target))
+            self.executables[identity.pid] = target_image
         else:
             del self.live[identity.pid]
             del self.executables[identity.pid]
+        if not retain:
+            return True
         if len(self.records) >= MAX_RETAINED:
             raise PrivateCaptureError("DATA")
         # Only select a full candidate validator for its actual known header.
@@ -432,15 +532,13 @@ def analyze(tracker: StreamFilter, controls: list[Control], complete: bool) -> R
                 before_token = before.get("audit_token")
                 after_token = after.get("audit_token")
                 linkage &= (
-                    isinstance(before_token, list)
-                    and isinstance(after_token, list)
-                    and before_token[:7] == after_token[:7]
+                    _tokens_match(before_token, after_token, credentials_only=True)
                     and before.get("group_id") == after.get("group_id")
                     and before.get("session_id") == after.get("session_id")
                 )
             linkage &= all(
                 view.get("ppid") == tracker.root_pid
-                and view.get("parent_audit_token") == parent_token
+                and _tokens_match(view.get("parent_audit_token"), parent_token)
                 for view in child_views
             )
         if len(exits) == 1:
@@ -461,7 +559,7 @@ def analyze(tracker: StreamFilter, controls: list[Control], complete: bool) -> R
                     and set(env) == {f"{key}={value}" for key, value in SAFE_ENV.items()}
                     and _mapping(execution.get("cwd")).get("path")
                     == str(Path(tracker.probe).parent)
-                    and _executable(execution.get("target")) == target_path
+                    and _matches_image(execution.get("target"), tracker.images[target_path])
                 )
                 descriptors = execution.get("fds")
                 descriptors_ok &= (
@@ -479,7 +577,7 @@ def analyze(tracker: StreamFilter, controls: list[Control], complete: bool) -> R
                 descriptors_ok = False
         if case == "failed_exec":
             failed_ok &= not execs and len(exits) == 1
-    delivery = complete and controls_ok and linkage and not tracker.live
+    delivery = tracker.tests_started and complete and controls_ok and linkage and not tracker.live
     profile = tracker.wire_profile
     shapes: Check = "INCONCLUSIVE"
     if profile == "V10_CANDIDATE":
@@ -487,20 +585,30 @@ def analyze(tracker: StreamFilter, controls: list[Control], complete: bool) -> R
     elif profile == "INVALID":
         shapes = "FAIL"
     unqualified = profile not in ("NOT_OBSERVED", "V10_CANDIDATE")
+
+    def case_check(passed: bool) -> Check:
+        if not tracker.tests_started:
+            return "INCONCLUSIVE"
+        return "PASS" if passed else "FAIL"
+
     return Report(
         error="WIRE_PROFILE" if unqualified else "NONE",
         target_platform="PASS",
+        stream_delivery="PASS" if tracker.total else "FAIL",
+        probe_identity_seen="PASS" if tracker.probe_identity_seen else "FAIL",
+        probe_image_seen="PASS" if tracker.probe_image_seen else "FAIL",
+        collector_ready="PASS" if tracker.tests_started else "FAIL",
         wire_profile=profile,
         message_shapes=shapes,
-        probe_controls="PASS" if controls_ok else "FAIL",
+        probe_controls=case_check(controls_ok),
         bounded_delivery="PASS" if delivery else "FAIL",
         candidate_v10_shapes=shapes if profile == "V10_CANDIDATE" else "INCONCLUSIVE",
-        fork_exec_exit_linkage="PASS" if linkage else "FAIL",
-        controlled_exec_inputs="PASS" if inputs_ok else "FAIL",
-        controlled_descriptors="PASS" if descriptors_ok else "FAIL",
-        exit_status_agreement="PASS" if statuses else "FAIL",
-        failed_exec_control="PASS" if failed_ok else "FAIL",
-        sequence_continuity="PASS" if tracker.sequence_ok and tracker.records else "FAIL",
+        fork_exec_exit_linkage=case_check(linkage),
+        controlled_exec_inputs=case_check(inputs_ok),
+        controlled_descriptors=case_check(descriptors_ok),
+        exit_status_agreement=case_check(statuses),
+        failed_exec_control=case_check(failed_ok),
+        sequence_continuity=case_check(bool(tracker.sequence_ok and tracker.records)),
     )
 
 
@@ -568,6 +676,7 @@ def _collect(work: Path, probe: Path) -> tuple[StreamFilter, list[Control], bool
     collector: subprocess.Popen[bytes] | None = None
     child: subprocess.Popen[bytes] | None = None
     complete = False
+    images = _owned_images(probe)
     with (
         _private_file(work / "probe-controls.jsonl") as protocol,
         _private_file(work / "probe-events.jsonl") as native,
@@ -585,9 +694,6 @@ def _collect(work: Path, probe: Path) -> tuple[StreamFilter, list[Control], bool
                 # use their sudo -v ticket. sudo forwards our stop signal.
                 start_new_session=False,
             )
-            # eslogger exposes no readiness handshake. Give startup a bounded
-            # head start; missing the first fork still fails the delivery check.
-            time.sleep(0.5)
             if collector.poll() is not None:
                 raise PrivateCaptureError("COLLECTOR")
             child = subprocess.Popen(
@@ -599,30 +705,52 @@ def _collect(work: Path, probe: Path) -> tuple[StreamFilter, list[Control], bool
                 stderr=subprocess.DEVNULL,
                 close_fds=True,
             )
-            tracker = StreamFilter(child.pid, probe)
+            tracker = StreamFilter(child.pid, probe, images)
             assert child.stdin is not None and collector.stdout is not None
-            # The C harness cannot fork until membership is initialized above.
-            child.stdin.write(b"G")
-            child.stdin.close()
-            deadline = time.monotonic() + CAPTURE_SECONDS
+            # Only a matched warm-up fork/exit proves source readiness. The
+            # harness waits for G before running its four controlled cases.
+            deadline = time.monotonic() + READINESS_SECONDS
+            next_probe = 0.0
+            readiness_probes = 0
             buffer = b""
+            stream_closed = False
             with selectors.DefaultSelector() as selector:
                 selector.register(collector.stdout, selectors.EVENT_READ)
                 while time.monotonic() < deadline:
                     if collector.poll() is not None:
                         break
+                    if (
+                        not tracker.tests_started
+                        and tracker.root is None
+                        and readiness_probes < MAX_READINESS_PROBES
+                        and time.monotonic() >= next_probe
+                    ):
+                        child.stdin.write(b"R")
+                        child.stdin.flush()
+                        readiness_probes += 1
+                        next_probe = time.monotonic() + 1.0
                     for key, _mask in selector.select(timeout=0.1):
                         chunk = os.read(key.fd, 65536)
                         if not chunk:
+                            stream_closed = True
                             break
                         buffer += chunk
                         while b"\n" in buffer:
                             line, buffer = buffer.split(b"\n", 1)
-                            if line.strip() and tracker.accept(line):
-                                native.write(line + b"\n")
+                            if line.strip():
+                                retain = tracker.tests_started
+                                if tracker.accept(line, retain=retain) and retain:
+                                    native.write(line + b"\n")
+                                if not tracker.tests_started and tracker.root_idle:
+                                    child.stdin.write(b"G")
+                                    child.stdin.close()
+                                    tracker.tests_started = True
+                                    deadline = time.monotonic() + CAPTURE_SECONDS
                         if len(buffer) > MAX_LINE_BYTES:
                             raise PrivateCaptureError("DATA")
-                    if child.poll() == 0 and tracker.root is not None and not tracker.live:
+                    if stream_closed:
+                        break
+                    if tracker.tests_started and child.poll() == 0 and not tracker.live:
                         complete = not buffer.strip()
                         break
             complete &= _stop_collector(collector)
@@ -638,9 +766,14 @@ def _collect(work: Path, probe: Path) -> tuple[StreamFilter, list[Control], bool
                         if collector.stdout is not None:
                             collector.stdout.close()
             finally:
-                if child is not None and child.poll() is None:
-                    child.kill()
-                    child.wait(timeout=2)
+                if child is not None:
+                    try:
+                        if child.poll() is None:
+                            child.kill()
+                            child.wait(timeout=2)
+                    finally:
+                        if child.stdin is not None:
+                            child.stdin.close()
     controls: list[Control] = []
     with (work / "probe-controls.jsonl").open("rb") as source:
         while line := source.readline(MAX_LINE_BYTES + 1):

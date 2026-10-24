@@ -98,6 +98,7 @@ def _experiment() -> tuple[list[dict[str, object]], list[kit.Control]]:
 
 def _tracker(rows: list[dict[str, object]]) -> kit.StreamFilter:
     tracker = kit.StreamFilter(100, _PROBE)
+    tracker.tests_started = True
     for row in rows:
         assert tracker.accept(json.dumps(row).encode())
     return tracker
@@ -238,7 +239,7 @@ def test_observed_versions_are_preserved_without_unqualified_native_passes(
     tracker = _tracker(rows)
     assert tracker.records == rows
     report = kit.analyze(tracker, controls, True)
-    assert report.kit_version == 2
+    assert report.kit_version == 3
     assert report.wire_profile == profile
     assert report.error == "WIRE_PROFILE"
     assert report.message_shapes == ("FAIL" if profile == "INVALID" else "INCONCLUSIVE")
@@ -520,7 +521,22 @@ def test_legacy_fixed_report_remains_readable() -> None:
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "malformed", "interrupted", "read_error", "startup", "partial", "unqualified"]
+    "failure",
+    [
+        None,
+        "malformed",
+        "interrupted",
+        "read_error",
+        "startup",
+        "partial",
+        "unqualified",
+        "no_stream",
+        "no_identity",
+        "no_image",
+        "missing_warmup_exit",
+        "late_ready",
+        "timeout",
+    ],
 )
 def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str | None
@@ -533,19 +549,40 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
     ambient = deepcopy(rows[0])
     ambient["process"] = _process_view(999)
     ambient["private_extra"] = _SECRET
-    # The ambient fork consumes a sequence number, even though it is discarded.
-    for row in rows:
-        row["global_seq_num"] += 1
-        if row["event_type"] == 11:
-            row["seq_num"] += 1
-    ambient["global_seq_num"] = 1
+    ready_child = _process_view(199)
+    warmup = [
+        _row("fork", _process_view(100), {"child": ready_child}),
+        _row("exit", ready_child, {"stat": 0}),
+    ]
+    if failure == "missing_warmup_exit":
+        warmup.pop()
+    all_rows = [ambient, *warmup, *rows]
+    if failure == "no_identity":
+        for row in all_rows:
+            row["process"]["audit_token"] = {"private_unknown": _SECRET}
+    if failure == "no_image":
+        for row in all_rows:
+            row["process"]["executable"]["path"] = f"/Users/{_SECRET}/other"
+    sequences: dict[int, int] = {}
+    for index, row in enumerate(all_rows):
+        family = row["event_type"]
+        row["seq_num"] = sequences.get(family, 0)
+        sequences[family] = row["seq_num"] + 1
+        row["global_seq_num"] = row["mach_time"] = index + 1
     original = [json.dumps(row, separators=(", ", ": ")).encode() + b"\n" for row in rows]
     source = tmp_path / "invented-input"
-    source.write_bytes(json.dumps(ambient).encode() + b"\n" + b"".join(original))
+    source.write_bytes(
+        b"".join(json.dumps(row).encode() + b"\n" for row in [ambient, *warmup])
+        + b"".join(original)
+    )
     if failure == "malformed":
         source.write_bytes(_SECRET.encode() + b"\n")
     elif failure == "partial":
         source.write_bytes(b'{"private_partial":"' + _SECRET.encode())
+    elif failure == "no_stream":
+        source.write_bytes(b"")
+    elif failure == "missing_warmup_exit":
+        source.write_bytes(json.dumps(warmup[0]).encode() + b"\n")
     source_file = source.open("rb")
 
     class Collector:
@@ -564,13 +601,44 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
 
     class Child:
         pid = 100
-        stdin = io.BytesIO()
+        returncode: int | None = None
+        stdin: io.BytesIO | None = None
 
-        def poll(self) -> int:
-            return 0
+        def poll(self) -> int | None:
+            return self.returncode
 
         def wait(self, timeout: int) -> int:
-            return 0
+            assert self.returncode is not None
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.returncode = -kit.signal.SIGTERM
+
+        def kill(self) -> None:
+            self.returncode = -kit.signal.SIGKILL
+
+    child = Child()
+    protocol: io.BufferedWriter | None = None
+
+    class Commands(io.BytesIO):
+        readiness_count: int = 0
+
+        def write(self, value: bytes) -> int:
+            assert value in (b"R", b"G")
+            if value == b"R":
+                self.readiness_count += 1
+            else:
+                # The fake probe also refuses to run until the native warm-up
+                # has been consumed, not just because a timer has expired.
+                assert self.getvalue().startswith(b"R")
+                assert protocol is not None
+                for control in controls:
+                    protocol.write(control.model_dump_json().encode() + b"\n")
+                child.returncode = 0
+            return super().write(value)
+
+    commands = Commands()
+    child.stdin = commands
 
     class Selector:
         def __enter__(self) -> "Selector":
@@ -583,6 +651,8 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
             return None
 
         def select(self, timeout: float) -> list[tuple[SimpleNamespace, int]]:
+            if failure == "timeout" or (failure == "late_ready" and commands.readiness_count < 2):
+                return []
             return [(SimpleNamespace(fd=source_file.fileno()), 1)]
 
     collector = Collector()
@@ -597,14 +667,32 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
             assert args == ["/usr/bin/sudo", "-n", "/usr/bin/eslogger", "fork", "exec", "exit"]
             return collector
         assert args == [str(_PROBE)]
-        for control in controls:
-            kwargs["stdout"].write(control.model_dump_json().encode() + b"\n")
-        return Child()
+        nonlocal protocol
+        protocol = kwargs["stdout"]
+        return child
 
     monkeypatch.setattr(kit.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(kit.selectors, "DefaultSelector", Selector)
-    monkeypatch.setattr(kit.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        kit,
+        "_owned_images",
+        lambda _probe: {
+            str(_PROBE): kit.OwnedImage(path=str(_PROBE)),
+            "/usr/bin/true": kit.OwnedImage(path="/usr/bin/true"),
+        },
+    )
     monkeypatch.setattr(kit, "CAPTURE_SECONDS", 0.01)
+    monkeypatch.setattr(kit, "READINESS_SECONDS", 0.01)
+    if failure in {"late_ready", "timeout"}:
+        elapsed = 0.0
+
+        def monotonic() -> float:
+            nonlocal elapsed
+            elapsed += 0.1
+            return elapsed
+
+        monkeypatch.setattr(kit.time, "monotonic", monotonic)
+        monkeypatch.setattr(kit, "READINESS_SECONDS", 10.0)
     if failure in ("interrupted", "read_error"):
 
         def broken_read(_fd: int, _size: int) -> bytes:
@@ -613,25 +701,180 @@ def test_collect_filters_before_disk_and_cleans_up_even_on_failure(
             raise OSError(_SECRET)
 
         monkeypatch.setattr(kit.os, "read", broken_read)
-    if failure not in (None, "partial", "unqualified"):
+    early = {"partial", "no_stream", "no_identity", "no_image", "missing_warmup_exit", "timeout"}
+    if failure not in (None, "unqualified", "late_ready", *early):
         with pytest.raises((ValueError, KeyboardInterrupt, OSError)):
             kit._collect(tmp_path, _PROBE)
         assert source_file.closed
         assert collector.returncode == (1 if failure == "startup" else 0)
         assert _SECRET.encode() not in (tmp_path / "probe-events.jsonl").read_bytes()
+        if failure != "startup":
+            assert child.returncode == -kit.signal.SIGKILL
+            assert child.stdin.closed
         return
     tracker, observed, complete = kit._collect(tmp_path, _PROBE)
     retained = (tmp_path / "probe-events.jsonl").read_bytes()
-    assert retained == (b"" if failure == "partial" else b"".join(original))
+    assert retained == (b"" if failure in early else b"".join(original))
     assert _SECRET.encode() not in retained
     assert kit.analyze(tracker, observed, complete).bounded_delivery == (
-        "FAIL" if failure == "partial" else "PASS"
+        "FAIL" if failure in early else "PASS"
     )
     assert collector.returncode == 0
     report = kit.analyze(tracker, observed, complete)
+    assert report.collector_ready == ("FAIL" if failure in early else "PASS")
+    assert child.stdin.closed
+    if failure in early:
+        assert observed == []
+        assert report.probe_controls == report.fork_exec_exit_linkage == "INCONCLUSIVE"
+        assert report.stream_delivery == (
+            "FAIL" if failure in {"no_stream", "partial", "timeout"} else "PASS"
+        )
+        assert report.probe_identity_seen == (
+            "FAIL" if failure in {"no_stream", "partial", "no_identity", "timeout"} else "PASS"
+        )
+        assert report.probe_image_seen == ("PASS" if failure == "missing_warmup_exit" else "FAIL")
+    if failure == "late_ready":
+        assert commands.readiness_count == 2
+    elif failure == "timeout":
+        assert commands.readiness_count == kit.MAX_READINESS_PROBES
     if failure == "unqualified":
         assert b"INVENTED_RELATED_ONLY" in retained
         assert "INVENTED_RELATED_ONLY" not in report.model_dump_json()
         assert report.wire_profile == "V11_UNQUALIFIED"
         assert report.message_shapes == "INCONCLUSIVE"
     assert (tmp_path / "probe-events.jsonl").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("token_form", ["array", "named", "val"])
+@pytest.mark.parametrize("birth_form", ["string", "timeval"])
+def test_explicit_identity_forms_preserve_scope_without_qualifying_unknown_wire(
+    token_form: str, birth_form: str
+) -> None:
+    names = ("auid", "euid", "egid", "ruid", "rgid", "pid", "asid", "pidversion")
+
+    def convert(value: object) -> object:
+        if isinstance(value, list):
+            return [convert(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {}
+        for key, item in value.items():
+            if key.endswith("audit_token"):
+                if token_form == "named":
+                    item = dict(zip(names, item, strict=True))
+                elif token_form == "val":
+                    item = {"val": item}
+                result[key] = item
+            elif key == "start_time" and birth_form == "timeval":
+                result[key] = {"tv_sec": 1234567890, "tv_usec": 123456}
+            else:
+                result[key] = convert(item)
+        return result
+
+    rows, controls = _experiment()
+    rows = convert(rows)
+    for row in rows:
+        row["version"] = 11
+    tracker = _tracker(rows)
+    report = kit.analyze(tracker, controls, True)
+    assert tracker.records == rows
+    assert report.probe_identity_seen == report.probe_image_seen == "PASS"
+    assert report.fork_exec_exit_linkage == report.controlled_exec_inputs == "PASS"
+    assert report.bounded_delivery == "PASS"
+    assert report.message_shapes == "INCONCLUSIVE"
+    assert report.wire_profile == "V11_UNQUALIFIED"
+    assert report.gate_status == "NOT_EVALUATED"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "pid_only",
+        "partial_named",
+        "extra_named",
+        "short_array",
+        "bool_word",
+        "bad_word",
+        "no_birth",
+        "partial_birth",
+        "extra_birth",
+        "bool_birth",
+        "bad_microseconds",
+    ],
+)
+def test_identity_never_falls_back_to_partial_tokens_or_pid_only(mutation: str) -> None:
+    process = _process_view(100)
+    names = ("auid", "euid", "egid", "ruid", "rgid", "pid", "asid", "pidversion")
+    if mutation == "pid_only":
+        process["audit_token"] = {"pid": 100}
+    elif mutation in {"partial_named", "extra_named"}:
+        token = dict(zip(names, process["audit_token"], strict=True))
+        if mutation == "partial_named":
+            del token["pidversion"]
+        else:
+            token["private_extra"] = _SECRET
+        process["audit_token"] = token
+    elif mutation == "short_array":
+        process["audit_token"].pop()
+    elif mutation in {"bool_word", "bad_word"}:
+        process["audit_token"][0] = True if mutation == "bool_word" else -1
+    elif mutation == "no_birth":
+        del process["start_time"]
+    else:
+        birth = {"tv_sec": 1234567890, "tv_usec": 123456}
+        if mutation == "partial_birth":
+            del birth["tv_usec"]
+        elif mutation == "extra_birth":
+            birth["private_extra"] = _SECRET
+        elif mutation == "bool_birth":
+            birth["tv_sec"] = True
+        else:
+            birth["tv_usec"] = 1_000_000
+        process["start_time"] = birth
+    with pytest.raises((kit.PrivateCaptureError, ValidationError)):
+        kit._identity(process)
+
+
+def test_owned_image_alias_uses_exact_file_objects_without_resolving_native_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sampled: list[Path] = []
+
+    def stat(path: Path) -> SimpleNamespace:
+        sampled.append(path)
+        assert path in {_PROBE, Path("/usr/bin/true")}
+        return SimpleNamespace(st_dev=123, st_ino=9002 if path.name == "true" else 9001)
+
+    monkeypatch.setattr(Path, "stat", stat)
+    images = kit._owned_images(_PROBE)
+    assert sampled == [_PROBE, Path("/usr/bin/true")]
+    rows, controls = _experiment()
+
+    def alias(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                alias(item)
+        elif isinstance(value, dict):
+            if "executable" in value:
+                executable = value["executable"]
+                if executable["path"] == "/usr/bin/true":
+                    executable["stat"]["st_ino"] = 9002
+                executable["path"] = f"/invented-alias/{_SECRET}"
+            for item in value.values():
+                alias(item)
+
+    alias(rows)
+    tracker = kit.StreamFilter(100, _PROBE, images)
+    tracker.tests_started = True
+    for row in rows:
+        assert tracker.accept(json.dumps(row).encode())
+    assert kit.analyze(tracker, controls, True).controlled_exec_inputs == "PASS"
+    assert _SECRET not in kit.analyze(tracker, controls, True).model_dump_json()
+    # A matching path cannot override a mismatched object or truncation flag.
+    process = _process_view(100)
+    process["executable"]["stat"]["st_ino"] = 9999
+    assert not kit._matches_image(process, images[str(_PROBE)])
+    process["executable"]["stat"]["st_ino"] = 9001
+    process["executable"]["path_truncated"] = True
+    assert not kit._matches_image(process, images[str(_PROBE)])
+    assert sampled == [_PROBE, Path("/usr/bin/true")]

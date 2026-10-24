@@ -61,7 +61,7 @@ Do not bypass an OS-family or architecture mismatch or paste `sw_vers`, `uname`,
 IDs, interpreter paths from your configuration, or other system inventories.
 These fixed codes suffice to choose the next step. The older `PLATFORM` and
 `OS_MAJOR` codes remain readable for previous reports; this kit no longer
-requires macOS 26. Its report carries `kit_version: 2`.
+requires macOS 26. Its report carries `kit_version: 3`.
 
 ## Run once after preflight passes
 
@@ -70,6 +70,10 @@ requires macOS 26. Its report carries `kit_version: 2`.
    executable returning ENOENT, followed by exit 3; and `/usr/bin/true` exiting 0.
    They do not enumerate users, files, processes, services or network activity.
    The probe receives only PATH/LANG/LC_ALL and explicit invented arguments.
+   Before these cases, it can fork/reap up to eight harmless warm-up children
+   without exec. The checker samples file-object identity for only its newly
+   compiled probe and the explicitly planned `/usr/bin/true`. It never resolves
+   arbitrary paths from the event stream or scans directories for matches.
 2. Close Codex and other agents. In standalone Terminal, `cd` to the **prepared
    kit directory**, not the repository. Save the following fixed Python path in
    your command; do not use `uv run` to fetch anything during capture:
@@ -87,10 +91,14 @@ requires macOS 26. Its report carries `kit_version: 2`.
    `/usr/bin/sudo -n /usr/bin/eslogger fork exec exit` with those elevated
    credentials; the probe remains your ordinary user. Do not run the whole kit
    with sudo. No capture is sent to Unified Log or displayed in Terminal.
-3. Collection has a 15-second deadline after startup and bounded shutdown waits.
-   There is no eslogger readiness handshake: a missed startup event is a failed
-   delivery check, never assumed evidence. A fixed failure report is safe to
-   inspect. If interrupted or the collector does not stop, keep the session
+3. The checker waits up to 10 seconds for a matched warm-up fork and child exit
+   before starting the four cases. It sends at most eight warm-up requests,
+   spaced at least one second apart. There is no fixed startup sleep or assumed
+   readiness. If readiness fails, the four cases never start and their checks
+   stay `INCONCLUSIVE`. Collection then has a 15-second deadline once the cases
+   start, with bounded shutdown waits. Compilation has separate bounded waits.
+   A fixed failure report is safe to inspect. If interrupted or the collector
+   does not stop, keep the session
    private and stop it manually before reopening agents; do not share its PID
    or an unfiltered process listing.
 4. Inspect the new `private-run-*` directory **yourself**. It contains:
@@ -127,6 +135,33 @@ embedded in a diagnostic. A shape mismatch stays private; do not paste its
 Pydantic validation error. We can investigate using independently invented
 examples and the already-public field vocabulary.
 
+Version 3 adds four fixed diagnostics; none exports record counts, identifiers,
+paths, native values or snippets:
+
+| Check | Meaning of PASS |
+| --- | --- |
+| `stream_delivery` | At least one complete JSON event line reached the filter |
+| `probe_identity_seen` | A full PID/PID-version/birth identity for the known probe PID was recognized |
+| `probe_image_seen` | That identity also identified the exact owned probe file object |
+| `collector_ready` | A matched warm-up fork and child exit were observed, allowing the cases to start |
+
+Read these in order when readiness fails. A missing stream differs from an
+unrecognized identity representation or an unmatched executable. These checks
+do not identify the specific cause of missing delivery or authorize changing
+permissions. `bounded_delivery: FAIL` still prevents an incomplete experiment
+from passing. Case-specific checks stay inconclusive when readiness prevents
+them from running.
+
+The acquisition filter understands explicit eight-word audit tokens as an
+array, an exact `val` wrapper, or a complete named mapping, with a string or
+explicit timeval process birth. It still requires PID version, birth identity,
+exact executable ownership and tracked fork ancestry; PID-only matching and
+path-prefix matching are forbidden. Known executable file objects can match
+their native path aliases. This does not qualify these representations for a
+production wire codec or silently change captured bytes. Pre-start warm-up
+records are discarded in memory; a delayed warm-up row delivered after the
+start barrier can appear among the bounded private probe-family records.
+
 The report's `wire_profile` is determined from the matched records' actual
 schema/message headers, never inferred from the OS major and never rewritten:
 
@@ -139,6 +174,10 @@ schema/message headers, never inferred from the OS major and never rewritten:
 | `MIXED` | Matched records contain different schema/message pairs |
 | `INVALID` | A header lacks valid positive integer discriminants |
 | `NOT_OBSERVED` | No safely matched probe records were retained |
+
+Readiness records discarded before the start barrier do not select a wire
+profile. A failed warm-up can therefore leave `wire_profile: NOT_OBSERVED` even
+when `stream_delivery` or a probe-identity diagnostic passes.
 
 `message_shapes` selects validation by that observed profile. Only
 `V10_CANDIDATE` has an implemented full candidate layout today. Newer,
