@@ -55,6 +55,7 @@ INSTRUCTIONS = (
 )
 _MISSING = object()
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
+type Presence = Literal["PRESENT_ALL", "ABSENT_ALL", "MIXED", "NOT_OBSERVED"]
 type ErrorCode = Literal[
     "NONE", "INPUT", "LOCATION", "PERMISSIONS", "SOURCE", "DATA", "LIMIT", "INTERNAL", "INTERRUPTED"
 ]
@@ -132,10 +133,50 @@ class FullHashReport(_Model):
     array_legacy_prefix: Check = "INCONCLUSIVE"
 
 
+class ExecFieldPresence(_Model):
+    """Only predeclared legacy field names; never names discovered in a record."""
+
+    target: Presence = "NOT_OBSERVED"
+    script: Presence = "NOT_OBSERVED"
+    cwd: Presence = "NOT_OBSERVED"
+    args: Presence = "NOT_OBSERVED"
+    env: Presence = "NOT_OBSERVED"
+    fds: Presence = "NOT_OBSERVED"
+    last_fd: Presence = "NOT_OBSERVED"
+    image_cputype: Presence = "NOT_OBSERVED"
+    image_cpusubtype: Presence = "NOT_OBSERVED"
+    dyld_exec_path: Presence = "NOT_OBSERVED"
+
+
+class ExecLayoutReport(_Model):
+    """Separate wrapper, missing-field and extra-field failures without exporting keys."""
+
+    wrapper_object: Check = "INCONCLUSIVE"
+    wrapper_fields: Check = "INCONCLUSIVE"
+    payload_object: Check = "INCONCLUSIVE"
+    required_fields: Check = "INCONCLUSIVE"
+    only_known_fields: Check = "INCONCLUSIVE"
+    known_fields: ExecFieldPresence = Field(default_factory=ExecFieldPresence)
+    additional_value_types: Literal[
+        "NONE",
+        "NULL",
+        "BOOLEAN",
+        "INTEGER",
+        "NUMBER",
+        "STRING",
+        "ARRAY",
+        "OBJECT",
+        "MIXED",
+        "UNRECOGNIZED",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    reserved_field: Presence = "NOT_OBSERVED"
+
+
 class ReviewReport(_Model):
     """The complete public vocabulary, independent of record keys and values."""
 
-    review_version: Literal[1] = 1
+    review_version: Literal[2] = 2
     mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
     purpose: Literal["SHAPE_DIAGNOSTIC_ONLY"] = "SHAPE_DIAGNOSTIC_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -153,6 +194,7 @@ class ReviewReport(_Model):
     fork_payload: Check = "INCONCLUSIVE"
     exec_fields: Check = "INCONCLUSIVE"
     exec_values: Check = "INCONCLUSIVE"
+    exec_layout: ExecLayoutReport = Field(default_factory=ExecLayoutReport)
     exit_payload: Check = "INCONCLUSIVE"
     audit_token_form: Literal[
         "ARRAY", "NAMED", "VAL_WRAPPER", "ABSENT", "NULL", "UNRECOGNIZED", "MIXED", "INCONCLUSIVE"
@@ -454,6 +496,55 @@ def _wire_profile(rows: list[dict[str, object]]) -> WireProfile:
     return {10: "V10_CANDIDATE", 11: "V11_UNQUALIFIED"}.get(version, "OTHER_UNQUALIFIED")
 
 
+def _presence(payloads: list[dict[str, object]], key: str) -> Presence:
+    if not payloads:
+        return "NOT_OBSERVED"
+    present = [key in payload for payload in payloads]
+    if all(present):
+        return "PRESENT_ALL"
+    return "MIXED" if any(present) else "ABSENT_ALL"
+
+
+def _value_type(value: object) -> str:
+    """Classify only the JSON value type, without inspecting strings or nested data."""
+    if value is None:
+        return "NULL"
+    return {
+        bool: "BOOLEAN",
+        int: "INTEGER",
+        float: "NUMBER",
+        str: "STRING",
+        list: "ARRAY",
+        dict: "OBJECT",
+    }.get(type(value), "UNRECOGNIZED")
+
+
+def _exec_layout(events: list[object]) -> ExecLayoutReport:
+    if not events:
+        return ExecLayoutReport()
+    wrappers = [_mapping(event) for event in events]
+    payloads = [_mapping(event.get("exec")) for event in wrappers]
+    known = set(ESExec.model_fields)
+    extra_types = [
+        _value_type(value)
+        for payload in payloads
+        for key, value in payload.items()
+        if key not in known
+    ]
+    return ExecLayoutReport(
+        wrapper_object=_check([isinstance(event, dict) for event in events]),
+        wrapper_fields=_check([set(event) == {"exec"} for event in wrappers]),
+        payload_object=_check([isinstance(event.get("exec"), dict) for event in wrappers]),
+        required_fields=_check([known <= set(payload) for payload in payloads]),
+        only_known_fields=_check([set(payload) <= known for payload in payloads]),
+        known_fields=ExecFieldPresence.model_validate(
+            {key: _presence(payloads, key) for key in ExecFieldPresence.model_fields}
+        ),
+        additional_value_types=_uniform(extra_types) if extra_types else "NONE",
+        reserved_field=_presence(payloads, "reserved"),
+    )
+
+
 def analyze(rows: list[dict[str, object]]) -> ReviewReport:
     """Inspect invented or human-private rows without claiming a qualified codec."""
     envelope_fields: list[bool] = []
@@ -462,6 +553,7 @@ def analyze(rows: list[dict[str, object]]) -> ReviewReport:
     forks: list[bool] = []
     exec_fields: list[bool] = []
     exec_values: list[bool] = []
+    exec_events: list[object] = []
     exits: list[bool] = []
     families: set[int] = set()
     for row in rows:
@@ -483,6 +575,7 @@ def analyze(rows: list[dict[str, object]]) -> ReviewReport:
             forks.append(set(event) == {"fork"} and set(payload) == {"child"})
             processes.append(_mapping(payload.get("child")))
         elif family == 9:
+            exec_events.append(row.get("event"))
             payload = _mapping(event.get("exec"))
             processes.append(_mapping(payload.get("target")))
             exec_fields.append(set(event) == {"exec"} and set(payload) == set(ESExec.model_fields))
@@ -516,6 +609,7 @@ def analyze(rows: list[dict[str, object]]) -> ReviewReport:
         fork_payload=_check(forks),
         exec_fields=_check(exec_fields),
         exec_values=_check(exec_values),
+        exec_layout=_exec_layout(exec_events),
         exit_payload=_check(exits),
         audit_token_form=_uniform(
             [

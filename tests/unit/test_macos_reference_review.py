@@ -88,6 +88,7 @@ def test_known_v11_shape_diagnostics_cannot_qualify_wire_or_modify_rows() -> Non
     rows = _rows()
     original = deepcopy(rows)
     report = kit.analyze(rows)
+    assert report.review_version == 2
     assert report.review_complete == "PASS"
     assert report.capture_summary == "INCONCLUSIVE"  # No file/report was read.
     assert report.wire_profile == "V11_UNQUALIFIED"
@@ -120,6 +121,120 @@ def test_known_v11_shape_diagnostics_cannot_qualify_wire_or_modify_rows() -> Non
     assert report.reference_review == "REQUIRED"
     assert report.gate_status == "NOT_EVALUATED"
     assert rows == original
+    with pytest.raises(ValidationError):
+        decode_endpoint_security_record(json.dumps(rows[1]))
+
+
+@pytest.mark.parametrize("field", tuple(kit.ExecFieldPresence.model_fields))
+def test_exec_diagnostics_identify_each_missing_known_field(field: str) -> None:
+    rows = _rows()
+    for row in rows:
+        if row["event_type"] == 9:
+            del row["event"]["exec"][field]
+    report = kit.analyze(rows)
+    detail = report.exec_layout
+    assert detail.wrapper_object == detail.wrapper_fields == detail.payload_object == "PASS"
+    assert detail.required_fields == "FAIL"
+    assert detail.only_known_fields == "PASS"
+    assert getattr(detail.known_fields, field) == "ABSENT_ALL"
+    assert detail.additional_value_types == "NONE"
+    assert report.exec_fields == report.exec_values == "FAIL"
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (None, "NULL"),
+        (False, "BOOLEAN"),
+        (123, "INTEGER"),
+        (1.5, "NUMBER"),
+        (_SECRET, "STRING"),
+        ([_SECRET], "ARRAY"),
+        ({_SECRET: _SECRET}, "OBJECT"),
+    ],
+)
+def test_exec_extra_fields_do_not_masquerade_as_missing_or_bad_known_values(
+    value: object, kind: str
+) -> None:
+    rows = _rows()
+    rows[1]["event"]["exec"][_SECRET] = value
+    original = deepcopy(rows)
+    report = kit.analyze(rows)
+    detail = report.exec_layout
+    assert report.exec_fields == "FAIL"
+    assert report.exec_values == "PASS"
+    assert detail.wrapper_fields == detail.required_fields == "PASS"
+    assert detail.only_known_fields == "FAIL"
+    assert detail.additional_value_types == kind
+    assert set(detail.known_fields.model_dump().values()) == {"PRESENT_ALL"}
+    assert detail.reserved_field == "ABSENT_ALL"
+    assert _SECRET not in report.model_dump_json()
+    assert rows == original
+
+
+@pytest.mark.parametrize("case", ["extra_wrapper", "missing_wrapper", "bad_wrapper", "bad_payload"])
+def test_exec_wrapper_failure_is_separate_from_payload_fields(case: str) -> None:
+    rows = _rows()
+    if case == "extra_wrapper":
+        rows[1]["event"][_SECRET] = _SECRET
+    elif case == "missing_wrapper":
+        rows[1]["event"] = {_SECRET: _SECRET}
+    elif case == "bad_wrapper":
+        rows[1]["event"] = _SECRET
+    else:
+        rows[1]["event"]["exec"] = _SECRET
+    report = kit.analyze(rows)
+    detail = report.exec_layout
+    assert report.exec_fields == "FAIL"
+    assert detail.wrapper_object == ("FAIL" if case == "bad_wrapper" else "PASS")
+    assert detail.wrapper_fields == ("PASS" if case == "bad_payload" else "FAIL")
+    assert detail.payload_object == ("PASS" if case == "extra_wrapper" else "FAIL")
+    assert detail.required_fields == ("PASS" if case == "extra_wrapper" else "FAIL")
+    assert report.exec_values == ("PASS" if case == "extra_wrapper" else "FAIL")
+    assert _SECRET not in report.model_dump_json()
+
+
+def test_exec_mixed_presence_types_and_public_reserved_name_never_export_contents() -> None:
+    rows = _rows()
+    rows[1]["event"]["exec"]["reserved"] = {_SECRET: _SECRET}
+    rows[1]["event"]["exec"][_SECRET] = False
+    del rows[1]["event"]["exec"]["script"]
+    original = deepcopy(rows)
+    report = kit.analyze(rows)
+    detail = report.exec_layout
+    assert detail.known_fields.script == "MIXED"
+    assert detail.reserved_field == "MIXED"
+    assert detail.required_fields == detail.only_known_fields == "FAIL"
+    assert detail.additional_value_types == "MIXED"
+    assert report.exec_fields == report.exec_values == "FAIL"
+    assert _SECRET not in report.model_dump_json()
+    assert rows == original
+
+
+def test_exec_diagnostics_with_no_exec_do_not_report_layout_passes() -> None:
+    rows = [row for row in _rows() if row["event_type"] != 9]
+    report = kit.analyze(rows)
+    assert report.exec_fields == report.exec_values == "INCONCLUSIVE"
+    assert report.exec_layout == kit.ExecLayoutReport()
+
+
+def test_exec_diagnostic_vocabulary_matches_existing_model_without_admitting_new_fields() -> None:
+    assert set(kit.ExecFieldPresence.model_fields) == set(kit.ESExec.model_fields)
+    for value in (
+        {"known_fields": {_SECRET: "PRESENT_ALL"}},
+        {"known_fields": {"args": _SECRET}},
+        {"additional_value_types": _SECRET},
+        {"reserved_field": _SECRET},
+        {_SECRET: _SECRET},
+    ):
+        with pytest.raises(ValidationError):
+            kit.ExecLayoutReport.model_validate(value)
+    rows = _rows()
+    rows[1]["event"]["exec"]["reserved"] = None
+    report = kit.analyze(rows)
+    assert report.exec_layout.reserved_field == "MIXED"
+    assert report.exec_fields == "FAIL"
+    assert report.message_shapes == "INCONCLUSIVE"
     with pytest.raises(ValidationError):
         decode_endpoint_security_record(json.dumps(rows[1]))
 

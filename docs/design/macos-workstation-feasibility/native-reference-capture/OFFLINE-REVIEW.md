@@ -55,6 +55,7 @@ Every output retains:
 
 ```json
 {
+  "review_version": 2,
   "mode": "OFFLINE_ONLY",
   "purpose": "SHAPE_DIAGNOSTIC_ONLY",
   "reference_review": "REQUIRED",
@@ -91,6 +92,40 @@ instructions to collect again.
 - `audit_token_form` and `process_start_form` classify only explicit known
   representations. A val-wrapper or timeval can be classified while failing
   the existing process-value model; the tool does not normalize these layouts.
+
+### Exec layout detail (review version 2)
+
+Reuse the existing successful capture with a freshly prepared version-2 review
+kit; no new collection is needed. Version 1 combined several layout differences
+into `exec_fields: FAIL`. The added `exec_layout` separates:
+
+- `wrapper_object` and `wrapper_fields`: an event object containing only exec.
+- `payload_object`: exec is an object, rather than missing, null or another type.
+- `required_fields`: all ten existing diagnostic field names are present,
+  including required nullable script and the observed-profile dyld_exec_path.
+  This is the existing diagnostic contract, not a newly qualified v11 schema.
+- `only_known_fields`: the payload has no additional field names. This remains
+  FAIL for additions even when the existing values pass.
+- `known_fields`: presence of each of the ten predeclared names, expressed only
+  as PRESENT_ALL, ABSENT_ALL, MIXED or NOT_OBSERVED. Present null values count as
+  present; value validation remains in exec_values. Invalid wrappers/payloads
+  fail the object checks and contribute absent known fields.
+- `additional_value_types`: only the aggregate JSON type of additional payload
+  values: NONE, NULL, BOOLEAN, INTEGER, NUMBER, STRING, ARRAY, OBJECT or MIXED.
+  Unknown in-memory types are UNRECOGNIZED; no exec observations are
+  INCONCLUSIVE. This does not inspect text or nested content, report a count,
+  or identify the additional fields. Extra event-wrapper fields affect the
+  wrapper check only, not this payload-type classification.
+- `reserved_field`: presence of the predeclared public API name reserved. Apple
+  lists it in [es_event_exec_t](https://developer.apple.com/documentation/endpointsecurity/es_event_exec_t).
+  This is a diagnostic probe, not evidence that eslogger exports it. Its value
+  is never exported, interpreted or admitted to a production model.
+
+For example, required_fields PASS with only_known_fields FAIL and exec_values
+PASS identifies additional payload fields rather than missing baseline fields
+or invalid baseline values. A wrapper_fields FAIL with both payload field
+checks PASS identifies the event wrapper instead. No unknown name is exported
+in either case. These diagnostics still cannot qualify the complete layout.
 
 FAIL is aggregate: at least one observed instance failed. INCONCLUSIVE means
 the check had no applicable evidence. No instance counts, record positions,

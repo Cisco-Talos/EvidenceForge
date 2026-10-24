@@ -396,3 +396,56 @@ Only the final fixed offline JSON should be shared after a successful review.
 The prior 236 passing selected tests cover the unchanged code; no test rerun is
 needed for new code-only paths. Native v11 integration and both evidence gates
 remain pending the human-private workflow and its fixed result.
+
+## Successful offline v11 report; separated exec layout diagnostics
+
+The human shared a completed version-1 offline diagnostic: error NONE,
+review_complete/capture_summary PASS and V11_UNQUALIFIED. Retained families,
+envelope fields/values, process fields/values, fork payload, exec values and
+exit payload all pass. Audit tokens are NAMED and process births are
+TIMESTAMP_STRING. Every retained process snapshot lacks cdhash_full
+(ABSENT_ALL/ABSENT); all encoding checks are correctly inconclusive. The
+documented API-field lead was not observed in this eslogger export. Do not add
+full-digest metadata requirements or infer a v11 codec from that lead.
+
+Only exec_fields fails. Version 1 combines exact event-wrapper and payload-key
+checks, whereas exec_values validates an explicit existing-field view and
+requires a string dyld_exec_path. Its PASS excludes missing/invalid baseline
+values for these records, but does not establish whether the remaining
+difference is in the event wrapper or extra exec payload fields. No unknown
+name or private record has been shared or inspected by the agent.
+
+Version-2 offline review now separates object/wrapper checks, required-field
+presence and absence of additional payload keys. It emits only fixed presence
+enums for the ten predeclared existing exec fields, plus the aggregate JSON
+type of additional payload values. Unknown field names, string contents,
+nested data, arbitrary counts and record positions remain unexportable.
+Presence of the public API reserved field is a separate predeclared diagnostic;
+it neither assumes that eslogger exports it nor admits its content. Apple's
+current [exec structure documentation](https://developer.apple.com/documentation/endpointsecurity/es_event_exec_t)
+was fetched from its official DocC JSON endpoint to confirm that public name;
+it did not establish the private mismatch or a complete v11 JSON schema.
+
+The reader, private input guards, capture-summary contract, collector and
+production parser/generator admission remain unchanged. All outputs retain
+SHAPE_DIAGNOSTIC_ONLY, REQUIRED, NOT_EVALUATED and inconclusive message_shapes.
+Reuse the existing successful capture; no recollection is needed. ES-R1/GK-R1
+remain open. The next human-private fixed diagnostic narrows the exec field-set
+difference before any supported profile is implemented.
+
+Validation: 287 selected tests pass: 121 offline review tests, 100 capture-kit
+tests, 27 native contracts and 39 Endpoint Security contracts. These use only
+invented input. Added cases distinguish all missing known fields, additional
+payload JSON types, extra/missing/malformed wrappers, mixed presence and public
+reserved-field presence; they enforce unchanged inputs, fixed nested report
+vocabulary, no native-value/canary export and continued production v11 rejection.
+Full Ruff check/format checks pass for 1,330 files. No native logs or private
+capture files were opened or committed.
+
+Fresh code-only version-2 review kit:
+`/private/tmp/eforge-native-review-kit-a9uhabeg`. Only prepare and its isolated
+static --help were executed. It contains private_review.py and OFFLINE-REVIEW.md
+and becomes human-only at handoff. Do not inspect this or any older private kit
+after handoff. The human closes agents and reruns only the new offline checker,
+selecting the existing successful inner private-run directory at its hidden
+prompt and sharing only the personally reviewed fixed JSON.
