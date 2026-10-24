@@ -9,7 +9,7 @@ sensitive information is seen by the agent and no captured logs enter the repo.
 
 Read [PRIVATE-RUN.md](PRIVATE-RUN.md) for the human procedure and privacy limits.
 The helper is [scripts/macos_reference_capture.py](../../../../scripts/macos_reference_capture.py).
-Agents may run `prepare` and invented-input tests, **never `capture`**. Preparation
+Agents may run `prepare` and invented-input tests, **never `preflight` or `capture`**. Preparation
 copies only code and instructions to a new private directory outside Git.
 
 ```sh
@@ -20,6 +20,9 @@ Do not run the old full-stream capture proposal. The human-run filter keeps only
 the exact probe family, using PID version and start time as well as PID. Raw
 matched rows and provenance remain private outside Git; the agent receives only
 human-reviewed fixed check codes. A candidate field check does not open a gate.
+The human-only `preflight` command distinguishes root-user, OS-family,
+Python-process-architecture and OS-major mismatches using fixed codes without
+compiling, collecting, writing data or disclosing actual platform values.
 
 ## Required lab and permission
 

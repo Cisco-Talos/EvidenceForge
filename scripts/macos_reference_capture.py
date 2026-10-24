@@ -55,7 +55,19 @@ SOURCES = (
 )
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type ErrorCode = Literal[
-    "NONE", "INPUT", "PLATFORM", "LOCATION", "BUILD", "COLLECTOR", "DATA", "INTERRUPTED", "INTERNAL"
+    "NONE",
+    "INPUT",
+    "PLATFORM",
+    "LOCATION",
+    "BUILD",
+    "COLLECTOR",
+    "DATA",
+    "INTERRUPTED",
+    "INTERNAL",
+    "ROOT_USER",
+    "OS_FAMILY",
+    "PYTHON_ARCH",
+    "OS_MAJOR",
 ]
 
 
@@ -579,17 +591,33 @@ def _collect(work: Path, probe: Path) -> tuple[StreamFilter, list[Control], bool
     return tracker, controls, complete
 
 
-def capture() -> Report:
-    """Run only on the human's command, privately, outside Git and agent tools."""
-    kit = Path(__file__).resolve().parent
+def _check_target(kit: Path) -> str:
+    """Check privately; return the local version or raise a fixed reason code."""
     _outside_git(kit)
-    if platform.system() != "Darwin" or platform.machine() != "arm64" or os.geteuid() == 0:
-        raise PrivateCaptureError("PLATFORM")
+    if platform.system() != "Darwin":
+        raise PrivateCaptureError("OS_FAMILY")
+    if os.geteuid() == 0:
+        raise PrivateCaptureError("ROOT_USER")
+    if platform.machine() != "arm64":
+        raise PrivateCaptureError("PYTHON_ARCH")
     if kit.stat().st_mode & 0o077:
         raise PrivateCaptureError("LOCATION")
     version = _quiet_command(["/usr/bin/sw_vers", "-productVersion"], kit).decode().strip()
     if version.split(".")[0] != "26":
-        raise PrivateCaptureError("PLATFORM")
+        raise PrivateCaptureError("OS_MAJOR")
+    return version
+
+
+def preflight() -> Report:
+    """HUMAN ONLY: check the target without compiling, collecting or writing data."""
+    _check_target(Path(__file__).resolve().parent)
+    return Report(target_platform="PASS")
+
+
+def capture() -> Report:
+    """Run only on the human's command, privately, outside Git and agent tools."""
+    kit = Path(__file__).resolve().parent
+    version = _check_target(kit)
     work = Path(tempfile.mkdtemp(prefix="private-run-", dir=kit))
     source = kit / "process_probe.c"
     probe = work / "process-probe"
@@ -645,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True, parser_class=QuietParser)
     stage = commands.add_parser("prepare", help="Copy code only; does not collect or build")
     stage.add_argument("--destination", type=Path)
+    commands.add_parser("preflight", help="HUMAN ONLY: private target check; no collection")
     run = commands.add_parser("capture", help="HUMAN ONLY: run privately after closing Codex")
     run.add_argument("--private-run", action="store_true", required=True)
     try:
@@ -652,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "prepare":
             print(prepare(args.destination))
             return 0
-        report = capture()
+        report = preflight() if args.command == "preflight" else capture()
         _emit(report)
         return 0 if all(value != "FAIL" for value in report.model_dump().values()) else 1
     except PrivateCaptureError as error:

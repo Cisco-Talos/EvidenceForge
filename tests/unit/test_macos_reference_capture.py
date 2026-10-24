@@ -308,6 +308,83 @@ def test_capture_from_checkout_is_rejected_before_host_checks(
         kit.capture()
 
 
+@pytest.mark.parametrize("command", ["preflight", "capture"])
+@pytest.mark.parametrize(
+    ("uid", "family", "architecture", "version", "code"),
+    [
+        (0, "Darwin", "arm64", "26.0", "ROOT_USER"),
+        (123, _SECRET, "arm64", "26.0", "OS_FAMILY"),
+        (123, "Darwin", _SECRET, "26.0", "PYTHON_ARCH"),
+        (123, "Darwin", "arm64", f"25.{_SECRET}", "OS_MAJOR"),
+    ],
+)
+def test_platform_failures_have_distinct_fixed_codes_before_any_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    uid: int,
+    family: str,
+    architecture: str,
+    version: str,
+    code: str,
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Platform failure attempted to build, collect or create output")
+
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
+    monkeypatch.setattr(kit.os, "geteuid", (lambda: uid) if family == "Darwin" else forbidden)
+    monkeypatch.setattr(kit.platform, "system", lambda: family)
+    monkeypatch.setattr(kit.platform, "machine", lambda: architecture)
+    monkeypatch.setattr(kit, "_quiet_command", lambda _args, _cwd: version.encode())
+    monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(kit.tempfile, "mkdtemp", forbidden)
+    monkeypatch.setattr(kit, "_private_file", forbidden)
+    monkeypatch.setattr(kit, "_collect", forbidden)
+    args = [command] + (["--private-run"] if command == "capture" else [])
+    assert kit.main(args) == 2
+    output = capsys.readouterr()
+    assert not output.err
+    assert _SECRET not in output.out
+    report = kit.Report.model_validate_json(output.out)
+    assert report.error == code
+    assert report.target_platform == "INCONCLUSIVE"
+    assert report.gate_status == "NOT_EVALUATED"
+
+
+def test_successful_preflight_never_builds_collects_or_writes_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Preflight must not build, collect or create output")
+
+    def fake_version(args: list[str], cwd: Path) -> bytes:
+        assert args == ["/usr/bin/sw_vers", "-productVersion"]
+        assert cwd == tmp_path
+        return f"26.{_SECRET}".encode()
+
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_capture.py"))
+    monkeypatch.setattr(kit.os, "geteuid", lambda: 123)
+    monkeypatch.setattr(kit.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(kit.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(kit, "_quiet_command", fake_version)
+    monkeypatch.setattr(kit.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(kit.tempfile, "mkdtemp", forbidden)
+    monkeypatch.setattr(kit, "_private_file", forbidden)
+    monkeypatch.setattr(kit, "_collect", forbidden)
+    assert kit.main(["preflight"]) == 0
+    output = capsys.readouterr()
+    assert not output.err
+    assert _SECRET not in output.out
+    report = kit.Report.model_validate_json(output.out)
+    assert report.error == "NONE"
+    assert report.target_platform == "PASS"
+    assert report.probe_controls == "INCONCLUSIVE"
+    assert report.gate_status == "NOT_EVALUATED"
+
+
 @pytest.mark.parametrize("args", [[], ["capture"], ["capture", "--private-run", _SECRET]])
 def test_cli_requires_explicit_private_run_and_never_echoes_arguments(
     args: list[str], capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch

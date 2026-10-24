@@ -73,3 +73,36 @@ is a **human-only private capture location after handoff**: future agents must
 not scan it, open reports or read its contents. The user will paste only a
 personally reviewed fixed report. No live test was run to validate the native
 collector; all process/record execution in tests is mocked or invented.
+
+## Fixed-code preflight follow-up
+
+The user reported the old fixed `PLATFORM` error, including after switching to
+normal-user Python. That code combined four checks and therefore cannot identify
+the failing predicate. It occurs before probe compilation, new run-directory
+creation or eslogger startup; it supplies no native reference evidence.
+
+The helper now shares one target guard between capture and a human-only
+`preflight` command. The guard reports only ROOT_USER, OS_FAMILY, PYTHON_ARCH or
+OS_MAJOR (plus existing location/error codes), never actual identities, machine
+details or OS/build values. The preflight does not compile, collect or write
+data. Python-process architecture is not a claim about physical hardware.
+The macOS 26/arm64 and normal-user requirements remain enforced. The old
+PLATFORM code stays in the report vocabulary for backwards readability.
+
+The standalone Terminal command is now documented as `sudo -v && python ...`
+so authentication and normal-user Python cannot be accidentally combined into
+one sudo invocation. Agents must not execute preflight or capture, inspect old
+private directories, or copy evidence into the repository. The user will run
+the prepared update privately and share only the fixed code/report.
+
+Validation: 102 selected tests pass (63 kit tests and 39 native contract tests),
+including mocked success/rejection paths proving preflight never launches a
+collector, compiles or writes files; simulated platform values contain an
+invented canary that is absent from all exported diagnostics. Full Ruff check
+and format checks pass. No live platform diagnostics or native tests were run.
+
+The updated code-only kit is staged at
+`/private/tmp/eforge-native-reference-kit-ow630c_8`. Only its static `--help` was
+executed. Like the original path, it becomes human-only after handoff: agents
+must not inspect it or run preflight/capture. All original private files are
+untouched. Await only the user's reviewed fixed code/report.

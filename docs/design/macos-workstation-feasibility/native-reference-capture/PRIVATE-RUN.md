@@ -1,7 +1,7 @@
 # Human-run private exec/exit experiment
 
 This kit is for **you to run privately, after closing Codex and other agents**.
-Agents may prepare code and test invented inputs. They must not run `capture`,
+Agents may prepare code and test invented inputs. They must not run `preflight` or `capture`,
 open its private output, or ask you to send captured records or screenshots.
 
 The checker requires this checkout's existing Python environment (Python 3.12+
@@ -34,7 +34,34 @@ This is not a guarantee that the operating system, swap, crash reporting, an
 existing security agent or backups never retain data. Never send a crash report,
 terminal transcript or entire kit directory to an agent.
 
-## Run once
+## Check the target first
+
+In standalone Terminal, run the new prepared copy as your normal user:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_capture.py preflight
+```
+
+This does not compile the probe, start eslogger, collect logs or write any data.
+It checks only the target conditions below and prints the same fixed JSON report
+vocabulary. Native values and exception text are never included. Privately
+review the report, then share only its text or its fixed `error` code.
+
+| Fixed error code | Meaning |
+| --- | --- |
+| `ROOT_USER` | The Python process runs as root; run it as your normal user |
+| `OS_FAMILY` | This Python process does not identify its OS family as Darwin |
+| `PYTHON_ARCH` | This Python process does not identify its architecture as arm64; this can include a process under Rosetta and does not identify the physical CPU |
+| `OS_MAJOR` | The OS major version does not match this kit's macOS 26 profile |
+| `LOCATION` | The kit location fails its private-directory/outside-Git checks |
+| `NONE`, with `target_platform: PASS` | Target prechecks pass; no collection or evidence acceptance is implied |
+
+Do not bypass an OS or architecture mismatch or paste `sw_vers`, `uname`, user
+IDs, interpreter paths from your configuration, or other system inventories.
+These fixed codes suffice to choose the next step. The older ambiguous
+`PLATFORM` code remains readable for reports from the original kit.
+
+## Run once after preflight passes
 
 1. Privately read `private_capture.py` and `process_probe.c`. The four cases are:
    self-exec followed by exit 7; self-exec followed by SIGTERM; a nonexistent
@@ -50,11 +77,11 @@ terminal transcript or entire kit directory to an agent.
    example uses the existing checkout on this workstation.
 
    ```sh
-   sudo -v
-   /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_capture.py capture --private-run
+   sudo -v && /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_capture.py capture --private-run
    ```
 
-   `sudo -v` authenticates privately. The kit then invokes only
+   `sudo -v` authenticates privately; `&&` then runs Python as your normal user.
+   Do not remove `&&` or put sudo directly before Python. The kit invokes only
    `/usr/bin/sudo -n /usr/bin/eslogger fork exec exit` with those elevated
    credentials; the probe remains your ordinary user. Do not run the whole kit
    with sudo. No capture is sent to Unified Log or displayed in Terminal.
