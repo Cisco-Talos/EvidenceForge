@@ -1,7 +1,8 @@
 # Private native reference testing
 
-**Status, 2026-10-24: kit preparation authorized; the user will run collection
-privately. No agent-run capture or native-record inspection is authorized.**
+**Status, 2026-10-24: the user reports a successful bounded v11 capture through
+the version-3 fixed report. Full v11 layout qualification remains pending.
+No agent-run capture or native-record inspection is authorized.**
 Native exec/exit (ES-R1) and Gatekeeper denial (GK-R1) remain gated. This kit
 supplies no reference evidence by itself. The Mac fork/v10 benchmark runs
 independently. The user's overriding requirements are that no potentially
@@ -38,6 +39,15 @@ array/named/val audit tokens and string/timeval births; executable aliases must
 match file objects sampled only for the two planned test images. Unknown full
 wire layouts remain unqualified. No earlier private directory may be inspected
 or modified by an agent during troubleshooting; prepare a fresh code-only kit.
+
+The user-reported version-3 run passes every controlled behavior and delivery
+check, with `V11_UNQUALIFIED`, `WIRE_PROFILE` and inconclusive full message
+shapes. This is successful acquisition for the bounded experiment, not full
+wire qualification or production source admission. Do not repeat collection
+solely for WIRE_PROFILE. The next step is a separate human-run offline checker
+for the existing private capture's complete v11 layout; that checker has not
+yet been implemented. Keep the user's macOS 27 evidence distinct from macOS 26
+coverage. See the [handoff](../../../worklog/2026-10-24-macos-private-reference-kit.md).
 
 ## Required lab and permission
 

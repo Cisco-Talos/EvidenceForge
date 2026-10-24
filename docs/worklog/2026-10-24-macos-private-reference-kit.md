@@ -204,3 +204,35 @@ isolated static `--help` were run. This new directory becomes human-only at
 handoff: agents must not inspect it, run preflight/capture, or revisit older
 private kit locations. The user will run it privately and may share only their
 reviewed fixed report. No captured logs or private provenance enter Git.
+
+## User-reported successful bounded capture
+
+The user returned only the reviewed fixed version-3 report. Platform, stream
+delivery, full probe identity, exact probe-image ownership and collector
+readiness all pass. Independent probe controls, bounded delivery, fork/exec/exit
+linkage, controlled exec inputs and descriptors, exit-status agreement,
+returning failed-exec control and sequence continuity also pass. This supports
+the bounded experiment's behavioral checks on the user's disclosed macOS 27
+system. It does not identify which earlier acquisition weakness caused the
+version-2 empty result.
+
+The retained header profile is V11_UNQUALIFIED. WIRE_PROFILE and inconclusive
+message_shapes/candidate_v10_shapes are the expected guard for that profile,
+not a collection failure. The current full candidate model is v10 only. No
+new collection is required just to change that result. All private directories,
+records, controls and provenance remain human-only; the agent has inspected
+none of them and has run no native commands.
+
+The next evidence step is a human-run read-only offline checker against the
+existing private capture, with only fixed known-field/type/absence/null results
+exported. That checker is not implemented yet. Qualify the complete v11
+serialization from public contracts plus private human review before admitting
+its parser/generator profile. Apple's
+[message-version guidance](https://developer.apple.com/documentation/endpointsecurity/es_message_t/version)
+requires version-aware field access; it does not establish eslogger's complete
+v11 JSON serialization. Do not retag v11 rows as v10 or expand an allowlist solely
+because the behavioral checks passed. Subsequent source admission must retain
+parser, correlated lifecycle, filtering, manifest and checkpoint acceptance.
+macOS 27 evidence does not qualify macOS 26, and this experiment supplies no
+Gatekeeper-denial evidence. ES-R1/GK-R1 remain open with this narrower progress
+recorded, rather than treating evidence acquisition as still unsuccessful.
