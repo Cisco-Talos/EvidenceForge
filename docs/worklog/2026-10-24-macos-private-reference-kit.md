@@ -236,3 +236,66 @@ parser, correlated lifecycle, filtering, manifest and checkpoint acceptance.
 macOS 27 evidence does not qualify macOS 26, and this experiment supplies no
 Gatekeeper-denial evidence. ES-R1/GK-R1 remain open with this narrower progress
 recorded, rather than treating evidence acquisition as still unsuccessful.
+
+## Public v11 research
+
+The user requested online research into v11. No private capture directory,
+installed SDK, host inventory or local log was inspected. Research used public
+Apple documentation, a pinned public Apple SDK header mirror, and public code/
+example searches. Public documents were processed in memory; no native example
+records or copied SDK sources were added to the repository.
+
+Findings and limits:
+
+- Apple's [message-version discussion](https://developer.apple.com/videos/play/wwdc2020/10159/?time=1750)
+  describes structure compatibility and version-gated fields. Message version
+  is distinct from eslogger's JSON schema version. The Apple-authored
+  [eslogger manual](https://keith.github.io/xcode-man-pages/eslogger.1.html),
+  hosted as an SDK-manual mirror, explicitly distinguishes these numbers.
+- Current Apple documentation exposes
+  [es_process_t.cdhash_full](https://developer.apple.com/documentation/endpointsecurity/es_process_t/cdhash_full)
+  with type [es_token_t](https://developer.apple.com/documentation/endpointsecurity/es_token_t):
+  a byte buffer plus byte count. The official documentation JSON was fetched
+  directly from developer.apple.com because the browser reader could not load
+  its JavaScript/Markdown pages. The field is absent from the public
+  [macOS 26.5 ESMessageCore.h baseline](https://github.com/alexey-lysiuk/macos-sdk/blob/896cd40df984b847d486723edce50e247385617e/MacOSX26.5.sdk/usr/include/EndpointSecurity/ESMessageCore.h),
+  which declares the existing process fields through cs_validation_category
+  (message >=10). This establishes a concrete current API difference, not its
+  exact eslogger serialization or exhaustive v11 coverage. No v11-specific
+  original SDK header or complete v11 JSON example was located in this bounded
+  primary-source search. Third-party indexing associates cdhash_full with v11,
+  but that association was not independently established from a v11 SDK header
+  and must not be used alone to admit a profile.
+- Our ESProcess and MachOCodeSignature models store only the existing 40-hex
+  cdhash. The latter derives a synthetic CodeDirectory identity in its own
+  namespace and truncates it to that legacy extent. A full digest requires
+  explicit canonical ownership; neither padding the legacy value nor using a
+  whole-file SHA-256 supplies missing CodeDirectory facts. Its hash algorithm,
+  byte extent, legacy/full relationship and JSON encoding still need a bounded
+  supported contract. Do not assume a 32-byte digest or a particular encoding
+  from the generic es_token_t type.
+- Apple's [eslogger introduction](https://developer.apple.com/videos/play/wwdc2022/110345/)
+  explains that JSON reflects native structures and can change with software
+  updates. The API type alone does not settle absent/null behavior or whether
+  that binary token appears as text, bytes, an object or another representation.
+  Existing process snapshots at the source, fork child and exec target all need
+  the same version-aware field contract. No new event semantics were established
+  merely by finding this added field.
+
+Recommended next implementation: a human-run read-only offline diagnostic for
+the already captured bounded experiment. Check the documented field set,
+required/absent/null distinctions, token representation, and unexpected-field
+presence using only fixed whitelisted report keys/codes. Unknown keys and all
+values remain private. Then define the supported v11 codec, add explicit full
+signature facts where required, and run independently authored parser/source/
+filtering/manifest/checkpoint tests. No new capture or version-number bypass is
+justified by the current report. The offline tool and v11 admission are still
+unimplemented; ES-R1/GK-R1 remain open.
+
+A separate public lead surfaced while searching: the original reporter's
+[Rancher Desktop issue](https://github.com/rancher-sandbox/rancher-desktop/issues/9839)
+contains v10 exit records with named audit tokens. The issue labels its original
+environment macOS 26.2/25C56 arm64, but that does not independently establish the
+exact later comment's capture build or supply the controlled v11 experiment.
+Treat it as a v10 exit qualification lead, not v11 or complete lifecycle proof;
+no records were copied into Git and no production allowlist was changed.
