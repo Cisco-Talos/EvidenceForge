@@ -16,10 +16,13 @@ The user has now shared a version-3 fixed report with successful acquisition,
 readiness, linkage, input/descriptor, exit-status, failed-exec and sequence
 checks. Its actual header profile is V11_UNQUALIFIED; full message shapes remain
 inconclusive. WIRE_PROFILE is an unqualified-layout guard, not a collection
-failure. No repeat capture is needed for that result. A human-run offline v11
-layout checker for the existing private evidence is the next step and is not
-yet implemented. No private records or provenance were inspected by an agent,
-and neither ES-R1 nor GK-R1 has been closed. See the
+failure. No repeat capture is needed for that result. A human-run read-only
+[offline diagnostic](native-reference-capture/OFFLINE-REVIEW.md) is now prepared
+for the existing private evidence, with fixed known-field and candidate-hash
+shape checks. Full v11 layout qualification and parser/generator admission still
+require its private human-run results and the remaining acceptance work.
+No private records or provenance were inspected by an agent, and neither ES-R1
+nor GK-R1 has been closed. See the
 [private-kit handoff](../../worklog/2026-10-24-macos-private-reference-kit.md).
 
 The focused search covered Apple Developer documentation and forums, version-labeled Mullvad eslogger fixtures, Mac Monitor's source and release notes, and a build-labeled public Gatekeeper research report. It found useful semantic evidence but no qualifying complete macOS 26 denial capture or new target-version exec/exit fixture. This is a bounded search result, not a claim that no such public evidence exists.

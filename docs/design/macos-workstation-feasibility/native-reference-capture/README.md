@@ -44,10 +44,28 @@ The user-reported version-3 run passes every controlled behavior and delivery
 check, with `V11_UNQUALIFIED`, `WIRE_PROFILE` and inconclusive full message
 shapes. This is successful acquisition for the bounded experiment, not full
 wire qualification or production source admission. Do not repeat collection
-solely for WIRE_PROFILE. The next step is a separate human-run offline checker
-for the existing private capture's complete v11 layout; that checker has not
-yet been implemented. Keep the user's macOS 27 evidence distinct from macOS 26
-coverage. See the [handoff](../../../worklog/2026-10-24-macos-private-reference-kit.md).
+solely for WIRE_PROFILE. A separate human-run offline diagnostic is now prepared
+for the existing private capture. It classifies known structures and candidate
+full-hash representations; full v11 qualification and product admission remain
+pending. See [OFFLINE-REVIEW.md](OFFLINE-REVIEW.md). Keep the user's macOS 27
+evidence distinct from macOS 26 coverage. See the
+[handoff](../../../worklog/2026-10-24-macos-private-reference-kit.md).
+
+Agents may stage this separate code-only kit, **never run its review on private
+evidence**:
+
+```sh
+UV_CACHE_DIR=/private/tmp/eforge-macos-316-uv-cache uv run --no-sync python scripts/macos_reference_review.py prepare
+```
+
+The human runs `private_review.py review --private-run` in standalone Terminal
+and enters the existing private-run directory at a hidden prompt. This starts
+no capture, subprocess or network request and writes no files. It opens only
+the existing fixed report and retained event file, with bounded strict readers.
+No private provenance, compiled binary or other file is opened. Only fixed
+diagnostic text may be shared; unknown keys, digests and all native values stay
+private. Agents must not inspect old capture kits or run directories to locate
+the input. A diagnostic completion is not a wire-profile acceptance.
 
 ## Required lab and permission
 

@@ -299,3 +299,61 @@ environment macOS 26.2/25C56 arm64, but that does not independently establish th
 exact later comment's capture build or supply the controlled v11 experiment.
 Treat it as a v10 exit qualification lead, not v11 or complete lifecycle proof;
 no records were copied into Git and no production allowlist was changed.
+
+## Prepared human-only offline diagnostic
+
+The user authorized the recommended sequence. The first dependency is now
+implemented as `scripts/macos_reference_review.py`: a separate standalone
+offline tool, with code-only preparation and a human-only review command. It
+contains no collector, subprocess invocation or network client. The human
+selects the existing private-run directory through a hidden interactive prompt;
+the agent must never locate that directory or invoke review against it.
+
+The reader opens only SHAREABLE-REPORT.json and probe-events.jsonl, using a
+retained directory descriptor, read-only/no-follow/nonblocking file opens,
+regular-file/current-owner/private-mode/single-link checks, and explicit byte,
+record and JSON-depth bounds. It rejects Git locations, malformed/duplicate or
+nonfinite JSON, inconsistent headers and unsuccessful/non-v3 capture reports.
+It writes no files, changes no permissions and reads no private provenance,
+controls, executable, SDK or host inventory. The report is a consistency check,
+not a cryptographic custody proof or a repeat of the live behavior experiment.
+
+Fixed diagnostics compare known envelope/process/event fields without changing
+the original v11 tags or records. Existing process models are applied only to
+an explicit legacy-field diagnostic view; missing/unknown keys are checked
+separately and cannot become a complete-layout pass. Audit/birth representation
+classes preserve unsupported distinctions. The full-hash report distinguishes
+absence, null, string, byte-array and candidate size/data objects. Hex, canonical
+base64 and strict byte-array interpretations are checked independently, with
+fixed extent buckets, declared-size consistency and conditional legacy-prefix
+comparisons. Ambiguous text can pass multiple encodings; the tool never chooses
+one or infers an algorithm. Unknown field names, arbitrary counts, raw values,
+paths, hashes and exception text are excluded from the export model.
+
+All results retain OFFLINE_ONLY, SHAPE_DIAGNOSTIC_ONLY, REQUIRED,
+NOT_EVALUATED and inconclusive full message_shapes. Diagnostic completion and a
+zero exit code do not qualify v11. Full layout/algorithm/nullable semantics and
+the canonical metadata/parser/generator/filtering/manifest/checkpoint changes
+depend on the human-run fixed report and subsequent reference qualification.
+Those changes have not been guessed or enabled. No new capture is needed.
+This human checkpoint follows the user's critical privacy requirement, not an
+additional approval requirement; only the human may access the private inputs.
+
+Validation: all 236 selected tests pass (97 new offline diagnostics/privacy
+tests, 100 capture-kit tests and 39 existing native contract tests). Tests use
+only invented records and temporary directories. They verify exact two-file
+access and unchanged input bytes while forbidding writes, commands, connections
+and permission changes; malformed/bounded inputs, link/FIFO/directory/Git and
+permission rejection; absent/null/mixed/ambiguous hash forms; strict tags and
+required nullable fields; hidden input; exception/canary exclusion; and the
+continued production v11 rejection. Full Ruff check and format checks pass for
+1,330 Python files; git diff whitespace check passes. No native records,
+private provenance or generated diagnostic fixtures are committed.
+
+New code-only review kit:
+`/private/tmp/eforge-native-review-kit-huehc9hi`. Only prepare and its isolated
+static --help were executed. It contains only private_review.py and
+OFFLINE-REVIEW.md. This directory becomes human-only at handoff; agents must
+not inspect it after handoff, run private review, or revisit any prior capture
+kit. Every existing private capture remains untouched. The human will share
+only the personally reviewed fixed JSON diagnostic.

@@ -192,6 +192,11 @@ only the reviewed report. Controlled lifecycle/exit/argv checks can pass while
 full wire qualification remains inconclusive. If the identity/path layout
 cannot be safely scoped, records are discarded and delivery checks fail.
 
+For a successful version-3/v11 capture, the next step is the separate
+[human-only offline diagnostic](OFFLINE-REVIEW.md). It reuses the existing
+private evidence without running another capture. Agents may prepare its code
+only; they must not inspect or review the private run.
+
 These checks are not an assertion that unseen native records conform, a complete
 API survey, or production exec/exit admission. The private provenance includes
 the actual OS/build and observed message versions. A macOS 27 experiment is
