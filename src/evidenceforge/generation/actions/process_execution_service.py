@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import ntpath
 import random
+import shlex
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -52,7 +53,11 @@ from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
 )
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
-from evidenceforge.generation.actions.posix_process import process_exit_occurrence
+from evidenceforge.generation.actions.posix_process import (
+    process_exec_occurrence,
+    process_exit_occurrence,
+    process_fork_occurrence,
+)
 from evidenceforge.generation.actions.posix_process_cleanup import prepare_surviving_child_adoptions
 from evidenceforge.generation.actions.process_execution import ProcessExecutionReuseIntent
 from evidenceforge.generation.activity.helpers import (
@@ -967,6 +972,9 @@ class ProcessExecutionService:
                 != request.exec_script
             ):
                 raise StateError("Mac script launch requires its exact prepared retention")
+        shell_root = self._prepare_macos_shell_root(request, admission, launch, binary=binary)
+        if shell_root is not None:
+            return shell_root
         provider = self.identity.macos_execution_metadata
         metadata = None
         terminal = None
@@ -1083,6 +1091,142 @@ class ProcessExecutionService:
             binary,
         )
 
+    def _prepare_macos_shell_root(
+        self,
+        request: ProcessExecutionRequest,
+        admission: ProcessExecutionAdmission,
+        launch: ProcessLaunchPlan,
+        *,
+        binary: ProcessBinaryIdentity | None,
+    ) -> ProcessRootPlan | None:
+        """Model a qualified direct shell command as an actual fork and exec.
+
+        This bounded path shares process admission, lifetime and completion owners.
+        It never infers native exec evidence. Incomplete local GUI audit metadata,
+        shell syntax and effect-bearing launches retain aggregate birth semantics.
+        """
+        if (
+            _get_os_category(request.system.os) != "macos"
+            or request.macos_launch_kind is not None
+            or request.new_posix_session
+            or request.exec_script is not None
+            or admission.endpoint is not None
+            or request.effect_plan is None
+            or request.effect_plan.nodes
+            or (
+                request.prepared_effects is not None
+                and any(
+                    token is not request.prepared_effects.process_binary_publication
+                    or self.dispatcher.local_artifact_registry is None
+                    or not self.dispatcher.local_artifact_registry.authenticates_prepared_retention(
+                        token
+                    )
+                    for token in request.prepared_effects.artifact_publications
+                )
+            )
+            or any(char in launch.actor.command_line for char in "|;&><$`()\n")
+        ):
+            return None
+        parent = self.state_manager.get_process_identity(request.system.hostname, launch.parent_pid)
+        provider = self.identity.macos_execution_metadata
+        session = self.state_manager.get_session_at(launch.actor.logon_id, launch.time)
+        if (
+            parent is None
+            or provider is None
+            or parent.image not in {"/bin/zsh", "/bin/bash"}
+            or parent.command_line not in {"-zsh", "-bash"}
+            or parent.principal != launch.actor.username
+            or parent.logon_id != launch.actor.logon_id
+            or parent.credentials is None
+            or parent.credentials.audit_uid is None
+            or parent.credentials.audit_session_id is None
+            or parent.responsibility is None
+            or parent.image_security is None
+            or parent.image_security.validation_category is None
+            or parent.executable_version is None
+            or parent.parentage is None
+            or parent.job_control is None
+            or parent.audit_pid_version is None
+            or parent.primary_thread is None
+            or parent.environment is None
+            or session is None
+            or session.session_kind not in {"interactive", "ssh"}
+        ):
+            return None
+        parent_binary = self.dispatcher.resolve_loaded_process_binary_identity(parent)
+        if (
+            getattr(parent_binary, "code_signature", None) is None
+            or self.state_manager.known_macos_terminal(parent.job_control.session, launch.time)
+            is None
+        ):
+            return None
+        try:
+            arguments = tuple(shlex.split(launch.actor.command_line))
+            quoted_words = shlex.split(launch.actor.command_line, posix=False)
+        except ValueError:
+            return None
+        if not arguments or arguments[0] != launch.actor.image:
+            return None
+        if any(
+            any(char in word for char in "*?[]~{}#")
+            and not (len(word) >= 2 and word[0] in {"'", '"'} and word[-1] == word[0])
+            for word in quoted_words
+        ):
+            # Unresolved shell expansion is not an exact direct-exec argv.
+            return None
+        gap = self.activity_timing.sample_profile_gap(
+            "macos.shell_fork_before_exec",
+            stable_id=request.stable_id,
+            host=request.system.hostname,
+            source="shell_command",
+            lifecycle_id=request.lifecycle_group_id or request.stable_id,
+        )
+        forked_at = ensure_utc(launch.time) - gap
+        if forked_at <= parent.execution_started_at:
+            return None
+        directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
+        if directory is None:
+            return None
+        builder = self.state_manager.begin_action_cohort_materialization()
+        birth = builder.fork_process(
+            parent,
+            forked_at=forked_at,
+            execution_directory=provider.directory(
+                parent.hostname, directory.native_path, forked_at
+            ),
+            lifecycle_group_id=request.lifecycle_group_id or request.stable_id,
+            concurrency_group_id=request.concurrency_group_id,
+        )
+        after = builder.execute_process(
+            birth,
+            image=launch.actor.image,
+            command_line=shlex.join(arguments),
+            executed_at=ensure_utc(launch.time),
+            arguments=arguments,
+            environment=parent.environment,
+            execution_directory=provider.directory(
+                parent.hostname, directory.native_path, launch.time
+            ),
+            executable_version=(
+                ProcessExecutableVersion.from_binary(binary)
+                if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
+                else None
+            ),
+            image_security=provider.image_security(binary),
+        )
+        session_identity = self.state_manager.get_session_identity(parent.logon_id)
+        cohort = builder.seal()
+        fork = process_fork_occurrence(
+            host=self.identity.host_context(request.system),
+            parent=parent,
+            child=birth.identity,
+            integrity_level=launch.integrity,
+        )
+        fork.storyline_origin = request.from_storyline
+        return ProcessRootPlan(
+            birth, cohort, session.session_id, session_identity, parent, binary, after, fork
+        )
+
     def _prepare_evidence(
         self,
         request: ProcessExecutionRequest,
@@ -1091,7 +1235,7 @@ class ProcessExecutionService:
         root: ProcessRootPlan,
     ) -> ProcessEvidencePlan:
         """Build canonical process evidence with its existing lifetime and source deadlines."""
-        process_identity = root.process.identity
+        process_identity = root.identity
         # Phase 2: Build and validate the complete root/dependent publication batch.
         provisional_process_termination = (
             request.prepared_effects.provisional_termination
@@ -1229,6 +1373,15 @@ class ProcessExecutionService:
                 parent_group_id=process_identity.parent_lifecycle_group_id or None,
             ),
         )
+        if root.executed is not None:
+            event = process_exec_occurrence(
+                host=self.identity.host_context(request.system),
+                before=root.process.identity,
+                after=root.executed,
+                integrity_level=launch.integrity,
+            )
+            event.storyline_origin = request.from_storyline
+            event.process.binary_identity = root.binary
 
         endpoint_source_deadline = (
             admission.endpoint.earliest_admitted_occurrence - timedelta(microseconds=1)
@@ -1270,6 +1423,8 @@ class ProcessExecutionService:
         evidence: ProcessEvidencePlan,
     ) -> PreparedProcessPublication:
         """Prepare and validate source, artifact and optional cohort capabilities before commit."""
+        if root.fork_event is not None:
+            return self._prepare_macos_shell_publication(request, root, evidence)
         process_plan = root.process
         process_identity = root.process.identity
         event = evidence.event
@@ -1461,6 +1616,52 @@ class ProcessExecutionService:
             action_cohort_batch,
         )
 
+    def _prepare_macos_shell_publication(
+        self, request: ProcessExecutionRequest, root: ProcessRootPlan, evidence: ProcessEvidencePlan
+    ) -> PreparedProcessPublication:
+        """Join canonical fork/exec and native fork in the existing exact journal."""
+        from evidenceforge.generation.macos_es_source import prepared_macos_es_fork_publication
+
+        assert root.cohort is not None and root.fork_event is not None
+        assert request.effect_plan is not None and not request.effect_plan.nodes
+        with prepared_macos_es_fork_publication(
+            self.dispatcher, root.cohort, root.fork_event
+        ) as native:
+            with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+                carriers = tuple(
+                    self.dispatcher.prepare_action_cohort_projection(
+                        event, source_timing_preparation=timing
+                    )
+                    for event in (root.fork_event, evidence.event)
+                )
+            artifacts = (
+                request.prepared_effects.artifact_publications
+                if request.prepared_effects is not None
+                else ()
+            )
+            members = tuple(
+                self.dispatcher.bind_action_cohort_projection(
+                    carrier,
+                    state_plan=root.cohort,
+                    artifact_publications=artifacts if index == 1 else (),
+                )
+                for index, carrier in enumerate(carriers)
+            )
+            effects = request.effect_plan
+            batch = self.dispatcher.prepare_action_cohort_batch(
+                f"macos-process-cohort:{root.cohort.semantic_id}",
+                root.cohort,
+                members,
+                (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+                (),
+                (),
+                exact_projection=True,
+                es_delivery=native.delivery if native else None,
+                es_collector_process=native.collector if native else None,
+                es_native_sink=native.sink if native else None,
+            )
+        return PreparedProcessPublication(members[0], members[1:], timing, artifacts, None, batch)
+
     def _publish_process(
         self,
         request: ProcessExecutionRequest,
@@ -1533,14 +1734,14 @@ class ProcessExecutionService:
                 command_line=launch.actor.command_line,
                 time=launch.time,
             )
-        if running_proc.logon_id and root.cohort is None:
+        if running_proc.logon_id and (root.cohort is None or root.fork_event is not None):
             session = self.state_manager.get_session(running_proc.logon_id)
             if session is not None:
                 session.last_activity_time = launch.time
         self.sources._record_process_source_create_time(
             request.system.hostname,
             root.process.identity.pid,
-            event,
+            root.fork_event if root.fork_event is not None else event,
             not_after=evidence.source_visible_by,
         )
         if evidence.provisional_termination is not None:

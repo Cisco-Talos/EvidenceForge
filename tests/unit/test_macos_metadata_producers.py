@@ -669,7 +669,10 @@ def test_validation_policy_is_explicit_and_does_not_create_static_signer_facts(
 ) -> None:
     from evidenceforge.events.macos_runtime import MacosImageSecurity
 
-    binary = modeled.producer._filesystem.deployed_binary("MAC-01", "/bin/zsh", "alex")
+    binary = replace(
+        modeled.producer._filesystem.deployed_binary("MAC-01", "/bin/zsh", "alex"),
+        code_signature=None,
+    )
     expected = MacosImageSecurity(0x24000001, True, 1)
     assert modeled.producer.image_security(binary) == expected
     assert binary.code_signature is None

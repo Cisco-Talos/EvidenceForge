@@ -76,6 +76,13 @@ class ProcessRootPlan:
     session_identity: SessionIdentity | None
     parent_identity: ProcessIdentity | None
     binary: ProcessBinaryIdentity | None = None
+    executed: ProcessIdentity | None = None
+    fork_event: OccurrenceBuilder | None = None
+
+    @property
+    def identity(self) -> ProcessIdentity:
+        """Return the current execution while retaining the exact birth plan."""
+        return self.executed if self.executed is not None else self.process.identity
 
 
 @dataclass(frozen=True)

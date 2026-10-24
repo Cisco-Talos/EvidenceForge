@@ -271,6 +271,7 @@ class ProcessForegroundLifecycle:
         requested_time: datetime,
         seed_text: str,
         concurrency_group_id: str = "",
+        use_cached_reservation: bool = True,
     ) -> datetime | None:
         """Delay a new foreground command until the same interactive shell is free."""
         key = self._foreground_shell_key(
@@ -310,7 +311,7 @@ class ProcessForegroundLifecycle:
                     )
                 ),
             )
-        next_time = self._foreground_shell_next_time.get(key)
+        next_time = self._foreground_shell_next_time.get(key) if use_cached_reservation else None
         if next_time is None or requested_time >= next_time:
             return requested_time
         if (
@@ -325,6 +326,74 @@ class ProcessForegroundLifecycle:
             )
         )
         return next_time + timedelta(milliseconds=rng.randint(120, 900))
+
+    def reserve_authored_macos_shell_time(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        command_line: str,
+    ) -> datetime | None:
+        """Find a free authored interval without jumping to later baseline work.
+
+        Live and retained children own occupancy. The monotonic baseline cache
+        cannot represent out-of-order authored visits. No new scheduling state
+        or inferred termination is introduced here.
+        """
+        candidate = self._reserve_foreground_shell_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=requested_time,
+            seed_text=command_line,
+            use_cached_reservation=False,
+        )
+        if (
+            candidate is None
+            or self._foreground_shell_key(
+                system=system, username=username, logon_id=logon_id, parent_pid=parent_pid
+            )
+            is None
+        ):
+            return candidate
+        shell = self.state_manager.get_process(system.hostname, parent_pid)
+        assert shell is not None
+        children = sorted(
+            (
+                process
+                for process in self.state_manager.get_processes_for_session(
+                    logon_id, system.hostname, include_retained=True
+                )
+                if process.parent_pid == parent_pid
+                and process.parentage is not None
+                and process.parentage.original is not None
+                and process.parentage.original.object_id == shell.ecar_object_id
+                and _posix_shell_process_reserves_foreground(
+                    "macos", process.image, process.command_line
+                )
+            ),
+            key=lambda process: process.start_time,
+        )
+        bounds = _posix_foreground_lifetime(
+            "macos", command_line.split(maxsplit=1)[0], command_line
+        )
+        budget = timedelta(seconds=bounds[1]) if bounds is not None else timedelta(0)
+        for process in children:
+            end = process.end_time or self.foreground_process_termination_time(
+                system.hostname, process.pid
+            )
+            if end is not None and ensure_utc(end) <= candidate:
+                continue
+            if ensure_utc(process.start_time) > candidate + budget:
+                break
+            if end is None:
+                return None
+            candidate = ensure_utc(end) + timedelta(milliseconds=1)
+        return candidate
 
     def _unbounded_foreground_shell_ready_at(
         self,

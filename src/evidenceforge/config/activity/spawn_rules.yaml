@@ -459,6 +459,51 @@ linux:
 # Native macOS ancestry. These are eligible relationships, not a claim that
 # every application or helper starts in every session.
 macos:
+  # Bounded office discovery queries. These modeled command profiles do not
+  # classify arbitrary invocations or long-running shell commands as short.
+  id:
+    command_templates: [/usr/bin/id, /usr/bin/id -u, /usr/bin/id -un, /usr/bin/id -a]
+    lifetime: short
+    children: []
+  sw_vers:
+    command_templates: [/usr/bin/sw_vers, /usr/bin/sw_vers -productVersion]
+    lifetime: short
+    children: []
+  ifconfig:
+    command_templates: [/sbin/ifconfig -a, /sbin/ifconfig en0]
+    lifetime: short
+    children: []
+  ps:
+    command_templates: [/bin/ps aux, /bin/ps -ef]
+    lifetime: short
+    children: []
+  dscl:
+    command_templates: [/usr/bin/dscl . -list /Users]
+    lifetime: short
+    children: []
+  pwd:
+    command_templates: [/bin/pwd]
+    lifetime: short
+    children: []
+  ls:
+    command_templates:
+      - /bin/ls -la /Users/{username}/Documents
+      - /bin/ls -la /Users/{username}/Library/LaunchAgents
+    lifetime: short
+    children: []
+  du:
+    command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
+    lifetime: short
+    children: []
+  df:
+    command_templates: [/bin/df -h]
+    lifetime: short
+    children: []
+  find:
+    command_templates:
+      - /usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"
+    lifetime: short
+    children: []
   Google Chrome:
     command_templates: ['"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"']
     lifetime: long

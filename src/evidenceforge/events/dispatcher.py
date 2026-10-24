@@ -11388,11 +11388,33 @@ class EventDispatcher:
         expected_type = {"posix_fork": 11, "posix_exec": 9, "posix_exit": 15}.get(
             record.exact_projection_kind
         )
+        # A fork-only source may observe the birth in an atomic fork/exec
+        # command. The canonical exec still belongs to this exact journal; it
+        # does not authorize a native exec projection or consume its counter.
+        fork_only_chain = (
+            record.exact_projection_kind == "macos_process_chain"
+            and len(record.member_occurrences) == 2
+            and record.member_occurrences[0].event_type is EventKind.PROCESS_FORK
+            and record.member_occurrences[1].event_type is EventKind.PROCESS_EXEC
+            and len(record.state_plan.processes) == 1
+            and len(record.state_plan.process_executions) == 1
+            and not record.state_plan.process_terminations
+        )
+        if fork_only_chain:
+            self._require_multi_process_projection(record)
+            connection = registry.connection(delivery.observation.source_instance)
+            if connection is None or {item.event_type for item in connection.event_counters} != {
+                11
+            }:
+                raise EventContractError(
+                    "A partial native process chain requires a fork-only client"
+                )
+            expected_type = 11
         if (
             registry is not self.es_collectors
             or not record.exact_projection
             or expected_type is None
-            or len(record.member_occurrences) != 1
+            or (len(record.member_occurrences) != 1 and not fork_only_chain)
             or not registry.authenticates_pending_delivery(delivery)
         ):
             raise EventContractError(
@@ -11404,7 +11426,8 @@ class EventDispatcher:
             event.src_host is None
             or event.src_host.os_category != "macos"
             or observation.hostname != event.src_host.hostname
-            or observation.occurrence_id != record.root_action_id
+            or observation.occurrence_id
+            != (self._es_process_occurrence(event)[0] if fork_only_chain else record.root_action_id)
             or observation.event_type != expected_type
             or observation.observed_at != event.timestamp
             or collector.hostname != observation.hostname
@@ -11427,7 +11450,7 @@ class EventDispatcher:
                 "ES binding requires frozen native bytes before canonical publication"
             )
         self._validate_action_cohort_es_file_placements(
-            record, (native,), observations=(observation,)
+            record, (native,), events=(event,), observations=(observation,)
         )
         return native
 

@@ -3656,6 +3656,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         *,
         forked_at: datetime,
         execution_directory: MacosExecutionDirectory | None = None,
+        lifecycle_group_id: str = "",
+        concurrency_group_id: str = "",
     ) -> ProcessMaterializationPlan:
         """Stage a POSIX child inheriting the exact current parent image and session."""
 
@@ -3699,6 +3701,8 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 executable_version=parent.executable_version,
                 execution_directory=execution_directory,
                 responsibility=parent.responsibility,
+                lifecycle_group_id=lifecycle_group_id,
+                concurrency_group_id=concurrency_group_id,
             )
 
             descriptors = (
@@ -17736,6 +17740,8 @@ class StateManager:
         self,
         logon_id: str,
         system: str | None = None,
+        *,
+        include_retained: bool = False,
     ) -> list[RunningProcess]:
         """Get running processes owned by one session.
 
@@ -17749,11 +17755,20 @@ class StateManager:
         with self._lock:
             resolved_logon_id = self._resolve_logon_id(logon_id)
             logon_ids = {logon_id, resolved_logon_id}
-            processes: dict[tuple[str, int], RunningProcess] = {}
+            processes: dict[tuple[str, int, str], RunningProcess] = {}
             for candidate_logon_id in logon_ids:
                 for process in self._running_processes.find("logon_id", candidate_logon_id):
                     if system is None or process.system == system:
-                        processes[(process.system, process.pid)] = process
+                        processes[(process.system, process.pid, process.ecar_object_id)] = process
+            if include_retained:
+                # Authored scheduling may visit an earlier time after baseline
+                # children have closed. Reuse bounded retained identities rather
+                # than interpreting the latest shell watermark as occupancy.
+                for process in self._ended_processes_by_object_id.values():
+                    if process.logon_id in logon_ids and (
+                        system is None or process.system == system
+                    ):
+                        processes[(process.system, process.pid, process.ecar_object_id)] = process
             return list(processes.values())
 
     def mark_story_process(self, system: str, pid: int) -> None:

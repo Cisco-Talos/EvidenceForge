@@ -2946,6 +2946,11 @@ applications:
       macos:
         image_path: /bin/zsh
         executable_format: mach_o
+        # Apple XNU signing-identity vocabulary; Microsoft Defender's public
+        # /bin/zsh example confirms this identifier and an empty team ID.
+        code_signature:
+          signing_id: com.apple.zsh
+          team_id: null
         deployment:
           kind: catalog
           release_policy: host_build
@@ -3000,6 +3005,119 @@ applications:
         command_templates: ["/bin/bash -l"]
     categories: [macos_session]
     personas: [developer, sysadmin, analyst, security_analyst, default]
+    system_types: [workstation]
+
+  # Installed command vocabulary, without automatic baseline activation.
+  # Host-build identities and Mach-O UUIDs are modeled, not captured binaries.
+  - id: macos-id
+    display_name: macOS id
+    platforms:
+      macos:
+        image_path: /usr/bin/id
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/id]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-sw-vers
+    display_name: macOS version query
+    platforms:
+      macos:
+        image_path: /usr/bin/sw_vers
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/sw_vers]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ifconfig
+    display_name: macOS interface query
+    platforms:
+      macos:
+        image_path: /sbin/ifconfig
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/sbin/ifconfig -a]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ps
+    display_name: macOS process query
+    platforms:
+      macos:
+        image_path: /bin/ps
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/ps aux]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-dscl
+    display_name: macOS directory query
+    platforms:
+      macos:
+        image_path: /usr/bin/dscl
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/usr/bin/dscl . -list /Users]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-pwd
+    display_name: macOS working directory query
+    platforms:
+      macos:
+        image_path: /bin/pwd
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/pwd]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-ls
+    display_name: macOS directory listing
+    platforms:
+      macos:
+        image_path: /bin/ls
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ["/bin/ls -la /Users/{username}/Documents"]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-du
+    display_name: macOS directory size query
+    platforms:
+      macos:
+        image_path: /usr/bin/du
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-df
+    display_name: macOS filesystem space query
+    platforms:
+      macos:
+        image_path: /bin/df
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: [/bin/df -h]
+    categories: [macos_command]
+    personas: []
+    system_types: [workstation]
+  - id: macos-find
+    display_name: macOS file query
+    platforms:
+      macos:
+        image_path: /usr/bin/find
+        executable_format: mach_o
+        deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
+        command_templates: ['/usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"']
+    categories: [macos_command]
+    personas: []
     system_types: [workstation]
 
   # Native service identities only; no automatic baseline or boot activation.

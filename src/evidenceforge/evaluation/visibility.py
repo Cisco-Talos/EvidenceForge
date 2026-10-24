@@ -26,9 +26,15 @@ Determines which log formats each system should produce (based on OS)
 and which network sensors observe traffic between systems.
 """
 
+from evidenceforge.events.source_catalog import DEFAULT_SOURCE_CATALOG, SourceOwnerKind
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+from evidenceforge.generation.source_deployment_compiler import (
+    SourceDeploymentCompilationError,
+    compile_scenario_source_deployment,
+)
 from evidenceforge.models.scenario import Scenario, System
 from evidenceforge.utils.platforms import platform_for_os
+from evidenceforge.utils.time import resolve_time_window
 
 # Web server service patterns
 _WEB_SERVICE_PATTERNS = ["http", "iis", "nginx", "apache", "web"]
@@ -63,6 +69,37 @@ class VisibilityModel:
         self._host_formats: dict[str, set[str]] = {}
         # Map FQDN variants back to bare hostname for lookups
         self._fqdn_to_bare: dict[str, str] = {}
+        self.deployment_verified = True
+        deployed_formats: dict[str, set[str]] = {}
+        try:
+            deployment = compile_scenario_source_deployment(
+                scenario, emitter_formats=enabled_formats
+            ).deployment
+        except SourceDeploymentCompilationError:
+            # Legacy evaluation inputs may omit sensor topology. Report catalog
+            # eligibility explicitly as unverified rather than inventing policy.
+            self.deployment_verified = False
+        else:
+            start, end = resolve_time_window(scenario.time_window)
+            for source in deployment:
+                if not source.policy.enabled:
+                    continue
+                if not any(
+                    (window.end is None or start < window.end)
+                    and (window.start is None or window.start < end)
+                    for window in source.policy.windows
+                ):
+                    continue
+                for source_format in source.formats:
+                    descriptor = DEFAULT_SOURCE_CATALOG.descriptor(source_format)
+                    if (
+                        descriptor.owner is SourceOwnerKind.HOST
+                        and source.policy.capabilities & descriptor.capabilities
+                        and source.policy.missingness_for(source_format) < 1.0
+                    ):
+                        deployed_formats.setdefault(source.identity.hostname.casefold(), set()).add(
+                            source_format
+                        )
 
         # Detect domain from scenario (same logic as generator)
         domain = getattr(scenario.environment, "domain", None)
@@ -89,22 +126,19 @@ class VisibilityModel:
                 self._fqdn_to_bare[fqdn.lower()] = system.hostname
                 self._systems[fqdn] = system
 
-            formats: set[str] = set()
-            if os_cat == "windows":
-                formats.add("windows_event_security")
-            elif os_cat == "linux":
-                formats.add("syslog")
-                formats.add("bash_history")
-            elif os_cat == "macos":
-                formats.update({"bash_history", "zsh_history"})
-
-            # eCAR is optional on any OS
-            if "ecar" in enabled_formats:
-                formats.add("ecar")
-
-            # Web access for web servers
-            if _has_web_service(system) and "web_access" in enabled_formats:
-                formats.add("web_access")
+            formats = (
+                deployed_formats.get(system.hostname.casefold(), set())
+                if self.deployment_verified
+                else {
+                    name
+                    for name in enabled_formats
+                    if DEFAULT_SOURCE_CATALOG.descriptor(name).applies_to_host(
+                        os_cat, system.roles or ()
+                    )
+                }
+            )
+            if not _has_web_service(system):
+                formats = formats - {"web_access"}
 
             # Only include formats that are actually enabled in the scenario
             resolved_formats = formats & enabled_formats

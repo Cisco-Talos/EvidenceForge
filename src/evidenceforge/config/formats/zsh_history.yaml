@@ -18,6 +18,10 @@ fields:
   - name: command
     type: string
     required: true
+  - name: duration_seconds
+    type: integer
+    required: false
+    description: "Zero for incremental submission; not a measured execution duration"
 output:
   format: text
   file_extension: ".history"

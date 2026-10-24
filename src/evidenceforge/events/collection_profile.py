@@ -122,6 +122,9 @@ def build_collection_profile(
                     "ecar",
                     "syslog",
                     "bash_history",
+                    "zsh_history",
+                    "macos_unified_log",
+                    "macos_endpoint_security",
                 ],
                 primary_window=collection_window,
                 tail_policy=(
@@ -138,6 +141,12 @@ def build_collection_profile(
                     "sessions, and services.",
                     "Endpoint flow attribution can be omitted when the collector cannot bind "
                     "a tuple to a stable process without breaking source-local causality.",
+                    "macOS shell history requires an explicit interactive submission to its "
+                    "live Bash or zsh owner; process creation alone does not imply history.",
+                    "The bounded macOS Unified Log profile covers loginwindow workspace entry. "
+                    "The Endpoint Security profile covers qualified canonical forks. Neither "
+                    "is a general process-execution audit; native ES exec/exit and Gatekeeper "
+                    "denial remain gated pending reference evidence.",
                 ],
             ),
             CollectionSourceFamily(

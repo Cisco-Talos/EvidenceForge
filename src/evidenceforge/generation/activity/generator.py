@@ -5953,6 +5953,35 @@ class ActivityGenerator:
                     return authored_candidate
         return serialized_time
 
+    def reserve_macos_foreground_process_start(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        command_line: str,
+    ) -> datetime | None:
+        """Reserve an authored Mac command through the shared foreground owner."""
+        if _get_os_category(system.os) != "macos":
+            return requested_time
+        reserved = self._process_foreground().reserve_authored_macos_shell_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=ensure_utc(requested_time),
+            command_line=command_line,
+        )
+        if reserved is None:
+            return None
+        session = self.state_manager.get_session(logon_id)
+        deadline = _session_activity_end_time(session) if session is not None else None
+        if deadline is not None and reserved >= ensure_utc(deadline):
+            return None
+        return reserved
+
     def _linux_ssh_process_shell_ready_time(
         self,
         *,
@@ -25177,6 +25206,8 @@ class ActivityGenerator:
         target_system: System,
         logon_id: str,
         activity_time: datetime,
+        *,
+        allow_deferred_start: bool = False,
     ) -> int | None:
         """Materialize a catalog-backed local terminal chain in its existing GUI session.
 
@@ -25246,7 +25277,9 @@ class ActivityGenerator:
         )
         start = ensure_utc(activity_time) - gap.value * 3
         if start <= ensure_utc(session.start_time):
-            return None
+            if not allow_deferred_start:
+                return None
+            start = ensure_utc(session.start_time) + timedelta(milliseconds=1)
         parent_pid = 1
         terminal_pid: int | None = None
         terminal_processes = [

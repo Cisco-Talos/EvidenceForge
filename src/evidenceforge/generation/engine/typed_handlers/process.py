@@ -19,6 +19,10 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.process_helpers import (
+    _macos_foreground_lifetime,
+    _macos_process_uses_shell,
+)
 from evidenceforge.models.scenario import (
     CreateRemoteThreadEventSpec,
     ProcessAccessEventSpec,
@@ -201,6 +205,14 @@ def handle_process(
             malicious_event["skipped_reason"] = "rdp_session_not_connected"
             return malicious_event
         time = max(time, interactive_ready_at)
+        if (
+            os_category == "macos"
+            and parent_pid is None
+            and _macos_process_uses_shell(process_name)
+        ):
+            parent_pid = self.activity_generator.ensure_macos_session_shell(
+                process_actor, system, process_logon_id, time, allow_deferred_start=True
+            )
         if parent_pid is None:
             parent_pid = self.activity_generator._resolve_parent(
                 system,
@@ -287,6 +299,22 @@ def handle_process(
             prepared_shell_command,
         )
         malicious_event["time"] = time
+    if os_category == "macos":
+        reserved_start = self.activity_generator.reserve_macos_foreground_process_start(
+            system=system,
+            username=process_actor.username,
+            logon_id=process_logon_id,
+            parent_pid=parent_pid,
+            requested_time=time,
+            command_line=process_command_line,
+        )
+        if reserved_start is None:
+            malicious_event["process_name"] = process_name
+            malicious_event["command_line"] = command_line
+            malicious_event["skipped_reason"] = "foreground_shell_unavailable"
+            return malicious_event
+        time = reserved_start
+        malicious_event["time"] = time
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     service_backed_process = service_process_identity is not None or (
         "service_installed" in explicit_types
@@ -349,10 +377,29 @@ def handle_process(
         suppress_command_file_effect=output_file is not None,
         lifecycle_group_id=service_lifecycle_group_id,
     )
+    if pid <= 0:
+        malicious_event["process_name"] = process_name
+        malicious_event["command_line"] = command_line
+        malicious_event["skipped_reason"] = "process_launch_unavailable"
+        return malicious_event
     running_process = self.state_manager.get_process(system.hostname, pid)
     if running_process is not None:
         time = max(ensure_utc(time), ensure_utc(running_process.start_time))
         malicious_event["time"] = time
+    if os_category == "macos":
+        submission_time = (
+            ensure_utc(running_process.start_time)
+            if running_process is not None and running_process.execution_ordinal > 0
+            else time
+        )
+        self.activity_generator.emit_macos_shell_history(
+            process_actor,
+            system,
+            submission_time,
+            command_line,
+            logon_id=process_logon_id,
+            shell_pid=parent_pid,
+        )
     self.activity_generator._record_user_process(system, process_actor, pid, process_name)
     self._record_last_storyline_process(system, pid, process_name, process_command_line)
     process_ref = getattr(spec, "process_ref", None)
@@ -477,7 +524,11 @@ def handle_process(
 
     # Mark as story process and schedule termination
     self.state_manager.mark_story_process(system.hostname, pid)
-    lifetime = _estimate_process_lifetime(process_name, process_command_line)
+    lifetime = (
+        _macos_foreground_lifetime(process_name, process_command_line)
+        if os_category == "macos"
+        else _estimate_process_lifetime(process_name, process_command_line)
+    )
     if lifetime is not None:
         term_delay = rng.uniform(lifetime[0], lifetime[1])
         term_time = time + timedelta(seconds=term_delay)
@@ -531,6 +582,18 @@ def handle_process(
                 future_specs,
             ):
                 terminate_immediately = False
+        if os_category == "macos":
+            canonical_close = self.activity_generator.foreground_process_termination_time(
+                system.hostname, pid
+            )
+            terminate_immediately = (
+                _macos_foreground_lifetime(process_name, process_command_line) is not None
+                and canonical_close is not None
+                and process_ref is None
+                and not self._process_has_following_same_host_connection(system, future_specs)
+            )
+            if terminate_immediately:
+                term_time = ensure_utc(canonical_close)
         if terminate_immediately:
             self.activity_generator.generate_process_termination(
                 user=process_actor,

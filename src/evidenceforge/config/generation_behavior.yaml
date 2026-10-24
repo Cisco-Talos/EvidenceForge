@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 331
+current_revision: 332
 history_start_revision: 1
-behavior_surface_sha256: cd9d0f7153193e362af02c3d025de3242c8446262accb7b678c666ade20cda95
+behavior_surface_sha256: d46420e9c3b4352bc27eb26aeec158693a5c375c3cb9d982b5e20abc9fb3503e
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3132,3 +3132,19 @@ changes:
       - scenario-evidence-coverage-validation
     formats: []
     summary: Replaces OS format expectations with effective per-host endpoint coverage notes and action-specific visibility warnings; shares the unchanged native workspace profile predicate. Rendered generation behavior is unchanged.
+  - revision: 332
+    id: macos-authored-command-execution-history-and-native-forks
+    impact: localized
+    domains:
+      - macos-process-lifecycle
+      - storyline-process-outcomes
+      - shell-command-history
+      - macos-native-source-projection
+      - collection-profile
+    formats:
+      - ecar
+      - zsh_history
+      - bash_history
+      - macos_endpoint_security
+      - macos_unified_log
+    summary: Serializes authored Mac commands with bounded utility lifetimes and actual shell history, reports rejected launches truthfully, and publishes qualified shell fork/exec chains with fork-only native ES observation.
