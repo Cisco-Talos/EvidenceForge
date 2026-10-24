@@ -49,6 +49,7 @@ MAX_RECORDS = 32
 MAX_SUMMARY_BYTES = 32_768
 MAX_TOKEN_BYTES = 4_096
 MAX_JSON_DEPTH = 32
+MAX_PRIVATE_NAMES = 16
 INSTRUCTIONS = (
     Path(__file__).resolve().parents[1]
     / "docs/design/macos-workstation-feasibility/native-reference-capture/OFFLINE-REVIEW.md"
@@ -654,7 +655,7 @@ def _private_reader(directory: int, name: str, limit: int) -> Iterator[BinaryIO]
         yield source
 
 
-def review(run: Path) -> ReviewReport:
+def _read_private_rows(run: Path) -> list[dict[str, object]]:
     """HUMAN ONLY: read exactly two existing private files; never write anything."""
     if not run.is_absolute():
         raise PrivateReviewError("LOCATION")
@@ -684,6 +685,12 @@ def review(run: Path) -> ReviewReport:
             raise PrivateReviewError("DATA")
     finally:
         os.close(directory)
+    return rows
+
+
+def review(run: Path) -> ReviewReport:
+    """HUMAN ONLY: produce fixed diagnostics without exporting record names or values."""
+    rows = _read_private_rows(run)
     report = analyze(rows)
     return report.model_copy(
         update={
@@ -693,21 +700,98 @@ def review(run: Path) -> ReviewReport:
     )
 
 
-def _human_review() -> ReviewReport:
+def _require_private_terminal(*, local_output: bool = False) -> None:
     kit = Path(__file__).resolve().parent
     _outside_git(kit)
     _private_metadata(kit.stat(), directory=True)
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() or (local_output and not sys.stdout.isatty()):
         raise PrivateReviewError("INPUT")
+
+
+def _hidden_input(prompt: str) -> str:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", getpass.GetPassWarning)
-            text = getpass.getpass("Private run directory (input hidden): ")
+            text = getpass.getpass(prompt)
     except (EOFError, getpass.GetPassWarning):
         raise PrivateReviewError("INPUT") from None
     if not text or len(text) > 4096 or "\0" in text:
         raise PrivateReviewError("INPUT")
-    return review(Path(text))
+    return text
+
+
+def _human_run_path() -> Path:
+    _require_private_terminal()
+    return Path(_hidden_input("Private run directory (input hidden): "))
+
+
+def _human_review() -> ReviewReport:
+    return review(_human_run_path())
+
+
+def _private_null_exec_names(rows: list[dict[str, object]]) -> tuple[str, ...]:
+    """HUMAN LOCAL VIEW ONLY: select identifiers from the diagnosed null-only additions.
+
+    These are private input, never a shareable report or a qualified field list.
+    Agent callers may exercise this only with invented test rows.
+    """
+    report = analyze(rows)
+    checks = (
+        report.retained_families,
+        report.envelope_fields,
+        report.envelope_values,
+        report.process_fields,
+        report.process_values,
+        report.fork_payload,
+        report.exec_values,
+        report.exit_payload,
+        report.exec_layout.wrapper_object,
+        report.exec_layout.wrapper_fields,
+        report.exec_layout.payload_object,
+        report.exec_layout.required_fields,
+    )
+    if (
+        report.wire_profile != "V11_UNQUALIFIED"
+        or any(check != "PASS" for check in checks)
+        or report.exec_layout.only_known_fields != "FAIL"
+        or report.exec_layout.additional_value_types != "NULL"
+        or report.full_hash.presence != "ABSENT_ALL"
+    ):
+        raise PrivateReviewError("SOURCE")
+    names = sorted(
+        {
+            key
+            for row in rows
+            if row.get("event_type") == 9
+            for key in _mapping(_mapping(row.get("event")).get("exec"))
+            if key not in ESExec.model_fields
+        }
+    )
+    if len(names) > MAX_PRIVATE_NAMES:
+        raise PrivateReviewError("LIMIT")
+    # No terminal escapes, whitespace, Unicode controls, paths or unbounded names.
+    # Plain identifiers can still be private; only the human may inspect this view.
+    if any(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", name) is None for name in names):
+        raise PrivateReviewError("DATA")
+    return tuple(names)
+
+
+def _human_field_names() -> None:
+    _require_private_terminal(local_output=True)
+    sys.stdout.write(
+        "PRIVATE LOCAL VIEW: field names are private input, not a shareable report.\n"
+        "Close agents and screen sharing first. Do not copy, record or paste this output.\n"
+    )
+    if _hidden_input("Type LOCAL VIEW to display only null exec field names (input hidden): ") != (
+        "LOCAL VIEW"
+    ):
+        raise PrivateReviewError("INPUT")
+    rows = _read_private_rows(_human_run_path())
+    names = _private_null_exec_names(rows)
+    sys.stdout.write("PRIVATE FIELD NAMES ONLY; NO VALUES:\n")
+    for name in names:
+        sys.stdout.write(json.dumps(name, ensure_ascii=True) + "\n")
+    sys.stdout.write("END PRIVATE LOCAL VIEW. Keep this output private.\n")
 
 
 def prepare(destination: Path | None) -> Path:
@@ -745,10 +829,18 @@ def main(argv: list[str] | None = None) -> int:
     stage.add_argument("--destination", type=Path)
     inspect = commands.add_parser("review", help="HUMAN ONLY: offline review; no collection")
     inspect.add_argument("--private-run", action="store_true", required=True)
+    local = commands.add_parser(
+        "private-field-names", help="HUMAN LOCAL VIEW ONLY: not a shareable report"
+    )
+    local.add_argument("--private-run", action="store_true", required=True)
+    local.add_argument("--local-only", action="store_true", required=True)
     try:
         args = parser.parse_args(argv)
         if args.command == "prepare":
             print(prepare(args.destination))
+            return 0
+        if args.command == "private-field-names":
+            _human_field_names()
             return 0
         report = _human_review()
         _emit(report)

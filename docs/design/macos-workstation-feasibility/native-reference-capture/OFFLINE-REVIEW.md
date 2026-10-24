@@ -46,7 +46,7 @@ live behavioral experiment or claim independent custody of the evidence.
 
 ## Review the fixed report before sharing
 
-The checker prints only fixed keys and enumerated classifications. It creates
+The `review` command prints only fixed keys and enumerated classifications. It creates
 no report file and changes no capture contents. Privately review its JSON, then
 share only that text. Do not add tee, shell tracing, transcripts, screenshots or
 archives. The hidden input prompt is operational text, not part of the JSON.
@@ -161,3 +161,50 @@ codec, correct canonical metadata ownership, private human reference review,
 and parser/source/filtering/manifest/checkpoint acceptance still follow these
 diagnostics. macOS 27 evidence does not establish macOS 26 fidelity. Gatekeeper
 is a separate experiment and is not inspected by this tool.
+
+## Optional private field-name view: separate from the shareable report
+
+Use this only after explicitly choosing to inspect unknown names privately.
+The version-2 report can establish that additions exist and are null, but its
+fixed vocabulary deliberately cannot identify them. Public documentation may
+not identify a particular eslogger export either: the
+[Apple-authored manual](https://keith.github.io/xcode-man-pages/eslogger.1.html)
+provides no formal JSON schema or stability guarantee. A null value alone does
+not justify allowing an unknown field in a production codec.
+
+The separate `private-field-names` command is a **local human view**, not a
+report to send to an agent. It displays only the names of additional null exec
+payload fields. The names are private input and might themselves be sensitive;
+they are not automatically declared safe or copied into a shareable report.
+It prints no values, record excerpts, timestamps, paths, digests or counts.
+Do not send its terminal output, a screenshot or an archive to an agent.
+
+After closing Codex and other agents and disabling screen sharing/recording,
+run the freshly prepared checker privately, as your normal user without sudo:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_review.py private-field-names --private-run --local-only
+```
+
+Read its local-only notice. At the hidden confirmation prompt, type exactly
+`LOCAL VIEW`. At the next hidden prompt, enter the existing successful inner
+private-run directory's actual absolute path. No new capture is needed.
+
+The command refuses redirected/noninteractive input or output and declines to
+read evidence before the explicit confirmation. It uses the same bounded,
+read-only two-file reader and private ownership/location/link checks as review.
+It requires the diagnosed v11 profile, passing known envelope/process/event
+values, all existing exec fields present, only null additions and absent full
+hashes. It rejects more than sixteen additional names and names containing
+terminal escapes, whitespace, path separators, non-ASCII characters or more
+than eighty characters. No name is printed until all checks pass. Plain
+identifier syntax does **not** establish that a name is safe to share.
+
+Privately determine whether each displayed name is an ordinary, non-identifying
+schema field, using a public API/source reference where possible. If a name
+could be identifying or otherwise sensitive, keep it private and stop here.
+Only after that human review may you choose to type an individual confirmed
+non-sensitive schema name into chat, without copying the output or any values.
+Agents must not run this view on your capture, observe your screen or treat
+unreviewed names as public. The fixed `review` report still exports no unknown
+names; neither command opens an evidence gate.

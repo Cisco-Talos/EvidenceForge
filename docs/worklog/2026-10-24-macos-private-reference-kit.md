@@ -449,3 +449,62 @@ and becomes human-only at handoff. Do not inspect this or any older private kit
 after handoff. The human closes agents and reruns only the new offline checker,
 selecting the existing successful inner private-run directory at its hidden
 prompt and sharing only the personally reviewed fixed JSON.
+
+## V2 report narrows additions to null-only exec fields
+
+The human's completed version-2 report confirms all expected exec fields are
+PRESENT_ALL, wrapper/payload objects and wrapper fields PASS, required_fields
+PASS and exec_values PASS. Only only_known_fields fails; additional_value_types
+is NULL and reserved_field is ABSENT_ALL. The earlier envelope/process/fork/
+exit checks still pass, audit tokens remain NAMED, births TIMESTAMP_STRING and
+full hashes ABSENT_ALL. This identifies additional null exec payload members;
+it does not identify their names, number, semantic meaning, per-record presence
+or their possible nonnull forms. It is not a failed command-execution control.
+
+A bounded public search did not establish those members. Apple's documented
+[exec structure](https://developer.apple.com/documentation/endpointsecurity/es_event_exec_t?language=objc)
+lists the known API members and reserved. The public SDK mirror still contains
+macOS 26.5, not the required original v11 schema. The
+[Apple-authored eslogger manual](https://keith.github.io/xcode-man-pages/eslogger.1.html)
+provides no formal JSON schema and distinguishes export schema from message
+version. Do not infer field names from null values, allow every unknown null
+member, silently remove them or mark native fidelity established.
+
+The fixed enum report has reached its deliberate information limit. A separate
+optional human-only local field-name view is now prepared for the existing
+capture. `private-field-names --private-run --local-only` requires private kit
+location/current-owner permissions, interactive stdin AND stdout, and an exact
+hidden LOCAL VIEW confirmation before reading private input. It reuses the
+same bounded read-only two-file reader. It requires the diagnosed v11 shape,
+passing known values, only null exec additions and absent full hashes before
+selecting those additional names. It rejects more than sixteen names and any
+non-ASCII/nonidentifier/control/path/whitespace/overlong spelling before
+printing any names. No record values, paths, hashes or counts are displayed.
+It writes nothing and runs no commands or network requests.
+
+This view explicitly displays PRIVATE INPUT, not a shareable report. Even an
+identifier can be sensitive; syntactic validity is not a disclosure approval.
+Only the human may view it after closing agents and screen sharing/recording.
+Its output, screenshots and transcripts must never be pasted to an agent.
+The human may choose to type only an individually reviewed, non-identifying
+schema name after establishing it is safe; otherwise it stays private. Agents
+must not run the view, locate the capture or observe its screen. The existing
+`review` command and ReviewReport version 2 remain fixed-vocabulary and never
+export discovered names. No production codec, emitter or admission gate changes.
+
+Validation: all 314 selected tests pass (148 offline-review tests, 100 capture
+tests, 27 native contracts and 39 ES contracts). Added invented cases cover
+exact-profile selection, nonnull/layout/header rejection, identifier and count
+bounds, required flags, hidden explicit confirmation, refusal before any read
+when redirected/unconfirmed, exclusion from the shareable report, no value/
+canary output and exact unchanged two-file reads while writes, commands and
+connections are forbidden. Full Ruff checks and formatting pass for 1,330 files;
+git diff whitespace check passes. No native records or captured schemas have
+been opened or committed by the agent.
+
+New code-only kit: `/private/tmp/eforge-native-review-kit-9te8hsns`. Only prepare
+and isolated static --help were executed. It becomes human-only at handoff;
+agents must not inspect or execute private work in it or any older kit.
+No recollection is needed. Native exec/exit qualification and Gatekeeper remain
+open, pending the narrow human-private schema clarification and subsequent
+profile/acceptance work.

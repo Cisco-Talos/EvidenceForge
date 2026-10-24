@@ -239,6 +239,184 @@ def test_exec_diagnostic_vocabulary_matches_existing_model_without_admitting_new
         decode_endpoint_security_record(json.dumps(rows[1]))
 
 
+def _null_additions() -> list[dict[str, object]]:
+    rows = _rows()
+    for process in _views(rows):
+        del process["cdhash_full"]
+    rows[1]["event"]["exec"]["invented_nullable_field"] = None
+    rows[1]["event"]["exec"]["args"].append(_SECRET)
+    return rows
+
+
+def test_private_name_selection_never_includes_values_or_enters_shareable_report() -> None:
+    rows = _null_additions()
+    original = deepcopy(rows)
+    assert kit._private_null_exec_names(rows) == ("invented_nullable_field",)
+    report = kit.analyze(rows)
+    assert "invented_nullable_field" not in report.model_dump_json()
+    assert _SECRET not in report.model_dump_json()
+    assert report.review_version == 2
+    assert report.message_shapes == "INCONCLUSIVE"
+    assert rows == original
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["nonnull", "wrapper_extra", "bad_values", "version", "full_hash", "no_additions", "no_exec"],
+)
+def test_private_names_require_the_exact_diagnosed_profile(case: str) -> None:
+    rows = _null_additions()
+    if case == "nonnull":
+        rows[1]["event"]["exec"]["invented_nullable_field"] = _SECRET
+    elif case == "wrapper_extra":
+        rows[1]["event"][_SECRET] = None
+    elif case == "bad_values":
+        rows[1]["event"]["exec"]["last_fd"] = _SECRET
+    elif case == "version":
+        rows[1]["version"] = 10
+    elif case == "full_hash":
+        rows[0]["process"]["cdhash_full"] = None
+    elif case == "no_additions":
+        del rows[1]["event"]["exec"]["invented_nullable_field"]
+    else:
+        rows = [row for row in rows if row["event_type"] != 9]
+    with pytest.raises(kit.PrivateReviewError, match="^SOURCE$"):
+        kit._private_null_exec_names(rows)
+
+
+@pytest.mark.parametrize(
+    "name", ["\x1b]52;c;secret\x07", "a\nb", "/private/path", "a b", "é", "a" * 81]
+)
+def test_private_names_reject_terminal_control_and_nonidentifier_keys(name: str) -> None:
+    rows = _null_additions()
+    rows[1]["event"]["exec"][name] = None
+    with pytest.raises(kit.PrivateReviewError, match="^DATA$"):
+        kit._private_null_exec_names(rows)
+
+
+def test_private_name_display_is_bounded_before_any_names_are_printed() -> None:
+    rows = _null_additions()
+    rows[1]["event"]["exec"].update(
+        {f"invented_field_{index}": None for index in range(kit.MAX_PRIVATE_NAMES)}
+    )
+    with pytest.raises(kit.PrivateReviewError, match="^LIMIT$"):
+        kit._private_null_exec_names(rows)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["private-field-names"],
+        ["private-field-names", "--private-run"],
+        ["private-field-names", "--local-only"],
+        ["private-field-names", "--private-run", "--local-only", _SECRET],
+    ],
+)
+def test_private_name_mode_requires_both_explicit_flags_and_never_echoes_arguments(
+    args: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(kit, "_human_field_names", lambda: pytest.fail("Unexpected private view"))
+    assert kit.main(args) == 2
+    output = capsys.readouterr()
+    assert not output.err
+    assert _SECRET not in output.out
+    assert kit.ReviewReport.model_validate_json(output.out).error == "INPUT"
+
+
+@pytest.mark.parametrize("surface", ["stdin", "stdout"])
+def test_private_name_view_refuses_noninteractive_or_redirected_output_before_reading(
+    surface: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_review.py"))
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: surface != "stdin")
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: surface != "stdout")
+    monkeypatch.setattr(
+        kit, "_hidden_input", lambda _prompt: pytest.fail("Must reject before input")
+    )
+    monkeypatch.setattr(
+        kit, "_read_private_rows", lambda _path: pytest.fail("Must reject before private read")
+    )
+    assert kit.main(["private-field-names", "--private-run", "--local-only"]) == 2
+    output = capsys.readouterr()
+    assert not output.err
+    assert kit.ReviewReport.model_validate_json(output.out).error == "INPUT"
+
+
+@pytest.mark.parametrize(
+    "confirmation", ["NO", "local view", " LOCAL VIEW", "LOCAL VIEW ", _SECRET]
+)
+def test_private_name_view_requires_exact_explicit_confirmation_before_reading(
+    confirmation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_review.py"))
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(kit, "_hidden_input", lambda _prompt: confirmation)
+    monkeypatch.setattr(
+        kit, "_read_private_rows", lambda _path: pytest.fail("Must reject before private read")
+    )
+    assert kit.main(["private-field-names", "--private-run", "--local-only"]) == 2
+    output = capsys.readouterr()
+    assert "not a shareable report" in output.out
+    assert '"error": "INPUT"' in output.out
+    assert "PRIVATE FIELD NAMES ONLY" not in output.out
+    assert _SECRET not in output.out
+
+
+def test_explicit_private_name_view_reads_only_two_invented_files_without_values_or_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = _run(tmp_path, _null_additions())
+    before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in run.iterdir()}
+    monkeypatch.setattr(kit, "__file__", str(tmp_path / "private_review.py"))
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    responses = iter(["LOCAL VIEW", str(run)])
+    monkeypatch.setattr(kit.getpass, "getpass", lambda _prompt: next(responses))
+    original_open = os.open
+    opened: list[str] = []
+
+    def read_only_open(path: str | Path, flags: int, *args: object, **kwargs: object) -> int:
+        assert flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND) == 0
+        if kwargs.get("dir_fd") is not None:
+            assert path in {"SHAREABLE-REPORT.json", "probe-events.jsonl"}
+            opened.append(path)
+        else:
+            assert Path(path) == run
+        return original_open(path, flags, *args, **kwargs)
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Private name view must not write, connect or execute commands")
+
+    with monkeypatch.context() as guard:
+        guard.setattr(kit.os, "open", read_only_open)
+        guard.setattr(subprocess, "Popen", forbidden)
+        guard.setattr(subprocess, "run", forbidden)
+        guard.setattr(socket.socket, "connect", forbidden)
+        guard.setattr(Path, "write_bytes", forbidden)
+        guard.setattr(Path, "write_text", forbidden)
+        guard.setattr(Path, "chmod", forbidden)
+        assert kit.main(["private-field-names", "--private-run", "--local-only"]) == 0
+    output = capsys.readouterr()
+    assert opened == ["SHAREABLE-REPORT.json", "probe-events.jsonl"]
+    assert "not a shareable report" in output.out
+    assert '"invented_nullable_field"' in output.out
+    assert _SECRET not in output.out
+    assert str(run) not in output.out
+    assert _DIGEST.hex() not in output.out
+    assert '"gate_status"' not in output.out
+    assert not output.err
+    assert before == {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in run.iterdir()
+    }
+
+
 @pytest.mark.parametrize("encoding", ["hex", "base64", "array"])
 @pytest.mark.parametrize("sized", [False, True])
 def test_hash_candidate_representations_and_explicit_size(encoding: str, sized: bool) -> None:
