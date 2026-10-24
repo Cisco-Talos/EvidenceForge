@@ -357,3 +357,42 @@ OFFLINE-REVIEW.md. This directory becomes human-only at handoff; agents must
 not inspect it after handoff, run private review, or revisit any prior capture
 kit. Every existing private capture remains untouched. The human will share
 only the personally reviewed fixed JSON diagnostic.
+
+## Fresh paired workflow after LOCATION
+
+The user returned a fixed offline report with LOCATION and every data check
+inconclusive. No v11 layout evidence was obtained from that attempt. A
+nonabsolute/nonexistent path, a non-directory, a missing expected input file,
+a Git location or certain unsafe-file checks share this code; the specific
+cause has not been established. The user could not find the shareable report
+and explicitly requested the entire procedure to recreate the capture and run
+the offline review. No agent inspected any prior private directory or file.
+
+Fresh code-only copies were prepared at:
+
+- Capture: `/private/tmp/eforge-native-reference-kit-zux8l1vi`.
+- Offline review: `/private/tmp/eforge-native-review-kit-9hqza0ek`.
+
+Only preparation and their isolated static --help commands were run. No source
+behavior changed and no live check, collector or private review was executed.
+These locations become human-only at handoff, like every previous kit. Future
+agents must not scan, stat, open or execute private work in any of these paths.
+
+The human handoff uses one standalone zsh Terminal after closing agents, with
+the two new kit paths assigned to task-specific shell variables. Run the
+normal-user Python capture once after sudo -v. Continue only for the expected
+passing bounded behavior report with V11_UNQUALIFIED/WIRE_PROFILE. A shallow
+zsh glob restricted to this freshly created capture kit identifies its sole
+private-run directory; private shell file-presence checks verify both
+SHAREABLE-REPORT.json and a nonempty probe-events.jsonl before review. The human
+then copies that actual local path into the offline checker's hidden prompt.
+The prompt does not expand shell variables, tildes, globs or quoting. Never
+enter the outer capture kit or the separate review kit as the input run.
+
+If the expected files are absent or the capture errors, stop and share only the
+reviewed fixed capture report. Do not manually manufacture the shareable report,
+copy records into Git, weaken permissions or give the private path to an agent.
+Only the final fixed offline JSON should be shared after a successful review.
+The prior 236 passing selected tests cover the unchanged code; no test rerun is
+needed for new code-only paths. Native v11 integration and both evidence gates
+remain pending the human-private workflow and its fixed result.
