@@ -153,3 +153,6 @@ refreshed through the installer. No product version was changed.
 The human subsequently confirmed that Remote Login is already enabled locally.
 The next private SSH descriptor experiment can therefore use localhost without
 changing that service. The agent has not connected to it or inspected its state.
+
+The next code-only kit is now prepared; see the
+[SSH descriptor handoff](2026-10-26-macos-ssh-descriptor-reference.md).
