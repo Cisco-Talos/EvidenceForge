@@ -152,3 +152,11 @@ All 16 Asset Browser tests, TypeScript, full Ruff checks/formatting (1,334 files
 the revision-333 behavior digest and whitespace checks pass. The three focused
 slow source/CLI/fresh-process checkpoint tests also passed during the October 24
 implementation checks. No coverage or full release/soak gate is claimed here.
+
+## Next producer: GUI audit identity
+
+The user requested collecting evidence for each remaining coverage item first,
+one at a time. A separate own-process-only GUI audit experiment is prepared;
+see the [private GUI reference worklog](2026-10-26-macos-gui-audit-reference.md)
+for the code-only kit handoff and strict human-only collection boundary.
+No agent has run its native probe, platform preflight or private reviewer.
