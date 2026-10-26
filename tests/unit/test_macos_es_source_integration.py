@@ -57,7 +57,7 @@ def test_engine_activates_same_canonical_collector_independent_of_output(
         pid = engine._system_pids["MAC-01"]["eslogger"]
         collector = engine.state_manager.get_process_identity("MAC-01", pid)
         assert collector.image == "/usr/bin/eslogger"
-        assert collector.arguments == ("/usr/bin/eslogger", "fork")
+        assert collector.arguments == ("/usr/bin/eslogger", "fork", "exec", "exit")
         assert collector.credentials.effective_uid == 0
         assert collector.parent_pid == 1
         assert collector.executable_version is not None
@@ -85,7 +85,9 @@ def test_engine_activates_same_canonical_collector_independent_of_output(
             emitter.close()
 
 
-def _routed(tmp_path: Path, *, exported: bool = True, complete: bool = True) -> tuple:
+def _routed(
+    tmp_path: Path, *, exported: bool = True, complete: bool = True, known_stdio: bool = False
+) -> tuple:
     source, system, collector, prior, _, _, artifacts = _setup()
     state = source.owner.state
     start = source.coverage.known_from + timedelta(seconds=1)
@@ -104,6 +106,7 @@ def _routed(tmp_path: Path, *, exported: bool = True, complete: bool = True) -> 
         image_security=prior.image_security if complete else None,
         responsibility=ProcessResponsibility(None),
         macos_terminal="absent",
+        macos_standard_io="null" if known_stdio else None,
     )
     state.materialize_process(birth)
     parent = birth.identity
@@ -164,9 +167,9 @@ def test_router_publishes_selected_fork_and_filtered_counters_once(
         records = [
             decode_endpoint_security_record(line) for line in paths[0].read_text().splitlines()
         ]
-        assert len(records) == 1 and records[0].version == 10 and records[0].event_type == 11
-        assert records[0].process.audit_token[5] == parent.pid
-        assert records[0].event.fork.child.audit_token[5] == child.pid
+        assert len(records) == 1 and records[0].version == 11 and records[0].event_type == 11
+        assert records[0].process.audit_token.pid == parent.pid
+        assert records[0].event.fork.child.audit_token.pid == child.pid
 
 
 def test_native_preparation_failure_releases_delivery_and_preserves_state(tmp_path: Path) -> None:
@@ -292,7 +295,7 @@ def test_router_obeys_compiled_source_admission_and_missingness(
 
 
 @pytest.mark.parametrize(
-    "changes", [{"architecture": "x64"}, {"os": "macOS 27"}, {"type": "server"}]
+    "changes", [{"architecture": "x64"}, {"os": "macOS 26"}, {"type": "server"}]
 )
 def test_requested_native_source_rejects_an_unsupported_host_before_activation(
     tmp_path: Path, changes: dict
@@ -302,7 +305,7 @@ def test_requested_native_source_rejects_an_unsupported_host_before_activation(
     for key, value in changes.items():
         setattr(scenario.environment.systems[0], key, value)
     engine = GenerationEngine(scenario, tmp_path)
-    with pytest.raises(StateError, match="macOS 26 arm64"):
+    with pytest.raises(StateError, match="macOS 27 arm64"):
         engine._initialize()
     assert not engine.state_manager._running_processes
 

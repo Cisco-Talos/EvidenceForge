@@ -22,7 +22,7 @@ def es_image_security_fields(
     the historical v6/v9 profiles. No signature, platform trust or policy verdict
     is inferred from executable paths, architecture or catalog membership.
     """
-    if type(version) is not int or version not in {6, 9, 10}:
+    if type(version) is not int or version not in {6, 9, 10, 11}:
         raise ValueError("ES signing projection requires an admitted wire version")
     if (
         type(identity) is not ProcessIdentity
@@ -62,8 +62,8 @@ def es_image_security_fields(
         team_id=signature.team_id,
         cdhash=signature.cdhash.lower(),
     )
-    if version == 10:
+    if version in {10, 11}:
         if security.validation_category is None:
-            raise ValueError("ES v10 signing projection requires an explicit validation category")
+            raise ValueError("ES signing projection requires an explicit validation category")
         result["cs_validation_category"] = security.validation_category
     return result

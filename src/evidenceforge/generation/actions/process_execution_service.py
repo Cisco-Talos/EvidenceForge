@@ -410,6 +410,8 @@ class ProcessExecutionService:
         # Due closes own independent commits and must precede frozen State/timing plans.
         self.foreground._finalize_due_process_lifetimes(launch.time, exhaust=False)
         root = self._prepare_root(request, admission, launch)
+        if root.fork_event is not None:
+            launch = replace(launch, time=root.identity.execution_started_at)
         evidence = self._prepare_evidence(request, admission, launch, root)
         publication = self._prepare_publication(request, admission, root, evidence)
         running = self._publish_process(request, root, publication)
@@ -1181,7 +1183,10 @@ class ProcessExecutionService:
             source="shell_command",
             lifecycle_id=request.lifecycle_group_id or request.stable_id,
         )
-        forked_at = ensure_utc(launch.time) - gap
+        # The admission instant is shell readiness, including the previous
+        # foreground close. Fork begins there; exec follows its modeled latency.
+        forked_at = ensure_utc(launch.time)
+        executed_at = forked_at + gap
         if forked_at <= parent.execution_started_at:
             return None
         directory = self.state_manager.process_directory_at(parent, event_time=forked_at)
@@ -1201,12 +1206,21 @@ class ProcessExecutionService:
             birth,
             image=launch.actor.image,
             command_line=shlex.join(arguments),
-            executed_at=ensure_utc(launch.time),
+            executed_at=executed_at,
             arguments=arguments,
             environment=parent.environment,
             execution_directory=provider.directory(
-                parent.hostname, directory.native_path, launch.time
+                parent.hostname, directory.native_path, executed_at
             ),
+            exec_image=provider.launch(
+                parent.hostname,
+                parent.principal,
+                at=executed_at,
+                requested_path=launch.actor.image,
+                binary=binary,
+                kind="user",
+            ).image,
+            exec_script=MacosExecScript(),
             executable_version=(
                 ProcessExecutableVersion.from_binary(binary)
                 if type(binary) in {BinaryReleaseIdentity, LocalArtifactBinaryIdentity}
@@ -1619,47 +1633,39 @@ class ProcessExecutionService:
     def _prepare_macos_shell_publication(
         self, request: ProcessExecutionRequest, root: ProcessRootPlan, evidence: ProcessEvidencePlan
     ) -> PreparedProcessPublication:
-        """Join canonical fork/exec and native fork in the existing exact journal."""
-        from evidenceforge.generation.macos_es_source import prepared_macos_es_fork_publication
-
+        """Publish canonical fork/exec through the shared exact native source boundary."""
         assert root.cohort is not None and root.fork_event is not None
         assert request.effect_plan is not None and not request.effect_plan.nodes
-        with prepared_macos_es_fork_publication(
-            self.dispatcher, root.cohort, root.fork_event
-        ) as native:
-            with self.dispatcher.source_timing_planner.prepared_planning() as timing:
-                carriers = tuple(
-                    self.dispatcher.prepare_action_cohort_projection(
-                        event, source_timing_preparation=timing
-                    )
-                    for event in (root.fork_event, evidence.event)
+        with self.dispatcher.source_timing_planner.prepared_planning() as timing:
+            carriers = tuple(
+                self.dispatcher.prepare_action_cohort_projection(
+                    event, source_timing_preparation=timing
                 )
-            artifacts = (
-                request.prepared_effects.artifact_publications
-                if request.prepared_effects is not None
-                else ()
+                for event in (root.fork_event, evidence.event)
             )
-            members = tuple(
-                self.dispatcher.bind_action_cohort_projection(
-                    carrier,
-                    state_plan=root.cohort,
-                    artifact_publications=artifacts if index == 1 else (),
-                )
-                for index, carrier in enumerate(carriers)
+        artifacts = (
+            request.prepared_effects.artifact_publications
+            if request.prepared_effects is not None
+            else ()
+        )
+        members = tuple(
+            self.dispatcher.bind_action_cohort_projection(
+                carrier,
+                state_plan=root.cohort,
+                artifact_publications=artifacts if index == 1 else (),
             )
-            effects = request.effect_plan
-            batch = self.dispatcher.prepare_action_cohort_batch(
-                f"macos-process-cohort:{root.cohort.semantic_id}",
-                root.cohort,
-                members,
-                (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
-                (),
-                (),
-                exact_projection=True,
-                es_delivery=native.delivery if native else None,
-                es_collector_process=native.collector if native else None,
-                es_native_sink=native.sink if native else None,
-            )
+            for index, carrier in enumerate(carriers)
+        )
+        effects = request.effect_plan
+        batch = self.dispatcher.prepare_action_cohort_batch(
+            f"macos-process-cohort:{root.cohort.semantic_id}",
+            root.cohort,
+            members,
+            (ExecutionEffectAuditCohortEntry(effects, effects.reconcile(())),),
+            (),
+            (),
+            exact_projection=True,
+        )
         return PreparedProcessPublication(members[0], members[1:], timing, artifacts, None, batch)
 
     def _publish_process(

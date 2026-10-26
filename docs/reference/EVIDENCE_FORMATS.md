@@ -658,31 +658,43 @@ The experimental Mac SSH receiver projects canonical login/logout, flow and help
 
 ### Experimental macOS Unified Log NDJSON
 
-`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The macOS 26 arm64 profile renders only `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]`. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
+`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders only `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]`. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
 
 The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Optional source/backtrace fields stay absent; no completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
 
 ### Experimental macOS Endpoint Security NDJSON
 
-`macos_endpoint_security` selects the modeled macOS 26 arm64 workstation profile and writes
-`<host>/macos_endpoint_security.ndjson` for actual authenticated forks with complete required
-metadata. The canonical boot fleet activates one privileged `/usr/bin/eslogger fork` process,
-independently of output filtering. This is a modeled process; EvidenceForge never runs the host
-collector or discovers local clients. The finite single-client inventory, selected wire version,
-boot/timebase and counter heads survive checkpoint recovery through existing owners.
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
 
-The Mac SSH startup coordinator routes its actual fork phases through this source. Required
-static signatures, execution validation, audit relationships, terminal and executable/file facts
-must all be known. The bounded built-in SSH path supplies these facts and produces nonempty
-fork output; unsupported or incomplete paths fail before commit with a metadata diagnostic.
-Ordinary aggregate process starts never become fork records. A run without eligible forks may
-produce no native file. Format discovery alone does not establish a nonempty accepted CLI dataset.
+`macos_endpoint_security` writes `<host>/macos_endpoint_security.ndjson` using the bounded
+macOS 27 arm64 message-11 profile: fork (11), exec (9), and exit (15). The canonical boot fleet
+models one privileged `/usr/bin/eslogger fork exec exit` process independently of output selection.
+EvidenceForge never runs the host collector or reads local clients. Frozen profile, finite client
+inventory, boot clock and counters share existing checkpoint and exact publication owners.
 
-Message version 10/event 11 is the only generation pair. Existing historical decoder admissions
-do not enable exec/exit, file events or a different current-build profile. Complete filtered or
-source-dropped observations retain collector counters without exporting rows. The normal source
-policy owns collection windows, missingness and export delay; native occurrence wall/Mach times
-remain canonical. Exact publication shares State, lifecycle, retained artifacts and the existing
-source journal, so a partial sink failure resumes frozen bytes without allocating another fork or
-counter. SOF-ELK and Splunk targets preserve these native bytes; external SIEM normalization and
-current-build fidelity remain unvalidated. ES-R1 and GK-R1 remain gated by user decision.
+A native fork requires an actual authenticated fork and complete signing, validation, audit,
+terminal and file facts. Exec additionally requires exact argv, environment, cwd, Mach-O slice,
+script presence and complete post-exec descriptors. The bounded v11 codec exports null
+`entitlements` only when the canonical binary explicitly models absent entitlements; unknown and
+nonnull entitlements do not qualify. Exit requires an explicit canonical completed status or
+signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
+become native fork or exec records.
+
+Unsupported individual phases retain nonexported counter observations, without placeholder
+native records. Known sibling forks remain available; later exported rows retain the resulting
+sequence gaps. In particular, current SSH shell descriptor tables remain unknown, so those
+commands can still produce native forks and eCAR exec evidence without native exec rows.
+Local GUI audit-origin gaps also remain explicit. The controlled, fully specified v11 process
+path supports all three phases; this does not imply native coverage for every ordinary command.
+
+Source policy owns windows, missingness and export delay. Atomic publication retains canonical
+identity, lifecycle, artifact leases, counters and frozen native bytes; sink recovery reuses
+those bytes without executing another process or allocating counters again. Historical v6/v9/v10
+decoding does not enable retired generation targets. Nonnull entitlement dictionaries, full-hash
+extensions, other native ES families, Gatekeeper denial and external SIEM ingestion remain outside
+this qualified scope. The human-reviewed macOS 27 controlled process evidence qualifies this
+bounded shape; broader native fidelity remains unclaimed. See the
+[profile worklog](../worklog/2026-10-24-macos27-native-process-profile.md).

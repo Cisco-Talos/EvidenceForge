@@ -458,6 +458,20 @@ def test_installed_and_runtime_exec_images_keep_their_own_providers(
     fixture.owner.collectors.cancel(fixture.delivery)
 
 
+@pytest.mark.parametrize("providers", ["ii", "ir", "ri", "rr"])
+def test_only_fully_installed_exec_can_omit_the_runtime_artifact_owner(providers: str) -> None:
+    fixture = _fixture(providers=providers)
+    supplied = replace(fixture, artifacts=None)
+    if providers == "ii":
+        with _prepare(supplied) as prepared:
+            assert decode_endpoint_security_record(prepared.ndjson).event_type == 9
+    else:
+        with pytest.raises(StateError, match="Runtime exec requires its retained artifact owner"):
+            with _prepare(supplied):
+                pytest.fail("runtime identity was accepted without its owner")
+    fixture.owner.collectors.cancel(fixture.delivery)
+
+
 @pytest.mark.parametrize(
     "damage", ["before_stat", "after_stat", "deployments", "empty_deployments", "runtime_stat"]
 )

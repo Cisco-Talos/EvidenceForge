@@ -26,7 +26,7 @@ def _coverage_notes(issues: list[ValidationIssue]) -> list[ValidationIssue]:
     return [issue for issue in issues if "no observable host endpoint source" in issue.message]
 
 
-@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 26"])
+@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 27"])
 def test_network_only_storyline_has_endpoint_note_without_format_warnings(
     scenarios_dir: Path, os_name: str
 ) -> None:
@@ -61,11 +61,11 @@ def test_network_only_storyline_has_endpoint_note_without_format_warnings(
         ("Ubuntu Linux 24.04", "ecar"),
         ("Ubuntu Linux 24.04", "syslog"),
         ("Ubuntu Linux 24.04", "bash_history"),
-        ("macOS 26", "ecar"),
-        ("macOS 26", "bash_history"),
-        ("macOS 26", "zsh_history"),
-        ("macOS 26", "macos_unified_log"),
-        ("macOS 26", "macos_endpoint_security"),
+        ("macOS 27", "ecar"),
+        ("macOS 27", "bash_history"),
+        ("macOS 27", "zsh_history"),
+        ("macOS 27", "macos_unified_log"),
+        ("macOS 27", "macos_endpoint_security"),
     ],
 )
 def test_each_applicable_endpoint_source_counts_without_requiring_sibling_formats(
@@ -79,7 +79,7 @@ def test_each_applicable_endpoint_source_counts_without_requiring_sibling_format
     assert not any(issue.severity == "error" for issue in issues)
 
 
-@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 26"])
+@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 27"])
 @pytest.mark.parametrize(
     "override, observable",
     [
@@ -118,9 +118,9 @@ def test_endpoint_coverage_uses_effective_collection_on_the_exact_host(
     [
         ("Ubuntu Linux 24.04", "bash_history"),
         ("Ubuntu Linux 24.04", "syslog"),
-        ("macOS 26", "zsh_history"),
-        ("macOS 26", "macos_unified_log"),
-        ("macOS 26", "macos_endpoint_security"),
+        ("macOS 27", "zsh_history"),
+        ("macOS 27", "macos_unified_log"),
+        ("macOS 27", "macos_endpoint_security"),
     ],
 )
 def test_limited_endpoint_source_does_not_imply_general_process_execution_coverage(
@@ -199,7 +199,7 @@ def test_native_source_gate_still_rejects_an_ineligible_mac(scenarios_dir: Path)
         ("Windows 11", "windows_event_sysmon"),
         ("Windows 11", "ecar"),
         ("Ubuntu Linux 24.04", "ecar"),
-        ("macOS 26", "ecar"),
+        ("macOS 27", "ecar"),
     ],
 )
 def test_one_capable_process_source_does_not_require_other_os_formats(
@@ -231,7 +231,7 @@ def test_one_capable_process_source_does_not_require_other_os_formats(
     assert not [issue for issue in issues if issue.severity in {"error", "warning"}]
 
 
-@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 26"])
+@pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 27"])
 @pytest.mark.parametrize("override", [{"enabled": False}, {"capabilities": ["network"]}])
 def test_another_hosts_process_collection_cannot_cover_the_authored_host(
     scenarios_dir: Path, os_name: str, override: dict[str, object]
@@ -268,9 +268,9 @@ def test_another_hosts_process_collection_cannot_cover_the_authored_host(
         ("Ubuntu Linux 24.04", "ecar", False),
         ("Ubuntu Linux 24.04", "syslog", False),
         ("Ubuntu Linux 24.04", "bash_history", True),
-        ("macOS 26", "ecar", False),
-        ("macOS 26", "macos_unified_log", True),
-        ("macOS 26", "macos_endpoint_security", True),
+        ("macOS 27", "ecar", False),
+        ("macOS 27", "macos_unified_log", True),
+        ("macOS 27", "macos_endpoint_security", True),
     ],
 )
 def test_ssh_session_visibility_requires_receiver_session_evidence(
@@ -310,7 +310,7 @@ def test_web_access_is_application_evidence_without_endpoint_collection(
     assert not [issue for issue in issues if issue.severity in {"warning", "error"}]
 
 
-@pytest.mark.parametrize("os_name, host_type", [("macOS", "workstation"), ("macOS 26", "server")])
+@pytest.mark.parametrize("os_name, host_type", [("macOS", "workstation"), ("macOS 27", "server")])
 def test_unavailable_workspace_profile_does_not_count_as_observable_endpoint_collection(
     scenarios_dir: Path, os_name: str, host_type: str
 ) -> None:
@@ -325,7 +325,7 @@ def test_unavailable_workspace_profile_does_not_count_as_observable_endpoint_col
 def test_incorrect_output_format_keeps_its_original_compatibility_error(
     scenarios_dir: Path,
 ) -> None:
-    issues = ScenarioValidator(_scenario(scenarios_dir, "macOS 26", "syslog")).validate()
+    issues = ScenarioValidator(_scenario(scenarios_dir, "macOS 27", "syslog")).validate()
 
     assert any(issue.severity == "error" and "requires linux" in issue.message for issue in issues)
 

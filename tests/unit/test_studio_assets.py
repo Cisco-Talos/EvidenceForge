@@ -76,8 +76,8 @@ def test_macos_host_add_and_edit_preserve_build_architecture_and_other_hosts(
     host = {
         "hostname": "MAC-01",
         "ip": "10.0.0.2",
-        "os": "macOS 26",
-        "os_build": "25A354",
+        "os": "macOS 27",
+        "os_build": "modeled-macos27-arm64",
         "architecture": "arm64",
         "type": "workstation",
     }

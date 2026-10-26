@@ -20,8 +20,7 @@ For modeled Mac workstations, read `/eforge:references:evidence-endpoint-macos` 
 2. Classify it before acting:
    - Scenario 1.0 uses `version: "1.0"` and never requires pack discovery.
    - Scenario 2.0 uses `scenario_version: "2.0"`; it may be monolithic or composed.
-   - A resolved document uses `kind: evidenceforge.resolved-scenario`; it is generated,
-     authoritative, and non-editable.
+   - A resolved document uses `kind: evidenceforge.resolved-scenario`; it is generated, authoritative, and non-editable.
 3. Read `/eforge:references:project-context`. For authored input, use the current working directory
    and omit `--project-root` unless the user explicitly selects another root.
 4. For a resolved document, do not discover packs, includes, project config, or a working-directory
@@ -29,8 +28,7 @@ For modeled Mac workstations, read `/eforge:references:evidence-endpoint-macos` 
 5. In an EvidenceForge source checkout, use `uv run eforge` so validation exercises that
    checkout's code. Outside a source checkout, use the installed `eforge` command.
 
-Packs are optional. Do not list or scan packs for Scenario 1.0 or monolithic Scenario 2.0, and do
-not warn about their absence.
+Packs are optional. Do not scan packs for Scenario 1.0 or monolithic Scenario 2.0, or warn about their absence.
 
 ## Validate read-only
 
@@ -41,15 +39,10 @@ Do not pipe its JSON through Python merely to regroup or reprint issues.
 eforge validate <absolute-scenario-path> --json [--checkpoint-hours <hours>]
 ```
 
-For a compact repair-oriented display, run `eforge validate <absolute-scenario-path>` without
-`--json`. It already prints issue severity, field paths, messages, and suggestions while preserving
-the validator's exit status.
+For a repair-oriented display, omit `--json`. Text output preserves severity, field paths,
+messages, suggestions, and exit status.
 
-For a resolved document, omit `--project-root`:
-
-```bash
-eforge validate <absolute-RESOLVED_SCENARIO.yaml> --json
-```
+For a resolved document, use `eforge validate <absolute-RESOLVED_SCENARIO.yaml> --json` and omit `--project-root`.
 
 Use text output only when the installed CLI does not support `--json`. Preserve the exit status:
 
@@ -61,11 +54,8 @@ Those meanings apply after CLI parsing. Usage help or an unknown-option error wi
 the invocation or CLI version is incompatible; it does not prove the scenario is invalid.
 
 When storage is authored or implied, add `--show-storage` and read `/eforge:references:validation-storage`.
-Review platform/native paths, backing/advertised filesystems, credentials, client mode, and audit.
-Drive/NTFS/ReFS versus POSIX/ext4/XFS mismatches are errors. Linux clients require CIFS or
-`smbclient`; Samba servers require Samba service/storage intent, not generic `file_server`. Fixed
-mappings require a principal, per-user forbids one, and external clients cannot use mapped/mounted
-paths. Keep local actor, SMB principal, and effective UID/GID distinct.
+That reference owns platform/path, filesystem, service, client-mapping and audit rules.
+Keep local actor, SMB principal, and effective UID/GID distinct.
 
 Do not run `resolve` merely to validate. When composition or provenance diagnosis is needed, use
 its non-writing explanation mode and omit `--output`; do not create a temporary resolved document:
@@ -74,9 +64,8 @@ its non-writing explanation mode and omit `--output`; do not create a temporary 
 eforge resolve <absolute-scenario-path> --explain-composition --json
 ```
 
-Add `--include-effective-scenario` only when the effective model is needed; its larger payload is
-not the default for a compact repair loop. Route direct pack schema, catalog, dependency, digest,
-or collision work to `/eforge pack`. Keep malformed Scenario 2.0 composition references here.
+Add `--include-effective-scenario` only when the effective model is needed. Route direct pack
+schema, catalog, dependency, digest or collision work to `/eforge pack`; keep malformed composition references here.
 
 ## Interpret compactly
 
@@ -94,8 +83,10 @@ Inspect only the implicated authored fragment rather than loading every include 
   behavior with no supported evidence projection remains a warning (or an error when a runtime
   prerequisite requires it). A limited native or history source does not imply complete process,
   session, or file coverage, and format selection does not guarantee rows.
-- On a clean pass, state that the scenario is valid; summarize counts or topology only if useful or
-  requested.
+- Generation targets must be allowlisted. Only macOS 27 arm64 workstations currently qualify
+  for Mac generation; all other Mac releases fail regardless of output selection. Historical
+  decoding does not enable a target. Report the error without silently changing the declared OS.
+- On a clean pass, state that the scenario is valid; add counts or topology only if useful or requested.
 - Resource forecasts are advisory and model the 24-hour checkpoint default; pass the intended `--checkpoint-hours` value (`0` disables it) when overriding that cadence.
   Distinguish final output from peak working disk; do not use hidden workload override flags.
 - A warning that a user-owned legacy public-identity overlay was consumed is emitted only by this

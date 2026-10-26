@@ -2849,9 +2849,7 @@ def _pack_artifact_payload(
                 image = record.binary.mach_o_image
                 binary_fields = (
                     *binary_fields,
-                    None
-                    if signature is None
-                    else (signature.signing_id, signature.team_id, signature.cdhash),
+                    None if signature is None else signature.serialized_values(),
                     None if image is None else (image.build_uuid, image.architecture),
                 )
     fields: tuple[object, ...] = (
@@ -2986,9 +2984,7 @@ def _local_artifact_record_primitive(record: object) -> tuple[object, ...]:
                 raise StateError("local artifact binary has malformed image metadata")
             binary_values = (
                 *binary_values,
-                None
-                if signature is None
-                else (signature.signing_id, signature.team_id, signature.cdhash),
+                None if signature is None else signature.serialized_values(),
                 None if image is None else (image.build_uuid, image.architecture),
             )
 
@@ -4921,9 +4917,7 @@ def _pack_binary_release(value: BinaryReleaseIdentity) -> bytes:
         signature = value.code_signature
         values = (
             *values,
-            (signature.signing_id, signature.team_id, signature.cdhash)
-            if signature is not None
-            else None,
+            signature.serialized_values() if signature is not None else None,
         )
     if value.mach_o_image is not None:
         values = (*values, (value.mach_o_image.build_uuid, value.mach_o_image.architecture))
@@ -4938,7 +4932,7 @@ def _unpack_binary_release(row: bytes) -> BinaryReleaseIdentity:
     image = None
     if len(values) >= 15 and (len(values) == 15 or values[14] is not None):
         signature_values = values[14]
-        if type(signature_values) is not list or len(signature_values) != 3:
+        if type(signature_values) is not list or len(signature_values) not in {3, 4}:
             raise StateError("binary release code signature row is invalid")
         signature = MachOCodeSignature(*signature_values)
     if len(values) == 16:

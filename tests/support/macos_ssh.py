@@ -18,7 +18,7 @@ def macos_ssh_scenario(
     data["time_window"] = {"start": "2026-10-15T10:00:00Z", "duration": "1h", "warmup": "1h"}
     data["environment"]["users"][0]["primary_system"] = "TEST-01"
     data["environment"]["systems"][0].update(
-        os="macOS 26",
+        os="macOS 27",
         architecture="arm64",
         services=[],
         roles=["workstation"],
@@ -60,7 +60,7 @@ def macos_ssh_scenario(
     ]
     if macos_receiver:
         data["environment"]["systems"][1].update(
-            os="macOS 26", architecture="arm64", type="workstation", assigned_user="test_user"
+            os="macOS 27", architecture="arm64", type="workstation", assigned_user="test_user"
         )
         data["storyline"][1]["activity"] = "Connect between modeled Mac workstations"
         data["output"]["logs"] = [

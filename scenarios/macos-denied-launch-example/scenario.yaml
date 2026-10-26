@@ -1,6 +1,6 @@
 version: '1.0'
 name: macos-workstation-example
-description: Experimental macOS 26 arm64 baseline with correlated eCAR, network and
+description: Experimental macOS 27 arm64 baseline with correlated eCAR, network and
   interactive zsh history
 environment:
   description: One invented development workstation on an observed network
@@ -14,8 +14,8 @@ environment:
   systems:
   - hostname: MAC-01
     ip: 192.0.2.10
-    os: macOS 26
-    os_build: 25A354
+    os: macOS 27
+    os_build: modeled-macos27-arm64
     architecture: arm64
     type: workstation
     assigned_user: alex

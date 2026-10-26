@@ -9277,13 +9277,21 @@ class EventDispatcher:
             if type(record.es_delivery) is ESDeliveryBatchPreparation
             else (record.es_delivery.observation,)
         )
-        lines = tuple(record.es_native_projection.splitlines(keepends=True))
+        if type(record.es_delivery) is ESDeliveryBatchPreparation:
+            assert record.es_registry is not None
+            lines = record.es_registry.retained_native_batch_projection(
+                record.es_delivery, canonical_token=record.state_plan.publication_token
+            )
+            if lines is None:
+                raise EventContractError("Native sink lost its frozen batch")
+        else:
+            lines = (record.es_native_projection,)
         if len(lines) != len(observations):
             raise EventContractError("Native sink changed its exact delivery row count")
         return tuple(
             line
             for line, observation in zip(lines, observations, strict=True)
-            if observation.status in {"visible", "delayed"}
+            if line is not None and observation.status in {"visible", "delayed"}
         )
 
     @staticmethod
@@ -9977,6 +9985,75 @@ class EventDispatcher:
             raise
 
     def prepare_action_cohort_batch(
+        self,
+        root_action_id: str,
+        state_plan: ActionCohortMaterializationPlan,
+        dispatches: tuple[PreparedDispatch, ...],
+        audit_entries: tuple[ExecutionEffectAuditCohortEntry, ...],
+        effect_member_bindings: tuple[ActionCohortEffectMemberBinding, ...],
+        external_effect_links: tuple[ActionCohortExternalEffectLink, ...],
+        *,
+        owned_effect_plans: tuple[OwnedEffectOccurrencePlan, ...] = (),
+        exact_projection: bool = False,
+        service_closure: ActionCohortServiceClosure | None = None,
+        es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None,
+        es_collector_process: ProcessIdentity | None = None,
+        es_native_sink: ExternalSortedLineWriter | None = None,
+    ) -> PreparedActionCohortBatch:
+        """Select native observations of exact canonical process cohorts before publication."""
+        from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
+
+        options = dict(
+            owned_effect_plans=owned_effect_plans,
+            exact_projection=exact_projection,
+            service_closure=service_closure,
+            es_delivery=es_delivery,
+            es_collector_process=es_collector_process,
+            es_native_sink=es_native_sink,
+        )
+        if (
+            exact_projection is True
+            and es_delivery is None
+            and es_collector_process is None
+            and es_native_sink is None
+            and type(state_plan) is ActionCohortMaterializationPlan
+            and type(dispatches) is tuple
+            and dispatches
+            and all(type(item) is PreparedDispatch for item in dispatches)
+        ):
+            from evidenceforge.generation.macos_es_publication import (
+                prepared_macos_es_process_publication,
+            )
+
+            with prepared_macos_es_process_publication(
+                self, state_plan, tuple(item._occurrence for item in dispatches)
+            ) as native:
+                if native is not None:
+                    options.update(
+                        es_delivery=native.delivery,
+                        es_collector_process=native.collector,
+                        es_native_sink=native.sink,
+                    )
+                return self._prepare_action_cohort_batch(
+                    root_action_id,
+                    state_plan,
+                    dispatches,
+                    audit_entries,
+                    effect_member_bindings,
+                    external_effect_links,
+                    **options,
+                )
+        return self._prepare_action_cohort_batch(
+            root_action_id,
+            state_plan,
+            dispatches,
+            audit_entries,
+            effect_member_bindings,
+            external_effect_links,
+            **options,
+        )
+
+    def _prepare_action_cohort_batch(
         self,
         root_action_id: str,
         state_plan: ActionCohortMaterializationPlan,
@@ -11442,17 +11519,55 @@ class EventDispatcher:
         expected_collector = owner._live_process(collector, observation.observed_at)
         if observation.collector_process != expected_collector:
             raise EventContractError("ES binding lost its exact collector execution")
-        native = registry.retained_native_projection(
-            delivery, canonical_token=record.state_plan.publication_token
-        )
+        native = registry.retained_native_projection(delivery)
         if native is None:
+            if self._counter_only_es_delivery(registry, delivery):
+                return ""
             raise EventContractError(
                 "ES binding requires frozen native bytes before canonical publication"
             )
+        native = registry.retained_native_projection(
+            delivery, canonical_token=record.state_plan.publication_token
+        )
         self._validate_action_cohort_es_file_placements(
             record, (native,), events=(event,), observations=(observation,)
         )
         return native
+
+    @staticmethod
+    def _counter_only_es_delivery(
+        registry: ESCollectorRegistry,
+        delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation,
+    ) -> bool:
+        """Allow no native bytes only for nonexported observations of the bounded v11 source.
+
+        The ordinary collector claim authenticates counters and exact occurrence
+        IDs. No source bytes or native metadata are asserted in this case. State
+        and the full canonical cohort are still authenticated by the caller.
+        """
+        observations = (
+            delivery.observations
+            if type(delivery) is ESDeliveryBatchPreparation
+            else (delivery.observation,)
+        )
+        if not observations or any(
+            observation.status in {"visible", "delayed"} for observation in observations
+        ):
+            return False
+        connection = registry.connection(observations[0].source_instance)
+        if connection is None or connection.source_profile is None:
+            return False
+        from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
+            load_macos_endpoint_security_profile,
+        )
+
+        profile = load_macos_endpoint_security_profile(
+            profile_id=connection.source_profile.profile_id
+        )
+        return (
+            profile is not None
+            and profile.message_version == connection.source_profile.message_version == 11
+        )
 
     @staticmethod
     def _es_process_occurrence(event: CanonicalOccurrence) -> tuple[str, int]:
@@ -11515,20 +11630,23 @@ class EventDispatcher:
                 or observation.collector_process != owner._live_process(collector, event.timestamp)
             ):
                 raise EventContractError("ES batch binding disagrees with its canonical member")
+        native = registry.retained_native_batch_projection(delivery)
+        if native is None:
+            if self._counter_only_es_delivery(registry, delivery):
+                return ""
+            raise EventContractError("ES batch binding requires every frozen native row")
         native = registry.retained_native_batch_projection(
             delivery, canonical_token=record.state_plan.publication_token
         )
-        if native is None:
-            raise EventContractError("ES batch binding requires every frozen native row")
         self._validate_action_cohort_es_file_placements(
             record, native, events=events, observations=delivery.observations
         )
-        return "".join(native)
+        return "".join(line for line in native if line is not None)
 
     def _validate_action_cohort_es_file_placements(
         self,
         record: _PreparedActionCohortBatchRecord,
-        native: tuple[str, ...],
+        native: tuple[str | None, ...],
         *,
         events: tuple[CanonicalOccurrence, ...] | None = None,
         observations: tuple[ESCollectorObservation, ...],
@@ -11563,6 +11681,10 @@ class EventDispatcher:
                 observations,
                 strict=True,
             ):
+                if line is None:
+                    if observation.status in {"visible", "delayed"}:
+                        raise ValueError("Visible ES occurrence has no native record")
+                    continue
                 parsed = decode_endpoint_security_record(line)
                 if (
                     parsed.event_type != observation.event_type

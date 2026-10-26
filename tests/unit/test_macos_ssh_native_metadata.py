@@ -74,11 +74,11 @@ def test_real_ssh_metadata_inheritance_authentication_native_forks_and_close(
         assert len(records) == 3
         for record in records:
             decode_endpoint_security_record(json.dumps(record))
-            assert record["event_type"] == 11 and record["version"] == 10
-        assert records[0]["process"]["audit_token"][0] == 2**32 - 1
-        assert records[0]["process"]["audit_token"][6] == 0
-        assert records[1]["process"]["audit_token"][0] == 501
-        assert records[2]["event"]["fork"]["child"]["audit_token"][0] == 501
+            assert record["event_type"] == 11 and record["version"] == 11
+        assert records[0]["process"]["audit_token"]["auid"] == 2**32 - 1
+        assert records[0]["process"]["audit_token"]["asid"] == 0
+        assert records[1]["process"]["audit_token"]["auid"] == 501
+        assert records[2]["event"]["fork"]["child"]["audit_token"]["auid"] == 501
 
 
 def test_old_execution_policy_preserves_unknown_audit_and_responsibility(modeled: _Fixture) -> None:

@@ -97,7 +97,7 @@ def test_old_inputs_need_no_native_profile_fields(tmp_path: Path) -> None:
     config = build_management_effective_config(tmp_path)
     with effective_config_scope(config):
         profile = load_macos_unified_log_profiles()
-        assert profile.profile == "macos26-workspace-entry-v1"
+        assert profile.profile == "macos27-workspace-entry-v1"
         assert profile.mach_timebase.numerator == 125
         assert profile.mach_timebase.denominator == 3
         assert workspace_request_callsite().trace_id & 255 == 4

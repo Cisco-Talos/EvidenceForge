@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Bounded fork-profile selection and modeled collector initialization.
+"""Bounded native profile selection and modeled collector initialization.
 
 An explicitly activated canonical collector is required. Installation, process
 names and the generator host cannot establish an ES connection. The normal
@@ -102,10 +102,10 @@ def prepared_macos_es_fork_publication(
     )
     if connection is None or connection.source_profile is None:
         if emitter is not None:
-            raise StateError("Native ES fork requires an activated macOS 26 arm64 source profile")
+            raise StateError("Native ES fork requires an activated macOS 27 arm64 source profile")
         yield None
         return
-    profile = load_macos_endpoint_security_profile()
+    profile = load_macos_endpoint_security_profile(profile_id=connection.source_profile.profile_id)
     coverage = dispatcher.es_collectors.complete_membership_coverage(connection.hostname)
     if profile is None or coverage is None or connection.process is None:
         raise StateError("Native ES fork lost its frozen source policy or complete inventory")
@@ -260,19 +260,17 @@ def prepared_macos_es_fork_publication(
 
 
 def select_macos_es_profile(system: System) -> MacosEndpointSecurityProfile | None:
-    """Select only explicit macOS 26 arm64 workstations with frozen source policy.
+    """Select an explicit workstation target from the active generation catalog.
 
     An exact authored build is retained as provenance, not declared empirically
     validated by this family-level modeled profile.
     """
-    if (
-        type(system) is not System
-        or system.type != "workstation"
-        or system.architecture != "arm64"
-        or re.fullmatch(r"macos 26(?:\.[0-9]+){0,2}", system.os.strip(), re.IGNORECASE) is None
-    ):
+    if type(system) is not System or system.type != "workstation" or system.architecture != "arm64":
         return None
-    return load_macos_endpoint_security_profile()
+    match = re.fullmatch(r"macos ([0-9]+)(?:\.[0-9]+){0,2}", system.os.strip(), re.IGNORECASE)
+    if match is None:
+        return None
+    return load_macos_endpoint_security_profile(int(match.group(1)), system.architecture)
 
 
 def macos_es_source_instance(hostname: str) -> str:
@@ -330,7 +328,7 @@ class MacosESSource:
                 or self.clock.timebase.numerator != self.source_profile.timebase_numerator
                 or self.clock.timebase.denominator != self.source_profile.timebase_denominator
                 or tuple(item.event_type for item in connection.event_counters)
-                != (self.profile.event_type,)
+                != self.profile.event_types
                 or self.owner.state.get_macos_boot_clock(
                     self.coverage.hostname, timebase=self.clock.timebase
                 )
@@ -380,7 +378,7 @@ class MacosESSource:
                 delivery=connection.next_delivery,
                 request=ESDeliveryRequest(
                     occurrence_id=f"process-fork:{child.object_id}",
-                    event_type=self.profile.event_type,
+                    event_type=11,
                     observed_at=at,
                     decision=decision,
                 ),
@@ -409,7 +407,7 @@ class MacosESSource:
             or _process(collector) != connection.process
             or delivery.observation.source_instance != self.source_instance
             or delivery.observation.generation != connection.generation
-            or delivery.observation.event_type != self.profile.event_type
+            or delivery.observation.event_type != 11
             or not self.coverage.known_from
             <= delivery.observation.observed_at
             < self.coverage.known_until
@@ -459,7 +457,7 @@ def initialize_macos_es_source(
         raise StateError("Native ES initialization requires exact canonical owners")
     profile = select_macos_es_profile(system)
     if profile is None:
-        raise StateError("Native ES source requires frozen macOS 26 arm64 workstation policy")
+        raise StateError("Native ES source requires frozen macOS 27 arm64 workstation policy")
     profile = MacosEndpointSecurityProfile.model_validate_json(profile.model_dump_json())
     coverage = ESClientMembershipCoverage(
         hostname=system.hostname, known_from=known_from, known_until=known_until
@@ -529,8 +527,9 @@ def initialize_macos_es_source(
                             last_delivery_at=known_from,
                             next_delivery=0,
                             next_global_sequence=0,
-                            event_counters=(
-                                ESEventCounter(event_type=profile.event_type, next_sequence=0),
+                            event_counters=tuple(
+                                ESEventCounter(event_type=event_type, next_sequence=0)
+                                for event_type in profile.event_types
                             ),
                             source_profile=stamp,
                             process=_process(collector),

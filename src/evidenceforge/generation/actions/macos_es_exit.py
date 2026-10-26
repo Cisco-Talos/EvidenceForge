@@ -88,7 +88,7 @@ def prepared_es_exit_record(
         or type(clock) is not MacosBootClock
         or type(action) is not ESAction
         or type(version) is not int
-        or version != 9
+        or version not in {9, 11}
     ):
         raise StateError(
             "Native exit preparation requires exact owners and the historical v9 profile"
@@ -238,6 +238,7 @@ class MacosExitRecordInput:
     action: ESAction
     installed_file: MacosFileMetadata | None = None
     installed_filesystem: MacosInstalledFilesystem | None = None
+    version: int = 9
 
     def __post_init__(self) -> None:
         if (
@@ -245,6 +246,8 @@ class MacosExitRecordInput:
             or type(self.process) is not MacosProcessCollectionObservation
             or type(self.thread) is not ThreadIdentity
             or type(self.action) is not ESAction
+            or type(self.version) is not int
+            or self.version not in {9, 11}
         ):
             raise StateError("Native exit batch requires exact per-record owners and observations")
         self.process.__post_init__()
@@ -308,7 +311,7 @@ def prepared_es_exit_records(
         or any(type(item) is not MacosExitRecordInput for item in records)
         or type(clock) is not MacosBootClock
         or type(version) is not int
-        or version != 9
+        or version not in {9, 11}
     ):
         raise StateError("Native exit batch requires exact bounded owners and historical v9")
     if owner.collectors.completed_batch(delivery) is not None:

@@ -415,8 +415,18 @@ SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used wi
 
 ### Modeled macOS workstations (experimental branch work)
 
-The macOS 26 arm64 foundation adds catalog-backed workstation activity, eCAR admission and bounded interactive zsh history. This is separate from running EvidenceForge/Studio on macOS. The shared SSH bundle also supports bounded arm64 Mac receivers with explicit local placement and automatic or paired authored closure; SCP/SFTP receiver helpers remain unavailable. The [native workspace example](scenarios/macos-workstation-example/native-workspace.yaml) selects experimental `macos_unified_log` output for loginwindow workspace-method entry only; experimental `macos_endpoint_security` now selects modeled v10 fork notifications with complete canonical metadata; ordinary process starts and ES exec/exit remain unavailable. Collector activation is modeled in canonical State and never runs a host collector. Other native families and broader acceptance remain in progress; see the [implementation worklog](docs/worklog/2026-10-15-macos-workstation-implementation.md) for coverage and acceptance gates.
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
 
-Internal POSIX image replacement can publish an eCAR process-modification extension while preserving the process lifetime. This does not introduce a new scenario event or admit native exec output; see the [format contract](docs/reference/EVIDENCE_FORMATS.md#evidenceforge-ecar-process-exec-extension).
+The modeled workstation supports catalog activity, eCAR, bounded shell history, SSH receivers,
+and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
+profile. Exec needs explicit absent entitlements and complete descriptors; exit needs an explicit
+completed result. Current ordinary SSH descriptor and local GUI audit gaps limit command-native
+coverage. Gatekeeper denial remains gated. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
+and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).
 
-The [mixed-fleet assessment benchmark](scenarios/macos-assessment/README.md) preserves separate supported-source and native-fork revisions. Nonempty fork CLI/parser, filtering, manifest and checkpoint-resume gates pass. Native exec/exit and Gatekeeper denial remain gated by user decision; the [assessment report](scenarios/macos-assessment/blind-test/REPORT.md) records the bounded realism results and remaining limitations.
+The [macOS 26 assessment benchmark](scenarios/macos-assessment/README.md) is preserved as historical
+assessment evidence. Its old target is no longer a currently valid generation scenario. Native
+reference records remain private and are never repository fixtures.

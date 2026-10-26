@@ -26,6 +26,7 @@ from evidenceforge.formats.macos_endpoint_security import (
     ESAction,
     ESExec,
     ESExecEvent,
+    ESExecV11,
     ESFileDescriptor,
     ESPipe,
     ESThread,
@@ -63,7 +64,7 @@ class PreparedMacosExecRecord:
 @contextmanager
 def prepared_es_exec_record(
     owner: ESCollectionActionOwner,
-    executables: LocalArtifactVersionRegistry,
+    executables: LocalArtifactVersionRegistry | None,
     *,
     cohort: ActionCohortMaterializationPlan,
     delivery: ESDeliveryPreparation,
@@ -114,7 +115,7 @@ def prepared_es_exec_record(
 
 def _exec_record(
     owner: ESCollectionActionOwner,
-    executables: LocalArtifactVersionRegistry,
+    executables: LocalArtifactVersionRegistry | None,
     *,
     cohort: ActionCohortMaterializationPlan,
     observation: ESCollectorObservation,
@@ -134,7 +135,7 @@ def _exec_record(
     """Build one exec row from explicit facts under an outer collector claim."""
     if (
         type(owner) is not ESCollectionActionOwner
-        or type(executables) is not LocalArtifactVersionRegistry
+        or (executables is not None and type(executables) is not LocalArtifactVersionRegistry)
         or (deployments is not None and type(deployments) is not DeploymentContentRegistry)
         or (
             installed_filesystem is not None
@@ -149,7 +150,7 @@ def _exec_record(
         or type(clock) is not MacosBootClock
         or type(action) is not ESAction
         or type(version) is not int
-        or version not in {6, 9}
+        or version not in {6, 9, 11}
     ):
         raise StateError("Native exec preparation requires exact owners and a historical profile")
     if installed_filesystem is not None:
@@ -188,6 +189,8 @@ def _exec_record(
         if reference.identity_kind == "installed_release":
             if deployments is None or type(metadata) is not MacosFileMetadata:
                 raise StateError("Installed exec requires its deployment owner and explicit stat")
+        elif executables is None:
+            raise StateError("Runtime exec requires its retained artifact owner")
         elif metadata is not None:
             raise StateError("Runtime exec stat must come from its retained artifact")
     if before_installed_file is not None:
@@ -277,6 +280,10 @@ def _exec_record(
         binary = None if image is None else image.binary
     if binary is None:
         raise StateError("Native exec lost its exact executable")
+    if version == 11 and (
+        binary.code_signature is None or binary.code_signature.entitlements != "absent"
+    ):
+        raise StateError("Native v11 exec requires explicit no-entitlements executable facts")
     context = ProcessContext(
         identity.pid,
         identity.parent_pid,
@@ -299,6 +306,17 @@ def _exec_record(
         else ESFileDescriptor(fd=item.fd, fdtype=item.fdtype)
         for item in descriptors.descriptors
     )
+    payload = {
+        "target": target,
+        "script": script_file,
+        "cwd": cwd,
+        "args": identity.arguments,
+        "env": identity.environment,
+        "fds": fds,
+        "last_fd": descriptors.last_fd,
+        **image_fields,
+    }
+    native_exec = ESExecV11(entitlements=None, **payload) if version == 11 else ESExec(**payload)
     record = EndpointSecurityRecord(
         schema_version=1,
         version=version,
@@ -311,17 +329,6 @@ def _exec_record(
         global_seq_num=observation.global_seq_num,
         thread=ESThread(thread_id=thread.tid),
         process=actor,
-        event=ESExecEvent(
-            exec=ESExec(
-                target=target,
-                script=script_file,
-                cwd=cwd,
-                args=identity.arguments,
-                env=identity.environment,
-                fds=fds,
-                last_fd=descriptors.last_fd,
-                **image_fields,
-            )
-        ),
+        event=ESExecEvent(exec=native_exec),
     )
     return record

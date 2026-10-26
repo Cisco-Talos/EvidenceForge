@@ -383,12 +383,14 @@ class TestVersionCommand:
 class TestValidateCommand:
     """Tests for 'eforge validate' command."""
 
-    @pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 26"])
+    @pytest.mark.parametrize("os_name", ["Windows 11", "Ubuntu Linux 24.04", "macOS 27"])
     def test_validate_network_only_output_reports_endpoint_info_without_warnings(
         self, scenarios_dir: Path, tmp_path: Path, os_name: str
     ) -> None:
         scenario_data = yaml.safe_load((scenarios_dir / "minimal.yaml").read_text())
         scenario_data["environment"]["systems"][0]["os"] = os_name
+        if os_name.startswith("macOS"):
+            scenario_data["environment"]["systems"][0]["architecture"] = "arm64"
         scenario_data["output"]["logs"] = [{"format": "zeek_conn"}]
         scenario_file = tmp_path / "scenario.yaml"
         scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
@@ -407,6 +409,27 @@ class TestValidateCommand:
         ]
         assert len(notes) == 1
         assert notes[0]["severity"] == "info"
+
+    @pytest.mark.parametrize(
+        "format_name", ["ecar", "zsh_history", "macos_unified_log", "macos_endpoint_security"]
+    )
+    def test_validate_rejects_retired_mac_target_for_every_output(
+        self, scenarios_dir: Path, tmp_path: Path, format_name: str
+    ) -> None:
+        scenario_data = yaml.safe_load((scenarios_dir / "minimal.yaml").read_text())
+        scenario_data["environment"]["systems"][0].update(os="macOS 26", architecture="arm64")
+        scenario_data["output"]["logs"] = [{"format": format_name}]
+        scenario_file = tmp_path / "retired-target.yaml"
+        scenario_file.write_text(yaml.safe_dump(scenario_data), encoding="utf-8")
+        result = runner.invoke(app, ["validate", str(scenario_file), "--json"])
+        assert result.exit_code != EXIT_SUCCESS
+        payload = json.loads(result.stdout)
+        assert payload["valid"] is False
+        assert any(
+            issue["severity"] == "error"
+            and "Unsupported macOS generation target" in issue["message"]
+            for issue in payload["issues"]
+        )
 
     def test_validate_rejects_behavior_with_no_possible_evidence_projection(
         self,

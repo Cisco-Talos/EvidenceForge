@@ -42,11 +42,20 @@ code_validation:
     artifact_names:
       - Terminal
       - bash
+      - df
+      - dscl
+      - du
+      - find
+      - id
+      - ifconfig
       - launchd
       - login
       - logind
       - loginwindow
       - mds
+      - ls
+      - ps
+      - pwd
       - smd
       - ssh
       - sshd
@@ -54,6 +63,7 @@ code_validation:
       - sshd-keygen-wrapper
       - sshd-session
       - syspolicyd
+      - sw_vers
       - tccd
       - zsh
     codesigning_flags: 603979777 # 0x24000001

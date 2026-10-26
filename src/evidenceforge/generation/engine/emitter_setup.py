@@ -402,15 +402,23 @@ class EmitterSetupMixin:
         requested = {log["format"] for log in self.scenario.output.logs if "format" in log}
         formats_to_generate = expand_formats(requested)
 
-        if "macos_endpoint_security" in formats_to_generate:
-            from evidenceforge.generation.macos_es_source import select_macos_es_profile
+        from evidenceforge.generation.activity.helpers import _get_os_category
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
 
+        for system in self.scenario.environment.systems:
+            if _get_os_category(system.os) == "macos" and select_macos_es_profile(system) is None:
+                raise StateError(
+                    "Unsupported macOS generation target; select an active macOS 27 arm64 "
+                    "workstation profile. Changing output formats does not enable retired targets."
+                )
+
+        if "macos_endpoint_security" in formats_to_generate:
             if not any(
                 select_macos_es_profile(system) is not None
                 for system in self.scenario.environment.systems
             ):
                 raise StateError(
-                    "Native ES output requires a frozen macOS 26 arm64 workstation profile"
+                    "Native ES output requires an active macOS 27 arm64 workstation profile"
                 )
 
         emitter_classes = _build_emitter_classes()

@@ -14,16 +14,8 @@
 # "string_fields" / "number_fields": scalar root fields with explicit primitive types
 OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
     "activity/macos_endpoint_security_profiles.yaml": {
-        "string_fields": {"schema_version", "profile", "architecture", "clock_profile"},
-        "string_list_fields": {"collector_arguments"},
-        "scalar_fields": {
-            "os_major": int,
-            "message_version": int,
-            "event_type": int,
-            "action_type": int,
-            "result_type": int,
-            "auth_result": int,
-        },
+        "string_fields": {"schema_version"},
+        "list_fields": {"profiles": "profile"},
     },
     "activity/macos_execution_metadata.yaml": {
         "dict_fields": {"terminal"},

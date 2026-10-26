@@ -13,7 +13,7 @@ environment:
   systems:
   - hostname: TEST-01
     ip: 10.0.0.1
-    os: macOS 26
+    os: macOS 27
     type: workstation
     assigned_user: test_user
     services:

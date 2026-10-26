@@ -1,4 +1,4 @@
-# Invented identities only. Experimental macOS 26 arm64 canonical/eCAR profile.
+# Invented identities only. Experimental macOS 27 arm64 canonical/eCAR profile.
 # No native SSH messages or SCP/SFTP receiver helpers.
 version: '1.0'
 name: macos-ssh-workstations
@@ -15,15 +15,15 @@ environment:
   systems:
   - hostname: MAC-01
     ip: 192.0.2.10
-    os: macOS 26
-    os_build: 25A354
+    os: macOS 27
+    os_build: modeled-macos27-arm64
     architecture: arm64
     type: workstation
     assigned_user: alex
   - hostname: MAC-02
     ip: 192.0.2.20
-    os: macOS 26
-    os_build: 25A354
+    os: macOS 27
+    os_build: modeled-macos27-arm64
     architecture: arm64
     type: workstation
     assigned_user: alex

@@ -213,6 +213,7 @@ class ScenarioValidator:
             List of validation issues (errors and warnings)
         """
         self._validate_user_persona_references()
+        self._validate_macos_generation_targets()
         self._validate_system_user_references()
         self._validate_user_primary_system_references()
         self._validate_group_member_references()
@@ -257,6 +258,44 @@ class ScenarioValidator:
         self._validate_legacy_smb_connections()
         self._sort_issues()
         return self.issues
+
+    def _validate_macos_generation_targets(self) -> None:
+        """Reject retired or unsupported Mac targets independently of output selection."""
+        macs = [
+            (index, system)
+            for index, system in enumerate(self.scenario.environment.systems)
+            if _get_os_category(system.os) == "macos"
+        ]
+        if not macs:
+            return
+        from evidenceforge.generation.activity.macos_endpoint_security_profiles import (
+            load_macos_endpoint_security_profiles,
+        )
+        from evidenceforge.generation.macos_es_source import select_macos_es_profile
+
+        catalog = load_macos_endpoint_security_profiles()
+        supported = (
+            ", ".join(
+                f"macOS {profile.os_major} {profile.architecture} workstation"
+                for profile in catalog.profiles
+            )
+            if catalog is not None
+            else "no active macOS generation target in these frozen inputs"
+        )
+        for index, system in macs:
+            if select_macos_es_profile(system) is None:
+                self.issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        field_path=f"environment.systems.{index}.os",
+                        message=f"Unsupported macOS generation target {system.os!r}",
+                        suggestion=(
+                            f"Supported targets: {supported}. Set the modeled OS, architecture "
+                            "and system type explicitly; changing output formats does not "
+                            "enable a retired generation profile."
+                        ),
+                    )
+                )
 
     def _validate_public_identity_reuse(self) -> None:
         """Report authored public addresses assigned contradictory semantic roles."""
@@ -2884,7 +2923,7 @@ class ScenarioValidator:
                     ValidationIssue(
                         severity="error",
                         field_path=f"output.logs.{idx}.format",
-                        message="Native ES requires a frozen macOS 26 arm64 workstation profile",
+                        message="Native ES requires an active macOS 27 arm64 workstation profile",
                         suggestion="Use an explicit supported workstation or omit this format.",
                     )
                 )

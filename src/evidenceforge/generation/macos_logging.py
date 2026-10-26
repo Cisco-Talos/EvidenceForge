@@ -77,7 +77,7 @@ def workspace_request_profile_available(os_name: str) -> bool:
     """Return whether the OS label has the bounded native workspace profile."""
     return (
         re.fullmatch(
-            r"(?:(?:macos|mac os x|os x)\s+26(?:\.\d+)*|darwin\s+25(?:\.\d+)*)",
+            r"macos\s+27(?:\.\d+){0,2}",
             os_name.strip().casefold(),
         )
         is not None

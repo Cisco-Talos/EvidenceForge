@@ -48,7 +48,7 @@ class MacosForkRecordInput:
 class MacosExecRecordInput:
     """Exact before/after metadata for one selected image replacement."""
 
-    executables: LocalArtifactVersionRegistry
+    executables: LocalArtifactVersionRegistry | None
     before: MacosProcessCollectionObservation
     after: MacosProcessCollectionObservation
     descriptors: MacosExecDescriptorObservation
@@ -65,7 +65,7 @@ class MacosExecRecordInput:
 class PreparedMacosProcessRecords:
     """Frozen complete native records under one exact collector reservation."""
 
-    ndjson: tuple[str, ...]
+    ndjson: tuple[str | None, ...]
     collector: PreparedESDeliveryBatchCommit
 
 
@@ -76,7 +76,7 @@ def prepared_es_process_records(
     cohort: ActionCohortMaterializationPlan,
     delivery: ESDeliveryBatchPreparation,
     collector_process: ProcessIdentity,
-    records: tuple[MacosForkRecordInput | MacosExecRecordInput | MacosExitRecordInput, ...],
+    records: tuple[MacosForkRecordInput | MacosExecRecordInput | MacosExitRecordInput | None, ...],
     clock: MacosBootClock,
 ) -> Iterator[PreparedMacosProcessRecords]:
     """Freeze every selected canonical process phase without committing any owner.
@@ -95,7 +95,8 @@ def prepared_es_process_records(
         or type(records) is not tuple
         or not 1 <= len(records) <= 256
         or any(
-            type(item) not in {MacosForkRecordInput, MacosExecRecordInput, MacosExitRecordInput}
+            item is not None
+            and type(item) not in {MacosForkRecordInput, MacosExecRecordInput, MacosExitRecordInput}
             for item in records
         )
     ):
@@ -137,8 +138,13 @@ def prepared_es_process_records(
             raise StateError(
                 "Native process batch must cover every available ordered canonical phase once"
             )
-        rendered: list[str] = []
+        rendered: list[str | None] = []
         for supplied, observation in zip(records, claimed.observations, strict=True):
+            if supplied is None:
+                if observation.status in {"visible", "delayed"}:
+                    raise StateError("Visible process phases require complete native record inputs")
+                rendered.append(None)
+                continue
             item = replace(supplied)
             common = dict(
                 cohort=cohort,
@@ -183,8 +189,9 @@ def prepared_es_process_records(
                     process=item.process,
                     thread=item.thread,
                     action=item.action,
-                    version=9,
+                    version=item.version,
                     installed_file=item.installed_file,
+                    installed_filesystem=item.installed_filesystem,
                 )
             rendered.append(record.to_ndjson())
         yield PreparedMacosProcessRecords(

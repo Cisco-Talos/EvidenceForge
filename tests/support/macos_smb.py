@@ -17,7 +17,7 @@ def macos_smb_scenario(scenarios_dir: Path, *, server_platform: str = "windows")
     data["environment"]["users"][0]["primary_system"] = "TEST-01"
     data["environment"]["systems"][0].update(
         {
-            "os": "macOS 26",
+            "os": "macOS 27",
             "architecture": "arm64",
             "services": ["smb-client"],
             "roles": ["workstation"],

@@ -13,13 +13,13 @@ environment:
   systems:
   - hostname: TEST-01
     ip: 10.0.0.1
-    os: macOS 26
+    os: macOS 27
     architecture: arm64
     type: workstation
     assigned_user: test_user
     roles:
     - workstation
-    os_build: 25A354
+    os_build: modeled-macos27-arm64
   - hostname: SSH-TEST
     ip: 10.0.0.20
     os: Ubuntu 24.04

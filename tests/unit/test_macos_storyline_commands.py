@@ -285,7 +285,7 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             fork = next(
                 row
                 for row in records
-                if row["event"]["fork"]["child"]["audit_token"][5] == result["pid"]
+                if row["event"]["fork"]["child"]["audit_token"]["pid"] == result["pid"]
             )
             assert submissions[command] <= datetime.fromisoformat(fork["time"]).timestamp()
 

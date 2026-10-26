@@ -1,8 +1,8 @@
 # Complete nested native fields are validated by the native_codec route.
 name: macos_endpoint_security
 version: '1.0'
-description: 'Experimental modeled macOS 26 arm64 eslogger v10 fork notifications;
-  complete canonical process metadata required; exec/exit unavailable'
+description: 'Experimental modeled macOS 27 arm64 eslogger v11 fork, exec and exit
+  notifications; complete canonical metadata required; unknown phases are omitted'
 category: host
 fields:
   - name: schema_version
@@ -12,11 +12,11 @@ fields:
   - name: version
     type: integer
     required: true
-    description: Selected ES message version (10)
+    description: Selected ES message version (11)
   - name: event_type
     type: integer
     required: true
-    description: Selected fork notification (11)
+    description: Selected fork (11), exec (9) or exit (15) notification
   - name: time
     type: string
     required: true

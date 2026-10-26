@@ -1956,17 +1956,21 @@ links rather than authoring history, so generation needs no transition-specific 
 
 ## Experimental modeled macOS workstations
 
-Use existing system fields (`os: macOS 26`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
+Use existing system fields (`os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`), user placement, software deployments and source collection/observation settings. Mac support does not introduce a top-level platform configuration block. eCAR and network/server sources retain their original ownership; Windows Security/Sysmon and Linux syslog do not become Mac-local evidence.
 
-Authored interactive process commands use their actual shell for foreground scheduling and history.
-The installed command catalog includes bounded discovery utilities; unknown invocations retain
-explicit lifecycle ownership. Qualified direct SSH-shell launches produce a real canonical fork
-and exec. The fork-only native ES profile records the inherited shell image; eCAR also records
-the subsequent `PROCESS/MODIFY` exec into the utility. Native exec/exit remain gated. Selecting
-a native format does not provide a native audit of every process, and an unexecuted command is
-reported as skipped rather than a successful PID-0 launch.
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
 
-The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native fork/v10, system-domain launch items and pre-spawn denial are documented below. Other Unified Log families, native exec/exit and native policy-denial export remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
+Authored interactive commands keep their shell scheduling and history. Qualified direct launches
+use canonical fork/exec transitions. Native v11 output requires complete per-phase facts; unknown
+SSH descriptors omit exec rows while preserving qualified forks and eCAR exec evidence. Known
+canonical terminal outcomes can render exit rows; unknown results remain unexported. An
+unexecuted command is reported as skipped. Selecting a native format never asserts a complete
+native audit of all processes.
+
+The initial `zsh_history` format records only modeled interactive zsh submissions, with incremental extended-history semantics. Mac Bash requires an explicit Bash session. Internal `zsh_command` occurrences are engine-owned, not new authored storyline event types. An existing local interactive Mac session can own a native SSH client to a Linux or bounded Mac receiver: use `ssh_session` on the receiver with the Mac's existing `source_ip`. The shared bundle owns transport, client lifecycle and platform-specific canonical receiver behavior. Experimental Mac receivers require `architecture: arm64`, `type: workstation`, `services: [ssh]` and an actor placed locally through `assigned_user` or `primary_system`. Use `ssh_session`, not Type 10 `logon`; an existing paired `logoff` can set the close deadline while the SSH continuation owns terminal execution. SCP/SFTP receiver helpers remain unavailable. Experimental `macos_unified_log` NDJSON can be selected through existing `output.logs` entries. It covers a separate workspace-method entry after a local interactive Mac login; it is not proof of desktop completion. `macos_workspace_request` is internal and must not be authored. Bounded native v11 process phases, system-domain launch items and pre-spawn denial are documented below. Other Unified Log families and native policy-denial export remain unavailable; consult the [implementation worklog](../worklog/2026-10-15-macos-workstation-implementation.md) before designing an exercise around them.
 
 The internal `process_fork` and `process_exec` canonical occurrences are not authored event types. Existing `process` authoring remains unchanged; bundles must own any image replacement, and native-source support must not be inferred from the eCAR exec extension.
 
@@ -1976,7 +1980,7 @@ The engine-only `process_audit_bind`, `process_privilege_drop` and `process_serv
 A `process` event defaults to `outcome: success`. Explicit `outcome: denied` on a modeled Mac rejects a launch before child allocation. Supply an absolute `process_name` and `parent_ref` naming an earlier process for the same host and storyline actor. Do not set `process_ref`: the rejected attempt creates no child. The canonical caller remains active; command-derived file/network effects and shell history are suppressed. Author legitimate precursor activities separately. Ground truth records the denial with `execution_denied_before_spawn` and no expected source; no native Gatekeeper or Endpoint Security denial message is generated. For a returning image-replacement failure in that existing caller, use `outcome: exec_failed` with the same path/reference constraints. It preserves the caller's image, execution identity, credentials, threads and descriptors; no child, replacement image, automatic command effect or native message is produced. The specific errno remains unknown. Ground truth records `exec_failed_caller_preserved`. A later caller exit is a separate event. Neither outcome represents prompting, an irreversible post-replacement failure or a named security product decision. See [executable example](../../scenarios/macos-denied-launch-example/scenario.yaml). The [returning exec-failure example](../../scenarios/macos-failed-exec-example/scenario.yaml) keeps the same caller available to launch a later child. Both examples use invented identities.
 
 ### `macos_launch_item` — experimental system-domain persistence
-This typed event supports explicit root-owned stages on modeled macOS 26 arm64 workstations. It reuses the environment's deployment, collection and observation configuration. No native plist file is exported.
+This typed event supports explicit root-owned stages on modeled macOS 27 arm64 workstations. It reuses the environment's deployment, collection and observation configuration. No native plist file is exported.
 | Field | Meaning |
 | --- | --- |
 | `operation` | Required: `write`, `bootstrap`, `activate`, `exit`, `unload`, or `remove`. |
@@ -1989,10 +1993,8 @@ This typed event supports explicit root-owned stages on modeled macOS 26 arm64 w
 | `exit_code` | Optional normal completed exit status, 0–255; exit only. |
 A file write does not register or activate a job. Bootstrap retains the current definition; removal withdraws the file while leaving the loaded job intact. Activation creates a process with a distinct group/session. Exit closes the leader while retaining registration; unload closes the exact retained group and job. The bounded profile requires explicit unload before scenario end. Registration and dormant unload have no native evidence and are marked unobserved in ground truth. File/process stages project to eCAR under normal collection rules. GUI agents, automatic activation/respawn, and native launchd/ES serialization are outside this profile. An executable example is in `scenarios/macos-persistence-example/scenario.yaml`.
 
-Experimental `output.logs: [{format: macos_endpoint_security}]` selects modeled macOS 26 arm64
-fork/v10 output, with canonical collector activation and no new authored event type. Complete
-static/runtime process, audit, terminal and file facts are mandatory. Built-in SSH helpers
-now consume shared modeled metadata for supported forks. Incomplete or legacy unknown facts
-still reject selected native output before commit.
-Ordinary `process` events do not assert a fork; a run may have no eligible native rows. Existing
-source overrides govern collection windows/missingness. This is not full native ES validation.
+Experimental `output.logs: [{format: macos_endpoint_security}]` selects the macOS 27 arm64
+v11 fork/exec/known-exit profile. Complete canonical facts are required; missing entitlements,
+descriptors or exit results omit the affected phase without padding. Existing collection settings
+still govern source visibility. See the [native format contract](EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson)
+for remaining gaps and the distinction between decoding and generation admission.

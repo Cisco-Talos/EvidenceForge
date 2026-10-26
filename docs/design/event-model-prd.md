@@ -1,5 +1,18 @@
 # PRD: EvidenceForge Canonical Event Model
 
+## Current generation admission (2026-10-24)
+
+The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
+build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
+output selection. The catalog can hold multiple profiles; historical wire decoders remain
+available independently of generation admission.
+
+The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
+publication. Unknown metadata stays unavailable; SSH descriptor and local GUI audit-origin gaps
+still limit ordinary command exports. Gatekeeper remains gated. Older v10/macOS 26 milestones
+below are historical context, not current target admission. See the
+[current profile worklog](../worklog/2026-10-24-macos27-native-process-profile.md).
+
 > **Status:** ✅ COMPLETE (Phase 7, implemented 2026-03-19)
 > **Addendum to:** `docs/PRD.md` (main EvidenceForge PRD)
 > **Scope:** Architectural refactor of the generation engine to use a canonical event model for cross-log consistency by construction.

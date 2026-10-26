@@ -1,6 +1,6 @@
 # Experimental Mac workstation examples
 
-These compatible Scenario 1.0 inputs use invented identities and the existing configuration fields. `scenario.yaml` models one macOS 26 arm64 workstation; `mixed-fleet.yaml` adds independent Windows and Linux workstations. They generate evidence about Macs and do not require the generator host to be a Mac. `smb-client.yaml` adds an explicitly logged-in Mac client reading a mounted Windows share. These are experimental examples, not complete native-investigation demonstrations.
+These compatible Scenario 1.0 inputs use invented identities and the existing configuration fields. `scenario.yaml` models one macOS 27 arm64 workstation; `mixed-fleet.yaml` adds independent Windows and Linux workstations. They generate evidence about Macs and do not require the generator host to be a Mac. `smb-client.yaml` adds an explicitly logged-in Mac client reading a mounted Windows share. These are experimental examples, not complete native-investigation demonstrations.
 
 From the repository root:
 

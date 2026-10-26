@@ -146,7 +146,7 @@ test.each(["applications", "processes"])("%s can add a Mac platform while preser
   expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ category, value: expect.objectContaining({ platforms: { ...platforms, macos: { image_path: "/Applications/Tool.app/Contents/MacOS/Tool" } } }) }), 180000);
 });
 
-const macHost: AssetDetail = { ...detail, category: "systems", identity_field: "hostname", schema_document: schemas.system, summary: { ...detail.summary!, id: "mac", key: "MAC-01", name: "MAC-01" }, value: { hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 26", os_build: "25A354", architecture: "arm64", type: "workstation", services: [] } };
+const macHost: AssetDetail = { ...detail, category: "systems", identity_field: "hostname", schema_document: schemas.system, summary: { ...detail.summary!, id: "mac", key: "MAC-01", name: "MAC-01" }, value: { hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 27", os_build: "modeled-macos27-arm64", architecture: "arm64", type: "workstation", services: [] } };
 
 test("new Mac hosts expose build and architecture fields and explain native coverage", async () => {
   const request = guidedSetup({ ...macHost, summary: null });
@@ -156,18 +156,18 @@ test("new Mac hosts expose build and architecture fields and explain native cove
   await user.click(await screen.findByRole("button", { name: "Continue with system" }));
   await user.type(screen.getByRole("textbox", { name: "Hostname *" }), "MAC-01");
   await user.type(screen.getByRole("textbox", { name: "Ip *" }), "10.0.0.2");
-  await user.type(screen.getByRole("textbox", { name: "Os *" }), "macOS 26");
+  await user.type(screen.getByRole("textbox", { name: "Os *" }), "macOS 27");
   await user.selectOptions(screen.getByRole("combobox", { name: "Type" }), "workstation");
   await user.click(screen.getByText("Os Build", { exact: false, selector: "summary" }));
   await user.click(screen.getByRole("button", { name: "Set Os Build" }));
-  await user.type(screen.getByRole("textbox", { name: "Os Build" }), "25A354");
+  await user.type(screen.getByRole("textbox", { name: "Os Build" }), "modeled-macos27-arm64");
   await user.click(screen.getByText("Architecture", { exact: false, selector: "summary" }));
   await user.click(screen.getByRole("button", { name: "Set Architecture" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Architecture" }), "arm64");
-  expect(screen.getByText(/Native exec\/exit and Gatekeeper-denial records remain unavailable/)).toBeVisible();
+  expect(screen.getByText(/macOS 26 is rejected/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Review changes" }));
   await user.click(screen.getByRole("button", { name: "Save draft" }));
-  expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ asset_id: null, category: "systems", value: expect.objectContaining({ hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 26", os_build: "25A354", architecture: "arm64", type: "workstation" }) }), 180000);
+  expect(request).toHaveBeenCalledWith(expect.any(String), "POST", expect.objectContaining({ asset_id: null, category: "systems", value: expect.objectContaining({ hostname: "MAC-01", ip: "10.0.0.2", os: "macOS 27", os_build: "modeled-macos27-arm64", architecture: "arm64", type: "workstation" }) }), 180000);
 });
 
 test("editing a Mac host retains OS metadata and leaves engine validation authoritative", async () => {

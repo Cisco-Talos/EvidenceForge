@@ -30,12 +30,12 @@ from evidenceforge.utils.platforms import platform_for_os
 _TIME = datetime(2026, 10, 12, 14, tzinfo=UTC)
 
 
-def _system(os_name: str = "macOS 26") -> System:
+def _system(os_name: str = "macOS 27") -> System:
     return System(
         hostname="MAC-TEST",
         ip="192.0.2.10",
         os=os_name,
-        os_build="25A354",
+        os_build="modeled-macos27-arm64",
         architecture="arm64",
         type="workstation",
         assigned_user="alex",

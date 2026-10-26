@@ -281,6 +281,7 @@ class MachOCodeSignature:
     signing_id: str | None
     team_id: str | None
     cdhash: str
+    entitlements: Literal["absent"] | None = None
 
     def __post_init__(self) -> None:
         """Reject malformed signing metadata without filling unknown fields."""
@@ -290,10 +291,24 @@ class MachOCodeSignature:
             if value is not None and (type(value) is not str or not value.strip() or "\0" in value):
                 raise ValueError(f"{name} must be nonempty text or explicit absence")
         object.__setattr__(self, "cdhash", _validate_digest(self.cdhash, "sha1"))
+        if self.entitlements is not None and (
+            type(self.entitlements) is not str or self.entitlements != "absent"
+        ):
+            raise ValueError("Entitlements must be explicit modeled absence or unknown")
+
+    def serialized_values(self) -> tuple[str | None, ...]:
+        """Retain the legacy encoding for unknown facts, extending only explicit absence."""
+        values = (self.signing_id, self.team_id, self.cdhash)
+        return values if self.entitlements is None else (*values, self.entitlements)
 
     @classmethod
     def derive(
-        cls, key: BinaryReleaseKey, *, signing_id: str | None, team_id: str | None
+        cls,
+        key: BinaryReleaseKey,
+        *,
+        signing_id: str | None,
+        team_id: str | None,
+        entitlements: Literal["absent"] | None = None,
     ) -> MachOCodeSignature:
         """Derive synthetic digest-shaped metadata once from the signed release.
 
@@ -303,10 +318,11 @@ class MachOCodeSignature:
 
         if key.platform != "macos":
             raise ValueError("Mach-O code signatures require a macOS binary release")
-        digest = _semantic_sha256(
-            "mach-o-code-directory", (*key.canonical_key, signing_id, team_id)
-        )[:40]
-        return cls(signing_id=signing_id, team_id=team_id, cdhash=digest)
+        facts = (*key.canonical_key, signing_id, team_id)
+        if entitlements is not None:
+            facts = (*facts, ("entitlements", entitlements))
+        digest = _semantic_sha256("mach-o-code-directory", facts)[:40]
+        return cls(signing_id=signing_id, team_id=team_id, cdhash=digest, entitlements=entitlements)
 
 
 @dataclass(frozen=True, slots=True)

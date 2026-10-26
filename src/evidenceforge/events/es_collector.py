@@ -138,6 +138,7 @@ class _NativeProjection:
     canonical_token: str | None
     membership: bytes = field(repr=False)
     proof: bytes = field(repr=False)
+    omitted_rows: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -261,8 +262,8 @@ class PreparedESDeliveryBatchCommit:
         return self._registry._batch_claim(self).observations
 
     def freeze_native_projections(
-        self, rows: tuple[str, ...], *, canonical_token: str | None = None
-    ) -> tuple[str, ...]:
+        self, rows: tuple[str | None, ...], *, canonical_token: str | None = None
+    ) -> tuple[str | None, ...]:
         """Bind one ordered native row per reserved observation before publication."""
         return self._registry._freeze_native_batch_projection(
             self, rows, canonical_token=canonical_token
@@ -1203,6 +1204,7 @@ class ESCollectorRegistry:
         ndjson: str,
         canonical_token: str | None,
         membership: bytes,
+        omitted_rows: tuple[int, ...] = (),
     ) -> bytes:
         domain = b"es-native-projection-v2:"
         if type(capability) is ESDeliveryPreparation:
@@ -1225,6 +1227,8 @@ class ESCollectorRegistry:
             + canonical
             + membership
         )
+        if omitted_rows:
+            material += b":omitted-rows:" + bytes(omitted_rows)
         return hmac.digest(self._secret, material, hashlib.sha256)
 
     @staticmethod
@@ -1288,13 +1292,31 @@ class ESCollectorRegistry:
             or type(native.membership) is not bytes
             or len(native.membership) != 32
             or not self._valid_native_canonical_token(native.canonical_token)
+            or type(native.omitted_rows) is not tuple
+            or any(type(index) is not int for index in native.omitted_rows)
+            or native.omitted_rows != tuple(sorted(set(native.omitted_rows)))
+            or (
+                bool(native.omitted_rows)
+                and (
+                    type(capability) is not ESDeliveryBatchPreparation
+                    or any(
+                        not 0 <= index < len(capability.observations)
+                        or capability.observations[index].status in {"visible", "delayed"}
+                        for index in native.omitted_rows
+                    )
+                )
+            )
         ):
             return False
         try:
             return hmac.compare_digest(
                 native.proof,
                 self._native_proof(
-                    capability, native.ndjson, native.canonical_token, native.membership
+                    capability,
+                    native.ndjson,
+                    native.canonical_token,
+                    native.membership,
+                    native.omitted_rows,
                 ),
             ) and (
                 not require_current
@@ -1371,17 +1393,22 @@ class ESCollectorRegistry:
     def _freeze_native_batch_projection(
         self,
         handle: PreparedESDeliveryBatchCommit,
-        rows: tuple[str, ...],
+        rows: tuple[str | None, ...],
         *,
         canonical_token: str | None,
-    ) -> tuple[str, ...]:
+    ) -> tuple[str | None, ...]:
         claim = self._batch_claim(handle)
         if not self._valid_native_canonical_token(canonical_token):
             raise StateError("ES native batch requires an exact canonical publication token")
         if type(rows) is not tuple or len(rows) != len(claim.observations):
             raise StateError("ES native batch requires one exact row per reserved observation")
         total = 0
-        for row in rows:
+        omitted = tuple(index for index, row in enumerate(rows) if row is None)
+        for row, observation in zip(rows, claim.observations, strict=True):
+            if row is None:
+                if observation.status in {"visible", "delayed"}:
+                    raise StateError("Visible ES observations require native bytes")
+                continue
             total += self._validate_native_line(row)
             if total > _MAX_NATIVE_BATCH_BYTES:
                 raise StateError("ES native batch exceeds its 16 MiB modeled budget")
@@ -1398,10 +1425,14 @@ class ESCollectorRegistry:
             )
         ):
             raise StateError("ES native batch lost its exact counter observations")
-        rendered = "".join(rows)
+        rendered = "".join(row for row in rows if row is not None)
         native = claim.native_projection
         if native is not None:
-            if native.ndjson != rendered or native.canonical_token != canonical_token:
+            if (
+                native.ndjson != rendered
+                or native.canonical_token != canonical_token
+                or native.omitted_rows != omitted
+            ):
                 raise StateError("ES native batch changed for the same reserved deliveries")
             return rows
         if claim.committed or claim.applied or claim.after is None:
@@ -1415,7 +1446,8 @@ class ESCollectorRegistry:
             rendered,
             canonical_token,
             membership,
-            self._native_proof(capability, rendered, canonical_token, membership),
+            self._native_proof(capability, rendered, canonical_token, membership, omitted),
+            omitted,
         )
         replacement = replace(pending, native_projection=native)
         proof = self._batch_proof_for(capability, native)
@@ -1427,7 +1459,7 @@ class ESCollectorRegistry:
 
     def retained_native_batch_projection(
         self, capability: ESDeliveryBatchPreparation, *, canonical_token: str | None = None
-    ) -> tuple[str, ...] | None:
+    ) -> tuple[str | None, ...] | None:
         """Recover the exact ordered row group without replaying or observing State."""
         self._validate_batch_capability(capability)
         if not self._valid_native_canonical_token(canonical_token):
@@ -1452,7 +1484,11 @@ class ESCollectorRegistry:
                 return None
             # Only LF delimits NDJSON. Unicode line separators inside JSON strings
             # are valid payload and must not be split by str.splitlines().
-            return tuple(row + "\n" for row in native.ndjson.split("\n")[:-1])
+            lines = iter(row + "\n" for row in native.ndjson.split("\n")[:-1])
+            return tuple(
+                None if index in native.omitted_rows else next(lines)
+                for index in range(len(capability.observations))
+            )
 
     def retained_native_projection(
         self, capability: ESDeliveryPreparation, *, canonical_token: str | None = None

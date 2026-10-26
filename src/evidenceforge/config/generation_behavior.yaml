@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 332
+current_revision: 333
 history_start_revision: 1
-behavior_surface_sha256: d46420e9c3b4352bc27eb26aeec158693a5c375c3cb9d982b5e20abc9fb3503e
+behavior_surface_sha256: 323341c082b461b276e88891b60dc9f8254acf3036fe4b1cf1f8794a0c0e764f
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3148,3 +3148,18 @@ changes:
       - macos_endpoint_security
       - macos_unified_log
     summary: Serializes authored Mac commands with bounded utility lifetimes and actual shell history, reports rejected launches truthfully, and publishes qualified shell fork/exec chains with fork-only native ES observation.
+  - revision: 333
+    id: macos27-v11-qualified-process-generation
+    impact: material
+    domains:
+      - macos-generation-targets
+      - macos-process-lifecycle
+      - macos-native-source-projection
+      - binary-content-identity
+      - collection-profile
+    formats:
+      - ecar
+      - macos_endpoint_security
+      - macos_unified_log
+      - zsh_history
+    summary: Selects macOS 27 arm64 from a profile catalog, retires 26 generation, publishes qualified v11 process phases with authenticated counter gaps, retains known entitlement absence, and orders shell fork latency after foreground readiness.

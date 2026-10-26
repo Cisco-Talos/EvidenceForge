@@ -42,7 +42,7 @@ class ESProcessRelationshipFields(BaseModel):
         cls, observation: ProcessRelationshipObservation, *, version: int
     ) -> ESProcessRelationshipFields:
         """Map known audit and POSIX identities using the versioned token layout."""
-        if type(version) is not int or version not in {6, 9, 10}:
+        if type(version) is not int or version not in {6, 9, 10, 11}:
             raise ValueError("ES process identity projection requires an admitted wire version")
         if type(observation) is not ProcessRelationshipObservation:
             raise ValueError("ES process identity projection requires exact relationship facts")

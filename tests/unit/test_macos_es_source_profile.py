@@ -43,7 +43,7 @@ def _system(hostname: str = "invented-mac", **changes: object) -> System:
         {
             "hostname": hostname,
             "ip": "192.0.2.41",
-            "os": "macOS 26",
+            "os": "macOS 27",
             "type": "workstation",
             "architecture": "arm64",
             "os_build": "invented-build",
@@ -63,8 +63,8 @@ def _setup() -> tuple:
         system=parent.hostname,
         parent_pid=0,
         image="/usr/bin/eslogger",
-        command_line="/usr/bin/eslogger fork",
-        arguments=("/usr/bin/eslogger", "fork"),
+        command_line="/usr/bin/eslogger fork exec exit",
+        arguments=("/usr/bin/eslogger", "fork", "exec", "exit"),
         username="root",
         integrity_level="System",
         os_category="macos",
@@ -87,11 +87,11 @@ def _setup() -> tuple:
     ("changes", "selected"),
     [
         ({}, True),
-        ({"os": "macOS 26.1.2"}, True),
-        ({"os": "MACOS 26.4"}, True),
+        ({"os": "macOS 27.1.2"}, True),
+        ({"os": "MACOS 27.4"}, True),
         ({"os": "macOS 15"}, False),
-        ({"os": "macOS 27"}, False),
-        ({"os": "macOS 26 beta"}, False),
+        ({"os": "macOS 26"}, False),
+        ({"os": "macOS 27 beta"}, False),
         ({"os": "Linux 26"}, False),
         ({"architecture": "x64"}, False),
         ({"architecture": None}, False),
@@ -106,7 +106,7 @@ def test_source_profile_selects_only_explicit_bounded_host(changes: dict, select
     ("field", "value"),
     [
         ("message_version", 9),
-        ("event_type", 9),
+        ("event_types", [11]),
         ("collector_arguments", ["/usr/bin/eslogger", "exec"]),
         ("action_type", True),
         ("message_version", "10"),
@@ -128,7 +128,9 @@ def test_initialization_produces_exact_inventory_subscription_clock_and_profile(
     assert connection.process == _process(collector)
     assert connection.next_delivery == connection.next_global_sequence == 0
     assert tuple((item.event_type, item.next_sequence) for item in connection.event_counters) == (
+        (9, 0),
         (11, 0),
+        (15, 0),
     )
     assert connection.source_profile.os_build == "invented-build"
     assert source.clock.hostname == system.hostname
@@ -164,7 +166,7 @@ def test_initialization_produces_exact_inventory_subscription_clock_and_profile(
 
 
 @pytest.mark.parametrize("status", ["visible", "filtered", "delayed"])
-def test_profile_drives_complete_v10_fork_preparation(status: str) -> None:
+def test_profile_drives_complete_v11_fork_preparation(status: str) -> None:
     source, _, _, parent, child, cohort, executables = _setup()
     delivery = source.prepare_fork(cohort, child, decision=ObservationDecision(status))
     with source.prepared_fork_record(
@@ -176,10 +178,10 @@ def test_profile_drives_complete_v10_fork_preparation(status: str) -> None:
         thread=parent.primary_thread,
     ) as prepared:
         record = decode_endpoint_security_record(prepared.ndjson)
-        assert record.version == 10
+        assert record.version == 11
         assert record.event_type == 11
         assert record.mach_time == source.clock.ticks_at(child.started_at)
-        assert isinstance(record.model_dump(mode="json")["process"]["audit_token"], list)
+        assert isinstance(record.model_dump(mode="json")["process"]["audit_token"], dict)
     # Frozen preparation is not canonical commit authority.
     assert source.owner.state.get_process(child.hostname, child.pid) is None
     source.owner.collectors.cancel(delivery)
@@ -647,7 +649,7 @@ def test_frozen_profile_and_old_inputs_do_not_read_new_ambient_policy(
 ) -> None:
     effective = build_management_effective_config(tmp_path)
     with effective_config_scope(effective):
-        assert load_macos_endpoint_security_profile().message_version == 10
+        assert load_macos_endpoint_security_profile().message_version == 11
     older = effective.model_copy(
         update={
             "packaged_defaults": {

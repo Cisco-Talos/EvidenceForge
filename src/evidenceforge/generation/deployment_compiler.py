@@ -395,7 +395,10 @@ def _release_for_application_artifact(
         ),
         code_signature=(
             MachOCodeSignature.derive(
-                key, signing_id=signature.signing_id, team_id=signature.team_id
+                key,
+                signing_id=signature.signing_id,
+                team_id=signature.team_id,
+                entitlements=signature.entitlements,
             )
             if signature is not None and is_main_executable
             else None

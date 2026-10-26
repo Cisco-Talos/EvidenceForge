@@ -18,7 +18,7 @@ def es_exec_image_fields(
     This is not a full exec record or admission of macOS 26 exec. A compiled
     arm64 release without explicit subtype/exec-path knowledge is insufficient.
     """
-    if type(version) is not int or version not in {6, 9}:
+    if type(version) is not int or version not in {6, 9, 11}:
         raise ValueError("ES exec image projection requires an admitted historical version")
     if (
         type(identity) is not ProcessIdentity
@@ -53,7 +53,7 @@ def es_exec_image_fields(
         "image_cputype": ARM64_CPU_TYPE,
         "image_cpusubtype": facts.cpu_subtype,
     }
-    if version == 9:
+    if version in {9, 11}:
         if facts.dyld_exec_path is None:
             raise ValueError("ES v9 exec image requires its explicit pre-resolution dyld exec path")
         result["dyld_exec_path"] = facts.dyld_exec_path

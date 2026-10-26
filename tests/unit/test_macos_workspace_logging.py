@@ -29,7 +29,7 @@ from tests.unit.test_macos_unified_projection import _START, _owned_writer
 
 
 def _request_event(
-    scenarios_dir: Path, *, missing_image: bool = False, os_name: str = "macOS 26"
+    scenarios_dir: Path, *, missing_image: bool = False, os_name: str = "macOS 27"
 ) -> tuple[StateManager, OccurrenceBuilder]:
     manager, registry, writer = _owned_writer(scenarios_dir)
     manager.set_current_time(_START + timedelta(seconds=10))
@@ -52,7 +52,7 @@ def _request_event(
             hostname=writer.hostname,
             fqdn="mac-fixture.example.test",
             ip="192.0.2.10",
-            os="macOS 26",
+            os="macOS 27",
             os_category="macos",
             system_type="workstation",
         ),
@@ -109,14 +109,15 @@ def test_missing_native_image_does_not_remove_or_close_canonical_request(
 @pytest.mark.parametrize(
     "os_name,available",
     [
-        ("macOS 26", True),
-        ("macOS 26.0.1", True),
-        ("Darwin 25.0", True),
+        ("macOS 27", True),
+        ("macOS 27.0.1", True),
+        ("Darwin 25.0", False),
+        ("macOS 26", False),
         ("macOS 15", False),
         ("macOS", False),
         ("Mac OS X", False),
         ("Darwin 24", False),
-        ("macOS 260", False),
+        ("macOS 270", False),
         ("Windows 26", False),
     ],
 )

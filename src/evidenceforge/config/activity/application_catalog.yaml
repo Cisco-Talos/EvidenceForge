@@ -2951,6 +2951,7 @@ applications:
         code_signature:
           signing_id: com.apple.zsh
           team_id: null
+          entitlements: absent # explicit bounded model; no host binary inspection
         deployment:
           kind: catalog
           release_policy: host_build
@@ -2996,6 +2997,7 @@ applications:
       macos:
         image_path: /bin/bash
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.bash, team_id: null, entitlements: absent}
         deployment:
           kind: catalog
           product_id: apple-macos
@@ -3009,12 +3011,15 @@ applications:
 
   # Installed command vocabulary, without automatic baseline activation.
   # Host-build identities and Mach-O UUIDs are modeled, not captured binaries.
+  # Signing and absent entitlements below are explicit synthetic binary facts.
+  # They do not assert the entitlement inventory of every installed Apple build.
   - id: macos-id
     display_name: macOS id
     platforms:
       macos:
         image_path: /usr/bin/id
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.id, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/usr/bin/id]
     categories: [macos_command]
@@ -3026,6 +3031,7 @@ applications:
       macos:
         image_path: /usr/bin/sw_vers
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.sw_vers, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/usr/bin/sw_vers]
     categories: [macos_command]
@@ -3037,6 +3043,7 @@ applications:
       macos:
         image_path: /sbin/ifconfig
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.ifconfig, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/sbin/ifconfig -a]
     categories: [macos_command]
@@ -3048,6 +3055,7 @@ applications:
       macos:
         image_path: /bin/ps
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.ps, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/bin/ps aux]
     categories: [macos_command]
@@ -3059,6 +3067,7 @@ applications:
       macos:
         image_path: /usr/bin/dscl
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.dscl, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/usr/bin/dscl . -list /Users]
     categories: [macos_command]
@@ -3070,6 +3079,7 @@ applications:
       macos:
         image_path: /bin/pwd
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.pwd, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/bin/pwd]
     categories: [macos_command]
@@ -3081,6 +3091,7 @@ applications:
       macos:
         image_path: /bin/ls
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.ls, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: ["/bin/ls -la /Users/{username}/Documents"]
     categories: [macos_command]
@@ -3092,6 +3103,7 @@ applications:
       macos:
         image_path: /usr/bin/du
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.du, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
     categories: [macos_command]
@@ -3103,6 +3115,7 @@ applications:
       macos:
         image_path: /bin/df
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.df, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: [/bin/df -h]
     categories: [macos_command]
@@ -3114,6 +3127,7 @@ applications:
       macos:
         image_path: /usr/bin/find
         executable_format: mach_o
+        code_signature: {signing_id: com.apple.find, team_id: null, entitlements: absent}
         deployment: {kind: catalog, product_id: apple-macos, release_policy: host_build, scope: machine, architectures: [arm64]}
         command_templates: ['/usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"']
     categories: [macos_command]

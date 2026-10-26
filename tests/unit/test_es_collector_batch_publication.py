@@ -14,6 +14,46 @@ from tests.unit.test_es_collector import _profile, _registry
 from tests.unit.test_es_collector_batch import _prepare
 
 
+def test_sparse_native_batch_authenticates_missing_filtered_bytes_and_completed_retry() -> None:
+    registry = _registry()
+    batch = _prepare(registry)
+    rows = ('{"one":1}\n', None, '{"three":3}\n')
+    before = registry.connection("mac-a:es-client")
+    with registry.prepared_batch(batch) as claimed:
+        assert claimed.freeze_native_projections(rows, canonical_token="b" * 64) == rows
+        assert registry.connection("mac-a:es-client") == before
+    assert registry.retained_native_batch_projection(batch, canonical_token="b" * 64) == rows
+    with registry.prepared_batch(batch) as claimed:
+        claimed.commit_no_fail()
+    assert registry.completed_batch(batch) == batch.observations
+    assert registry.retained_native_batch_projection(batch, canonical_token="b" * 64) == rows
+
+
+@pytest.mark.parametrize("omitted", [(-1,), (0,), (1, 1), (2,), (True,)])
+def test_sparse_native_batch_does_not_authenticate_changed_omission_map(omitted: tuple) -> None:
+    registry = _registry()
+    batch = _prepare(registry)
+    with registry.prepared_batch(batch) as claimed:
+        claimed.freeze_native_projections(('{"one":1}\n', None, '{"three":3}\n'))
+    object.__setattr__(batch._native_projection, "omitted_rows", omitted)
+    assert not registry.authenticates_pending_batch(batch)
+    with pytest.raises(StateError):
+        registry.commit_batch(batch)
+    registry.cancel_batch(batch)
+
+
+@pytest.mark.parametrize("index", [0, 2])
+def test_visible_or_delayed_batch_member_requires_native_bytes(index: int) -> None:
+    registry = _registry()
+    batch = _prepare(registry)
+    rows = ['{"one":1}\n', None, '{"three":3}\n']
+    rows[index] = None
+    with registry.prepared_batch(batch) as claimed:
+        with pytest.raises(StateError, match="Visible ES"):
+            claimed.freeze_native_projections(tuple(rows))
+    registry.cancel_batch(batch)
+
+
 @pytest.mark.parametrize("damage", ["source", "sequence", "empty", "list", "member", "native"])
 def test_changed_batch_facts_reject_publication_but_do_not_strand_cleanup(damage: str) -> None:
     registry = _registry()

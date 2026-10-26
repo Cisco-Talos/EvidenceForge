@@ -95,6 +95,22 @@ def test_durable_network_identity_authenticates_nested_signing_metadata() -> Non
         assert _network_request(replace(binary, code_signature=signature)).stable_id != original
 
 
+def test_explicit_no_entitlements_has_distinct_identity_and_roundtrips() -> None:
+    application = _application()
+    unknown = _release(application)
+    application.platforms["macos"].code_signature = MacCodeSignatureEntry(
+        signing_id="test.example.editor", team_id="EXAMPLE123", entitlements="absent"
+    )
+    known = _release(application)
+    assert unknown.code_signature.entitlements is None
+    assert known.code_signature.entitlements == "absent"
+    assert known.code_signature.cdhash != unknown.code_signature.cdhash
+    assert len(unknown.code_signature.serialized_values()) == 3
+    assert len(known.code_signature.serialized_values()) == 4
+    assert _unpack_binary_release(_pack_binary_release(known)) == known
+    assert _network_request(unknown).stable_id != _network_request(known).stable_id
+
+
 @pytest.mark.parametrize(
     "platform,architecture,expected",
     [

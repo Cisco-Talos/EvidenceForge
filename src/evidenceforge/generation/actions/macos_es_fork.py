@@ -126,7 +126,7 @@ def _fork_record(
         or type(clock) is not MacosBootClock
         or type(action) is not ESAction
         or type(version) is not int
-        or version not in {6, 10}
+        or version not in {6, 10, 11}
     ):
         raise StateError("Native fork preparation requires exact supported owners and profile")
     if installed_filesystem is not None:

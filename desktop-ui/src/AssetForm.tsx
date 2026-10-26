@@ -52,8 +52,8 @@ function ChoicePicker({ title, value, multiple, source, options, custom, disable
 const fieldHelp: Record<string, string> = {
   username: "Unique account name; letters, digits, dots, underscores, hyphens and $ are allowed.",
   full_name: "Name shown for this account.", email: "A valid email address, such as alex@example.com.",
-  hostname: "Unique hostname, such as WORKSTATION-01.", ip: "An IPv4 or IPv6 address.", os: "Operating system and version, such as Windows 11, Ubuntu 24.04 or macOS 26.",
-  os_build: "Exact OS build when required by the selected evidence source, such as 25A354 for macOS 26. Use the build being modeled.",
+  hostname: "Unique hostname, such as WORKSTATION-01.", ip: "An IPv4 or IPv6 address.", os: "Operating system and version, such as Windows 11, Ubuntu 24.04 or macOS 27.",
+  os_build: "Exact OS build when required by the selected evidence source, such as 25A354 for macOS 27. Use the build being modeled.",
   architecture: "CPU architecture of the modeled host. Native macOS sources currently require arm64 workstations.",
   primary_system: "Choose this user's main computer from the systems in this environment.",
   groups: "Choose groups defined in this environment.", members: "Choose ordinary user accounts; stale accounts cannot be group members.",

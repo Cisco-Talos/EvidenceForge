@@ -375,6 +375,20 @@
             ],
             "default": null,
             "title": "Team Id"
+          },
+          "entitlements": {
+            "anyOf": [
+              {
+                "const": "absent",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Explicit modeled no-entitlements fact; null leaves it unknown",
+            "title": "Entitlements"
           }
         },
         "required": [

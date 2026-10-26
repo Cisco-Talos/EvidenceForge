@@ -844,6 +844,9 @@ class MacCodeSignatureEntry(BaseModel, extra="forbid", frozen=True):
 
     signing_id: str = Field(min_length=1, max_length=512)
     team_id: str | None = Field(default=None, min_length=1, max_length=128)
+    entitlements: Literal["absent"] | None = Field(
+        default=None, description="Explicit modeled no-entitlements fact; null leaves it unknown"
+    )
 
     @field_validator("signing_id", "team_id")
     @classmethod
@@ -3996,7 +3999,7 @@ class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
     """Bounded source profile; no collector or management configuration duplicates."""
 
     schema_version: Literal["1.0"]
-    profile: Literal["macos26-workspace-entry-v1"]
+    profile: Literal["macos26-workspace-entry-v1", "macos27-workspace-entry-v1"]
     mach_timebase: MacosMachTimebaseConfig
     workspace_request: MacosWorkspaceLogProfile
 
@@ -4058,24 +4061,24 @@ class MacosCodeValidationPolicy(BaseModel, extra="forbid", frozen=True):
 
 
 class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
-    """Bounded modeled fork export policy, independent of decoder admissions."""
+    """One explicitly qualified generation target, independent of wire decoding."""
 
     schema_version: Literal["1.0"]
-    profile: Literal["modeled-macos26-arm64-fork-v1"]
-    os_major: Literal[26]
+    profile: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,127}$")
+    os_major: Literal[27]
     architecture: Literal["arm64"]
     collector_arguments: tuple[str, ...]
-    message_version: Literal[10]
-    event_type: Literal[11]
+    message_version: Literal[11]
+    event_types: tuple[int, ...]
     action_type: Literal[1]
     result_type: Literal[0]
     auth_result: Literal[0]
-    clock_profile: Literal["macos26-workspace-entry-v1"]
+    clock_profile: Literal["macos27-workspace-entry-v1"]
+    exec_entitlements: Literal["absent_only"]
 
     @field_validator(
         "os_major",
         "message_version",
-        "event_type",
         "action_type",
         "result_type",
         "auth_result",
@@ -4090,11 +4093,41 @@ class MacosEndpointSecurityProfile(BaseModel, extra="forbid", frozen=True):
 
     @field_validator("collector_arguments")
     @classmethod
-    def fork_subscription(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        """Keep source admission narrower than the historical native codec."""
-        if values != ("/usr/bin/eslogger", "fork"):
-            raise ValueError("The bounded ES profile requires /usr/bin/eslogger fork")
+    def process_subscription(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Require the subscription actually covered by the bounded experiment."""
+        if values != ("/usr/bin/eslogger", "fork", "exec", "exit"):
+            raise ValueError("The bounded ES profile requires /usr/bin/eslogger fork exec exit")
         return values
+
+    @field_validator("event_types", mode="before")
+    @classmethod
+    def supported_families(cls, values: object) -> object:
+        """Counter order is canonical, distinct from collector argument order."""
+        if (
+            type(values) not in {tuple, list}
+            or any(type(value) is not int for value in values)
+            or tuple(values) != (9, 11, 15)
+        ):
+            raise ValueError("The bounded ES profile requires event types [9, 11, 15]")
+        return values
+
+
+class MacosEndpointSecurityProfilesConfig(BaseModel, extra="forbid", frozen=True):
+    """Selectable generation catalog; retiring a target does not remove its decoder."""
+
+    schema_version: Literal["2.0"]
+    profiles: tuple[MacosEndpointSecurityProfile, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def unambiguous_targets(self) -> Self:
+        """Require unique IDs and a single profile per current OS/architecture target."""
+        ids = [profile.profile for profile in self.profiles]
+        targets = [(profile.os_major, profile.architecture) for profile in self.profiles]
+        if len(set(ids)) != len(ids) or len(set(targets)) != len(targets):
+            raise ValueError(
+                "Mac generation profile IDs and OS/architecture targets must be unique"
+            )
+        return self
 
 
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):

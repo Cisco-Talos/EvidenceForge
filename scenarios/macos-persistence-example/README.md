@@ -1,5 +1,5 @@
 # Explicit Mac system-job workflow
-This invented macOS 26 arm64 example writes and bootstraps a system LaunchDaemon definition, removes its file, then activates the already-loaded definition. It models a completed leader exit, a second activation and group unload. The provisioning process and all file/process identities are synthetic.
+This invented macOS 27 arm64 example writes and bootstraps a system LaunchDaemon definition, removes its file, then activates the already-loaded definition. It models a completed leader exit, a second activation and group unload. The provisioning process and all file/process identities are synthetic.
 Run from the repository root:
 ```sh
 uv run eforge validate scenarios/macos-persistence-example/scenario.yaml
