@@ -513,13 +513,30 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             or not 100_000 <= value < 2**32 - 1
         ):
             raise CheckpointCorruptionError("StateManager macOS audit session counter is invalid")
+    audit_owners: set[tuple[str, int]] = set()
     for session in chain(
         fresh._active_sessions.values(), (row[0] for row in fresh._ended_sessions.values())
     ):
         origin = session.audit_origin
+        ssh = session.session_kind == "ssh" and session.auth_protocol == "ssh"
+        gui = (
+            session.session_kind == "interactive"
+            and type(session.logon_type) is int
+            and session.logon_type == 2
+            and session.auth_protocol == "local"
+            and session.source_ip == "-"
+            and type(session.source_port) is int
+            and session.source_port == 0
+            and session.transport_pid is None
+            and session.network_close_time is None
+            and origin is not None
+            and type(session.effective_uid) is int
+            and session.effective_uid == origin.audit_uid
+            and type(session.session_id) is int
+            and session.session_id == 0
+        )
         if origin is not None and (
-            session.session_kind != "ssh"
-            or session.auth_protocol != "ssh"
+            not (ssh or gui)
             or origin.audit_session_id > fresh._macos_audit_session_counters.get(session.system, 0)
             or origin.created_at < session.start_time
             or (
@@ -532,6 +549,11 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             )
         ):
             raise CheckpointCorruptionError("StateManager native session audit origin is invalid")
+        if origin is not None:
+            key = session.system, origin.audit_session_id
+            if key in audit_owners:
+                raise CheckpointCorruptionError("StateManager session audit origin is duplicated")
+            audit_owners.add(key)
     for host, version in fresh._macos_audit_pid_versions.items():
         if (
             type(host) is not str

@@ -559,7 +559,7 @@ further per-loop or per-PR details in worklogs or PR descriptions.
 - The active generation target has moved to **macOS 27 arm64** through a selectable
   profile catalog; macOS 26 scenarios now fail validation independently of selected sources.
   Human-reviewed private shape evidence admits bounded v11 fork/exec/known-exit projection.
-  Unknown SSH descriptors, local GUI audit origins and automatic terminal outcomes still
+  Unknown SSH descriptors, GUI launch relationships and automatic terminal outcomes still
   limit ordinary native command coverage; expanding those canonical producers is follow-up
   work, not an implicit claim of complete native ES coverage. See the
   [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).

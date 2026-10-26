@@ -27,7 +27,10 @@ def test_mac_ssh_client_process_history_transport_and_close(
     scenario = macos_ssh_scenario(scenarios_dir)
     engine = GenerationEngine(scenario, tmp_path)
     try:
-        engine._initialize()
+        # Native boot identity and later activity must use the same run seed.
+        with generation_seed_scope(scenario.generation_seed):
+            reset_thread_rng()
+            engine._initialize()
         generator = engine.activity_generator
         user = scenario.environment.users[0]
         client, server = scenario.environment.systems
@@ -90,8 +93,10 @@ def test_mac_ssh_client_process_history_transport_and_close(
     account = generator.identity_directory.macos_account(user.username, client.hostname)
     assert identity.credentials.real_uid == identity.credentials.effective_uid == account.uid
     assert identity.credentials.real_gid == identity.credentials.effective_gid == account.gid
-    assert identity.credentials.audit_uid is None
-    assert identity.credentials.audit_session_id is None
+    origin = engine.state_manager.get_session_at(logon, opened).audit_origin
+    assert origin is not None
+    assert identity.credentials.audit_uid == origin.audit_uid == account.uid
+    assert identity.credentials.audit_session_id == origin.audit_session_id
     close = next(
         row
         for row in clients

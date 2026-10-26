@@ -4148,6 +4148,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     code_validation: tuple[MacosCodeValidationPolicy, ...] = Field(default=(), max_length=256)
     system_audit_origin: Literal["default_unattributed"] | None = None
     system_responsibility: Literal["none"] | None = None
+    gui_audit_origin: Literal["authenticated_local_account"] | None = None
 
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:

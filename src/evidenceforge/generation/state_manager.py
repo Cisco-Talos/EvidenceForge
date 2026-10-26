@@ -1291,7 +1291,7 @@ class MaterializationBatchBuilder:
         audit_uid: int,
         authenticated_at: datetime,
     ) -> SessionMaterializationPlan:
-        """Reserve native SSH audit origin before planning receiver processes."""
+        """Reserve a native SSH or local GUI audit origin before planning processes."""
         self._require_open()
         if self._session is not plan or self._processes:
             raise StateError("macOS audit enrichment must precede batch process planning")
@@ -8638,16 +8638,32 @@ class StateManager:
             ):
                 raise StateError("macOS audit enrichment requires the current unpopulated batch")
             self._validate_session_materialization_plan(plan)
+            ssh = plan.identity.session_kind == "ssh" and plan._payload.auth_protocol == "ssh"
+            gui = (
+                plan.identity.session_kind == "interactive"
+                and type(plan._payload.logon_type) is int
+                and plan._payload.logon_type == 2
+                and plan._payload.auth_protocol == "local"
+                and plan._payload.source_ip == "-"
+                and type(plan._payload.source_port) is int
+                and plan._payload.source_port == 0
+                and type(plan.identity.session_id) is int
+                and plan._payload.transport_pid is None
+                and plan._payload.network_close_time is None
+                and type(plan._payload.effective_uid) is int
+                and plan._payload.effective_uid == audit_uid
+            )
             if (
                 plan.audit_origin is not None
                 or plan._allocator_patch.macos_audit_session_counter is not None
                 or plan._allocator_patch.linux_logind is not None
                 or plan.identity.session_id != 0
-                or plan.identity.session_kind != "ssh"
-                or plan._payload.auth_protocol != "ssh"
+                or not (ssh or gui)
                 or self._pid_os.get(plan.identity.hostname) != "macos"
             ):
-                raise StateError("macOS audit enrichment requires an unenriched Mac SSH session")
+                raise StateError(
+                    "macOS audit enrichment requires an unenriched Mac SSH or local GUI session"
+                )
             created_at = ensure_utc(authenticated_at)
             if (
                 created_at < plan.identity.started_at
@@ -9815,6 +9831,29 @@ class StateManager:
             session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
+            if session.audit_origin is not None and session.session_kind == "interactive":
+                if (
+                    source_ready_time is not None
+                    and ensure_utc(source_ready_time) < session.audit_origin.created_at
+                ):
+                    raise StateError("Mac GUI readiness cannot precede its audit authentication")
+                protected = (
+                    (username, session.username),
+                    (start_time, session.start_time),
+                    (source_ip, "-"),
+                    (source_port, 0),
+                    (session_kind, "interactive"),
+                    (transport_pid, None),
+                    (network_close_time, None),
+                    (auth_protocol, "local"),
+                    (session_id, 0),
+                    (effective_uid, session.audit_origin.audit_uid),
+                )
+                if any(
+                    value is not None and (type(value) is not type(expected) or value != expected)
+                    for value, expected in protected
+                ):
+                    raise StateError("Cannot replace an authenticated Mac GUI audit owner")
             if username is not None:
                 self._authoritative_session_ends.remove(session.logon_id)
                 session.username = username

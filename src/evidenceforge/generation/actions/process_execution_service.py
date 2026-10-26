@@ -992,6 +992,15 @@ class ProcessExecutionService:
                     kind=request.macos_launch_kind,
                     script=request.exec_script,
                 )
+                if request.macos_launch_kind == "user":
+                    credentials = provider.gui_launch_credentials(
+                        self.state_manager,
+                        request.system.hostname,
+                        launch.actor.username,
+                        logon_id=launch.actor.logon_id,
+                        at=ensure_utc(launch.time),
+                        credentials=credentials,
+                    )
             terminal = (
                 provider.profile.terminal
                 if request.macos_terminal == "allocate"

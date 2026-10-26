@@ -10,6 +10,14 @@ Use existing `environment.systems` values: `os: macOS 27`, explicit `os_build`, 
 
 Select eCAR for modeled endpoint process/session/flow evidence. Existing network, firewall, IDS, proxy, mail and server evidence can describe Mac interactions only when routing and sensor visibility permit it. Windows Security/Sysmon and Linux syslog remain local to their actual owners. Native Mac `logind` is not Linux `systemd-logind`.
 
+The current frozen launch policy gives each modeled normal-user local GUI login one canonical
+audit origin, separate from terminal POSIX sessions/groups. Explicit GUI user launches consume
+that origin and child fork/exec inherits it; a fresh GUI login gets a new audit session. Older
+policies and unknown existing sessions retain unknown audit facts. Bounded human-reviewed
+iTerm2 identity comparisons support these relationships; they do not qualify GUI startup log
+messages or responsible-process relationships. Complete native GUI command export remains
+conditional on those independently owned process facts.
+
 `zsh_history` writes `<host>/zsh_history/<username>.zsh_history` as `: epoch:0;command`. Its initial collection profile models EXTENDED_HISTORY with incremental append at interactive command submission; zero duration is not measured execution time. Only a live, explicitly interactive `/bin/zsh` shell in the owning session can submit history. Process creation alone does not imply history. Mac Bash uses the existing `bash_history` format only for an explicitly modeled interactive `/bin/bash` session. Noninteractive commands, multiline/metafied zsh records, history erasure and delayed session-exit history persistence remain outside this profile. [zsh history options](https://zsh.sourceforge.io/Doc/Release/Options.html#History) describe the native semantics.
 
 Application availability and implemented variants are distinct. Unresolved Mac variants are unavailable rather than substituted with Linux/Windows paths. Initial managed variants have a conservative 2026-10-15 catalog-snapshot availability floor; host-bundled entries follow the modeled OS build. Paths and command pools come from catalog data, never the generator host or personal inventories. Chrome’s profiled renderer/GPU/utility helpers use existing application `children` and spawn-rule fields. The GUI baseline binds a modeled subset to the installed browser and owning session; counts/delays are synthetic profile values. Release overrides must also update versioned helper paths. Browser IPC and helper-attributed network traffic are not inferred.

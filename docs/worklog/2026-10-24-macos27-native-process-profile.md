@@ -160,3 +160,8 @@ one at a time. A separate own-process-only GUI audit experiment is prepared;
 see the [private GUI reference worklog](2026-10-26-macos-gui-audit-reference.md)
 for the code-only kit handoff and strict human-only collection boundary.
 No agent has run its native probe, platform preflight or private reviewer.
+
+The human has now shared successful iTerm2 identity and same-boot GUI-relogin
+comparisons. Revision 334 implements login-owned GUI audit origins and explicit
+launch/child inheritance with rollback/recovery checks. The linked worklog records
+the bounded evidence and remaining GUI responsibility/native-startup limits.

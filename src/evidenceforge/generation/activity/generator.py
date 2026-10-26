@@ -335,7 +335,11 @@ from evidenceforge.generation.deployment_registry import (
 )
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.http_channels import HttpApplicationChannelManager
-from evidenceforge.generation.identity import IdentityDirectory, default_linux_uid_for_user
+from evidenceforge.generation.identity import (
+    IdentityDirectory,
+    MacAccount,
+    default_linux_uid_for_user,
+)
 from evidenceforge.generation.indexes import ExpiringIndex
 from evidenceforge.generation.lifecycle_authority import (
     GeneratorLifecycleAuthority,
@@ -11895,6 +11899,7 @@ class ActivityGenerator:
 
     def _execute_logon_bundle(self, request: LogonRequest) -> str:
         """Expand a successful logon bundle through the compatibility adapter."""
+        account: MacAccount | None = None
         if _get_os_category(request.system.os) == "macos" and self.identity_directory is not None:
             account = self.identity_directory.macos_account(
                 request.user.username, request.system.hostname
@@ -12257,7 +12262,53 @@ class ActivityGenerator:
         local_macos_session = (
             os_cat == "macos" and logon_type == 2 and session_kind == "interactive"
         )
-        if logon_id is None:
+        gui_audit_origin = (
+            local_macos_session
+            and self.macos_execution_metadata is not None
+            and self.macos_execution_metadata.profile.gui_audit_origin
+            == "authenticated_local_account"
+            and account is not None
+            and account.uid > 0
+            and request.effective_uid == account.uid
+            and request.effective_gid == account.gid
+            and resolved_auth_protocol in {"", "local"}
+        )
+        if gui_audit_origin:
+            resolved_auth_protocol = "local"
+        if (
+            gui_audit_origin
+            and account is not None
+            and (logon_id is None or self.state_manager.get_session(logon_id) is None)
+        ):
+            # Allocate GUI authentication and its independent audit namespace
+            # together, before any workspace or terminal process is published.
+            batch = self.state_manager.begin_materialization_batch()
+            planned = batch.plan_session(
+                username=user.username,
+                system=system.hostname,
+                logon_type=logon_type,
+                source_ip=auth_source_ip,
+                source_port=0,
+                session_kind=session_kind,
+                logon_guid_required=requires_logon_guid,
+                lifecycle_group_id=lifecycle_group_id,
+                auth_protocol=resolved_auth_protocol,
+                account_scope=request.account_scope,
+                auth_session_ref=request.auth_session_ref,
+                effective_uid=request.effective_uid,
+                effective_gid=request.effective_gid,
+                session_id=0,
+                logon_id=logon_id,
+                start_time=time,
+            )
+            planned = batch.enrich_macos_audit_session(
+                planned, audit_uid=account.uid, authenticated_at=time
+            )
+            with self.state_manager.prepared_materialization_batch(batch.seal()) as prepared:
+                prepared.apply_provisional()
+                prepared.finalize_no_fail()
+            logon_id = planned.identity.logon_id
+        elif logon_id is None:
             logon_id = self.state_manager.create_session(
                 username=user.username,
                 system=system.hostname,
@@ -12273,7 +12324,7 @@ class ActivityGenerator:
                 auth_session_ref=request.auth_session_ref,
                 effective_uid=request.effective_uid,
                 effective_gid=request.effective_gid,
-                session_id=0 if local_linux_session else None,
+                session_id=0 if local_linux_session or local_macos_session else None,
             )
         else:
             existing_session = self.state_manager.get_session(logon_id)
@@ -12295,7 +12346,7 @@ class ActivityGenerator:
                     auth_session_ref=request.auth_session_ref,
                     effective_uid=request.effective_uid,
                     effective_gid=request.effective_gid,
-                    session_id=0 if local_linux_session else None,
+                    session_id=0 if local_linux_session or local_macos_session else None,
                 )
             else:
                 self.state_manager.update_session_metadata(

@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 333
+current_revision: 334
 history_start_revision: 1
-behavior_surface_sha256: 323341c082b461b276e88891b60dc9f8254acf3036fe4b1cf1f8794a0c0e764f
+behavior_surface_sha256: 9e8169b1fdfb3629c0478d3a2cf12b20f51b380b9273246f6434a56b9b04e44c
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3163,3 +3163,17 @@ changes:
       - macos_unified_log
       - zsh_history
     summary: Selects macOS 27 arm64 from a profile catalog, retires 26 generation, publishes qualified v11 process phases with authenticated counter gaps, retains known entitlement absence, and orders shell fork latency after foreground readiness.
+  - revision: 334
+    id: macos-gui-login-owned-audit-origin
+    impact: localized
+    domains:
+      - macos-session-lifecycle
+      - macos-gui-audit-origin
+      - process-credentials
+      - checkpoint-recovery
+    formats:
+      - ecar
+      - macos_endpoint_security
+      - macos_unified_log
+      - zsh_history
+    summary: Allocates one authenticated audit origin per modeled local GUI login, shares it across explicit user launches and inherited children, separates POSIX session identity, and validates retained origins during recovery.

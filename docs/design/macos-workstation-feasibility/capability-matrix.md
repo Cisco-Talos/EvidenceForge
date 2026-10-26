@@ -1,6 +1,6 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-10-24)
+## Current generation admission (2026-10-26)
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
@@ -8,10 +8,18 @@ output selection. The catalog can hold multiple profiles; historical wire decode
 available independently of generation admission.
 
 The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
-publication. Unknown metadata stays unavailable; SSH descriptor and local GUI audit-origin gaps
-still limit ordinary command exports. Gatekeeper remains gated. Older v10/macOS 26 milestones
+publication. Local GUI audit origins now belong to the canonical login and survive explicit
+user launches, inherited children and recovery. Unknown SSH descriptors, GUI responsible-process
+relationships and automatic exit results still limit ordinary command exports. Gatekeeper remains gated. Older v10/macOS 26 milestones
 below are historical context, not current target admission. See the
 [current profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md).
+
+The [GUI audit experiment and implementation](../../worklog/2026-10-26-macos-gui-audit-reference.md)
+record human-reviewed own-process comparisons from iTerm2 on macOS 27. Audit identity is shared
+across its tested windows/tabs and fork/exec, distinct from POSIX sessions, and changes across a
+human-attested same-boot GUI relogin while the audit user stays constant. The generator models
+those bounded relationships through existing login, process and recovery owners. This does
+not validate Apple Terminal startup behavior, native GUI log layouts or responsible ownership.
 
 This branch targets modeled macOS 26 arm64 workstations. “Implemented” means a canonical path exists; “experimental” means it is usable with explicit limitations; “validated” requires the named tests and reference boundary. A passing JSON parser does not establish native fidelity. This matrix records implementation progress, not a general macOS support claim.
 

@@ -155,6 +155,55 @@ class MacosExecutionMetadataProducer:
             raise StateError("Mac working directory has no provisioned facts at this time")
         return MacosExecutionDirectory(hostname, path, at, metadata)
 
+    def gui_launch_credentials(
+        self,
+        state: StateManager,
+        hostname: str,
+        principal: str,
+        *,
+        logon_id: str,
+        at: datetime,
+        credentials: PosixProcessCredentials | None,
+    ) -> PosixProcessCredentials | None:
+        """Bind an explicit GUI launch to its already authenticated local origin.
+
+        The session owner allocates the origin once. A direct user launch may
+        consume it; ordinary children inherit their parent's credentials. This
+        does not infer audit identity from POSIX session IDs or replace a known
+        foreign audit origin. Older frozen profiles/sessions retain unknowns.
+        """
+        if self.profile.gui_audit_origin is None or credentials is None:
+            return credentials
+        session = state.get_session_at(logon_id, at)
+        if session is None or session.audit_origin is None:
+            return credentials
+        if session.session_kind != "interactive" or session.logon_type != 2:
+            return credentials
+        account = self._accounts.get((hostname.casefold(), principal.casefold()))
+        origin = session.audit_origin
+        if (
+            session.system != hostname
+            or session.username != principal
+            or account is None
+            or session.effective_uid != account.uid
+            or origin.audit_uid != account.uid
+            or at < origin.created_at
+            or (credentials.real_uid, credentials.effective_uid) != (account.uid, account.uid)
+            or (credentials.real_gid, credentials.effective_gid) != (account.gid, account.gid)
+        ):
+            raise StateError("Mac GUI launch requires its exact authenticated local account")
+        current = credentials.audit_uid, credentials.audit_session_id
+        expected = origin.audit_uid, origin.audit_session_id
+        if current != (None, None) and current != expected:
+            raise StateError("Mac GUI launch cannot replace a known foreign audit origin")
+        return PosixProcessCredentials(
+            credentials.real_uid,
+            credentials.effective_uid,
+            credentials.real_gid,
+            credentials.effective_gid,
+            *expected,
+        )
+
     def launch(
         self,
         hostname: str,
