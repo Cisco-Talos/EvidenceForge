@@ -9,8 +9,10 @@ available independently of generation admission.
 
 The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
 publication. Local GUI audit origins now belong to the canonical login and survive explicit
-user launches, inherited children and recovery. Unknown SSH descriptors, GUI responsible-process
-relationships and automatic exit results still limit ordinary command exports. Gatekeeper remains gated. Older v10/macOS 26 milestones
+user launches, inherited children and recovery. Qualified external commands without a PTY now
+receive their SSH channel's three pipe descriptors at exec. Shell/helper descriptor inventories,
+PTY command generation, GUI responsible-process relationships and automatic exit results remain
+coverage limits. Gatekeeper remains gated. Older v10/macOS 26 milestones
 below are historical context, not current target admission. See the
 [current profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md).
 
@@ -21,7 +23,11 @@ human-attested same-boot GUI relogin while the audit user stays constant. The ge
 those bounded relationships through existing login, process and recovery owners. This does
 not validate Apple Terminal startup behavior, native GUI log layouts or responsible ownership.
 
-This branch targets modeled macOS 26 arm64 workstations. “Implemented” means a canonical path exists; “experimental” means it is usable with explicit limitations; “validated” requires the named tests and reference boundary. A passing JSON parser does not establish native fidelity. This matrix records implementation progress, not a general macOS support claim.
+The historical milestones below targeted modeled macOS 26 arm64 workstations; the active target
+is now 27. “Implemented” means a canonical path exists; “experimental” means it is usable with
+explicit limitations; “validated” requires the named tests and reference boundary. A passing JSON
+parser does not establish native fidelity. This matrix records implementation progress, not a
+general macOS support claim.
 
 The [ES metadata map and evidence gates](es-metadata-and-evidence-gates.md) record the engineering ownership, public-search findings, acceptance criteria and controlled-capture fallback. Nonempty modeled fork/v10 CLI, parser, filtering and checkpoint acceptance pass. Three isolated blind panels are complete; the final mean is 66.75 with all reviewers judging Synthetic. The [bounded acceptance record](../../../scenarios/macos-assessment/ACCEPTANCE.md) separates completed engineering contracts from broader quality findings; there is no general authenticity pass. The user explicitly deferred native Gatekeeper denial and current-build ES exec/exit evidence on 2026-10-21; no further local-log inspection is authorized without asking the user first.
 

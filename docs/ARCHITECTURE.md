@@ -1276,7 +1276,21 @@ The internal `macos_workspace_request` occurrence separates session intent from 
 
 ### Authored Mac system-job ownership
 The experimental `macos_launch_item` coordinator composes explicit root/system-domain file and lifecycle stages through existing owners. The shared runtime content registry owns definitions and placement removal; the service registry owns loaded snapshots; process/group transactions own activation, exit and unload. File stages use the finite `macos_launch_item_file` effect owner with exact occurrence cardinality and normal audit reconciliation, not an audit exemption. Registration and dormant unload create no fabricated source occurrence. An exact running caller is required even when State retains an exited identity for historical correlation.
-ES collector connections bind exact modeled executions. The active catalog selects macOS 27 arm64 v11 fork/exec/known-exit generation; retired targets fail validation independently of output. The canonical boot collector, client inventory, counters and clock remain checkpoint owners. Exact process publication freezes native bytes before State/lifecycle/artifact commit. Unsupported phases retain authenticated nonexported counter positions, with no fabricated native rows. Exec requires explicit binary entitlement absence and complete descriptors; exit requires a canonical completed outcome. Known sibling forks remain available. Unknown SSH descriptors and GUI responsible-process relationships remain explicit limitations. Sink retries reuse the retained native projection and canonical receipt. Historical wire decoding remains separate from active source admission.
+ES collector connections bind exact modeled executions. The active catalog selects macOS 27 arm64 v11 fork/exec/known-exit generation; retired targets fail validation independently of output. The canonical boot collector, client inventory, counters and clock remain checkpoint owners. Exact process publication freezes native bytes before State/lifecycle/artifact commit. Unsupported phases retain authenticated nonexported counter positions, with no fabricated native rows. Exec requires explicit binary entitlement absence and complete descriptors; exit requires a canonical completed outcome. Known sibling forks remain available. Shell/helper descriptor inventories, PTY command generation and GUI responsible-process relationships remain explicit limitations. Sink retries reuse the retained native projection and canonical receipt. Historical wire decoding remains separate from active source admission.
+
+The frozen Mac execution policy can select `ssh_command_descriptors: standard_pipes`.
+The authenticated SSH start batch reserves three distinct pipe identities in the existing host
+namespace and commits them with the session. `MacosSshCommandStreams` owns these channel streams;
+it is separate from a shell or helper's complete FD inventory. A qualified external-command exec
+may consume fd 0/1/2 after an exact fork from the bound login shell with known terminal absence.
+It preserves a known inherited table instead of replacing it. The shell's unknown table and the
+child's pre-exec history remain unknown. Later commands reuse channel pipes, and native ES exec
+renders the resulting canonical table. Allocation, validation, rollback and source publication
+use the existing session/process journal. StateManager schema 9 and active-session record v3
+retain streams through recovery; older no-stream records retain their v2 encoding and unknown
+semantics. There is no new pipe registry or source-dependent allocation. Human-reviewed own-process
+comparisons support the bounded post-exec layout, not sshd internals, PTY generation or native
+export timing; see the [SSH reference worklog](worklog/2026-10-26-macos-ssh-descriptor-reference.md).
 
 The frozen execution policy explicitly enables one audit origin per modeled normal-user local
 GUI authentication. The auth bundle allocates the origin and session atomically through the

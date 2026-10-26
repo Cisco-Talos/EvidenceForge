@@ -4149,6 +4149,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     system_audit_origin: Literal["default_unattributed"] | None = None
     system_responsibility: Literal["none"] | None = None
     gui_audit_origin: Literal["authenticated_local_account"] | None = None
+    ssh_command_descriptors: Literal["standard_pipes"] | None = None
 
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:

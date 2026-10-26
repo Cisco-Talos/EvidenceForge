@@ -36,6 +36,7 @@ from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalSession
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -112,6 +113,7 @@ _ACTIVE_SESSION_FIELDS = (
     "effective_uid",
     "effective_gid",
     "audit_origin",
+    "ssh_command_streams",
 )
 _RUNNING_PROCESS_FIELDS = (
     "pid",
@@ -396,7 +398,11 @@ _NETWORK_TRANSACTION_PLAN_FIELDS = (
 )
 
 _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
-    "active-session-v2": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "active-session-v3": (ActiveSession, _ACTIVE_SESSION_FIELDS),
+    "macos-ssh-command-streams-v1": (
+        MacosSshCommandStreams,
+        ("hostname", "session_object_id", "available_at", "bindings"),
+    ),
     "macos-process-privilege-drop-v1": (
         MacosProcessPrivilegeDrop,
         (
@@ -558,6 +564,12 @@ def encode_state_value(value: object) -> object:
     if value_type is MacosDirectoryMetadata:
         return ["macos-directory-metadata-v1", value.canonical_json()]
     record_tag = _TAGS_BY_TYPE.get(value_type)
+    if value_type is ActiveSession and value.ssh_command_streams is None:
+        return [
+            "record",
+            "active-session-v2",
+            [encode_state_value(getattr(value, name)) for name in _ACTIVE_SESSION_FIELDS[:-1]],
+        ]
     if record_tag is not None:
         _schema_type, names = _SCHEMAS[record_tag]
         return [
@@ -650,6 +662,9 @@ def decode_state_value(value: object) -> object:
             encoded_fields = [*encoded_fields, None]
         if record_tag == "active-session" and len(encoded_fields) == 34:
             record_tag = "active-session-v2"
+            encoded_fields = [*encoded_fields, None]
+        if record_tag == "active-session-v2" and len(encoded_fields) == 35:
+            record_tag = "active-session-v3"
             encoded_fields = [*encoded_fields, None]
         # Explicit, lossless upgrade of pre-exec process records. Old readers reject
         # the versioned tags; new readers retain legacy scenarios/checkpoint state.

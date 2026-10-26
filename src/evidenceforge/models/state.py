@@ -51,6 +51,7 @@ from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_runtime import MacosImageSecurity
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.network import NetworkTrafficLedger
 from evidenceforge.events.parentage import ProcessParentage, ProcessParentageChange
 from evidenceforge.events.process_executable import ProcessExecutableVersion
@@ -116,6 +117,7 @@ class ActiveSession:
     effective_uid: int | None = None
     effective_gid: int | None = None
     audit_origin: MacosAuditSession | None = None
+    ssh_command_streams: MacosSshCommandStreams | None = None
 
 
 @dataclass

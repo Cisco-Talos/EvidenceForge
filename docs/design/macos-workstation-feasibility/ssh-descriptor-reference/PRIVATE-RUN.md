@@ -84,6 +84,10 @@ not inspect connection addresses, environment or another process to establish it
 `reference_review: REQUIRED` and `gate_status: NOT_EVALUATED` remain present.
 No generator policy or native gate is changed by collection alone.
 
+For VNODE streams, `SAME` compares the underlying terminal node; it does not establish a shared
+open-file description, file offset or access history. Pipe comparisons distinguish the opaque
+pipe objects only within the native probe. Neither comparison exports a native identifier.
+
 API meaning follows Apple's public
 [proc FD structures](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/bsd/sys/proc_info.h)
 and [libproc declarations](https://raw.githubusercontent.com/apple-oss-distributions/xnu/main/libsyscall/wrappers/libproc/libproc.h).

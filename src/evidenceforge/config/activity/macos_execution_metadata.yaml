@@ -8,6 +8,8 @@ system_responsibility: none # clean service launch with no other responsible lif
 # One canonical origin per explicit GUI login, shared across terminal POSIX sessions.
 # Bounded inheritance/login-boundary reference: human-reviewed macOS 27 iTerm2 probe.
 gui_audit_origin: authenticated_local_account
+# Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
+ssh_command_descriptors: standard_pipes
 terminal:
   volume_id: modeled-devfs
   device: 16777217

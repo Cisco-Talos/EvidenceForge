@@ -5,6 +5,7 @@
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from itertools import chain
 from typing import Literal
 
 from evidenceforge.config.schemas import MacosTerminalDeviceProfile
@@ -12,6 +13,7 @@ from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdenti
 from evidenceforge.events.job_control import PosixSessionIdentity
 from evidenceforge.events.macos_descriptors import MacosDescriptorBinding, MacosDescriptorTable
 from evidenceforge.events.macos_file import MacosFileTime, MacosTerminalMetadata
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalSession
 from evidenceforge.generation.posix_job_control import (
     ReservationKey,
@@ -169,6 +171,8 @@ def validate_native_pipe_state(
     counters: dict[str, tuple[int, int]],
     processes: tuple[RunningProcess, ...],
     platforms: dict[str, str],
+    *,
+    command_streams: tuple[MacosSshCommandStreams, ...] = (),
 ) -> None:
     """Check native pipe allocation/share identities once before checkpoint adoption."""
     for host, value in counters.items():
@@ -183,19 +187,35 @@ def validate_native_pipe_state(
             raise ValueError("Mac native pipe counter is invalid")
     ids: dict[tuple[str, int], str] = {}
     objects: dict[tuple[str, str], int] = {}
-    for process in processes:
-        for table in process.descriptor_history:
-            for binding in table.bindings:
-                if binding.native_pipe_id is None:
-                    continue
-                native_id = binding.native_pipe_id
-                counter = counters.get(process.system)
-                if (
-                    counter is None
-                    or not counter[0] <= native_id <= counter[1]
-                    or ids.setdefault((process.system, native_id), binding.object_id)
-                    != binding.object_id
-                    or objects.setdefault((process.system, binding.object_id), native_id)
-                    != native_id
-                ):
-                    raise ValueError("Mac native pipe identity disagrees with its allocation owner")
+    owners: dict[tuple[str, int], str] = {}
+    for streams in command_streams:
+        streams.__post_init__()
+        for binding in streams.bindings:
+            key = streams.hostname, binding.native_pipe_id
+            if owners.setdefault(key, streams.session_object_id) != streams.session_object_id:
+                raise ValueError("SSH command channels cannot share their distinct pipe objects")
+    bindings = chain(
+        (
+            (process.system, binding)
+            for process in processes
+            for table in process.descriptor_history
+            for binding in table.bindings
+        ),
+        (
+            (streams.hostname, binding)
+            for streams in command_streams
+            for binding in streams.bindings
+        ),
+    )
+    for host, binding in bindings:
+        if binding.native_pipe_id is None:
+            continue
+        native_id = binding.native_pipe_id
+        counter = counters.get(host)
+        if (
+            counter is None
+            or not counter[0] <= native_id <= counter[1]
+            or ids.setdefault((host, native_id), binding.object_id) != binding.object_id
+            or objects.setdefault((host, binding.object_id), native_id) != native_id
+        ):
+            raise ValueError("Mac native pipe identity disagrees with its allocation owner")

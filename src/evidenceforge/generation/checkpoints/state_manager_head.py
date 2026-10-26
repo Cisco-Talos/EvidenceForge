@@ -47,7 +47,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "8"
+_SCHEMA_VERSION = "9"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -356,6 +356,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         _SCHEMA_VERSION,
         _LEGACY_VERSION,
         "7",
+        "8",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -493,6 +494,14 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
                 )
             ),
             fresh._pid_os,
+            command_streams=tuple(
+                session.ssh_command_streams
+                for session in chain(
+                    fresh._active_sessions.values(),
+                    (row[0] for row in fresh._ended_sessions.values()),
+                )
+                if session.ssh_command_streams is not None
+            ),
         )
         if document["schema_version"] in {"6", "7"} and any(
             table.native_last_fd is not None
@@ -554,6 +563,24 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
             if key in audit_owners:
                 raise CheckpointCorruptionError("StateManager session audit origin is duplicated")
             audit_owners.add(key)
+        streams = session.ssh_command_streams
+        if streams is not None:
+            if (
+                document["schema_version"] != _SCHEMA_VERSION
+                or not ssh
+                or origin is None
+                or session.effective_uid != origin.audit_uid
+                or streams.hostname != session.system
+                or streams.session_object_id != session.ecar_object_id
+                or session.source_ready_time is None
+                or streams.available_at > session.source_ready_time
+                or streams.available_at < origin.created_at
+                or (
+                    session.network_close_time is not None
+                    and streams.available_at >= session.network_close_time
+                )
+            ):
+                raise CheckpointCorruptionError("StateManager SSH command stream owner is invalid")
     for host, version in fresh._macos_audit_pid_versions.items():
         if (
             type(host) is not str
@@ -887,8 +914,8 @@ class StateManagerParticipant:
     checkpoint_owner = "state-manager"
     checkpoint_restore_priority = 10
     checkpoint_schema_version = _SCHEMA_VERSION
-    checkpoint_compatible_head_versions = (_LEGACY_VERSION, "7")
-    checkpoint_compatible_segment_versions = (_LEGACY_VERSION, "7")
+    checkpoint_compatible_head_versions = (_LEGACY_VERSION, "7", "8")
+    checkpoint_compatible_segment_versions = (_LEGACY_VERSION, "7", "8")
     checkpoint_state_fields = STATE_MANAGER_CHECKPOINT_FIELDS
 
     def __init__(self, manager: StateManager) -> None:
@@ -980,7 +1007,8 @@ class StateManagerParticipant:
             document = loads(payload)
             if (
                 type(document) is not dict
-                or document.get("schema_version") not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7"}
+                or document.get("schema_version")
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

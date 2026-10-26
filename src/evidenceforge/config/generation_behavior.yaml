@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 334
+current_revision: 335
 history_start_revision: 1
-behavior_surface_sha256: 9e8169b1fdfb3629c0478d3a2cf12b20f51b380b9273246f6434a56b9b04e44c
+behavior_surface_sha256: b28e0f4ebd9dc92d7db388b9877b503fcd68e901bdd12cb53cf1ee1838998d01
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3177,3 +3177,14 @@ changes:
       - macos_unified_log
       - zsh_history
     summary: Allocates one authenticated audit origin per modeled local GUI login, shares it across explicit user launches and inherited children, separates POSIX session identity, and validates retained origins during recovery.
+  - revision: 335
+    id: macos-ssh-channel-owned-command-descriptors
+    impact: localized
+    domains:
+      - macos-ssh-command-descriptors
+      - macos-native-source-projection
+      - checkpoint-recovery
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Reserves three distinct no-PTY SSH channel pipes atomically and supplies complete post-exec command descriptors through canonical State, preserving unknown helper tables, inherited known tables and recoverable native v11 publication.

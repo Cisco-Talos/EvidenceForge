@@ -1236,6 +1236,14 @@ class ProcessExecutionService:
                 else None
             ),
             image_security=provider.image_security(binary),
+            macos_ssh_standard_io=(
+                provider.profile.ssh_command_descriptors == "standard_pipes"
+                and session.session_kind == "ssh"
+                and session.ssh_command_streams is not None
+                and self.state_manager.process_descriptors_at(parent, event_time=forked_at) is None
+                and self.state_manager.known_macos_terminal(parent.job_control.session, forked_at)
+                == "absent"
+            ),
         )
         session_identity = self.state_manager.get_session_identity(parent.logon_id)
         cohort = builder.seal()

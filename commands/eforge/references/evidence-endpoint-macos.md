@@ -36,8 +36,10 @@ available independently of generation admission.
 Select `macos_unified_log` for modeled loginwindow workspace-method entry only; method entry does
 not establish desktop completion. Select `macos_endpoint_security` for qualified v11 fork,
 exec and known exit phases. Complete canonical metadata is required. Exec additionally needs
-explicit absent entitlements and complete descriptors; unknown SSH descriptors omit native exec
-while preserving known forks and eCAR image replacement. Unknown exit outcomes omit native exit.
+explicit absent entitlements and complete descriptors. Qualified external SSH commands without
+a PTY receive three channel-owned pipes at exec; unknown shell/helper tables still omit their
+native exec rows. Known forks and eCAR image replacement remain available. Unknown exit outcomes
+omit native exit.
 No native host collector runs. Other Unified Log families, nonnull entitlements, full hashes and
 Gatekeeper-denial exports remain unavailable. See the current format contract and profile worklog.
 
@@ -75,7 +77,7 @@ The internal ES process compositor now accepts complete matching relationship, r
 
 Internal execution metadata can retain an explicit Mac directory/stat snapshot at launch or exec. It does not derive cwd from the generator host, a home directory or a previous launch. No authored/configuration field exposes this primitive, and it does not enable native ES exec generation.
 
-Ordinary Mac process launches retain resolved executable-version identity independently of subsequent file replacement. Complete internal native projections require that exact version; matching a path is insufficient. The supported SSH path supplies complete fork/v11 metadata and passes nonempty CLI/parser/filter/checkpoint acceptance. Qualified direct commands from a metadata-complete interactive SSH shell now use actual canonical fork/exec occurrences: ES renders the fork with the inherited shell image, while eCAR renders the fork and subsequent exec into the requested utility. Aggregate GUI births, incomplete metadata, shell syntax and effect-bearing commands do not acquire invented fork records. The v11 profile admits complete exec and known-exit projections; ordinary SSH descriptor gaps still omit exec rows. Gatekeeper denial remains gated.
+Ordinary Mac process launches retain resolved executable-version identity independently of subsequent file replacement. Complete internal native projections require that exact version; matching a path is insufficient. The supported SSH path supplies complete fork/v11 metadata and passes nonempty CLI/parser/filter/checkpoint acceptance. Qualified direct commands from a metadata-complete interactive SSH shell use actual canonical fork/exec occurrences: ES renders the inherited shell fork and, for the bounded command contract without a PTY, exec into the requested utility with three distinct channel-owned pipe descriptors. eCAR renders both phases. This does not backfill a shell/helper's unknown FD inventory or enable PTY command generation. Aggregate GUI births, incomplete metadata, shell syntax and effect-bearing commands do not acquire invented fork records. The v11 profile admits complete exec and known-exit projections; unknown terminal outcomes still omit native exit. Gatekeeper denial remains gated.
 
 Authored interactive Mac processes submit history through their actual live Bash/zsh owner after successful launch admission. Foreground scheduling consults live and retained child intervals rather than jumping to later baseline reservations; explicitly bounded utility profiles can finish before the next command. Unknown long-running invocations still require a modeled release. Ground truth records rejected launches as skipped, and evaluation rejects legacy successful process records with nonpositive PIDs. The informational host profile lists native and shell-history sources as conditional, reports process/fork/exec counts separately from FLOW volume, and does not interpret an unused Bash source as missing Mac telemetry.
 

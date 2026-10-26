@@ -4296,6 +4296,14 @@ class SshSessionActionBundle:
                 audit_uid=environment.account.uid,
                 authenticated_at=accepted_time,
             )
+            provider = getattr(executor, "macos_execution_metadata", None)
+            if (
+                provider is not None
+                and provider.profile.ssh_command_descriptors == "standard_pipes"
+            ):
+                session_plan = batch_builder.enrich_macos_ssh_command_streams(
+                    session_plan, first_pipe_id=provider.profile.first_pipe_id
+                )
             receiver_parent_pid = environment.parent.pid
             receiver_parent_group = environment.parent.lifecycle_group_id
         else:

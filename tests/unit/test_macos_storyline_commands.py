@@ -275,8 +275,9 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
     assert len(paths) == int(native_mode == "visible")
     if native_mode == "visible":
         records = [json.loads(line) for line in paths[0].read_text().splitlines()]
-        assert len(records) == 7
-        assert all(row["event_type"] == 11 for row in records)
+        assert len(records) == 11
+        assert sum(row["event_type"] == 11 for row in records) == 7
+        assert sum(row["event_type"] == 9 for row in records) == 4
         submissions = {
             line.split(";", 1)[1]: int(line.split(":", 2)[1])
             for line in history[0].read_text().splitlines()
@@ -285,9 +286,19 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
             fork = next(
                 row
                 for row in records
-                if row["event"]["fork"]["child"]["audit_token"]["pid"] == result["pid"]
+                if row["event_type"] == 11
+                and row["event"]["fork"]["child"]["audit_token"]["pid"] == result["pid"]
             )
             assert submissions[command] <= datetime.fromisoformat(fork["time"]).timestamp()
+            execution = next(
+                row["event"]["exec"]
+                for row in records
+                if row["event_type"] == 9
+                and row["event"]["exec"]["target"]["audit_token"]["pid"] == result["pid"]
+            )
+            assert execution["target"]["executable"]["path"] == command.split()[0]
+            assert [item["fd"] for item in execution["fds"]] == [0, 1, 2]
+            assert all(item["fdtype"] == 6 for item in execution["fds"])
 
 
 @pytest.mark.parametrize("after_write", [False, True])
@@ -360,7 +371,9 @@ def test_command_native_write_recovery_does_not_repeat_fork_exec_or_counters(
         for path in tmp_path.rglob("macos_endpoint_security.ndjson")
         for line in path.read_text().splitlines()
     ]
-    assert len(native) == 4 and attempts == 2
+    assert len(native) == 5 and attempts == 3
+    assert sum(row["event_type"] == 11 for row in native) == 4
+    assert sum(row["event_type"] == 9 for row in native) == 1
     commands = [
         process
         for process in engine.state_manager.get_processes_for_session(session.logon_id)

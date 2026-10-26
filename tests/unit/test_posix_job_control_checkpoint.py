@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""State v6 recovery with retained immutable allocator segments and v8 writes."""
+"""State v6 recovery with retained immutable allocator segments and v9 writes."""
 
 from dataclasses import replace
 from pathlib import Path
@@ -77,7 +77,7 @@ def test_controller_restores_only_explicitly_compatible_segments(
         phase="collection", completed_simulated_hours=12, next_hour="2026-10-16T00:00:00+00:00"
     )
     manifest = controller.commit(cursor=next_cursor, participants=(participant,))
-    assert manifest.participant_heads[0].schema_version == "8"
+    assert manifest.participant_heads[0].schema_version == "9"
     again = StateManager()
     controller.restore_participants(
         recovery=store.recover(), participants=(StateManagerParticipant(again),)

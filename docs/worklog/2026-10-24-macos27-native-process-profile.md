@@ -165,3 +165,15 @@ The human has now shared successful iTerm2 identity and same-boot GUI-relogin
 comparisons. Revision 334 implements login-owned GUI audit origins and explicit
 launch/child inheritance with rollback/recovery checks. The linked worklog records
 the bounded evidence and remaining GUI responsibility/native-startup limits.
+
+## SSH command descriptors
+
+The human then completed the private own-process loopback SSH experiment. Revision 335 uses
+its reviewed post-exec three-pipe layout for qualified external commands without a PTY. The
+session reserves canonical pipe identities; exact fork/exec publication now renders command
+images and complete descriptors in native v11 rows while leaving shell/helper inventories
+unknown. The [SSH reference worklog](2026-10-26-macos-ssh-descriptor-reference.md) records scope,
+transaction/recovery compatibility and verification. No private records were inspected or
+committed, and PTY command generation is still unavailable. Automatic terminal-outcome producers
+are the next coverage item; earlier controlled exit reference evidence can be reused for that
+work without a new native collection solely to repeat already reviewed wait-status checks.

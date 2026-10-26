@@ -77,6 +77,7 @@ from evidenceforge.events.macos_execution_directory import (
 )
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
 from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
+from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalObservation, MacosTerminalSession
 from evidenceforge.events.network import (
     DirectionalTrafficLedger,
@@ -599,6 +600,7 @@ class _SessionAllocatorPatch:
     windows_session_counter: tuple[str, int] | None
     linux_logind: _LinuxLogindAllocatorPatch | None
     macos_audit_session_counter: tuple[str, int] | None = None
+    macos_ssh_pipe_counter: tuple[str, int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -621,6 +623,7 @@ class _SessionMaterializationPayload:
     closure_owned_by_bundle: bool = False
     end_plan: SessionEndPlan | None = None
     audit_origin: MacosAuditSession | None = None
+    ssh_command_streams: MacosSshCommandStreams | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,6 +675,11 @@ class SessionMaterializationPlan:
     def audit_origin(self) -> MacosAuditSession | None:
         """Return the explicitly planned native authentication origin, if any."""
         return self._payload.audit_origin
+
+    @property
+    def ssh_command_streams(self) -> MacosSshCommandStreams | None:
+        """Return channel-owned command streams, not a helper descriptor inventory."""
+        return self._payload.ssh_command_streams
 
     @property
     def external_rng_state_after(self) -> object | None:
@@ -1297,6 +1305,17 @@ class MaterializationBatchBuilder:
             raise StateError("macOS audit enrichment must precede batch process planning")
         enriched = self._manager._enrich_batch_macos_audit_session(
             self, plan, audit_uid=audit_uid, authenticated_at=authenticated_at
+        )
+        self._session = enriched
+        return enriched
+
+    def enrich_macos_ssh_command_streams(
+        self, plan: SessionMaterializationPlan, *, first_pipe_id: int
+    ) -> SessionMaterializationPlan:
+        """Reserve channel pipe identities before receiver startup, without publishing FDs."""
+        self._require_open()
+        enriched = self._manager._enrich_batch_macos_ssh_command_streams(
+            self, plan, first_pipe_id=first_pipe_id
         )
         self._session = enriched
         return enriched
@@ -3747,6 +3766,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
         exec_script: MacosExecScript | None = None,
         executable_version: ProcessExecutableVersion | None = None,
         execution_directory: MacosExecutionDirectory | None = None,
+        macos_ssh_standard_io: bool = False,
     ) -> ProcessIdentity:
         """Stage one image replacement; return its immutable post-exec snapshot."""
 
@@ -3869,6 +3889,13 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
             if platform == "macos"
             else None
         )
+        if type(macos_ssh_standard_io) is not bool:
+            raise StateError("SSH command descriptor selection requires an exact bool")
+        descriptors_after = descriptors.after_exec(timestamp) if descriptors is not None else None
+        if macos_ssh_standard_io:
+            if descriptors is not None:
+                raise StateError("SSH command contract cannot replace a known inherited FD table")
+            descriptors_after = self._manager._macos_ssh_command_descriptor_table(birth, timestamp)
         if audit_pid_version is not None:
             self._macos_audit_pid_versions[normalized.hostname] = audit_pid_version
         if thread_counter is not None:
@@ -3882,9 +3909,7 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 retired_threads=retired_threads,
                 thread_counter=thread_counter,
                 _capability=_ActionCohortCapability(),
-                descriptors_after=(
-                    descriptors.after_exec(timestamp) if descriptors is not None else None
-                ),
+                descriptors_after=descriptors_after,
             )
         )
         return after
@@ -4097,7 +4122,10 @@ def _materialization_integrity_token(
     ):
         raise StateError("Session materialization requires an exact session allocator")
     if type(payload) is _SessionMaterializationPayload and (
-        payload.audit_origin is not None or allocator_patch.macos_audit_session_counter is not None
+        payload.audit_origin is not None
+        or allocator_patch.macos_audit_session_counter is not None
+        or payload.ssh_command_streams is not None
+        or allocator_patch.macos_ssh_pipe_counter is not None
     ):
         origin = payload.audit_origin
         counter = allocator_patch.macos_audit_session_counter
@@ -4108,6 +4136,37 @@ def _materialization_integrity_token(
             or counter != (identity.hostname, origin.audit_session_id)
         ):
             raise StateError("macOS audit session plan has inconsistent origin/allocator facts")
+        streams = payload.ssh_command_streams
+        pipes = allocator_patch.macos_ssh_pipe_counter
+        if streams is not None or pipes is not None:
+            if (
+                type(streams) is not MacosSshCommandStreams
+                or type(pipes) is not tuple
+                or len(pipes) != 3
+                or pipes[0] != identity.hostname
+                or any(type(value) is not int for value in pipes[1:])
+                or not 0 < pipes[1] <= pipes[2] - 2 < 2**64 - 2
+                or identity.session_kind != "ssh"
+                or payload.auth_protocol != "ssh"
+                or payload.effective_uid != origin.audit_uid
+                or streams.hostname != identity.hostname
+                or streams.session_object_id != identity.object_id
+                or streams.available_at != payload.source_ready_time
+                or streams.available_at < origin.created_at
+                or (
+                    payload.network_close_time is not None
+                    and streams.available_at >= payload.network_close_time
+                )
+                or tuple(item.native_pipe_id for item in streams.bindings)
+                != (pipes[2] - 2, pipes[2] - 1, pipes[2])
+                or any(
+                    item.object_id
+                    != stable_uuid("macos-native-pipe", identity.hostname, item.native_pipe_id)
+                    for item in streams.bindings
+                )
+            ):
+                raise StateError("SSH command streams lost their exact session/pipe allocation")
+            streams.__post_init__()
         _validate_action_cohort_safe_value((identity, payload, allocator_patch), set())
         return _trusted_capability_digest(
             authority_secret,
@@ -4320,6 +4379,7 @@ _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
         PosixProcessCredentials,
         MacosAuditSession,
+        MacosSshCommandStreams,
         MacosProcessAuditBinding,
         MacosProcessPrivilegeDrop,
         MacosProcessServiceDrop,
@@ -8704,6 +8764,83 @@ class StateManager:
                 ),
             )
 
+    def _enrich_batch_macos_ssh_command_streams(
+        self,
+        builder: MaterializationBatchBuilder,
+        plan: SessionMaterializationPlan,
+        *,
+        first_pipe_id: int,
+    ) -> SessionMaterializationPlan:
+        """Reserve one no-PTY channel's distinct pipes in the existing host namespace."""
+        with self._capability_minting_guard("enrich_macos_ssh_command_streams"):
+            if (
+                type(builder) is not MaterializationBatchBuilder
+                or builder._manager is not self
+                or builder._session is not plan
+                or builder._processes
+                or builder._admission_epoch != self._prepared_state_admission_epoch
+                or builder.expected_version != self._materialization_version
+                or self.state.current_time != builder._expected_state_time
+            ):
+                raise StateError("SSH command streams require the current unpopulated batch")
+            self._validate_session_materialization_plan(plan)
+            if (
+                self._pid_os.get(plan.identity.hostname) != "macos"
+                or plan.identity.session_kind != "ssh"
+                or plan._payload.auth_protocol != "ssh"
+                or plan.audit_origin is None
+                or plan._payload.effective_uid != plan.audit_origin.audit_uid
+                or plan._payload.source_ready_time is None
+                or plan.ssh_command_streams is not None
+                or plan._allocator_patch.macos_ssh_pipe_counter is not None
+                or type(first_pipe_id) is not int
+                or not 0 < first_pipe_id < 2**63
+            ):
+                raise StateError("SSH command streams require an authenticated Mac channel")
+            host = plan.identity.hostname
+            counter = self._macos_pipe_counters.get(host, (first_pipe_id, first_pipe_id - 1))
+            if (
+                type(counter) is not tuple
+                or len(counter) != 2
+                or any(type(item) is not int for item in counter)
+                or counter[0] != first_pipe_id
+                or not first_pipe_id - 1 <= counter[1] < 2**64 - 3
+            ):
+                raise StateError("SSH channel pipe policy changed or its IDs are exhausted")
+            last = counter[1] + 3
+            streams = MacosSshCommandStreams(
+                host,
+                plan.identity.object_id,
+                plan._payload.source_ready_time,
+                tuple(
+                    MacosDescriptorBinding(
+                        fd,
+                        "pipe",
+                        stable_uuid("macos-native-pipe", host, native_id),
+                        False,
+                        native_id,
+                    )
+                    for fd, native_id in enumerate(range(last - 2, last + 1))
+                ),
+            )
+            payload = replace(plan._payload, ssh_command_streams=streams)
+            allocator = replace(
+                plan._allocator_patch, macos_ssh_pipe_counter=(host, first_pipe_id, last)
+            )
+            return replace(
+                plan,
+                _payload=payload,
+                _allocator_patch=allocator,
+                _integrity_token=_materialization_integrity_token(
+                    self._materialization_secret,
+                    "session",
+                    plan.expected_version,
+                    plan.identity,
+                    payload,
+                    allocator,
+                ),
+            )
+
     def _enrich_batch_linux_logind_session(
         self,
         builder: MaterializationBatchBuilder,
@@ -9119,6 +9256,10 @@ class StateManager:
             if plan.expected_version != self._materialization_version:
                 raise StateError("Session materialization plan became stale before commit")
             identity = plan.identity
+            if plan._allocator_patch.macos_ssh_pipe_counter is not None:
+                host, first, last = plan._allocator_patch.macos_ssh_pipe_counter
+                if self._macos_pipe_counters.get(host, (first, first - 1)) != (first, last - 3):
+                    raise StateError("SSH channel pipe allocation lost its exact host counter")
             if identity.logon_id in self.state.active_sessions:
                 raise StateError(
                     f"Session materialization LogonID is already live: {identity.logon_id}"
@@ -9160,6 +9301,9 @@ class StateManager:
         if patch.macos_audit_session_counter is not None:
             host, counter = patch.macos_audit_session_counter
             self._macos_audit_session_counters[host] = counter
+        if patch.macos_ssh_pipe_counter is not None:
+            host, first, last = patch.macos_ssh_pipe_counter
+            self._macos_pipe_counters[host] = first, last
         if patch.linux_logind is not None:
             self._commit_linux_logind_allocator_patch(
                 patch.linux_logind,
@@ -12588,6 +12732,10 @@ class StateManager:
                     if current_descriptors is not None
                     else None
                 )
+                if expected_descriptors is None and execution.descriptors_after is not None:
+                    expected_descriptors = self._macos_ssh_command_descriptor_table(
+                        birth, after.execution_started_at
+                    )
                 if execution.descriptors_after != expected_descriptors:
                     raise StateError("Process execution descriptor effect is stale or changed")
                 if is_macos:
@@ -13000,6 +13148,7 @@ class StateManager:
             effective_uid=payload.effective_uid,
             effective_gid=payload.effective_gid,
             audit_origin=payload.audit_origin,
+            ssh_command_streams=payload.ssh_command_streams,
             network_close_time=payload.network_close_time,
             source_ready_time=payload.source_ready_time,
             closure_owned_by_bundle=payload.closure_owned_by_bundle,
@@ -13355,6 +13504,8 @@ class StateManager:
                 capture_mapping(
                     self._macos_audit_session_counters, patch.macos_audit_session_counter[0]
                 )  # type: ignore[arg-type]
+            if patch.macos_ssh_pipe_counter is not None:
+                capture_mapping(self._macos_pipe_counters, patch.macos_ssh_pipe_counter[0])  # type: ignore[arg-type]
             if patch.linux_logind is not None:
                 logind = patch.linux_logind
                 capture_mapping(self._linux_logind_session_initials, logind.system)  # type: ignore[arg-type]
@@ -16861,6 +17012,49 @@ class StateManager:
         return next(
             (item for item in reversed(process.descriptor_history) if item.observed_at <= at), None
         )
+
+    def _macos_ssh_command_descriptor_table(
+        self, birth: ProcessMaterializationPlan | None, at: datetime
+    ) -> MacosDescriptorTable:
+        """Validate the exact no-PTY external-command descriptor contract.
+
+        The shell/helper table remains unknown. Only a fresh direct child of
+        the bound authenticated shell may consume its channel-owned pipes.
+        """
+        if type(birth) is not ProcessMaterializationPlan or not birth._payload.forked:
+            raise StateError("SSH command descriptor contract requires its exact fork birth")
+        identity, parent = birth.identity, birth.parent_identity
+        session = self.get_session_at(identity.logon_id, at)
+        if (
+            session is None
+            or self._pid_os.get(identity.hostname) != "macos"
+            or session.ssh_command_streams is None
+            or session.audit_origin is None
+            or session.session_kind != "ssh"
+            or session.auth_protocol != "ssh"
+            or session.system != identity.hostname
+            or session.username != identity.principal
+            or session.source_ready_time is None
+            or at < session.source_ready_time
+            or parent is None
+            or parent.pid != session.session_shell_pid
+            or parent.principal != identity.principal
+            or parent.logon_id != identity.logon_id
+            or parent.image not in {"/bin/zsh", "/bin/bash"}
+            or parent.command_line not in {"-zsh", "-bash"}
+            or parent.job_control is None
+            or self.known_macos_terminal(parent.job_control.session, at) != "absent"
+            or identity.credentials is None
+            or identity.credentials != parent.credentials
+            or identity.credentials.audit_uid != session.audit_origin.audit_uid
+            or identity.credentials.audit_session_id != session.audit_origin.audit_session_id
+            or session.ssh_command_streams.session_object_id != session.ecar_object_id
+            or session.ssh_command_streams.hostname != identity.hostname
+        ):
+            raise StateError(
+                "SSH command descriptors require the exact authenticated non-PTY shell"
+            )
+        return session.ssh_command_streams.after_command_exec(at)
 
     def process_descriptors_at(
         self, identity: ProcessIdentity, *, event_time: datetime
