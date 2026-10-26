@@ -31,9 +31,12 @@ a freshly prepared kit; do not overwrite samples to make a result pass.
 ## First three samples: current GUI login
 
 Use macOS 27 arm64 as your normal user, signed in at the desktop. Use Apple's
-Terminal app, with a normal local shell, outside SSH, tmux, screen, an IDE,
-or an agent terminal. Keep the sampled windows/tabs open until reporting.
-No logout or other disruption is necessary for these initial samples.
+Terminal app or iTerm2, with a normal local shell, outside SSH, tmux, screen,
+an IDE, or an agent terminal. Use the same terminal app for all samples and
+identify that app when sharing the fixed report; the probe does not inspect
+the app to determine it. The evidence applies to that tested app/context,
+not automatically to other terminal apps. Keep the sampled windows/tabs open
+until reporting. No logout is necessary for these initial samples.
 
 In the commands below replace `KIT` with the new code-only kit's absolute
 path supplied by Codex. Use the existing project interpreter; the script
@@ -87,7 +90,8 @@ GUI-relogin attestation; it does not independently inspect boot or login logs.
 
 1. Keep the private kit in place. Save work and close Codex and other agents.
 2. Log out of the desktop, then log in as the **same user without rebooting**.
-3. Open Terminal and run, using the same kit path:
+3. Open the same terminal app used for the first three samples and run,
+   using the same kit path:
 
    ```sh
    /Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B KIT/private_gui_audit.py record fresh_login --private-run --same-boot-gui-relogin
@@ -108,8 +112,8 @@ three samples do not share one audit identity. An unset audit user/session
 is reported as a failed control, never substituted with the effective user
 or a POSIX session ID.
 
-This verifies selected identity relationships in the tested Terminal context.
-It does not inspect Terminal.app's own token, establish every GUI application's
+This verifies selected identity relationships in the tested terminal context.
+It does not inspect the terminal app's own token, establish every GUI application's
 behavior, observe loginwindow startup, qualify a Unified Log layout, or repeat
 Endpoint Security JSON collection. `reference_review: REQUIRED` and
 `gate_status: NOT_EVALUATED` remain present. Generation admission requires
