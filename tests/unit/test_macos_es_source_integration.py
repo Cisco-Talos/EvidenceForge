@@ -86,7 +86,12 @@ def test_engine_activates_same_canonical_collector_independent_of_output(
 
 
 def _routed(
-    tmp_path: Path, *, exported: bool = True, complete: bool = True, known_stdio: bool = False
+    tmp_path: Path,
+    *,
+    exported: bool = True,
+    complete: bool = True,
+    known_stdio: bool = False,
+    known_version: bool = True,
 ) -> tuple:
     source, system, collector, prior, _, _, artifacts = _setup()
     state = source.owner.state
@@ -102,7 +107,7 @@ def _routed(
         start_time=start,
         credentials=prior.credentials,
         new_posix_session=True,
-        executable_version=prior.executable_version,
+        executable_version=prior.executable_version if known_version else None,
         image_security=prior.image_security if complete else None,
         responsibility=ProcessResponsibility(None),
         macos_terminal="absent",

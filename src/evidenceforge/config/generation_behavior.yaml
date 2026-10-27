@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 341
+current_revision: 342
 history_start_revision: 1
-behavior_surface_sha256: 30f5762355d6b5572f6c5f72c6546a76e49773cea72f64fe3c81c4260a0eaa07
+behavior_surface_sha256: 48e3ba2199e16c7bb46347afcbf0ed0832ab94e0d6a6883b7b85631ea5e98548
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3246,3 +3246,11 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Admits qualified plain nested shell command parents without widening metadata gates; bounds source ingress buffers and budgets temporary source storage independently of selected formats.
+  - revision: 342
+    id: macos-unqualified-loaded-image-coverage
+    impact: localized
+    domains:
+      - native-source-admission
+    formats:
+      - macos_endpoint_security
+    summary: Keeps known-result process phases with unknown loaded executable versions as explicit unsupported coverage observations instead of failing mixed-workload generation or inventing native image metadata.

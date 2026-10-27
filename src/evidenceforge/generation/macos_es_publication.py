@@ -214,6 +214,12 @@ def prepared_macos_es_process_publication(
     # Unsupported individual phases retain counter observations, with no native
     # bytes. A known fork remains available when later exec metadata is unknown.
     def phase_reason(event: CanonicalOccurrence) -> str:
+        # A known terminal result cannot qualify an image whose exact loaded
+        # version was never supplied. This is an unavailable source phase, not
+        # a malformed complete projection or a reason to invent executable facts.
+        subject = event.identity_plan.subject
+        if subject.executable_version is None:
+            return "executable_version_unknown"
         if event.event_type == "process_exec":
             execution = next(
                 item

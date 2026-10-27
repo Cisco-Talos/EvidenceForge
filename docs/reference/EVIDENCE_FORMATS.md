@@ -707,7 +707,7 @@ counts, source decisions, the first blocking qualification reason and per-author
 counts for exact process cohorts and explicit authored aggregate births. The Markdown ground truth shows the host summary.
 `aggregate_birth_only` is diagnostic and consumes no ES sequence; `entitlements_unknown`,
 `entitlements_present`, `descriptors_unknown`, `thread_replacement_unknown` and
-`exit_outcome_unknown` explain unavailable phases. Deliberate filtering, loss and collection
+`exit_outcome_unknown` and `executable_version_unknown` explain unavailable phases. Deliberate filtering, loss and collection
 windows remain separate source decisions. Older queued snapshots may report `not_recorded`.
 This is a workload coverage account, not a new native reference qualification or an inventory
 of unannotated background aggregate births or every compatibility path. Authored no-child outcomes remain explained by

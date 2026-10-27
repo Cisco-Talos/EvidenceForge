@@ -211,3 +211,26 @@ def test_source_ingress_retries_release_after_durable_native_admission(
     assert ingress._authority.census().active_batches == 0
     path = next((tmp_path / "output").rglob("macos_endpoint_security.ndjson"))
     assert len(path.read_text().splitlines()) == 1
+
+
+def test_unknown_loaded_version_remains_counted_without_native_placeholder(tmp_path: Path) -> None:
+    source, dispatcher, output, cohort, event, _, _, child = _routed(
+        tmp_path / "output", known_version=False
+    )
+    ingress = MacosESIngress(tmp_path / "ingress")
+    dispatcher.macos_es_ingress = ingress
+    dispatcher.storyline_cluster_id = "unknown-loaded-version"
+    startup = object.__new__(MacosSshReceiverStartup)
+    startup._dispatcher = dispatcher
+    batch = startup._prepare_retained_publication(
+        cohort, event, f"process-fork:{child.object_id}", ()
+    )
+    dispatcher.publish_prepared_action_cohort_batch(batch)
+    ingress.finalize(dispatcher)
+    output.close()
+    assert dispatcher.state_manager.get_process_identity(child.hostname, child.pid) == child
+    assert dispatcher.es_collectors.snapshot()[0].next_delivery == 1
+    observation = ingress.coverage.hosts[0].observations[0]
+    assert observation.reason == "executable_version_unknown"
+    assert observation.status == "filtered"
+    assert not list((tmp_path / "output").rglob("macos_endpoint_security.ndjson"))

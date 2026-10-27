@@ -107,3 +107,14 @@ budgets its host pages, temporary run/merge overlap and checkpoint snapshots eve
 output is filtered. The byte-rate and authored-occurrence allowances are conservative engineering
 budgets, not measured native production rates. All 25 forecast tests pass, including the eCAR-only
 Mac budget case. Generation behavior revision 341 covers this milestone.
+
+## Mixed benchmark source-admission correction
+
+The new six-hour macOS 27 mixed benchmark exposed a pre-existing admission assumption: a launchd
+leader's explicit known exit was treated as sufficient to attempt native projection even though
+its loaded executable version was unknown. The native source now counts that unsupported phase
+with `executable_version_unknown`, preserving canonical behavior and sequence gaps without
+inventing a loaded-image identity or failing the whole generation. This is a source-admission fix,
+not a widened native fidelity gate. A sibling fork with an unknown loaded version has a focused
+no-placeholder regression. Behavior revision 342 records the correction. The full mixed benchmark
+now completes with all 26 authored steps; it is still pending quantitative and blind assessment.

@@ -17,6 +17,7 @@ NativeReason = Literal[
     "descriptors_unknown",
     "thread_replacement_unknown",
     "exit_outcome_unknown",
+    "executable_version_unknown",
 ]
 
 
