@@ -29,3 +29,9 @@ synthetic benchmark does not establish those missing native reference contracts.
 
 Generated bundles stay ignored under `output/`. Only authored sources, reports and derived
 assessment summaries belong in Git; captured records and raw log datasets never do.
+
+The [first current-profile panel](blind-test/loop-1/REPORT.md) is followed by
+[deterministic verification of the selected fixes](blind-test/verification-rev344/REPORT.md).
+All five nested commands execute and the qualified native exec/exit pairs pass. This closes
+the bounded development slice, with no new blind score. Further assessment loops require a
+separate request; GUI app launch responsibility remains a reference-data dependency.

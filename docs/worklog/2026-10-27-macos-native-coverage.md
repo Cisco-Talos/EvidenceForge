@@ -274,3 +274,15 @@ a fixed activity count. Both native CLI contracts pass (the mixed case was rerun
 count assertion was corrected). Unknown commands and all native metadata/result gates remain.
 Full Ruff, format, whitespace, 99-file config validation and behavior revision/digest checks pass.
 The next saved bundle is deterministic verification only; no further blind panel is planned.
+
+The final source is committed/pushed as `54e5a8ab`. Fresh `output/verify-344` generation finishes
+with 10,634 records, all hard eval gates passing and automated score 90.1802. Its 2,095 connection
+rows have no duplicate once-only markers; all 852 TLS rows meet the tested passive vocabulary.
+All five authored nested commands execute. Native counts stay eight fork/four exec/two known
+exit; both qualified queries exit about 93 ms after exec. All six paired simple query lifetimes
+in the bounded eCAR probe are subsecond, median 0.18 seconds. This final output supersedes the
+intermediate timing probe above. Derived checks and the exact limitations are saved under
+`scenarios/macos27-native-assessment/blind-test/verification-rev344/`. No second panel was run.
+The assessment cycle is closed; remaining unrelated findings are backlog, and the next native
+coverage dependency is the separately approved GUI launch reference. No captures, raw datasets,
+host logs, live native collection or product release/version changes were part of this work.
