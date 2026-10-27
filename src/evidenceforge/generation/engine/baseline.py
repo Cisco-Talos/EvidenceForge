@@ -8048,6 +8048,9 @@ class BaselineMixin:
         Ensures temporal consistency: all events for hour N are written
         before hour N+1 begins.
         """
+        ingress = getattr(getattr(self, "dispatcher", None), "macos_es_ingress", None)
+        if ingress is not None:
+            ingress.barrier_flush()
         logger.debug("Barrier flush: waiting for all emitters to complete")
         profiler = getattr(self, "profiler", None)
         if profiler is None or not profiler.active:

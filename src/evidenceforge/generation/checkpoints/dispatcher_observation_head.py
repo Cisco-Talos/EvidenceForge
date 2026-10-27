@@ -15,7 +15,7 @@ from .packed import dumps, loads
 from .participants import OwnerStateField, ParticipantSeal
 from .store import HeadDraft
 
-_SCHEMA_VERSION = "5"
+_SCHEMA_VERSION = "6"
 
 
 class _DispatcherObservationHead(BaseModel):
@@ -28,6 +28,8 @@ class _DispatcherObservationHead(BaseModel):
     summaries: list[list[object]] = Field(default_factory=list)
     es_collectors: list[str] = Field(default_factory=list)
     es_membership: list[str] = Field(default_factory=list)
+    es_ingress_enabled: bool = False
+    es_ingress_rows: int = Field(default=0, ge=0)
 
 
 class DispatcherObservationParticipant:
@@ -36,11 +38,13 @@ class DispatcherObservationParticipant:
     checkpoint_owner = "dispatcher-observation-reporting"
     checkpoint_restore_priority = 30
     checkpoint_schema_version = _SCHEMA_VERSION
+    checkpoint_compatible_head_versions = ("5",)
     checkpoint_state_fields = (
         OwnerStateField("_source_evidence_status", "bounded-live-head"),
         OwnerStateField("_source_evidence_version", "bounded-live-head"),
         OwnerStateField("_source_evidence_lock", "deterministically-rebuilt"),
         OwnerStateField("es_collectors", "bounded-live-head"),
+        OwnerStateField("macos_es_ingress", "deterministically-rebuilt"),
     )
 
     def __init__(self, dispatcher: EventDispatcher) -> None:
@@ -73,6 +77,15 @@ class DispatcherObservationParticipant:
                 summaries=rows,
                 es_collectors=[state.model_dump_json() for state in collectors],
                 es_membership=[item.model_dump_json() for item in membership],
+                es_ingress_enabled=bool(
+                    self.dispatcher.macos_es_ingress is not None
+                    and self.dispatcher.macos_es_ingress.enabled
+                ),
+                es_ingress_rows=(
+                    self.dispatcher.macos_es_ingress.event_count
+                    if self.dispatcher.macos_es_ingress is not None
+                    else 0
+                ),
             )
         return ParticipantSeal(
             head=HeadDraft(
@@ -103,12 +116,23 @@ class DispatcherObservationParticipant:
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint head is invalid"
             ) from error
-        if document.schema_version not in {"1", "2", "3", "4", self.checkpoint_schema_version} or (
-            document.schema_version == "1" and document.es_collectors
-        ):
+        if document.schema_version not in {
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            self.checkpoint_schema_version,
+        } or (document.schema_version == "1" and document.es_collectors):
             raise CheckpointCorruptionError(
                 "dispatcher observation checkpoint schema is unsupported"
             )
+        if document.schema_version != self.checkpoint_schema_version and (
+            document.es_ingress_enabled or document.es_ingress_rows
+        ):
+            raise CheckpointCorruptionError("Older collector head cannot contain ES ingress")
+        if not document.es_ingress_enabled and document.es_ingress_rows:
+            raise CheckpointCorruptionError("Disabled ES ingress cannot contain source snapshots")
         collectors = ESCollectorRegistry()
         try:
             states = tuple(
@@ -120,7 +144,7 @@ class DispatcherObservationParticipant:
                 raise ValueError("Older collector head cannot contain attachment or close metadata")
             if document.schema_version in {"1", "2", "3"} and document.es_membership:
                 raise ValueError("Older collector head cannot contain complete membership")
-            if document.schema_version != self.checkpoint_schema_version and any(
+            if document.schema_version not in {"5", self.checkpoint_schema_version} and any(
                 state.source_profile is not None for state in states
             ):
                 raise ValueError("Older collector head cannot contain native source profiles")
@@ -161,3 +185,9 @@ class DispatcherObservationParticipant:
             self.dispatcher._source_evidence_status = restored
             self.dispatcher._source_evidence_version = document.source_evidence_version
             self.dispatcher.es_collectors = collectors
+            ingress = self.dispatcher.macos_es_ingress
+            if document.es_ingress_enabled and ingress is None:
+                raise CheckpointCorruptionError("ES ingress checkpoint has no source owner")
+            if ingress is not None:
+                ingress.enabled = document.es_ingress_enabled
+                ingress._expected_restored_count = document.es_ingress_rows

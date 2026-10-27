@@ -148,6 +148,7 @@ if TYPE_CHECKING:
         LifecycleShadow,
         LifecycleShadowViolationSummary,
     )
+    from evidenceforge.generation.macos_es_ingress import MacosESIngress, PreparedESIngress
     from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
     from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
     from evidenceforge.generation.persistent_smb_projection import (
@@ -943,6 +944,7 @@ class _PreparedActionCohortBatchRecord:
     es_collector_process: ProcessIdentity | None = None
     es_native_projection: str | None = None
     es_native_sink: ExternalSortedLineWriter | None = None
+    es_ingress: PreparedESIngress | None = None
     es_claimed: PreparedESDeliveryCommit | PreparedESDeliveryBatchCommit | None = None
     es_publication_token: str = ""
     es_cleanup_complete: bool = True
@@ -1462,6 +1464,7 @@ class EventDispatcher:
         self._source_evidence_version = 0
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self.es_collectors = ESCollectorRegistry()
+        self.macos_es_ingress: MacosESIngress | None = None
         # Immutable file facts rebuilt from frozen run inputs, never a cursor.
         self.macos_installed_filesystem: MacosInstalledFilesystem | None = None
         self._latest_network_uid = ""
@@ -9264,7 +9267,10 @@ class EventDispatcher:
 
     @staticmethod
     def _es_native_rows(record: _PreparedActionCohortBatchRecord) -> tuple[str, ...]:
-        """Select export visibility from the already frozen collector decisions."""
+        """Select frozen native rows or unsequenced source-ingress snapshots."""
+        if record.es_ingress is not None:
+            record.es_ingress.owner.validate(record.es_ingress, record.state_plan.publication_token)
+            return record.es_ingress.encoded
         if record.es_native_sink is None:
             return ()
         from evidenceforge.generation.macos_es_native_sink import validate_es_native_sink
@@ -9297,7 +9303,10 @@ class EventDispatcher:
     @staticmethod
     def _stage_es_native_rows(record: _PreparedActionCohortBatchRecord) -> None:
         """Stage native rows into the same exact journal attempt as sibling sources."""
-        if record.es_native_sink is not None:
+        if record.es_ingress is not None:
+            for line in EventDispatcher._es_native_rows(record):
+                record.es_ingress.sink.write(line)
+        elif record.es_native_sink is not None:
             for line in EventDispatcher._es_native_rows(record):
                 record.es_native_sink.write(line)
 
@@ -9321,6 +9330,8 @@ class EventDispatcher:
                         participants.append(participant)
             if record.es_native_sink is not None:
                 participants.append(record.es_native_sink)
+            if record.es_ingress is not None:
+                participants.append(record.es_ingress.sink)
             batch.reserve_participants(tuple(participants))
 
             def prepare_members() -> tuple[tuple[tuple[str, str], ...], ...]:
@@ -9411,6 +9422,8 @@ class EventDispatcher:
         )
         if record.es_native_sink is not None:
             participants = (*participants, record.es_native_sink)
+        if record.es_ingress is not None:
+            participants = (*participants, record.es_ingress.sink)
         batch.reserve_participants(cast(tuple[object, ...], participants))
 
         def prepare_single() -> tuple[tuple[str, str], ...]:
@@ -9999,6 +10012,7 @@ class EventDispatcher:
         es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None,
         es_collector_process: ProcessIdentity | None = None,
         es_native_sink: ExternalSortedLineWriter | None = None,
+        es_ingress: PreparedESIngress | None = None,
     ) -> PreparedActionCohortBatch:
         """Select native observations of exact canonical process cohorts before publication."""
         from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
@@ -10010,12 +10024,14 @@ class EventDispatcher:
             es_delivery=es_delivery,
             es_collector_process=es_collector_process,
             es_native_sink=es_native_sink,
+            es_ingress=es_ingress,
         )
         if (
             exact_projection is True
             and es_delivery is None
             and es_collector_process is None
             and es_native_sink is None
+            and es_ingress is None
             and type(state_plan) is ActionCohortMaterializationPlan
             and type(dispatches) is tuple
             and dispatches
@@ -10028,7 +10044,9 @@ class EventDispatcher:
             with prepared_macos_es_process_publication(
                 self, state_plan, tuple(item._occurrence for item in dispatches)
             ) as native:
-                if native is not None:
+                if native is not None and native.ingress is not None:
+                    options.update(es_ingress=native.ingress)
+                elif native is not None:
                     options.update(
                         es_delivery=native.delivery,
                         es_collector_process=native.collector,
@@ -10068,6 +10086,7 @@ class EventDispatcher:
         es_delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None = None,
         es_collector_process: ProcessIdentity | None = None,
         es_native_sink: ExternalSortedLineWriter | None = None,
+        es_ingress: PreparedESIngress | None = None,
     ) -> PreparedActionCohortBatch:
         """Prepare one bounded all-owner action cohort without canonical mutation."""
 
@@ -10339,6 +10358,24 @@ class EventDispatcher:
             owned_effect_plans=owned_effect_plans,
         )
 
+        if es_ingress is not None:
+            if self.macos_es_ingress is None or es_delivery is not None or not exact_projection:
+                raise EventContractError("Ordered ES ingress requires its exact source owner")
+            self.macos_es_ingress.validate(es_ingress, state_plan.publication_token)
+            expected = {
+                self._es_process_occurrence(item._occurrence)[0]: item._occurrence
+                for item in dispatches
+            }
+            for row in es_ingress.rows:
+                occurrence = expected.get(row.occurrence_id)
+                if (
+                    occurrence is None
+                    or occurrence.timestamp != row.observed_at
+                    or occurrence.src_host != row.host
+                ):
+                    raise EventContractError(
+                        "ES ingress snapshot is not a member of its canonical cohort"
+                    )
         native_observations: tuple[ESCollectorObservation, ...] = ()
         if es_delivery is not None:
             if type(es_delivery) is ESDeliveryPreparation:
@@ -10361,6 +10398,17 @@ class EventDispatcher:
                 and observation.observed_at == prepared._occurrence.timestamp
                 and observation.occurrence_id
                 == self._es_process_occurrence(prepared._occurrence)[0]
+            )
+            + tuple(
+                _ActionCohortObservationDelta(
+                    cluster_id=prepared._occurrence.storyline_cluster_id,
+                    source="macos_endpoint_security",
+                    status=row.status,
+                    timestamp=row.observed_at,
+                )
+                for row in (es_ingress.rows if es_ingress is not None else ())
+                if prepared._occurrence.storyline_cluster_id
+                and row.occurrence_id == self._es_process_occurrence(prepared._occurrence)[0]
             )
             for prepared in dispatches
         )
@@ -10425,6 +10473,8 @@ class EventDispatcher:
             observation_deltas,
             intent_request,
         )
+        if es_ingress is not None:
+            retained_bytes += sum(len(row.encode("utf-8")) for row in es_ingress.encoded)
         with self._action_cohort_lock:
             if (
                 len(self._action_cohort_batches)
@@ -10606,6 +10656,7 @@ class EventDispatcher:
                     lifecycle_request=lifecycle_request,
                     lifecycle_token=lifecycle_token,
                     service_closure=service_closure,
+                    es_ingress=es_ingress,
                     audit_entries=audit_entries,
                     effect_member_bindings=effect_member_bindings,
                     external_effect_links=external_effect_links,
@@ -10637,6 +10688,8 @@ class EventDispatcher:
                 )
                 if exact_projection:
                     self._initialize_action_cohort_exact_projection(record, cleanup_record)
+                    if record.es_ingress is not None:
+                        record.exact_all_suppressed = False
                     if record.exact_projection_kind in {
                         "posix_exit",
                         "macos_exit_group",

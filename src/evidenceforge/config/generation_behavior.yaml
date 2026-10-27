@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 338
+current_revision: 339
 history_start_revision: 1
-behavior_surface_sha256: 0871dee49660a0d57aca9fa87c289e02061989c53f11cbd767e514314751c3e8
+behavior_surface_sha256: 8a269ac09e07c09254d9f8e03d10082d4bcb797cbe25b0f9d78441c858b46a27
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3217,3 +3217,12 @@ changes:
     formats:
       - macos_unified_log
     summary: Adds explicit macOS 27 app-policy refusal observations with owned target PID, boot-owned kernel writer and separate policy sender, without claiming target execution or refusal cause.
+  - revision: 339
+    id: macos-chronological-es-source-ingress
+    impact: material
+    domains:
+      - native-process-collection
+      - checkpoint-source-ingress
+    formats:
+      - macos_endpoint_security
+    summary: Sequences immutable canonical process observations in occurrence order after producer completion, preserving modeled times, exact source admission and incremental recovery.

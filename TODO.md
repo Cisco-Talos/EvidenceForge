@@ -72,11 +72,9 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
-- [ ] **P1** Repair ES delivery chronology for ordinary Mac background suspicious-noise
-  execution during warm-up. A short invented Mac scenario with ES selected and seed 123
-  reproduces the error before any authored policy attempt, on both the committed predecessor
-  and current branch. The low-noise bounded refusal acceptance passes independently; see the
-  [Gatekeeper worklog](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
+- [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
+  canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
+  checkpoint/resume now pass; see the [coverage worklog](docs/worklog/2026-10-27-macos-native-coverage.md).
 
 - [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
   The Mac benchmark independently confirms two contradictions; 16 rows are reported.

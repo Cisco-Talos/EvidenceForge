@@ -222,7 +222,7 @@ def test_atomic_checkpoint_retains_complete_inventory_and_legacy_heads_stay_unkn
     dispatcher.es_collectors = owner.collectors
     payload = DispatcherObservationParticipant(dispatcher).prepare_checkpoint(1).head.payload
     document = loads(payload)
-    assert document["schema_version"] == "5"
+    assert document["schema_version"] == "6"
     restored = EventDispatcher(StateManager(), {})
     DispatcherObservationParticipant(restored).restore_checkpoint(payload, ())
     assert (

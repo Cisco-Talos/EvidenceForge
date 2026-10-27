@@ -718,6 +718,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 "phase_start",
                 {"phase": "initialize", "description": "Initializing generation engine"},
             )
+            # Deferred source delivery requires the complete public generation
+            # lifecycle. Direct explicitly ordered initialization APIs retain
+            # their immediate collector contract.
+            self._chronological_es_delivery = True
             with self._profile_span("generation.initialize"):
                 self._initialize()
             recovery = self._checkpoint_recovery
@@ -729,6 +733,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     recovery=recovery,
                     participants=self._checkpoint_participants,
                 )
+                ingress = self.dispatcher.macos_es_ingress
+                if ingress is not None:
+                    ingress.assert_restored_count()
                 if controller.migration_required:
                     self._barrier_flush_all_emitters()
                     controller.commit_migration(participants=self._checkpoint_participants)
@@ -1106,6 +1113,16 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             lifecycle_shadow=self.lifecycle_shadow,
             collection_deployment=self.source_deployment_compilation.deployment,
         )
+        from evidenceforge.generation.activity.helpers import _get_os_category
+
+        if getattr(self, "_chronological_es_delivery", False) and any(
+            _get_os_category(host.os) == "macos" for host in self.scenario.environment.systems
+        ):
+            from evidenceforge.generation.macos_es_ingress import MacosESIngress
+
+            self.dispatcher.macos_es_ingress = MacosESIngress(
+                self.output_dir / ".eforge-es-ingress"
+            )
         # All process/file producers share the existing runtime owner when the
         # scenario explicitly needs retained launch-item definitions.
         if self.dispatcher.local_artifact_registry is None and any(
@@ -1893,11 +1910,24 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self._finalize_terminal_runtime_cleanup_before_close()
         self._finalize_exact_projection_recoveries_before_close()
         self._assert_terminal_transient_state_before_close()
+        ingress = getattr(getattr(self, "dispatcher", None), "macos_es_ingress", None)
+        if include_foreground and ingress is not None:
+            self._run_bounded_terminal_stage(
+                completed_attribute="_es_ingress_finalized",
+                description="ES occurrence delivery",
+                operation=lambda: ingress.finalize(self.dispatcher),
+            )
 
     def _close_emitters(self, *, primary: BaseException | None = None) -> None:
         """Close every emitter, retaining a supplied lifecycle failure as primary."""
 
         failures: list[BaseException] = []
+        ingress = getattr(getattr(self, "dispatcher", None), "macos_es_ingress", None)
+        if ingress is not None:
+            try:
+                ingress.spool.close()
+            except BaseException as error:
+                failures.append(error)
         snapshot = self._pin_terminal_owners()
         expected_emitters = dict(snapshot.emitters)
         self._expected_close_emitters = expected_emitters
@@ -1973,6 +2003,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             workload_estimate=self.workload_estimate,
         )
 
+        ingress = self.dispatcher.macos_es_ingress
+        if ingress is not None:
+            ingress.cleanup()
         self._finalization_complete = True
         logger.info("All emitters closed")
 

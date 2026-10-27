@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import CanonicalOccurrence
 from evidenceforge.events.es_collector import (
+    ESCollectorObservation,
     ESDeliveryBatchPreparation,
     ESDeliveryPreparation,
     ESDeliveryRequest,
@@ -23,12 +24,13 @@ from evidenceforge.events.macos_process_observation import MacosProcessCollectio
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.formats.macos_endpoint_security import ESAction
 from evidenceforge.generation.actions.es_collection import ESCollectionActionOwner, _process
-from evidenceforge.generation.actions.macos_es_exec import prepared_es_exec_record
+from evidenceforge.generation.actions.macos_es_exec import _exec_record, prepared_es_exec_record
 from evidenceforge.generation.actions.macos_es_exit import (
     MacosExitRecordInput,
+    _exit_record,
     prepared_es_exit_record,
 )
-from evidenceforge.generation.actions.macos_es_fork import prepared_es_fork_record
+from evidenceforge.generation.actions.macos_es_fork import _fork_record, prepared_es_fork_record
 from evidenceforge.generation.actions.macos_es_process_batch import (
     MacosExecRecordInput,
     MacosForkRecordInput,
@@ -44,6 +46,7 @@ from evidenceforge.models.exceptions import StateError
 if TYPE_CHECKING:
     from evidenceforge.events.dispatcher import EventDispatcher
     from evidenceforge.generation.emitters.sorted_writer import ExternalSortedLineWriter
+    from evidenceforge.generation.macos_es_ingress import PreparedESIngress
     from evidenceforge.generation.state_manager import ActionCohortMaterializationPlan
 
 logger = logging.getLogger(__name__)
@@ -53,9 +56,10 @@ logger = logging.getLogger(__name__)
 class MacosESPublication:
     """Existing collector reservation and optional exact sink; no commit authority."""
 
-    delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation
+    delivery: ESDeliveryPreparation | ESDeliveryBatchPreparation | None
     collector: ProcessIdentity
     sink: ExternalSortedLineWriter | None
+    ingress: PreparedESIngress | None = None
 
 
 def _binding(dispatcher: EventDispatcher, hostname: str) -> MacosESSource | None:
@@ -317,6 +321,101 @@ def prepared_macos_es_process_publication(
             records = [None] * len(events)
         else:
             raise StateError(f"Incomplete macOS 27 native process facts: {error}") from error
+    ingress = dispatcher.macos_es_ingress
+    if ingress is not None and ingress.enabled:
+        from evidenceforge.generation.macos_es_ingress import ESProcessIngressRow
+
+        snapshots: list[ESProcessIngressRow] = []
+        for event, item, decision in zip(events, records, decisions, strict=True):
+            occurrence, family = dispatcher._es_process_occurrence(event)
+            # These zeroes are validation scaffolding for a message body only.
+            # They are removed before ingress admission, never exported as counters.
+            observation = ESCollectorObservation(
+                source_instance=connection.source_instance,
+                hostname=host.hostname,
+                generation=connection.generation,
+                delivery=0,
+                occurrence_id=occurrence,
+                event_type=family,
+                observed_at=event.timestamp,
+                collector_process=connection.process,
+                seq_num=0,
+                global_seq_num=0,
+                status=decision.status,
+                delay=decision.delay,
+            )
+            common = dict(
+                cohort=cohort,
+                observation=observation,
+                collector_process=collector,
+                clock=source.clock,
+            )
+            body = None
+            if type(item) is MacosForkRecordInput:
+                record = _fork_record(
+                    source.owner,
+                    item.executables,
+                    **common,
+                    parent=item.parent,
+                    child=item.child,
+                    thread=item.thread,
+                    action=item.action,
+                    version=item.version,
+                    installed_file=item.installed_file,
+                    installed_filesystem=item.installed_filesystem,
+                )
+                body = record.model_dump_json(
+                    exclude={"seq_num", "global_seq_num"}, exclude_unset=True
+                )
+            elif type(item) is MacosExecRecordInput:
+                record = _exec_record(
+                    source.owner,
+                    item.executables,
+                    **common,
+                    before=item.before,
+                    after=item.after,
+                    descriptors=item.descriptors,
+                    thread=item.thread,
+                    action=item.action,
+                    version=item.version,
+                    deployments=item.deployments,
+                    before_installed_file=item.before_installed_file,
+                    after_installed_file=item.after_installed_file,
+                    installed_filesystem=item.installed_filesystem,
+                )
+                body = record.model_dump_json(
+                    exclude={"seq_num", "global_seq_num"}, exclude_unset=True
+                )
+            elif type(item) is MacosExitRecordInput:
+                record = _exit_record(
+                    source.owner,
+                    item.executables,
+                    **common,
+                    process=item.process,
+                    thread=item.thread,
+                    action=item.action,
+                    version=item.version,
+                    installed_file=item.installed_file,
+                    installed_filesystem=item.installed_filesystem,
+                )
+                body = record.model_dump_json(
+                    exclude={"seq_num", "global_seq_num"}, exclude_unset=True
+                )
+            snapshots.append(
+                ESProcessIngressRow(
+                    host=host,
+                    initial=connection,
+                    occurrence_id=occurrence,
+                    event_type=family,
+                    observed_at=event.timestamp,
+                    status=decision.status,
+                    delay=decision.delay,
+                    native_body=body,
+                )
+            )
+        prepared = ingress.prepare(cohort.publication_token, tuple(snapshots))
+        yield MacosESPublication(None, collector, None, prepared)
+        return
     requests = tuple(
         ESDeliveryRequest(
             occurrence_id=dispatcher._es_process_occurrence(event)[0],

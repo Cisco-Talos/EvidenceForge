@@ -143,7 +143,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         scenario_data["output"]["logs"].append({"format": "macos_endpoint_security"})
         for system in scenario_data["environment"]["systems"]:
             if system["os"].startswith("macOS"):
-                system["os_build"] = "25A354"
+                system["os_build"] = "26A100"
     if native:
         scenario_data["output"]["logs"].append({"format": "macos_unified_log"})
         scenario_data["storyline"] = [
@@ -425,7 +425,7 @@ def test_short_generation_checkpoint_suspension_and_resume(
         assert len(rows) == 6
         for row in rows:
             decode_endpoint_security_record(json.dumps(row))
-            assert row["version"] == 10 and row["event_type"] == 11
+            assert row["version"] == 11 and row["event_type"] == 11
         sequences = [row["seq_num"] for row in rows]
         assert sequences == list(range(sequences[0], sequences[0] + 6))
     if denied_launch or failed_exec:

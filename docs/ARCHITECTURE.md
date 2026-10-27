@@ -1318,3 +1318,14 @@ ownership or the terminal application's complete lifecycle.
 
 
 The internal `macos_policy_refusal` occurrence is produced only by an explicit authored `process.outcome: policy_refused`. The process-policy action bundle plans and commits an authenticated State cohort allocation, then publishes through the ordinary dispatcher. `MacosPolicyRefusalTarget` is an attempt identity, not a `ProcessIdentity`: its shared-namespace PID is reserved at the observation instant without claiming a birth or lifetime. State retains a bounded exact target/initiator/logging-TID receipt and checkpoints both it and the allocator state. `MacosKernelLogObservation` binds the host boot to its kernel writer and distinct deployment-owned AppleSystemPolicy image. Its source projector renders PID/UID zero and the absolute-style Default/log tracepoint using explicitly modeled profile offsets. Ordinary collection, timing, host sorting and checkpoint spools own export. No eCAR create or ES fork/exec/exit is requested. The pre-child `denied` and returning `exec_failed` paths remain separate; no refusal cause or target exec stage is inferred.
+
+### macOS native process source delivery
+
+Public generation retains immutable, unsequenced ES fork/exec/known-exit facts in a private
+source ingress journal committed with the canonical action cohort. After all canonical producers
+and terminal recoveries finish, it streams those snapshots in occurrence order through the strict
+collector registry to allocate source-local and global sequence numbers. Canonical execution order
+therefore cannot move native timestamps or regress delivered source time. Unsupported/filtered
+phases advance source counters without inventing native records. The internal snapshots use the
+incremental emitter spool checkpoint contract and are removed before bundle completion. Legacy
+checkpoints preserve their immediate-delivery mode; direct ordered collector APIs are unchanged.

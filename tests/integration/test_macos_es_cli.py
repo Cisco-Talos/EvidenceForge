@@ -29,7 +29,7 @@ def test_nonempty_native_cli_is_deterministic_filter_independent_and_ingestible(
         mode="json", exclude_none=True
     )
     for system in data["environment"]["systems"]:
-        system["os_build"] = "25A354"
+        system["os_build"] = "26A100"
     data["output"]["logs"].append({"format": "macos_endpoint_security"})
     scenario = tmp_path / "invented-native-ssh.yaml"
     scenario.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -75,7 +75,7 @@ def test_nonempty_native_cli_is_deterministic_filter_independent_and_ingestible(
         assert schema.score == constraints.score == 100
         for record in records:
             decode_endpoint_security_record(record.raw)
-            assert record.fields["event_type"] == 11 and record.fields["version"] == 10
+            assert record.fields["event_type"] == 11 and record.fields["version"] == 11
         manifest = json.loads((output / "GENERATION_MANIFEST.json").read_text())
         assert "macos_endpoint_security" in manifest["formats"]
     assert snapshots[0] == snapshots[1] == snapshots[2]
