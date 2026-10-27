@@ -14,7 +14,12 @@ exact-item live filtering, bounded collector guard and fixed report. Live collec
 human-only. The human separately authorized agent execution of the fixed offline checker;
 private rows are processed locally with only fixed diagnostic labels exposed. The approved
 six persona metadata field shapes now decode successfully without exporting their values or
-changing generated records. Private policy decision meaning remains unreviewed. The
+changing generated records. The fixed refusal review now supports the exact AppleSystemPolicy
+kernel template for the controlled downloaded app, with a successful local control and human
+block attestation. Specific cause and allocation/exec stage remain unclassified. This is a usable
+bounded reference; native integration still needs a failed-launch target PID and a kernel writer
+with a separate sender image. The existing pre-child denial cannot be reinterpreted as that
+observation, and native output remains disabled. The
 [Gatekeeper worklog](../../worklog/2026-10-26-macos-gatekeeper-reference.md) records handoff and limits.
 
 ## Historical assessment and acquisition context

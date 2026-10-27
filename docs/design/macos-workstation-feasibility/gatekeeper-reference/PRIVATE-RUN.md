@@ -86,6 +86,45 @@ The layout identifies potential templates; it does not prove which verdict was r
 GK-R1. Private decision review must still distinguish a terminal denial from assessment, allow,
 cache activity or an evaluator failure before native generation can use any template.
 
+### Fixed review of the approved ASP refusal template
+
+The human approved the kernel template `ASP: Security policy would not allow process: %d, %s`
+with its native trailing newline. `review-denial` processes the same bounded test UL file and
+the already authorized fixed capture/control summaries. With explicit fixed-checker permission,
+an agent may run this offline command; otherwise run privately with agents closed:
+
+```sh
+"$PY" -I -B "$NEW_KIT/private_gatekeeper.py" review-denial --private-run --outcome BLOCK_ALERT
+```
+
+Use BLOCK_ALERT only for the human-observed downloaded test block. An optional `--existing-kit`
+supplies the already known original kit folder instead of the hidden prompt. Nothing launches,
+collects, writes or accesses the network. No ES file or execution marker is opened.
+
+The fixed report checks every acquisition prerequisite, exact capture/control summary agreement,
+successful local control, current UL decoding, exact template/rendering, positive uint32 target
+PID shape, unique test-bundle executable suffix, kernel PID-zero writer and AppleSystemPolicy
+sender image. Identifiers and message arguments remain private; only fixed comparison labels
+return. Multiple reported target PIDs remain a fixed MULTIPLE classification, never an assumed
+single child. ES nonobservation is read from the acquisition summary, not upgraded into proof
+of no process allocation or successful exec.
+
+`BOUNDED_REFERENCE_SUPPORTED` establishes only this controlled LaunchServices app-policy refusal.
+It does not identify malware, a notarization verdict, the AMFI error reason or a fork/exec stage.
+The full generation gate stays NOT_EVALUATED. Native integration must first model the reported
+failed-launch PID separately from a successful execution and support a kernel writer with its
+distinct AppleSystemPolicy sender. The existing pre-child `outcome: denied` must not be silently
+reinterpreted using this observation. No repeat capture is needed for the bounded reference.
+
+Apple's [Gatekeeper investigation discussion](https://developer.apple.com/forums/thread/766466)
+contains the same kernel refusal family alongside a distinct syspolicyd terminal decision.
+Another [Apple-hosted firsthand report](https://developer.apple.com/forums/thread/742974) shows
+that family with an AMFI entitlement-validation failure. These support a refusal interpretation,
+not a unique cause or allocation-stage rule. Apple's
+[notarization source](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/notarization.cpp)
+separates ticket extraction/checking from their outcomes; those diagnostic templates alone are
+not terminal refusal evidence. No public native record was copied into tests.
+
 ## Version 2: diagnosing a version-1 verification error
 
 If the earlier kit stopped at `PRIVATE_STEP_VERIFYING_DOWNLOAD` with `INTERNAL`, do not

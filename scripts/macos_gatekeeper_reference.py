@@ -62,6 +62,8 @@ READINESS_SECONDS = 12.0
 CAPTURE_SECONDS = 30.0
 SERVER_SECONDS = 900.0
 WRITERS = ("syspolicyd", "amfid", "taskgated-helper", "runningboardd", "kernel")
+# Static layout approved by the human, never a captured record or rendered value.
+ASP_DENIAL_FORMAT = "ASP: Security policy would not allow process: %d, %s\n"
 type Check = Literal["PASS", "FAIL", "INCONCLUSIVE"]
 type Presence = Literal["PRESENT", "ABSENT", "INCONCLUSIVE"]
 type Code = Literal[
@@ -315,6 +317,38 @@ class ShapeReport(BaseModel, extra="forbid", frozen=True, strict=True):
     fields: dict[KnownULField, ULFieldShape] = Field(default_factory=dict)
     candidate_fields: dict[CandidateULField, ULFieldShape] = Field(default_factory=dict)
     unrecognized_fields: FieldPresence = "NOT_OBSERVED"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    server: Literal["NOT_STARTED"] = "NOT_STARTED"
+    test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
+
+
+class DenialReviewReport(BaseModel, extra="forbid", frozen=True, strict=True):
+    """Bounded refusal evidence, without cause or lifecycle-stage inference."""
+
+    review_version: Literal[1] = 1
+    purpose: Literal["BOUNDED_APP_POLICY_REJECTION"] = "BOUNDED_APP_POLICY_REJECTION"
+    mode: Literal["OFFLINE_READ_ONLY"] = "OFFLINE_READ_ONLY"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    reference_status: Literal["INCONCLUSIVE", "BOUNDED_REFERENCE_SUPPORTED"] = "INCONCLUSIVE"
+    error: Code = "NONE"
+    review_complete: Check = "INCONCLUSIVE"
+    acquisition_controls: Check = "INCONCLUSIVE"
+    successful_local_control: Check = "INCONCLUSIVE"
+    unified_log_shapes: Check = "INCONCLUSIVE"
+    asp_refusal_template: Literal["OBSERVED", "NOT_OBSERVED"] = "NOT_OBSERVED"
+    asp_rendering: Check = "INCONCLUSIVE"
+    target_image_linkage: Check = "INCONCLUSIVE"
+    target_pid_shape: Check = "INCONCLUSIVE"
+    target_pid_extent: Literal["SINGLE", "MULTIPLE", "NOT_OBSERVED"] = "NOT_OBSERVED"
+    kernel_writer_identity: Check = "INCONCLUSIVE"
+    apple_system_policy_sender: Check = "INCONCLUSIVE"
+    downloaded_marker: Presence = "INCONCLUSIVE"
+    es_exec_records: Literal["OBSERVED", "NOT_OBSERVED"] = "NOT_OBSERVED"
+    es_exit_records: Literal["OBSERVED", "NOT_OBSERVED"] = "NOT_OBSERVED"
+    human_outcome: Outcome = "NOT_REVIEWED"
+    policy_cause: Literal["NOT_CLASSIFIED"] = "NOT_CLASSIFIED"
+    allocation_exec_stage: Literal["NOT_ESTABLISHED"] = "NOT_ESTABLISHED"
+    fork_evidence: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     server: Literal["NOT_STARTED"] = "NOT_STARTED"
     test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
@@ -1090,6 +1124,122 @@ def review_shapes(existing: Path) -> ShapeReport:
     return ShapeReport(error=code)
 
 
+def review_denial(existing: Path, outcome: Outcome) -> DenialReviewReport:
+    """OFFLINE: classify the approved exact refusal template, never expose arguments.
+
+    Existing permission for fixed-output processing covers the same bounded UL input.
+    The fixed control summary was already authorized; no ES file or marker is opened.
+    """
+    try:
+        records = [UnifiedLogRecord.model_validate_json(raw) for raw in _shape_inputs(existing)]
+        work = existing.resolve(strict=True) / "private"
+        config = _config(work.parent)
+        capture = StoredCapture.model_validate_json(_read(work / "capture.json"))
+        control = StoredCapture.model_validate_json(_read(work / "control.json"))
+        original = control.model_copy(
+            update={
+                "local_control_launch": capture.local_control_launch,
+                "local_control_marker": capture.local_control_marker,
+            }
+        )
+        if original != capture:
+            raise PrivateError("CONTROL")
+        acquisition = all(
+            value == "PASS"
+            for value in (
+                capture.target_platform,
+                capture.provenance,
+                capture.same_executable,
+                capture.signature_integrity,
+                capture.es_ready,
+                capture.unified_log_ready,
+                capture.bounded_collection,
+                capture.collector_cleanup,
+            )
+        ) and (
+            capture.browser_delivery == "HUMAN_ATTESTED"
+            and capture.archive_quarantine == capture.app_quarantine == "PRESENT"
+            and capture.downloaded_launch in {"RETURNED_SUCCESS", "RETURNED_ERROR"}
+        )
+        local_control = (
+            control.local_control_launch == "RETURNED_SUCCESS"
+            and control.local_control_marker == "PRESENT"
+        )
+        refusals = [record for record in records if record.format_string == ASP_DENIAL_FORMAT]
+        rendering: list[bool] = []
+        paths: list[bool] = []
+        pids: list[bool] = []
+        identities: set[int] = set()
+        suffix = f"/{config.app_name}/Contents/MacOS/Probe"
+        for record in refusals:
+            match = re.fullmatch(
+                r"ASP: Security policy would not allow process: ([0-9]+), ([^\r\n]+)\n?",
+                record.event_message,
+            )
+            rendering.append(match is not None)
+            if match is not None:
+                pid_text, image = match.groups()
+                pid_valid = len(pid_text) <= 10 and 0 < int(pid_text) < 2**32
+                pids.append(pid_valid)
+                if pid_valid:
+                    identities.add(int(pid_text))
+                paths.append(image.startswith("/") and image.endswith(suffix) and "\0" not in image)
+        kernel = [
+            record.process_image_path.rsplit("/", 1)[-1] == "kernel" and record.process_id == 0
+            for record in refusals
+        ]
+        sender = [
+            record.sender_image_path.rsplit("/", 1)[-1] == "AppleSystemPolicy"
+            for record in refusals
+        ]
+        supported = (
+            acquisition
+            and local_control
+            and bool(refusals)
+            and all(rendering)
+            and all(paths)
+            and all(pids)
+            and all(kernel)
+            and all(sender)
+            and capture.downloaded_marker == "ABSENT"
+            and capture.es_exec_records == capture.es_exit_records == "NOT_OBSERVED"
+            and outcome == "BLOCK_ALERT"
+        )
+        return DenialReviewReport(
+            reference_status="BOUNDED_REFERENCE_SUPPORTED" if supported else "INCONCLUSIVE",
+            review_complete="PASS",
+            acquisition_controls="PASS" if acquisition else "FAIL",
+            successful_local_control="PASS" if local_control else "FAIL",
+            unified_log_shapes="PASS",
+            asp_refusal_template="OBSERVED" if refusals else "NOT_OBSERVED",
+            asp_rendering=_shape(rendering),
+            target_image_linkage=_shape(paths),
+            target_pid_shape=_shape(pids),
+            target_pid_extent=(
+                "NOT_OBSERVED"
+                if not identities
+                else "SINGLE"
+                if len(identities) == 1
+                else "MULTIPLE"
+            ),
+            kernel_writer_identity=_shape(kernel),
+            apple_system_policy_sender=_shape(sender),
+            downloaded_marker=capture.downloaded_marker,
+            es_exec_records=capture.es_exec_records,
+            es_exit_records=capture.es_exit_records,
+            human_outcome=outcome,
+        )
+    except PrivateError as error:
+        code = error.code
+    except OSError as error:
+        code = _filesystem_code(error)
+    except (ValidationError, UnicodeError, RecursionError):
+        code = "DATA"
+    except (ValueError, TypeError, KeyError):
+        code = "INTERNAL"
+    return DenialReviewReport(error=code)
+
+
 def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -1565,14 +1715,20 @@ def main(argv: list[str] | None = None) -> int:
         "review-shapes",
         "inspect-field-names",
         "inspect-policy-layouts",
+        "review-denial",
     ):
         child = commands.add_parser(name)
         child.add_argument("--private-run", action="store_true", required=True)
-        if name in {"review-shapes", "inspect-field-names", "inspect-policy-layouts"}:
+        if name in {
+            "review-shapes",
+            "inspect-field-names",
+            "inspect-policy-layouts",
+            "review-denial",
+        }:
             child.add_argument("--existing-kit", type=Path)
         if name == "capture":
             child.add_argument("--browser-download", action="store_true", required=True)
-        if name == "report":
+        if name in {"report", "review-denial"}:
             child.add_argument(
                 "--outcome",
                 choices=(
@@ -1607,6 +1763,10 @@ def main(argv: list[str] | None = None) -> int:
             inspect_field_names(args.existing_kit or _hidden_existing_root())
         elif args.command == "inspect-policy-layouts":
             inspect_policy_layouts(args.existing_kit or _hidden_existing_root())
+        elif args.command == "review-denial":
+            denial = review_denial(args.existing_kit or _hidden_existing_root(), args.outcome)
+            print(denial.model_dump_json(indent=2))
+            return 0 if denial.error == "NONE" else 2
         else:
             result = (
                 capture(browser_download=args.browser_download)

@@ -58,6 +58,48 @@ def shape_capture(synthetic: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return synthetic
 
 
+@pytest.fixture
+def denial_capture(shape_capture: Path) -> Path:
+    work = shape_capture / "private"
+    summary = json.loads((work / "capture.json").read_bytes())
+    for name in (
+        "target_platform",
+        "provenance",
+        "same_executable",
+        "signature_integrity",
+        "es_ready",
+        "unified_log_ready",
+        "bounded_collection",
+        "collector_cleanup",
+    ):
+        summary[name] = "PASS"
+    summary.update(
+        browser_delivery="HUMAN_ATTESTED",
+        archive_quarantine="PRESENT",
+        app_quarantine="PRESENT",
+        downloaded_launch="RETURNED_SUCCESS",
+        downloaded_marker="ABSENT",
+    )
+    (work / "capture.json").write_text(json.dumps(summary))
+    control = dict(summary, local_control_launch="RETURNED_SUCCESS", local_control_marker="PRESENT")
+    kit._write(work / "control.json", json.dumps(control).encode())
+    config = kit._config(shape_capture)
+    row = _shape_row()
+    row.update(
+        processImagePath="/System/Library/Kernels/kernel",
+        processID=0,
+        userID=0,
+        senderImagePath="/invented/AppleSystemPolicy",
+        formatString=kit.ASP_DENIAL_FORMAT,
+        eventMessage=(
+            f"ASP: Security policy would not allow process: 12345, "
+            f"/invented/{config.app_name}/Contents/MacOS/Probe\n"
+        ),
+    )
+    (work / "test-ul.jsonl").write_bytes(json.dumps(row).encode() + b"\n")
+    return shape_capture
+
+
 def _config() -> kit.Config:
     return kit.Config(token=_TOKEN, cdhash=_HASH, os_release="27.0", os_build="26A123", digests={})
 
@@ -1180,3 +1222,139 @@ def test_private_policy_layouts_validate_all_inputs_before_any_output(
         kit.inspect_policy_layouts(shape_capture)
     output = capsys.readouterr()
     assert not output.out and not output.err
+
+
+@pytest.mark.parametrize("field", tuple(kit.DenialReviewReport.model_fields))
+def test_denial_review_report_has_only_fixed_leaves(field: str) -> None:
+    with pytest.raises(ValidationError):
+        kit.DenialReviewReport.model_validate({field: _CANARY})
+
+
+def test_fixed_denial_review_preserves_evidence_and_does_not_infer_cause_or_exec_stage(
+    denial_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    capsys.readouterr()
+    before = {path: path.read_bytes() for path in denial_capture.rglob("*") if path.is_file()}
+    read = kit._read
+
+    def restricted(path: Path, *args: object, **kwargs: object) -> bytes:
+        assert path.name not in {"test-es.jsonl", "marker", "control-marker", "test-marker"}
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(kit, "_read", restricted)
+    assert (
+        kit.main(
+            [
+                "review-denial",
+                "--private-run",
+                "--existing-kit",
+                str(denial_capture),
+                "--outcome",
+                "BLOCK_ALERT",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr()
+    result = kit.DenialReviewReport.model_validate_json(output.out)
+    assert result.reference_status == "BOUNDED_REFERENCE_SUPPORTED"
+    assert result.target_image_linkage == result.target_pid_shape == "PASS"
+    assert result.kernel_writer_identity == result.apple_system_policy_sender == "PASS"
+    assert result.target_pid_extent == "SINGLE"
+    assert result.policy_cause == "NOT_CLASSIFIED"
+    assert result.allocation_exec_stage == "NOT_ESTABLISHED"
+    assert result.fork_evidence == "NOT_COLLECTED" and result.gate_status == "NOT_EVALUATED"
+    assert not output.err and _CANARY not in output.out and "12345" not in output.out
+    assert str(denial_capture) not in output.out
+    assert before == {
+        path: path.read_bytes() for path in denial_capture.rglob("*") if path.is_file()
+    }
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "absent",
+        "near_template",
+        "writer",
+        "writer_pid",
+        "sender",
+        "rendering",
+        "target",
+        "zero_pid",
+        "overflow_pid",
+        "oversized_pid",
+        "quarantine",
+        "test_executed",
+        "es_exec_seen",
+        "control_failed",
+        "control_foreign",
+        "human_outcome",
+    ],
+)
+def test_denial_review_never_accepts_incomplete_or_mismatched_refusal_evidence(
+    denial_capture: Path, fault: str
+) -> None:
+    work = denial_capture / "private"
+    path = work / "test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    if fault == "absent":
+        row["formatString"] = "checking notarization on %d, %@"
+    elif fault == "near_template":
+        row["formatString"] = kit.ASP_DENIAL_FORMAT.rstrip()
+    elif fault == "writer":
+        row["processImagePath"] = "/usr/libexec/syspolicyd"
+    elif fault == "writer_pid":
+        row["processID"] = 100
+    elif fault == "sender":
+        row["senderImagePath"] = "/invented/OtherImage"
+    elif fault == "rendering":
+        row["eventMessage"] = row["eventMessage"].replace("would not allow", "would allow")
+    elif fault == "target":
+        row["eventMessage"] = row["eventMessage"].replace("/Contents/MacOS/Probe", "/Other/Probe")
+    elif fault in {"zero_pid", "overflow_pid", "oversized_pid"}:
+        row["eventMessage"] = row["eventMessage"].replace(
+            "12345", {"zero_pid": "0", "overflow_pid": str(2**32), "oversized_pid": "9" * 20}[fault]
+        )
+    elif fault in {"quarantine", "test_executed", "es_exec_seen"}:
+        for name in ("capture.json", "control.json"):
+            summary_path = work / name
+            summary = json.loads(summary_path.read_bytes())
+            key, value = {
+                "quarantine": ("app_quarantine", "ABSENT"),
+                "test_executed": ("downloaded_marker", "PRESENT"),
+                "es_exec_seen": ("es_exec_records", "OBSERVED"),
+            }[fault]
+            summary[key] = value
+            summary_path.write_text(json.dumps(summary))
+    elif fault in {"control_failed", "control_foreign"}:
+        control_path = work / "control.json"
+        control = json.loads(control_path.read_bytes())
+        control["local_control_launch" if fault == "control_failed" else "same_executable"] = (
+            "RETURNED_ERROR" if fault == "control_failed" else "FAIL"
+        )
+        control_path.write_text(json.dumps(control))
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_denial(
+        denial_capture, "OTHER" if fault == "human_outcome" else "BLOCK_ALERT"
+    )
+    assert result.reference_status == "INCONCLUSIVE" and result.gate_status == "NOT_EVALUATED"
+    assert _CANARY not in result.model_dump_json()
+
+
+def test_denial_review_retains_multiple_target_pids_as_unqualified_lifecycle_extent(
+    denial_capture: Path,
+) -> None:
+    path = denial_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    another = dict(row, eventMessage=row["eventMessage"].replace("12345", "12346"))
+    path.write_bytes(b"\n".join(json.dumps(item).encode() for item in (row, another)) + b"\n")
+    result = kit.review_denial(denial_capture, "BLOCK_ALERT")
+    assert result.reference_status == "BOUNDED_REFERENCE_SUPPORTED"
+    assert result.target_pid_extent == "MULTIPLE"
+    assert result.allocation_exec_stage == "NOT_ESTABLISHED"
+
+
+def test_repo_copy_cannot_review_native_denial() -> None:
+    result = kit.review_denial(Path("/invented-private-location-never-opened"), "BLOCK_ALERT")
+    assert result.error == "LOCATION"

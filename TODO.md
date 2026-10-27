@@ -563,9 +563,12 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   limit ordinary native command coverage; expanding those canonical producers is follow-up
   work, not an implicit claim of complete native ES coverage. See the
   [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
-- [ ] Qualify native Gatekeeper denial (GK-R1) before enabling that export. The user authorized
-  a private human-run experiment; the [kit handoff](docs/worklog/2026-10-26-macos-gatekeeper-reference.md)
-  supplies a temporary loopback server and bounded filtering. Native denial output remains gated.
+- [ ] Implement bounded native app-policy refusal support from the privately verified macOS 27
+  AppleSystemPolicy reference. Add canonical failed-launch target PID ownership and kernel/sender
+  logging facts before projection; preserve existing pre-child denial semantics. Exact Gatekeeper
+  cause and fork/exec stage remain unqualified under GK-R1. No repeat capture is needed for the
+  bounded reference; see the [handoff](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
+  Native denial output remains gated until integration and its acceptance checks pass.
   Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and
   Mac SMB serving remain outside the bounded scope. See the
   [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md).

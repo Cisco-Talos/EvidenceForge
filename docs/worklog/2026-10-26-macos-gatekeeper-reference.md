@@ -251,3 +251,66 @@ run its human-only policy-layout command. The human's next step is to close agen
 these layouts privately, sharing only verified nonsensitive technical literals. If a literal is
 sensitive or ambiguous, keep it private and leave the gate open; do not redact a full record,
 collect more data or weaken privacy. No additional data acquisition is needed for shape repair.
+
+## Bounded policy-refusal reference supported
+
+The human privately reviewed and shared only technical writer/subsystem/category/format-string
+tuples. The kernel ASP refusal is distinct from the other AMFI validation, signing, resource,
+notarization and launch-management diagnostics. The approved template is now a fixed diagnostic
+constant, not a captured record or argument. No rendered message, native identifier or personal
+value was shared or copied into the repository.
+
+Primary context was checked against Apple's
+[Gatekeeper discussion](https://developer.apple.com/forums/thread/766466), a separate
+[firsthand AMFI validation report](https://developer.apple.com/forums/thread/742974), and
+[Security's notarization implementation](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/notarization.cpp).
+The refusal interpretation is supported by the message, its kernel/AppleSystemPolicy source and
+the controlled outcome. The references do not make that message a unique notarization, malware
+or Gatekeeper-reason code. Ticket extraction/checking messages do not themselves establish a
+terminal result. No public trace was imported into fixtures.
+
+Added `review-denial`: no native execution, app, collector, network or writes. It uses only the
+already permitted bounded UL input plus the previously authorized fixed capture/control
+summaries, and never opens ES rows or execution markers. It validates original provenance,
+every row's scope and current schema, all acquisition conditions, exact summary coherence and
+the successful local control. It then checks the exact ASP layout and rendered grammar locally,
+positive uint32 target-PID shape, the unique test executable suffix, kernel PID-zero writer
+and the AppleSystemPolicy sender. Only fixed labels leave the command; matching PID/path values
+and any exception details remain private. Multiple reported PIDs are retained as a fixed extent
+classification, without asserting one child or a successful execution.
+
+Under the continuing explicit permission to run fixed-output checks, the prepared offline
+checker returned BOUNDED_REFERENCE_SUPPORTED. All acquisition/control/shape/rendering/linkage/
+writer/sender checks passed; the target extent was SINGLE. The downloaded marker was absent,
+the local control succeeded, ES exec/exit were not observed and the human attested BLOCK_ALERT.
+The original kit, capture, control summaries and native evidence were not changed. No new data
+collection or human command is needed for this bounded refusal reference.
+
+Full native generation stays disabled. The checker explicitly preserves policy cause as
+NOT_CLASSIFIED, allocation/exec stage as NOT_ESTABLISHED and fork evidence as NOT_COLLECTED.
+The experiment listened to exec/exit, not fork, and marker absence is not proof that the kernel
+never allocated a process. The existing canonical DeniedProcessLaunch is explicitly pre-child
+and cannot correctly supply the PID printed by this observation. MacosUnifiedLogObservation
+currently requires a positive process PID and same main-image writer/callsite, so it cannot
+correctly represent a kernel PID-zero writer with a separate AppleSystemPolicy sender either.
+These are concrete integration gaps, not reasons to fabricate an ordinary process, successful
+exec, exit, parent relationship, enforcement reason or native callsite metadata.
+
+Next engineering sequence: own the failed-attempt target PID without admitting an execution;
+add canonical kernel writer and distinct sender/callsite facts; then integrate the bounded
+refusal through ordinary event routing, observation, sorting and checkpoint publication. Keep
+the existing pre-child denial and returning failed-exec contracts intact. Native tracepoint
+style must follow the applicable kernel representation, not reuse the positive-PID main-image
+encoding by assertion; Apple's frozen
+[tracepoint layout](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/libkern/firehose/tracepoint_private.h)
+and [style discriminants](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.1.9/libkern/firehose/firehose_types_private.h)
+provide the protocol context. Existing permission permits later fixed-output checks of the same
+bounded evidence; it never permits displaying native offsets, addresses or identities.
+
+All 788 selected tests pass, with one slow case excluded, including 46 new refusal-review cases.
+They cover closed output vocabulary, immutable evidence, exact source/template/target matching,
+PID bounds, coherent controls, missing prerequisites, multiple targets and unknown-stage/cause
+preservation. Full Ruff check/format (1,344 files), whitespace and unchanged behavior revision 337
+validation against the predecessor pass. The code-only review copy is
+`/private/tmp/eforge-gatekeeper-denial-review-v1-462cb09a`; no native operation was run there.
+The durable roadmap now identifies the remaining integration work and the bounded evidence limit.
