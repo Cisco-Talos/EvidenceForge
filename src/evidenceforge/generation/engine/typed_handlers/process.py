@@ -603,6 +603,7 @@ def handle_process(
                 process_name=process_name,
                 logon_id=process_logon_id,
                 from_storyline=True,
+                **({"macos_command_completed": True} if os_category == "macos" else {}),
             )
         else:
             release_storyline_index = (

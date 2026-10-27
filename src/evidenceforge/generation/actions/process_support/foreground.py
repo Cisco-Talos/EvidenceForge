@@ -138,6 +138,11 @@ class ProcessForegroundLifecycle:
                     process_name=running.image or intent.process_name,
                     logon_id=running.logon_id or intent.logon_id,
                     session_end_plan=session.end_plan if session is not None else None,
+                    **(
+                        {"macos_command_completed": True}
+                        if _get_os_category(system.os) == "macos"
+                        else {}
+                    ),
                 )
             if not exhaust:
                 if self._lifecycle_authority.has_due_process_closes(normalized_cutoff):
@@ -670,7 +675,9 @@ class ProcessForegroundLifecycle:
             or lifecycle_process.identity.hostname != running.system
             or lifecycle_process.identity.pid != running.pid
             or lifecycle_process.identity.started_at != running.start_time
-            or lifecycle_process.identity.image != running.image
+            or lifecycle_process.identity.image != (running.lifetime_image or running.image)
+            or lifecycle_process.current_view.image != running.image
+            or lifecycle_process.current_view.execution_ordinal != running.execution_ordinal
         ):
             raise StateError(
                 "Process close admission has no matching live lifecycle identity: "
@@ -694,7 +701,9 @@ class ProcessForegroundLifecycle:
                     or child_lifecycle.identity.hostname != child.system
                     or child_lifecycle.identity.pid != child.pid
                     or child_lifecycle.identity.started_at != child.start_time
-                    or child_lifecycle.identity.image != child.image
+                    or child_lifecycle.identity.image != (child.lifetime_image or child.image)
+                    or child_lifecycle.current_view.image != child.image
+                    or child_lifecycle.current_view.execution_ordinal != child.execution_ordinal
                     or child_lifecycle.identity.parent_object_id != running.ecar_object_id
                 ):
                     raise StateError(

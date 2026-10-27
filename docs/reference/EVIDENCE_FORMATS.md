@@ -42,7 +42,7 @@ output/
       windows_event_security.xml           # Windows Security XML document, or splunk XML event stream
       windows_event_sysmon.xml             # Sysmon XML document, or splunk XML event stream
       ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
-      macos_endpoint_security.ndjson       # Experimental modeled v10 fork notifications
+      macos_endpoint_security.ndjson       # Experimental modeled v11 fork/exec/known-exit
       macos_unified_log.ndjson             # Experimental workspace-entry export
       syslog.log                           # Linux syslog (default/splunk target; RFC5424)
       bash_history/<username>.bash_history # Per-user explicit Bash history (Linux/Mac)
@@ -683,11 +683,18 @@ nonnull entitlements do not qualify. Exit requires an explicit canonical complet
 signal/core result. Unknown outcomes never become success. Ordinary aggregate starts do not
 become native fork or exec records.
 
+The ordinary completion owner preserves explicit normal/signal outcomes for an exact live
+execution. Frozen policy also declares nominal zero results for the exact natural query
+invocations `/usr/bin/id`, `/usr/bin/sw_vers`, and `/usr/bin/sw_vers -productVersion`. This is
+selected modeled behavior, not measured reliability or a successful-exec inference. Extra
+arguments, unlisted commands, session teardown and timing-truncated closes retain unknown results.
+
 Unsupported individual phases retain nonexported counter observations, without placeholder
 native records. Known sibling forks remain available; later exported rows retain the resulting
-sequence gaps. In particular, current SSH shell descriptor tables remain unknown, so those
-commands can still produce native forks and eCAR exec evidence without native exec rows.
-Local GUI audit-origin gaps also remain explicit. The controlled, fully specified v11 process
+sequence gaps. Qualified external SSH commands without a PTY use three channel-owned pipe
+descriptors after exec; the shell/helper inventories remain unknown. Local GUI audit origins
+are modeled, while GUI responsible-process relationships remain unknown. PTY command generation
+is unavailable. The controlled, fully specified v11 process
 path supports all three phases; this does not imply native coverage for every ordinary command.
 
 Source policy owns windows, missingness and export delay. Atomic publication retains canonical

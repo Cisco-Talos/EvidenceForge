@@ -34,12 +34,14 @@ from evidenceforge.events.dispatcher import (
 )
 from evidenceforge.events.identity import (
     EventIdentityPlan,
+    ProcessIdentity,
 )
 from evidenceforge.events.lifecycle import (
     ActionLifecycleContext,
 )
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import (
     EffectRequirement,
     ExecutionEffectPlanError,
@@ -1848,6 +1850,12 @@ class ProcessTerminationService:
         authoritative_latest_allowed: datetime | None = None
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        if request.expected_process is not None and (
+            running_proc is None
+            or self.state_manager.get_process_identity(system.hostname, pid)
+            != request.expected_process
+        ):
+            raise StateError("Process completion lost its exact live execution")
         owned_end_plan = (
             self.state_manager.process_session_end_plan(system.hostname, pid)
             if running_proc is not None
@@ -2061,6 +2069,7 @@ class ProcessTerminationService:
                 process=process,
                 timestamp=time,
                 integrity_level=running_proc.integrity_level,
+                exit_outcome=self._macos_exit_outcome(request, process, time),
             )
             event.storyline_origin = from_storyline
 
@@ -2130,7 +2139,9 @@ class ProcessTerminationService:
             completed_at=event.timestamp,
             action_id=root,
         )
-        builder.terminate_process(process, end_time=event.timestamp)
+        builder.terminate_process(
+            process, end_time=event.timestamp, exit_outcome=event.process.exit_outcome
+        )
         plan = builder.seal()
         with self.dispatcher.source_timing_planner.prepared_planning() as timing:
             carrier = self.dispatcher.prepare_action_cohort_projection(
@@ -2154,3 +2165,26 @@ class ProcessTerminationService:
             timing.cancel()
             raise
         self.dispatcher.publish_prepared_action_cohort_batch(batch)
+
+    def _macos_exit_outcome(
+        self, request: ProcessTerminationRequest, process: ProcessIdentity, at: datetime
+    ) -> PosixProcessExit | None:
+        """Retain explicit truth or the policy of an untruncated natural completion."""
+        if request.exit_outcome is not None:
+            return request.exit_outcome
+        provider = self.identity.macos_execution_metadata
+        if not request.macos_command_completed or provider is None:
+            return None
+        planned = self.foreground.foreground_process_termination_time(process.hostname, process.pid)
+        session = self.state_manager.get_session(process.logon_id)
+        deadlines = (
+            self.state_manager.get_session_end_time(process.logon_id),
+            session.network_close_time if session is not None else None,
+        )
+        if (
+            ensure_utc(at) != ensure_utc(request.time)
+            or (planned is not None and ensure_utc(at) < ensure_utc(planned))
+            or any(ensure_utc(at) >= ensure_utc(end) for end in deadlines if end is not None)
+        ):
+            return None
+        return provider.command_completion(process, at)

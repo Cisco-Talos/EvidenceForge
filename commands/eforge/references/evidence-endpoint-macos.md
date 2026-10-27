@@ -39,7 +39,11 @@ exec and known exit phases. Complete canonical metadata is required. Exec additi
 explicit absent entitlements and complete descriptors. Qualified external SSH commands without
 a PTY receive three channel-owned pipes at exec; unknown shell/helper tables still omit their
 native exec rows. Known forks and eCAR image replacement remain available. Unknown exit outcomes
-omit native exit.
+omit native exit. Natural completion of the exact modeled invocations `/usr/bin/id`,
+`/usr/bin/sw_vers`, and `/usr/bin/sw_vers -productVersion` supplies a declared nominal zero result.
+Session teardown, deadline truncation, additional arguments and unlisted commands do not inherit
+that result. Explicit completed normal/signal results can also use the canonical termination
+owner; a signal request or successful launch alone does not establish terminal status.
 No native host collector runs. Other Unified Log families, nonnull entitlements, full hashes and
 Gatekeeper-denial exports remain unavailable. See the current format contract and profile worklog.
 

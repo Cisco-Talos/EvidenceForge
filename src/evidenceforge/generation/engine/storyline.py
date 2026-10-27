@@ -3315,6 +3315,15 @@ class StorylineMixin:
         """Defer termination until same-step and cross-step authored dependents run."""
         if not hasattr(self, "_pending_story_process_terminations"):
             self._pending_story_process_terminations = []
+        completion: dict[str, object] = {}
+        if _get_os_category(system.os) == "macos":
+            process = self.state_manager.get_process_identity(system.hostname, pid)
+            if process is not None:
+                completion = {
+                    "macos_command_completed": True,
+                    "completion_process_object_id": process.object_id,
+                    "completion_execution_id": process.execution_id,
+                }
         self._pending_story_process_terminations.append(
             {
                 "actor": actor.username,
@@ -3324,6 +3333,7 @@ class StorylineMixin:
                 "process_name": process_name,
                 "logon_id": logon_id,
                 "release_storyline_index": release_storyline_index,
+                **completion,
             }
         )
 
@@ -3379,6 +3389,16 @@ class StorylineMixin:
             proc = self.state_manager.get_process(system.hostname, item["pid"])
             if proc is None:
                 continue
+            completed_command = item.get("macos_command_completed", False)
+            if type(completed_command) is not bool:
+                raise StateError("Deferred Mac command completion marker is invalid")
+            if completed_command:
+                identity = self.state_manager.get_process_identity(system.hostname, item["pid"])
+                if identity is None or identity.object_id != item.get(
+                    "completion_process_object_id"
+                ):
+                    raise StateError("Deferred Mac command completion lost its exact lifetime")
+                completed_command = identity.execution_id == item.get("completion_execution_id")
             termination_time = item["time"]
             if release_time is not None:
                 termination_time = max(
@@ -3393,6 +3413,7 @@ class StorylineMixin:
                 process_name=item["process_name"],
                 logon_id=item["logon_id"],
                 from_storyline=True,
+                **({"macos_command_completed": True} if completed_command else {}),
             )
         self._pending_story_process_terminations = retained
 

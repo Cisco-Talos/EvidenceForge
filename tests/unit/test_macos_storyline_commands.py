@@ -275,9 +275,16 @@ def test_ssh_shell_commands_own_real_forks_and_history(tmp_path: Path, native_mo
     assert len(paths) == int(native_mode == "visible")
     if native_mode == "visible":
         records = [json.loads(line) for line in paths[0].read_text().splitlines()]
-        assert len(records) == 11
+        assert len(records) == 13
         assert sum(row["event_type"] == 11 for row in records) == 7
         assert sum(row["event_type"] == 9 for row in records) == 4
+        assert sum(row["event_type"] == 15 for row in records) == 2
+        completed = [row for row in records if row["event_type"] == 15]
+        assert {row["process"]["executable"]["path"] for row in completed} == {
+            "/usr/bin/id",
+            "/usr/bin/sw_vers",
+        }
+        assert all(row["event"]["exit"]["stat"] == 0 for row in completed)
         submissions = {
             line.split(";", 1)[1]: int(line.split(":", 2)[1])
             for line in history[0].read_text().splitlines()

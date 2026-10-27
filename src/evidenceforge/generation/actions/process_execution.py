@@ -31,9 +31,10 @@ from inspect import getattr_static
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from evidenceforge.events.content_identity import canonical_native_path
-from evidenceforge.events.identity import validate_process_arguments
+from evidenceforge.events.identity import ProcessIdentity, validate_process_arguments
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.macos_exec_script import MacosExecScript, validate_macos_exec_script
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.actions.command_effects import (
     ExecutionEffectPlan,
@@ -416,17 +417,52 @@ class ProcessTerminationRequest:
     from_storyline: bool = False
     session_end_plan: SessionEndPlan | None = None
     source: str = "activity_generator"
+    exit_outcome: PosixProcessExit | None = None
+    expected_process: ProcessIdentity | None = None
+    macos_command_completed: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.macos_command_completed) is not bool:
+            raise ValueError("Mac command completion requires an exact bool")
+        if self.exit_outcome is not None:
+            if type(self.exit_outcome) is not PosixProcessExit:
+                raise ValueError("Process termination requires an exact terminal result")
+            self.exit_outcome.__post_init__()
+            if type(self.expected_process) is not ProcessIdentity:
+                raise ValueError("An explicit terminal result requires its exact process execution")
+        if self.expected_process is not None and (
+            type(self.expected_process) is not ProcessIdentity
+            or self.expected_process.hostname != self.system.hostname
+            or self.expected_process.pid != self.pid
+        ):
+            raise ValueError("Process termination expected identity disagrees with host/PID")
+        if (self.exit_outcome is not None or self.macos_command_completed) and platform_for_os(
+            self.system.os
+        ) != "macos":
+            raise ValueError(
+                "Explicit process completion is currently supported only for Mac hosts"
+            )
 
     @property
     def stable_id(self) -> str:
         """Return a deterministic intent identifier for durable references."""
 
+        completion_suffix = ""
+        if (
+            self.exit_outcome is not None
+            or self.expected_process is not None
+            or self.macos_command_completed
+        ):
+            completion_suffix = (
+                f":completion:{self.exit_outcome!r}:{self.macos_command_completed}:"
+                f"{self.expected_process.execution_id if self.expected_process is not None else ''}"
+            )
         seed = _stable_seed(
             "action_bundle:process_termination:"
             f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
             f"{self.pid}:{self.process_name}:{self.logon_id}:{self.from_storyline}:"
             f"{self.session_end_plan.canonical_end.isoformat() if self.session_end_plan else ''}:"
-            f"{self.source}"
+            f"{self.source}{completion_suffix}"
         )
         return f"process-termination-{seed:016x}"
 

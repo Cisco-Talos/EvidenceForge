@@ -11,8 +11,11 @@ The bounded v11 fork/exec/known-exit projection is now implemented through exact
 publication. Local GUI audit origins now belong to the canonical login and survive explicit
 user launches, inherited children and recovery. Qualified external commands without a PTY now
 receive their SSH channel's three pipe descriptors at exec. Shell/helper descriptor inventories,
-PTY command generation, GUI responsible-process relationships and automatic exit results remain
-coverage limits. Gatekeeper remains gated. Older v10/macOS 26 milestones
+PTY command generation, GUI responsible-process relationships and unspecified exit results remain
+coverage limits. Natural completion of three literal query invocations now supplies declared
+nominal results; ordinary termination also preserves exact explicit normal/signal results.
+See the [completion worklog](../../worklog/2026-10-26-macos-command-exit-outcomes.md).
+Gatekeeper remains gated. Older v10/macOS 26 milestones
 below are historical context, not current target admission. See the
 [current profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md).
 

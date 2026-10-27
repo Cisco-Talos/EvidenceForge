@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 335
+current_revision: 336
 history_start_revision: 1
-behavior_surface_sha256: b28e0f4ebd9dc92d7db388b9877b503fcd68e901bdd12cb53cf1ee1838998d01
+behavior_surface_sha256: a150d841c97489ccad5ece060d70fd04f154fe9ee4e17e31491c9a1f3d4bd549
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3188,3 +3188,14 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Reserves three distinct no-PTY SSH channel pipes atomically and supplies complete post-exec command descriptors through canonical State, preserving unknown helper tables, inherited known tables and recoverable native v11 publication.
+  - revision: 336
+    id: macos-explicit-command-completion-outcomes
+    impact: localized
+    domains:
+      - macos-process-completion
+      - process-lifecycle-admission
+      - macos-native-source-projection
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Preserves explicit normal/signal results, selects nominal outcomes for exact natural query completions, and separates birth/current execution checks during foreground closure.

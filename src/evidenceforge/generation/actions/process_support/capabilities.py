@@ -10,9 +10,10 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from evidenceforge.events.contexts import HostContext
-from evidenceforge.events.identity import PosixProcessCredentials
+from evidenceforge.events.identity import PosixProcessCredentials, ProcessIdentity
 from evidenceforge.events.lifecycle import SessionEndPlan
 from evidenceforge.events.macos_exec_script import MacosExecScript
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import NmapCommandProbeRequest
 from evidenceforge.generation.actions.endpoint_effects import PreparedProcessEffectActor
 from evidenceforge.generation.actions.process_execution import (
@@ -200,6 +201,10 @@ class GenerateProcessTerminationCapability(Protocol):
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
+        macos_command_completed: bool = False,
     ) -> None:
         """Delegate to the existing generate process termination owner."""
         ...

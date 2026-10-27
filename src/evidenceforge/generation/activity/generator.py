@@ -149,6 +149,7 @@ from evidenceforge.events.network import (
     NetworkTrafficLedger,
     NetworkTransactionPlan,
 )
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.generation.actions import (
     AccountChangedActionBundle,
     AccountChangedRequest,
@@ -4621,6 +4622,11 @@ class ActivityGenerator:
                 process_name=running.image or process_name,
                 logon_id=running.logon_id or logon_id,
                 session_end_plan=session.end_plan if session is not None else None,
+                **(
+                    {"macos_command_completed": True}
+                    if _get_os_category(system.os) == "macos"
+                    else {}
+                ),
             )
 
     def _defer_ssh_session_close(
@@ -19262,6 +19268,10 @@ class ActivityGenerator:
         logon_id: str,
         from_storyline: bool = False,
         session_end_plan: SessionEndPlan | None = None,
+        *,
+        exit_outcome: PosixProcessExit | None = None,
+        expected_process: ProcessIdentity | None = None,
+        macos_command_completed: bool = False,
     ) -> None:
         """Generate process termination event across all applicable log formats.
 
@@ -19275,6 +19285,9 @@ class ActivityGenerator:
             pid: PID of the terminated process
             process_name: Full path of the terminated process
             logon_id: LogonID of the owning session
+            exit_outcome: Explicit completed Mac result, requiring expected_process
+            expected_process: Exact live execution for a supplied completed result
+            macos_command_completed: Natural bounded command completion, not session teardown
         """
         request = ProcessTerminationRequest(
             user=user,
@@ -19285,6 +19298,9 @@ class ActivityGenerator:
             logon_id=logon_id,
             from_storyline=from_storyline,
             session_end_plan=session_end_plan,
+            exit_outcome=exit_outcome,
+            expected_process=expected_process,
+            macos_command_completed=macos_command_completed,
         )
         ProcessTerminationActionBundle(self, request).execute()
 

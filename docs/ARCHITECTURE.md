@@ -1292,6 +1292,18 @@ semantics. There is no new pipe registry or source-dependent allocation. Human-r
 comparisons support the bounded post-exec layout, not sshd internals, PTY generation or native
 export timing; see the [SSH reference worklog](worklog/2026-10-26-macos-ssh-descriptor-reference.md).
 
+Ordinary Mac termination requests can carry an explicit `PosixProcessExit` and exact expected
+live execution. The occurrence and State plan publish the same result atomically through the
+existing lifecycle/native journal. A separate natural-command-completion marker permits the
+frozen execution policy's exact `command_completions` argv rules. Current policy supplies nominal
+zero outcomes only for `id`, `sw_vers` and `sw_vers -productVersion` at their enumerated absolute
+paths. The producer validates the first exec, known argv/script absence, account, installed
+content and completion window. Session teardown and timing-truncated closes remain unknown;
+other invocations get no success fallback. Deferred authored completion retains exact lifetime
+and execution IDs in the existing engine queue. Older policy/queue inputs keep unknown results.
+Foreground close admission checks immutable birth image and current runtime image/ordinal
+separately. See the [completion worklog](worklog/2026-10-26-macos-command-exit-outcomes.md).
+
 The frozen execution policy explicitly enables one audit origin per modeled normal-user local
 GUI authentication. The auth bundle allocates the origin and session atomically through the
 existing host-local audit namespace; GUI and SSH origins share that allocator. A local GUI

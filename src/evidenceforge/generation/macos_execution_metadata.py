@@ -26,6 +26,7 @@ from evidenceforge.events.macos_execution_directory import MacosExecutionDirecto
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, MacosFileTime
 from evidenceforge.events.macos_runtime import MacosCodeValidationDecision, MacosImageSecurity
 from evidenceforge.events.process_executable import ProcessExecutableVersion
+from evidenceforge.events.process_outcome import PosixProcessExit
 from evidenceforge.events.responsibility import ProcessResponsibility
 from evidenceforge.generation.identity import IdentityDirectory
 from evidenceforge.generation.macos_installed_filesystem import MacosInstalledFilesystem
@@ -147,6 +148,36 @@ class MacosExecutionMetadataProducer:
         self._directories = MappingProxyType(directories)
         self._known_from = born_at
         self._known_until = window_end
+
+    def command_completion(self, process: ProcessIdentity, at: datetime) -> PosixProcessExit | None:
+        """Select declared nominal truth for an exact first command execution.
+
+        The completion owner must separately prove a natural bounded close.
+        Neither successful exec nor a matching display command establishes a result.
+        Later image replacements and unspecified/frozen legacy policies stay unknown.
+        """
+        if (
+            process.execution_ordinal != 1
+            or process.arguments is None
+            or not process.arguments
+            or process.arguments[0] != process.image
+            or process.executable_version is None
+            or process.executable_version.platform != "macos"
+            or process.executable_version.identity_kind != "installed_release"
+            or process.exec_script != MacosExecScript()
+            or (process.hostname.casefold(), process.principal.casefold()) not in self._accounts
+            or not self._known_from <= process.execution_started_at < at < self._known_until
+        ):
+            return None
+        binary = self._filesystem.deployed_binary(
+            process.hostname, process.image, process.principal
+        )
+        if binary is None or binary.content_id != process.executable_version.content_id:
+            return None
+        for rule in self.profile.command_completions:
+            if process.arguments == rule.arguments:
+                return PosixProcessExit(exit_code=rule.exit_code)
+        return None
 
     def directory(self, hostname: str, path: str, at: datetime) -> MacosExecutionDirectory:
         """Observe one provisioned directory object without inferring arbitrary paths."""

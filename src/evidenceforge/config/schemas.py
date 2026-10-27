@@ -4130,6 +4130,21 @@ class MacosEndpointSecurityProfilesConfig(BaseModel, extra="forbid", frozen=True
         return self
 
 
+class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
+    """Explicit nominal result for one literal modeled query invocation."""
+
+    arguments: tuple[str, ...] = Field(min_length=1, max_length=32)
+    exit_code: int = Field(strict=True, ge=0, le=255)
+
+    @field_validator("arguments")
+    @classmethod
+    def literal_invocation(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        """Require an absolute executable and NUL-free literal argument vector."""
+        if not values[0].startswith("/") or values[0] == "/" or any("\0" in v for v in values):
+            raise ValueError("Mac command completion requires an absolute NUL-free invocation")
+        return values
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4150,6 +4165,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     system_responsibility: Literal["none"] | None = None
     gui_audit_origin: Literal["authenticated_local_account"] | None = None
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
+    command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
+        default=(), max_length=256
+    )
 
     @model_validator(mode="after")
     def unique_validation_selectors(self) -> Self:
@@ -4159,6 +4177,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         ]
         if len(selectors) != len(set(selectors)):
             raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
+        invocations = [rule.arguments for rule in self.command_completions]
+        if len(invocations) != len(set(invocations)):
+            raise ValueError("Mac command completion policies must have distinct argument vectors")
         return self
 
     @field_validator("user_environment", "root_environment")

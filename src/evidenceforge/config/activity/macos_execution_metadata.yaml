@@ -10,6 +10,16 @@ system_responsibility: none # clean service launch with no other responsible lif
 gui_audit_origin: authenticated_local_account
 # Bounded non-PTY external-command boundary; never an inferred sshd/shell FD inventory.
 ssh_command_descriptors: standard_pipes
+# Explicit nominal completed results for these exact invocations only. This is a
+# synthetic workload choice, not a success default, failure-rate measurement or
+# result inferred from exec admission. Only the natural completion owner uses it.
+command_completions:
+  - arguments: ["/usr/bin/id"]
+    exit_code: 0
+  - arguments: ["/usr/bin/sw_vers"]
+    exit_code: 0
+  - arguments: ["/usr/bin/sw_vers", "-productVersion"]
+    exit_code: 0
 terminal:
   volume_id: modeled-devfs
   device: 16777217

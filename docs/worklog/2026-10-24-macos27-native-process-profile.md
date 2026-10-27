@@ -177,3 +177,12 @@ transaction/recovery compatibility and verification. No private records were ins
 committed, and PTY command generation is still unavailable. Automatic terminal-outcome producers
 are the next coverage item; earlier controlled exit reference evidence can be reused for that
 work without a new native collection solely to repeat already reviewed wait-status checks.
+
+## Explicit command completion outcomes
+
+Revision 336 carries exact explicit terminal results through ordinary termination and selects
+nominal outcomes for three literal query invocations only through natural completion owners.
+It also corrects foreground close admission to distinguish birth image from current execution.
+See the [completion worklog](2026-10-26-macos-command-exit-outcomes.md) for the reused evidence,
+frozen policy, recovery tests and remaining unknown-result boundary. No new collection or
+private-file inspection was needed.
