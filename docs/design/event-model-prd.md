@@ -9,7 +9,7 @@ available independently of generation admission.
 
 The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
 publication. Unknown metadata stays unavailable; SSH descriptor and local GUI audit-origin gaps
-still limit ordinary command exports. Gatekeeper remains gated. Older v10/macOS 26 milestones
+still limit ordinary command exports. Explicit `process.outcome: policy_refused` now builds an internal `macos_policy_refusal` occurrence with an attempt subject and boot-owned kernel writer. The target PID has no asserted process lifetime; exact refusal cause and execution stage remain unqualified. Older v10/macOS 26 milestones
 below are historical context, not current target admission. See the
 [current profile worklog](../worklog/2026-10-24-macos27-native-process-profile.md).
 

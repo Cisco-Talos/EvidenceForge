@@ -4002,6 +4002,32 @@ class MacosUnifiedLogProfilesConfig(BaseModel, extra="forbid", frozen=True):
     profile: Literal["macos26-workspace-entry-v1", "macos27-workspace-entry-v1"]
     mach_timebase: MacosMachTimebaseConfig
     workspace_request: MacosWorkspaceLogProfile
+    policy_refusal: MacosPolicyRefusalLogProfile | None = None
+
+
+class MacosPolicyRefusalLogProfile(BaseModel, extra="forbid", frozen=True):
+    """Bounded ASP template and explicit modeled kernel/sender build callsite."""
+
+    profile: Literal["macos27-asp-refusal-v1"]
+    kernel_path: str
+    kernel_export_path: Literal["/kernel"] = "/kernel"
+    sender_path: str
+    format_string: Literal["ASP: Security policy would not allow process: %d, %s\n"]
+    format_string_offset: int = Field(strict=True, gt=0, lt=2**31)
+    program_counter: int = Field(strict=True, gt=0, lt=2**32, multiple_of=4)
+
+    @model_validator(mode="after")
+    def exact_images(self) -> Self:
+        """Require explicit independent native artifact paths."""
+        if (
+            any(
+                not path.startswith("/") or "\0" in path or "/../" in path
+                for path in (self.kernel_path, self.sender_path)
+            )
+            or self.kernel_path == self.sender_path
+        ):
+            raise ValueError("Policy logging requires distinct absolute kernel and sender images")
+        return self
 
 
 class MacosProvisioningRange(BaseModel, extra="forbid", frozen=True):
@@ -4341,6 +4367,7 @@ class SystemBinaryEntry(BaseModel, extra="forbid"):
     roles_any: tuple[str, ...] = ()
     services_any: tuple[str, ...] = ()
     native_release: NativeSystemBinaryReleaseEntry | None = None
+    executable_format: Literal["mach_o"] | None = None
 
     @model_validator(mode="before")
     @classmethod

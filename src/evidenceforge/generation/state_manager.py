@@ -76,6 +76,7 @@ from evidenceforge.events.macos_execution_directory import (
     validate_macos_execution_directory,
 )
 from evidenceforge.events.macos_file import MacosDirectoryMetadata, detach_directory_metadata
+from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
 from evidenceforge.events.macos_runtime import MacosImageSecurity, validate_macos_image_security
 from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalObservation, MacosTerminalSession
@@ -703,6 +704,15 @@ class _ProcessAllocatorPatch:
     pid_candidate_probe_delta: int
     thread_counter: tuple[str, int] | None
     thread_rng_state: tuple[str, object] | None
+
+
+@dataclass(frozen=True, slots=True)
+class MacosPolicyRefusalAllocation:
+    """Cohort-owned PID/TID allocation without a process or thread lifetime."""
+
+    target: MacosPolicyRefusalTarget
+    kernel_thread_id: int
+    allocator: _ProcessAllocatorPatch
 
 
 @dataclass(frozen=True, slots=True)
@@ -2330,6 +2340,7 @@ class ActionCohortProcessActivityPatch:
     descriptor_table: MacosDescriptorTable | None = None
     native_pipe_allocation: tuple[int, int, str] | None = None
     terminal_after: MacosTerminalSession | None = None
+    policy_refusal: MacosPolicyRefusalAllocation | None = None
 
     def __post_init__(self) -> None:
         """Normalize the canonical activity time."""
@@ -2780,6 +2791,17 @@ class _PreparedActionCohortCommitPlan:
     claim_version: int
     claim_state_time: datetime | None
     claim_preimage: object
+    refusal_allocations: tuple["_PreparedPolicyRefusalAllocation", ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPolicyRefusalAllocation:
+    allocation: MacosPolicyRefusalAllocation
+    rng: random.Random
+    temporal_default: TemporalAllocationIndex
+    reservations: dict[int, list[tuple[datetime, datetime]]]
+    intervals: list[tuple[datetime, datetime]]
+    receipt: MacosPolicyRefusalReceipt
 
 
 @dataclass(slots=True)
@@ -3287,6 +3309,28 @@ class ActionCohortMaterializationBuilder(MaterializationBatchBuilder):
                 _capability=_ActionCohortCapability(),
             )
         )
+
+    def plan_macos_policy_refusal(
+        self, initiator: ProcessIdentity, *, image: str, refused_at: datetime
+    ) -> MacosPolicyRefusalAllocation:
+        """Reserve only the reported target PID and kernel observation TID."""
+        self._require_open()
+        if self._process_activity_patches:
+            raise StateError("Policy refusal requires its own process activity cohort")
+        normalized = self._manager._normalize_action_cohort_process_target(self, initiator)
+        if type(normalized) is not ProcessIdentity:
+            raise StateError("Policy refusal requires an existing initiating process")
+        with self._manager._capability_minting_guard("plan_macos_policy_refusal"):
+            allocation = self._manager._plan_macos_policy_refusal(normalized, image, refused_at)
+        self._process_activity_patches.append(
+            ActionCohortProcessActivityPatch(
+                target=normalized,
+                activity_time=allocation.target.refused_at,
+                policy_refusal=allocation,
+                _capability=_ActionCohortCapability(),
+            )
+        )
+        return allocation
 
     def record_macos_descriptors(
         self,
@@ -4377,6 +4421,8 @@ def _materialization_batch_integrity_token(
 
 _ACTION_COHORT_SAFE_RECORD_TYPES = frozenset(
     {
+        MacosPolicyRefusalTarget,
+        MacosPolicyRefusalAllocation,
         PosixProcessCredentials,
         MacosAuditSession,
         MacosSshCommandStreams,
@@ -4700,6 +4746,13 @@ def _action_cohort_semantic_preimage(
         tuple(
             (
                 (
+                    _action_cohort_process_target_semantic(patch.target),
+                    patch.activity_time,
+                    "macos-policy-refusal-v1",
+                    patch.policy_refusal,
+                )
+                if patch.policy_refusal is not None
+                else (
                     _action_cohort_process_target_semantic(patch.target),
                     patch.activity_time,
                     "macos-process-privilege-drop-v1",
@@ -5328,6 +5381,7 @@ class StateManager:
         self._active_pid_reservation_counts: dict[str, int] = {}
         self._transient_pid_reservations: dict[str, dict[int, list[tuple[datetime, datetime]]]] = {}
         self._transient_pid_reservation_counts: dict[str, int] = {}
+        self._macos_policy_refusals: ExpiringIndex[str, MacosPolicyRefusalReceipt] = ExpiringIndex()
         self._pid_candidate_probe_count = 0
         self._pid_allocation_count = 0
         self._connection_id_counter = 0
@@ -10496,6 +10550,98 @@ class StateManager:
             counter = rng.randint(8000, 42000)
         return counter, rng, True
 
+    def _plan_macos_policy_refusal(
+        self, initiator: ProcessIdentity, image: str, refused_at: datetime
+    ) -> MacosPolicyRefusalAllocation:
+        """Preview a PID and logging TID using the existing Mac host allocators."""
+        if (
+            type(initiator) is not ProcessIdentity
+            or self._pid_os.get(initiator.hostname) != "macos"
+        ):
+            raise StateError("Policy refusal requires an established Mac initiating process")
+        if type(refused_at) is not datetime or refused_at.utcoffset() is None:
+            raise StateError("Policy refusal requires an aware occurrence time")
+        at = ensure_utc(refused_at)
+        self._validate_action_live_process_identity(initiator)
+        live = self._processes_by_object_id[initiator.object_id]
+        if at < max(initiator.execution_started_at, live.last_activity_time or live.start_time):
+            raise StateError("Policy refusal cannot precede its initiating process activity")
+        host = initiator.hostname
+        epoch = self._system_boot_times.get(host)
+        if epoch is None or at < epoch:
+            raise StateError("Policy refusal requires its established host boot")
+        counter, rng, _ = self._preview_pid_allocator(host, "macos")
+        prefix = self._linux_pid_weekly_churn_prefixes.get(host)
+        prefix_patch = None
+        if prefix is None:
+            prefix = self._build_linux_pid_weekly_churn_prefix(host)
+            prefix_patch = (host, prefix)
+        pid, position, bucket, probes = self._preview_linux_pid(
+            system=host,
+            counter=counter,
+            rng=rng,
+            current_time=at,
+            minimum_logical_exclusive=None,
+            prefix=prefix,
+            epoch=epoch,
+            os_category="macos",
+        )
+        target = MacosPolicyRefusalTarget(
+            host,
+            stable_uuid(
+                "macos-policy-attempt", host, at.isoformat(), position, image, initiator.object_id
+            ),
+            pid,
+            image,
+            at,
+            position,
+        )
+        tid, thread_counter, thread_rng = self._preview_primary_thread(
+            system=host, os_category="macos", object_id=target.object_id, pid=0
+        )
+        assert thread_rng is None
+        return MacosPolicyRefusalAllocation(
+            target,
+            tid,
+            _ProcessAllocatorPatch(
+                pid_counter=(host, counter),
+                pid_os=None,
+                pid_rng_state=(host, rng.getstate()),
+                pid_epoch=None,
+                pid_weekly_prefix=prefix_patch,
+                linux_allocation=(host, at, position),
+                pid_bucket_offset=bucket,
+                fixed_pid=None,
+                pid_allocation_count_delta=1,
+                pid_candidate_probe_delta=probes,
+                thread_counter=thread_counter,
+                thread_rng_state=None,
+            ),
+        )
+
+    def validates_macos_policy_refusal(
+        self,
+        target: MacosPolicyRefusalTarget,
+        *,
+        kernel_thread_id: int | None = None,
+        initiator_object_id: str | None = None,
+    ) -> bool:
+        """Check the exact namespace reservation without claiming a live process."""
+        if type(target) is not MacosPolicyRefusalTarget:
+            return False
+        with self._lock:
+            receipt = self._macos_policy_refusals.get(target.object_id)
+            return (
+                self._pid_os.get(target.hostname) == "macos"
+                and receipt is not None
+                and receipt.target == target
+                and (kernel_thread_id is None or kernel_thread_id == receipt.kernel_thread_id)
+                and (
+                    initiator_object_id is None
+                    or initiator_object_id == receipt.initiator_object_id
+                )
+            )
+
     def _preview_windows_pid(
         self,
         *,
@@ -12583,6 +12729,7 @@ class StateManager:
                             patch.parentage_change,
                             patch.directory_change,
                             patch.descriptor_table,
+                            patch.policy_refusal,
                         )
                     )
                     > 1
@@ -12653,10 +12800,23 @@ class StateManager:
                 if (
                     patch.job_control_change is not None
                     or patch.directory_change is not None
+                    or patch.policy_refusal is not None
                     or (
                         patch.descriptor_table is not None and type(patch.target) is ProcessIdentity
                     )
                 ):
+                    if patch.policy_refusal is not None:
+                        if type(patch.target) is not ProcessIdentity:
+                            raise StateError("Policy refusal requires an exact existing initiator")
+                        expected = self._plan_macos_policy_refusal(
+                            patch.target,
+                            patch.policy_refusal.target.image,
+                            patch.activity_time,
+                        )
+                        if patch.policy_refusal != expected:
+                            raise StateError(
+                                "Policy refusal allocation differs from exact State planning"
+                            )
                     if patch.job_control_change is not None:
                         self._validate_posix_job_control_patch(patch)
                     if (
@@ -13697,6 +13857,27 @@ class StateManager:
             identity = self._action_process_identity(patch.target)
             if patch.native_pipe_allocation is not None:
                 capture_mapping(self._macos_pipe_counters, identity.hostname)
+            if patch.policy_refusal is not None:
+                allocation = patch.policy_refusal
+                pid_patch = allocation.allocator
+                for mapping, entry in (
+                    (self._pid_counters, pid_patch.pid_counter),
+                    (self._pid_os, pid_patch.pid_os),
+                    (self._pid_rngs, pid_patch.pid_rng_state),
+                    (self._pid_time_epochs, pid_patch.pid_epoch),
+                    (self._linux_pid_weekly_churn_prefixes, pid_patch.pid_weekly_prefix),
+                    (self._pid_bucket_offsets, pid_patch.pid_bucket_offset),
+                    (self._thread_id_counters, pid_patch.thread_counter),
+                ):
+                    if entry is not None:
+                        capture_mapping(mapping, entry[0])
+                assert pid_patch.linux_allocation is not None
+                capture_temporal_addition(self._linux_pid_allocations, *pid_patch.linux_allocation)
+                capture_mapping(self._transient_pid_reservations, identity.hostname)
+                reservations = self._transient_pid_reservations.get(identity.hostname)
+                if reservations is not None:
+                    capture_mapping(reservations, allocation.target.pid)
+                capture_mapping(self._transient_pid_reservation_counts, identity.hostname)
             process = (
                 process_rows.get(identity.object_id)
                 or self._processes_by_object_id[identity.object_id]
@@ -13773,6 +13954,14 @@ class StateManager:
             mapped_set_entries=tuple(mapped_set_entries.values()),
             indexed_store_entries=tuple(indexed_store_entries.values()),
             expiring_indexes=(
+                capture_expiring(
+                    self._macos_policy_refusals,
+                    {
+                        patch.policy_refusal.target.object_id
+                        for patch in plan._process_activity
+                        if patch.policy_refusal is not None
+                    },
+                ),
                 capture_expiring(self._ended_sessions, ended_session_keys),  # type: ignore[arg-type]
                 capture_expiring(self._ended_processes_by_key, ended_process_keys),  # type: ignore[arg-type]
                 capture_expiring(
@@ -14846,6 +15035,29 @@ class StateManager:
             claim_version=self._materialization_version,
             claim_state_time=self.state.current_time,
             claim_preimage=self._action_cohort_rollback_observation(rollback_journal),
+            refusal_allocations=tuple(
+                _PreparedPolicyRefusalAllocation(
+                    allocation=patch.policy_refusal,
+                    rng=_random_from_state(patch.policy_refusal.allocator.pid_rng_state[1]),
+                    temporal_default=TemporalAllocationIndex(),
+                    reservations=self._transient_pid_reservations.get(
+                        patch.policy_refusal.target.hostname, {}
+                    ),
+                    intervals=[
+                        *self._transient_pid_reservations.get(
+                            patch.policy_refusal.target.hostname, {}
+                        ).get(patch.policy_refusal.target.pid, ()),
+                        (patch.activity_time, patch.activity_time),
+                    ],
+                    receipt=MacosPolicyRefusalReceipt(
+                        patch.policy_refusal.target,
+                        patch.policy_refusal.kernel_thread_id,
+                        self._action_process_identity(patch.target).object_id,
+                    ),
+                )
+                for patch in plan._process_activity
+                if patch.policy_refusal is not None
+            ),
         )
 
     @contextmanager
@@ -15406,6 +15618,25 @@ class StateManager:
             process.lifetime_image = execution.after.lifetime_image
             process.executed_at = execution.after.executed_at
             process.last_activity_time = execution.after.execution_started_at
+        for refusal in prepared.refusal_allocations:
+            allocation = refusal.allocation
+            pid_patch = allocation.allocator
+            host = allocation.target.hostname
+            self._commit_pid_allocator_patch(
+                pid_patch, prepared_rng=refusal.rng, temporal_default=refusal.temporal_default
+            )
+            if pid_patch.thread_counter is not None:
+                self._thread_id_counters[host] = pid_patch.thread_counter[1]
+            self._transient_pid_reservations[host] = refusal.reservations
+            refusal.reservations[allocation.target.pid] = refusal.intervals
+            self._transient_pid_reservation_counts[host] = (
+                self._transient_pid_reservation_counts.get(host, 0) + 1
+            )
+            self._macos_policy_refusals.set(
+                allocation.target.object_id,
+                refusal.receipt,
+                (allocation.target.refused_at + _ENDED_IDENTITY_RETENTION).timestamp(),
+            )
         for patch in prepared.process_activity:
             identity = self._action_process_identity(patch.target)
             process = self._processes_by_object_id[identity.object_id]
@@ -15977,18 +16208,15 @@ class StateManager:
             ):
                 raise StateError("Process auth token disagrees with its owning session")
 
-    def _commit_prevalidated_process_materialization(
+    def _commit_pid_allocator_patch(
         self,
-        plan: ProcessMaterializationPlan,
+        patch: _ProcessAllocatorPatch,
         *,
-        advance_version: bool = True,
-        update_state_time: bool = True,
-        prepared: _PreparedActionCohortProcessStart | None = None,
-        emit_log: bool = True,
-    ) -> RunningProcess:
-        """Perform primitive process writes after validation under materialization_guard."""
-
-        patch = plan._allocator_patch
+        prepared_rng: random.Random | None = None,
+        temporal_default: TemporalAllocationIndex | None = None,
+        fixed_default: set[int] | None = None,
+    ) -> None:
+        """Install shared PID namespace facts without admitting an execution."""
         if patch.pid_counter is not None:
             host, counter = patch.pid_counter
             self._pid_counters[host] = counter
@@ -15997,8 +16225,8 @@ class StateManager:
             self._pid_os[host] = category
         if patch.pid_rng_state is not None:
             host, rng_state = patch.pid_rng_state
-            if prepared is not None and prepared.pid_rng_replacement is not None:
-                self._pid_rngs[host] = prepared.pid_rng_replacement
+            if prepared_rng is not None:
+                self._pid_rngs[host] = prepared_rng
             else:
                 rng = self._pid_rngs.setdefault(host, random.Random())
                 rng.setstate(rng_state)
@@ -16013,9 +16241,7 @@ class StateManager:
             allocations = self._linux_pid_allocations.get(host)
             if allocations is None:
                 allocations = (
-                    prepared.linux_pid_allocations_default
-                    if prepared is not None and prepared.linux_pid_allocations_default is not None
-                    else TemporalAllocationIndex()
+                    temporal_default if temporal_default is not None else TemporalAllocationIndex()
                 )
                 self._linux_pid_allocations[host] = allocations
             allocations.add(at, logical_position)
@@ -16026,15 +16252,32 @@ class StateManager:
             host, pid = patch.fixed_pid
             reservations = self._fixed_pid_reservations.get(host)
             if reservations is None:
-                reservations = (
-                    prepared.fixed_pid_reservations_default
-                    if prepared is not None and prepared.fixed_pid_reservations_default is not None
-                    else set()
-                )
+                reservations = fixed_default if fixed_default is not None else set()
                 self._fixed_pid_reservations[host] = reservations
             reservations.add(pid)
         self._pid_allocation_count += patch.pid_allocation_count_delta
         self._pid_candidate_probe_count += patch.pid_candidate_probe_delta
+
+    def _commit_prevalidated_process_materialization(
+        self,
+        plan: ProcessMaterializationPlan,
+        *,
+        advance_version: bool = True,
+        update_state_time: bool = True,
+        prepared: _PreparedActionCohortProcessStart | None = None,
+        emit_log: bool = True,
+    ) -> RunningProcess:
+        """Perform primitive process writes after validation under materialization_guard."""
+
+        patch = plan._allocator_patch
+        self._commit_pid_allocator_patch(
+            patch,
+            prepared_rng=prepared.pid_rng_replacement if prepared is not None else None,
+            temporal_default=prepared.linux_pid_allocations_default
+            if prepared is not None
+            else None,
+            fixed_default=prepared.fixed_pid_reservations_default if prepared is not None else None,
+        )
         if patch.thread_counter is not None:
             host, counter = patch.thread_counter
             self._thread_id_counters[host] = counter
@@ -18087,6 +18330,8 @@ class StateManager:
             if self._ended_processes_by_object_id.get(process.ecar_object_id) is process:
                 self._ended_processes_by_object_id.pop(process.ecar_object_id, None)
         self._ended_threads.expire_before(cutoff, inclusive=True)
+        self._macos_policy_refusals.expire_before(cutoff, inclusive=True)
+        self._macos_policy_refusals.trim_earliest(_MAX_RETAINED_PROCESS_IDENTITIES)
 
     def _clear_session_process_references(self, system: str, pid: int) -> None:
         """Clear active-session pointers to a process that has ended."""
@@ -26967,6 +27212,20 @@ class StateManager:
         admission_epoch = self._reject_mutation_during_action_cohort_claim("apply")
         with self._lock:
             self._reject_mutation_during_action_cohort_claim("apply", admitted_at=admission_epoch)
+            if event.macos_policy_refusal is not None:
+                refusal = event.macos_policy_refusal
+                if not self.validates_macos_policy_refusal(
+                    refusal.target,
+                    kernel_thread_id=refusal.native.thread_id if refusal.native else None,
+                    initiator_object_id=refusal.initiator.object_id,
+                ):
+                    raise StateError("Policy refusal requires its exact committed State receipt")
+                if refusal.native is not None and (
+                    self.get_boot_time(refusal.target.hostname) != refusal.native.boot_time
+                    or modeled_boot_id(refusal.target.hostname, refusal.native.boot_time).upper()
+                    != refusal.native.boot_uuid
+                ):
+                    raise StateError("Policy refusal kernel writer requires the exact State boot")
             if event.network is not None and event.network.conn_id:
                 self._authorize_pinned_connection_mutation_locked(event.network.conn_id)
             if event.event_type == "logoff" and event.auth is not None:

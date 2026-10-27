@@ -143,10 +143,10 @@ def build_collection_profile(
                     "a tuple to a stable process without breaking source-local causality.",
                     "macOS shell history requires an explicit interactive submission to its "
                     "live Bash or zsh owner; process creation alone does not imply history.",
-                    "The bounded macOS Unified Log profile covers loginwindow workspace entry. "
-                    "The Endpoint Security profile covers qualified canonical forks. Neither "
-                    "is a general process-execution audit; native ES exec/exit and Gatekeeper "
-                    "denial remain gated pending reference evidence.",
+                    "The bounded macOS Unified Log profile covers loginwindow workspace entry "
+                    "and explicit app-policy refusals. Endpoint Security covers qualified v11 "
+                    "fork/exec/known-exit observations. Missing native metadata is omitted; "
+                    "policy refusal does not establish its cause or a target execution stage.",
                 ],
             ),
             CollectionSourceFamily(

@@ -8,16 +8,20 @@ from datetime import datetime
 
 from evidenceforge.events.identity import ProcessIdentity, SessionIdentity
 from evidenceforge.events.macos_logging import (
+    KernelLogCallsite,
+    MacosKernelLogObservation,
+    MacosPolicyRefusal,
     MacosUnifiedLogObservation,
     MacosWorkspaceRequest,
     UnifiedLogCallsite,
+    kernel_writer_identity,
 )
 from evidenceforge.generation.activity.macos_unified_log_profiles import (
     load_macos_unified_log_profiles,
     workspace_request_callsite,
 )
 from evidenceforge.generation.deployment_registry import DeploymentContentRegistry
-from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.state_manager import MacosPolicyRefusalAllocation, StateManager
 from evidenceforge.generation.timing.macos import MachTimebase
 from evidenceforge.models.exceptions import StateError
 
@@ -82,6 +86,64 @@ def workspace_request_profile_available(os_name: str) -> bool:
         )
         is not None
     )
+
+
+def prepare_policy_refusal(
+    state: StateManager,
+    deployment: DeploymentContentRegistry | None,
+    *,
+    initiator: ProcessIdentity,
+    allocation: MacosPolicyRefusalAllocation,
+    os_name: str,
+) -> MacosPolicyRefusal:
+    """Freeze a kernel observation without claiming a target execution lifetime.
+
+    Called against a pure cohort allocation before commit. State authenticates
+    the receipt when the resulting occurrence is published. Source selection
+    never controls allocation or native fact preparation.
+    """
+    target = allocation.target
+    profiles = load_macos_unified_log_profiles()
+    profile = profiles.policy_refusal
+    if not workspace_request_profile_available(os_name) or profile is None:
+        return MacosPolicyRefusal(target, initiator, None, "profile_unavailable")
+    kernel = (
+        deployment.resolve_binary(target.hostname, profile.kernel_path, "macos")
+        if deployment
+        else None
+    )
+    sender = (
+        deployment.resolve_binary(target.hostname, profile.sender_path, "macos")
+        if deployment
+        else None
+    )
+    if (
+        kernel is None
+        or sender is None
+        or kernel.mach_o_image is None
+        or sender.mach_o_image is None
+    ):
+        return MacosPolicyRefusal(target, initiator, None, "native_image_unavailable")
+    timebase = MachTimebase(profiles.mach_timebase.numerator, profiles.mach_timebase.denominator)
+    clock = state.get_macos_boot_clock(target.hostname, timebase=timebase)
+    writer = kernel_writer_identity(target.hostname, clock.boot_uuid, profile.kernel_export_path)
+    native = MacosKernelLogObservation(
+        canonical_time=target.refused_at,
+        writer=writer,
+        boot_time=clock.boot_time,
+        boot_uuid=clock.boot_uuid,
+        kernel_path=profile.kernel_export_path,
+        kernel_binary=kernel,
+        sender_path=profile.sender_path,
+        sender_binary=sender,
+        thread_id=allocation.kernel_thread_id,
+        mach_timestamp=clock.ticks_at(target.refused_at),
+        callsite=KernelLogCallsite(
+            profile.format_string, profile.format_string_offset, profile.program_counter
+        ),
+        message=profile.format_string % (target.pid, target.image),
+    )
+    return MacosPolicyRefusal(target, initiator, native)
 
 
 def prepare_workspace_request(

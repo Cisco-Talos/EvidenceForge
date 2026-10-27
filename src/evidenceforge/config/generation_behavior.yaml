@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 337
+current_revision: 338
 history_start_revision: 1
-behavior_surface_sha256: ff76510641024dd58c0509fc26ac6b5b745814fb3ca4b47373f5c06548918610
+behavior_surface_sha256: 0871dee49660a0d57aca9fa87c289e02061989c53f11cbd767e514314751c3e8
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3207,3 +3207,13 @@ changes:
     formats:
       - macos_unified_log
     summary: Accepts six optional strictly typed macOS 27 persona export fields without inventing metadata, changing generated records or admitting Gatekeeper decision semantics.
+  - revision: 338
+    id: macos-bounded-app-policy-refusal
+    impact: localized
+    domains:
+      - macos-policy-refusal
+      - native-kernel-logging
+      - process-namespace-allocation
+    formats:
+      - macos_unified_log
+    summary: Adds explicit macOS 27 app-policy refusal observations with owned target PID, boot-owned kernel writer and separate policy sender, without claiming target execution or refusal cause.

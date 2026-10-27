@@ -65,6 +65,7 @@ class IdentityLifecyclePlanner:
             "process_privilege_drop",
             "process_service_drop",
             "process_job_control",
+            "macos_policy_refusal",
         }:
             # Both snapshots belong to the State transition plan, including the prior actor.
             # Inferring from live state would overwrite the immutable role boundary.

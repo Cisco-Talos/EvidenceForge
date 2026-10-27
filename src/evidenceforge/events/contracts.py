@@ -51,6 +51,7 @@ class EventKind(StrEnum):
     LOGON = "logon"
     MACHINE_LOGON = "machine_logon"
     MACOS_WORKSPACE_REQUEST = "macos_workspace_request"
+    MACOS_POLICY_REFUSAL = "macos_policy_refusal"
     NTLM_VALIDATION = "ntlm_validation"
     PASSWORD_CHANGE = "password_change"
     PASSWORD_RESET = "password_reset"
@@ -108,6 +109,7 @@ class ContextKind(StrEnum):
     KERBEROS = "kerberos"
     LIFECYCLE = "lifecycle"
     MACOS_WORKSPACE = "macos_workspace"
+    MACOS_POLICY_REFUSAL = "macos_policy_refusal"
     NAT = "nat"
     NETWORK = "network"
     NETWORK_ENDPOINT = "network_endpoint"
@@ -621,6 +623,17 @@ _TASK_REQUIRED = _contexts(ContextKind.AUTH, ContextKind.SCHEDULED_TASK, Context
 
 
 EVENT_KIND_CONTRACTS: dict[EventKind, EventKindContract] = {
+    EventKind.MACOS_POLICY_REFUSAL: _contract(
+        EventKind.MACOS_POLICY_REFUSAL,
+        required=_contexts(
+            ContextKind.SRC_HOST, ContextKind.MACOS_POLICY_REFUSAL, ContextKind.LIFECYCLE
+        ),
+        src=HostSemantic.LOCAL_ACTOR,
+        identity=IdentityRequirement.REQUIRED,
+        lifecycle=LifecycleRole.DEPENDENT,
+        state=StateEffect.READ,
+        emitters=_formats(FormatKind.MACOS_UNIFIED_LOG),
+    ),
     EventKind.MACOS_WORKSPACE_REQUEST: _contract(
         EventKind.MACOS_WORKSPACE_REQUEST,
         required=_contexts(
@@ -1294,6 +1307,37 @@ def shadow_seal(event: _EventLike) -> ShadowSealResult:
                     code=ContractViolationCode.INVALID_IDENTITY,
                     event_type=event.event_type,
                     message="Mac workspace request must preserve its exact host, session and writer roles",
+                )
+            )
+
+    if contract.kind is EventKind.MACOS_POLICY_REFUSAL:
+        from evidenceforge.events.macos_logging import MacosPolicyRefusal
+
+        refusal = getattr(event, "macos_policy_refusal", None)
+        host = getattr(event, "src_host", None)
+        identities = event.identity_plan
+        lifecycle = getattr(event, "lifecycle", None)
+        if (
+            type(refusal) is not MacosPolicyRefusal
+            or host is None
+            or host.os_category != "macos"
+            or refusal.target.hostname != host.hostname
+            or refusal.target.refused_at != event.timestamp
+            or identities is None
+            or identities.subject != refusal.target.entity
+            or identities.actor != (refusal.native.writer if refusal.native else None)
+            or identities.session is not None
+            or identities.target is not None
+            or lifecycle is None
+            or lifecycle.group_id != refusal.target.object_id
+            or lifecycle.canonical_start != refusal.target.refused_at
+            or lifecycle.phase != "dependent"
+        ):
+            violations.append(
+                ContractViolation(
+                    code=ContractViolationCode.INVALID_IDENTITY,
+                    event_type=event.event_type,
+                    message="Mac policy refusal must preserve its exact host, attempt and kernel writer roles",
                 )
             )
 

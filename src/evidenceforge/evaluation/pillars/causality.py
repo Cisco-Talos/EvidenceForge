@@ -857,6 +857,24 @@ class CausalityScorer(DimensionScorer):
                     and self._host_matches(f.get("hostname"), event.system)
                 )
         elif event_type == "process":
+            if event.details.get("outcome") == "policy_refused":
+                message = re.fullmatch(
+                    r"ASP: Security policy would not allow process: ([1-9][0-9]*), (.+)\n",
+                    str(f.get("eventMessage", "")),
+                )
+                return bool(
+                    format_name == "macos_unified_log"
+                    and not record.parse_errors
+                    and message
+                    and int(message.group(1)) < 100000
+                    and message.group(2) == event.details.get("process_name")
+                    and f.get("formatString")
+                    == "ASP: Security policy would not allow process: %d, %s\n"
+                    and type(f.get("processID")) is int
+                    and f["processID"] == 0
+                    and str(f.get("senderImagePath", "")).endswith("/AppleSystemPolicy")
+                    and self._host_matches(_extract_hostname(record), event.system)
+                )
             if format_name == "windows_event_security":
                 return (
                     f.get("EventID") == 4688
@@ -3475,9 +3493,10 @@ def _build_host_log_profile(
             profile[hostname]["process_coverage"] = dict(processes.get(hostname, {}))
             profile[hostname]["coverage_notes"] = [
                 "Shell history requires an explicit interactive submission to its live shell.",
-                "Unified Log covers the qualified loginwindow workspace-entry callsite only.",
-                "Endpoint Security covers qualified canonical forks; aggregate process CREATE "
-                "is not a fork. Native exec/exit and Gatekeeper denial remain evidence-gated.",
+                "Unified Log covers qualified workspace-entry and explicit app-policy refusal callsites.",
+                "Endpoint Security covers qualified v11 fork/exec/known-exit observations; "
+                "aggregate process CREATE is not a fork. App-policy refusal establishes "
+                "neither a target execution stage nor a specific refusal cause.",
             ]
 
     return profile

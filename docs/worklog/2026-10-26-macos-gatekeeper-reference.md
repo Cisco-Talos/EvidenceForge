@@ -333,3 +333,62 @@ The normal canonical event, source observation/timing, sorting and checkpoint pa
 Synthetic offsets and build identities remain explicit model values, never copied from evidence.
 The rejection cause, process allocation stage, GUI parentage and additional native families stay
 unqualified. No new collector, launch, control, private native-value view or service is authorized.
+
+
+## Bounded native refusal implementation (revision 338)
+
+Implemented the separate authored `process.outcome: policy_refused`. It requires an earlier
+same-host/actor live `parent_ref` initiator and absolute app-bundle executable, and forbids a
+child `process_ref`. The process-policy bundle bypasses successful process/effect/history paths.
+The State cohort previews then atomically reserves a target PID and kernel logging TID using
+the ordinary host namespaces. It registers neither a RunningProcess nor a RunningThread, and
+makes no fork, exec, exit, parentage, precise allocation-stage or process-lifetime claim. The
+instant PID reservation and bounded target/initiator/TID receipt survive checkpoint restore;
+invalid/stale inputs, forged receipts and partial allocator/receipt commits are covered.
+
+A boot-owned kernel resource and distinct deployment-owned AppleSystemPolicy image supply the
+native observation. Both use modeled build UUIDs; callsite offsets are independently modeled.
+The already authorized fixed-output checker processed only the original bounded private input
+again, comparing two predefined public path candidates. `kernel_export_pseudopath` and
+`policy_sender_system_path` both returned PASS. This qualifies `/kernel` as the export identity,
+separately from the installed kernel artifact path. Unknown paths are never displayed or inferred.
+No collector, server, control, application, native probe or new capture was run, and the original
+kit/records remain unchanged. The code-only checker copy is
+`/private/tmp/eforge-refusal-path-check-3d6b174c`; do not inspect the original kit directly.
+
+The internal `macos_policy_refusal` occurrence has an attempt subject and kernel actor. Only
+Unified Log consumes it. Existing collection/source timing, clock offsets, host sorting, threaded
+writers and checkpoint spools own export. Native level is Default, with log namespace, absolute
+PC style, static format, no activities and kernel UID zero. The format/message use the exact
+attempt PID/path; author-supplied command arguments never enter that kernel message. Missing
+native facts omit the source; filters do not alter allocation. Existing denied/exec_failed
+outcomes remain intact. Scenario reachability and evaluation distinguish refusal evidence from
+successful process execution; ground truth leaves cause and execution stage unclassified.
+Documentation, canonical skill references, constructor inventory and Studio support text agree.
+No causal prerequisite or eCAR/ES sibling is inferred from the rendered kernel record.
+
+The bounded engineering gate is admitted; the checker continues to report NOT_EVALUATED because
+it is an offline diagnostic, not an automatic generation-admission authority. Unique refusal
+cause, signing/notarization diagnosis, GUI parentage, fork stage and broader native families
+remain unqualified. They are not required for this bounded projection, and no further collection
+is necessary for it. Product release versions are unchanged.
+
+Verification: the main Mac/State regression run passed 3,313 tests with two integration defects
+found and repaired (required catalog display metadata and a legacy-head test fixture). The
+subsequent affected and cross-platform deployment/skill/ground-truth tests pass; final digest
+validation is recorded with the commit. New refusal tests cover threaded output, filter-independent
+State and native bytes, fresh hash seeds, immutable native snapshots, target/source identity,
+State/spool recovery, schema-9 SSH stream compatibility, rollback, retention, evaluation and
+reachability. The dedicated CLI refusal acceptance passed four fresh-process generation runs.
+No private native data was copied into tests or Git.
+
+## Adjacent regression findings
+
+The existing denied/exec_failed CLI tests hit `ES client deliveries require chronological aware
+times` during suspicious-noise warm-up, before their authored attempts. A separate code-only
+archive of committed predecessor c73bf2a6, with an invented baseline/caller and seed 123, reproduces
+the same error without any refusal event. Low-noise refusal acceptance passes. This pre-existing
+ordinary-generation bug is now a durable P1 in TODO; it does not change refusal semantics.
+The older workspace CLI test generates deterministic/filter-identical native output, then fails
+its eCAR-login assertion because it expects a now-absent explicit `properties.outcome=success`.
+These failures are retained explicitly rather than described as passing regressions.

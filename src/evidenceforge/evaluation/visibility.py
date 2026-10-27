@@ -213,6 +213,15 @@ class VisibilityModel:
             "ecar",
         }
         host_local = host_formats & host_local_formats
+        policy_refusals = [
+            detail for detail in event_details or () if detail.get("outcome") == "policy_refused"
+        ]
+        if (
+            policy_refusals
+            and len(policy_refusals) == len(event_details or ())
+            and event_types == ["process"]
+        ):
+            host_local = set()
         transport_types = {
             "connection",
             "ssh_session",
@@ -246,6 +255,8 @@ class VisibilityModel:
         }
 
         groups: list[tuple[str, set[str]]] = []
+        if policy_refusals and "macos_unified_log" in host_formats:
+            groups.append(("app_policy_refusal", {"macos_unified_log"}))
         if host_local:
             groups.append(("host_local", host_local))
         event_type_set = set(event_types)

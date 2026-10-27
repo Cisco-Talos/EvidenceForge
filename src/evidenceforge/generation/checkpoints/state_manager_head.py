@@ -21,6 +21,7 @@ from evidenceforge.events.macos_descriptors import validate_macos_descriptors
 from evidenceforge.events.macos_exec_image import validate_macos_exec_image
 from evidenceforge.events.macos_exec_script import validate_macos_exec_script
 from evidenceforge.events.macos_execution_directory import validate_macos_execution_directory
+from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt
 from evidenceforge.events.macos_runtime import validate_macos_image_security
 from evidenceforge.events.parentage import ProcessParentageChange, validate_process_parentage
 from evidenceforge.events.process_executable import validate_process_executable_version
@@ -39,6 +40,7 @@ from evidenceforge.generation.state_manager import (
     _MAX_RETAINED_PROCESS_DIRECTORIES,
     StateManager,
 )
+from evidenceforge.utils.rng import stable_uuid
 
 from .errors import CheckpointCorruptionError
 from .owner_inventory import STATE_MANAGER_CHECKPOINT_FIELDS, assert_transient_owner_state_empty
@@ -47,7 +49,7 @@ from .participants import ParticipantSeal
 from .state_values import decode_state_value, encode_state_value
 from .store import HeadDraft, SegmentDraft
 
-_SCHEMA_VERSION = "9"
+_SCHEMA_VERSION = "10"
 _LEGACY_VERSION = "6"
 _JOB_CONTROL_FIELDS = {"_posix_job_control_reservations", "_posix_job_control_reservation_counts"}
 _TERMINAL_FIELDS = {
@@ -81,6 +83,7 @@ _TEMPORAL_ALLOCATION_FIELDS = (
     "_linux_pid_allocations",
 )
 _EXPIRING_FIELDS = (
+    "_macos_policy_refusals",
     "_ended_sessions",
     "_ended_threads",
 )
@@ -357,6 +360,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         _LEGACY_VERSION,
         "7",
         "8",
+        "9",
     }:
         raise CheckpointCorruptionError("StateManager checkpoint head schema is invalid")
     if set(document) != {
@@ -425,10 +429,41 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         fresh._refresh_connection_lifecycle(connection)
 
     expiring = document["expiring"]
+    if document["schema_version"] != _SCHEMA_VERSION:
+        if type(expiring) is not dict or set(expiring) != set(_EXPIRING_FIELDS) - {
+            "_macos_policy_refusals"
+        }:
+            raise CheckpointCorruptionError("Legacy StateManager expiry tables changed")
+        expiring = {
+            **expiring,
+            "_macos_policy_refusals": _capture_expiring(fresh._macos_policy_refusals),
+        }
     if type(expiring) is not dict or set(expiring) != set(_EXPIRING_FIELDS):
         raise CheckpointCorruptionError("StateManager checkpoint expiry tables changed")
     for name in _EXPIRING_FIELDS:
         _restore_expiring(getattr(fresh, name), expiring[name], name)
+    for key, receipt in fresh._macos_policy_refusals.items():
+        if type(receipt) is not MacosPolicyRefusalReceipt:
+            raise CheckpointCorruptionError("StateManager policy-refusal receipt is invalid")
+        target = receipt.target
+        boot = fresh.get_boot_time(target.hostname)
+        if (
+            key != target.object_id
+            or fresh._pid_os.get(target.hostname) != "macos"
+            or boot is None
+            or target.refused_at < boot
+            or receipt.kernel_thread_id >= fresh._thread_id_counters.get(target.hostname, 0)
+            or target.object_id
+            != stable_uuid(
+                "macos-policy-attempt",
+                target.hostname,
+                target.refused_at.isoformat(),
+                target.allocation_position,
+                target.image,
+                receipt.initiator_object_id,
+            )
+        ):
+            raise CheckpointCorruptionError("StateManager policy-refusal allocation is invalid")
 
     grouped = document["grouped"]
     if type(grouped) is not dict or set(grouped) != set(_GROUPED_TEMPORAL_FIELDS):
@@ -566,7 +601,7 @@ def _restore_head(manager: StateManager, head: bytes) -> None:
         streams = session.ssh_command_streams
         if streams is not None:
             if (
-                document["schema_version"] != _SCHEMA_VERSION
+                document["schema_version"] not in {"9", _SCHEMA_VERSION}
                 or not ssh
                 or origin is None
                 or session.effective_uid != origin.audit_uid
@@ -1008,7 +1043,7 @@ class StateManagerParticipant:
             if (
                 type(document) is not dict
                 or document.get("schema_version")
-                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8"}
+                not in {_SCHEMA_VERSION, _LEGACY_VERSION, "7", "8", "9"}
                 or set(document) != {"records", "schema_version"}
                 or type(document.get("records")) is not list
             ):

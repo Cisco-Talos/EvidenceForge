@@ -72,6 +72,12 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P1** Repair ES delivery chronology for ordinary Mac background suspicious-noise
+  execution during warm-up. A short invented Mac scenario with ES selected and seed 123
+  reproduces the error before any authored policy attempt, on both the committed predecessor
+  and current branch. The low-noise bounded refusal acceptance passes independently; see the
+  [Gatekeeper worklog](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
+
 - [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
   The Mac benchmark independently confirms two contradictions; 16 rows are reported.
   The loss method is unchanged from the branch base. Repair the network observation owner,
@@ -563,12 +569,11 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   limit ordinary native command coverage; expanding those canonical producers is follow-up
   work, not an implicit claim of complete native ES coverage. See the
   [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
-- [ ] Implement bounded native app-policy refusal support from the privately verified macOS 27
-  AppleSystemPolicy reference. Add canonical failed-launch target PID ownership and kernel/sender
-  logging facts before projection; preserve existing pre-child denial semantics. Exact Gatekeeper
-  cause and fork/exec stage remain unqualified under GK-R1. No repeat capture is needed for the
-  bounded reference; see the [handoff](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
-  Native denial output remains gated until integration and its acceptance checks pass.
+- [x] Implement bounded macOS 27 native app-policy refusal through explicit
+  `process.outcome: policy_refused`, with canonical target PID, boot-owned kernel writer and
+  distinct sender facts. Existing pre-child/returning-exec semantics remain intact. Exact
+  cause and fork/exec stage remain unqualified; no repeat capture is required. See the
+  [acceptance and limits](docs/worklog/2026-10-26-macos-gatekeeper-reference.md).
   Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and
   Mac SMB serving remain outside the bounded scope. See the
   [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md).

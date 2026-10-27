@@ -60,6 +60,8 @@ type PosixProcessEnvironment = Annotated[
 ]
 
 type EntityIdentityKind = Literal[
+    "process_attempt",
+    "kernel_writer",
     "authentication_attempt",
     "authentication_occurrence",
     "file",

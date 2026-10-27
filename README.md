@@ -424,7 +424,7 @@ The modeled workstation supports catalog activity, eCAR, bounded shell history, 
 and Unified Log workspace-method entry. Native Endpoint Security uses the qualified v11 process
 profile. Exec needs explicit absent entitlements and complete descriptors; exit needs an explicit
 completed result. Current ordinary SSH descriptor and local GUI audit gaps limit command-native
-coverage. Gatekeeper denial remains gated. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
+coverage. Explicit `process.outcome: policy_refused` now renders the bounded AppleSystemPolicy kernel refusal in Unified Log, without asserting its cause or a target execution stage. See the [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md)
 and [format contract](docs/reference/EVIDENCE_FORMATS.md#experimental-macos-endpoint-security-ndjson).
 
 The [macOS 26 assessment benchmark](scenarios/macos-assessment/README.md) is preserved as historical

@@ -910,15 +910,17 @@ class ProcessEventSpec(_EventSpecBase):
     parent_ref: str | None = None  # Optional process_ref to use as this process parent
     supplementary: Literal["auto", "none"] = "auto"
 
-    outcome: Literal["success", "denied", "exec_failed"] = "success"
+    outcome: Literal["success", "denied", "exec_failed", "policy_refused"] = "success"
 
     @model_validator(mode="after")
     def bounded_unsuccessful_process(self) -> "ProcessEventSpec":
         """A no-new-execution outcome requires its existing caller, never a new child."""
         if self.outcome != "success":
-            label = (
-                "Denied process launch" if self.outcome == "denied" else "Returning exec failure"
-            )
+            label = {
+                "denied": "Denied process launch",
+                "exec_failed": "Returning exec failure",
+                "policy_refused": "App-policy refusal",
+            }[self.outcome]
             if not self.parent_ref or self.process_ref is not None:
                 raise ValueError(f"{label} requires parent_ref and forbids process_ref")
             if (
@@ -927,6 +929,10 @@ class ProcessEventSpec(_EventSpecBase):
                 or "\0" in self.process_name
             ):
                 raise ValueError(f"{label} requires an absolute Mac executable path")
+            if self.outcome == "policy_refused":
+                from evidenceforge.events.macos_policy import validate_policy_refusal_image
+
+                validate_policy_refusal_image(self.process_name)
         return self
 
 

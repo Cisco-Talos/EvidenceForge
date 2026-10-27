@@ -15,7 +15,7 @@ PTY command generation, GUI responsible-process relationships and unspecified ex
 coverage limits. Natural completion of three literal query invocations now supplies declared
 nominal results; ordinary termination also preserves exact explicit normal/signal results.
 See the [completion worklog](../../worklog/2026-10-26-macos-command-exit-outcomes.md).
-Gatekeeper remains gated. Older v10/macOS 26 milestones
+Bounded app-policy refusal now uses `process.outcome: policy_refused` and the privately verified kernel ASP template. Exact cause, process allocation/exec stage and broader Gatekeeper families remain unqualified. Older v10/macOS 26 milestones
 below are historical context, not current target admission. See the
 [current profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md).
 
@@ -283,3 +283,6 @@ The zsh static signing vocabulary is corroborated by
 [Apple XNU](https://github.com/apple/darwin-xnu/blob/main/bsd/kern/mach_loader.c) and
 [Microsoft Defender’s documented zsh example](https://github.com/MicrosoftDocs/defender-docs/blob/public/defender-endpoint/mac-preferences.md).
 The catalog’s release-scoped CodeDirectory hash remains synthetic; this is not a macOS 26 capture.
+
+
+Revision 338 admits the bounded kernel app-policy refusal via explicit `process.outcome: policy_refused`. It uses an earlier live initiator and absolute app-bundle executable, an attempt-owned target PID, kernel PID/UID zero and `/kernel` export identity, a separate AppleSystemPolicy sender and Default/log absolute-PC tracepoint. The installed kernel binary path remains separate from its export pseudopath. Only the approved fixed-output checker processed the existing private evidence; no further collection or native values were exposed. Ordinary routing, timing, source omission, host sorting and exact State/spool recovery apply. No target RunningProcess/RunningThread, fork/exec/exit, command effects or shell history is inferred. Specific refusal causes, GUI parentage and target execution stage remain unclassified. Historical GK-R1 text above does not broaden this admission.

@@ -35,6 +35,7 @@ from evidenceforge.events.macos_exec_image import MacosExecImage
 from evidenceforge.events.macos_exec_script import MacosExecScript
 from evidenceforge.events.macos_execution_directory import MacosExecutionDirectory
 from evidenceforge.events.macos_file import MacosDirectoryMetadata
+from evidenceforge.events.macos_policy import MacosPolicyRefusalReceipt, MacosPolicyRefusalTarget
 from evidenceforge.events.macos_runtime import MacosImageSecurity
 from evidenceforge.events.macos_ssh_streams import MacosSshCommandStreams
 from evidenceforge.events.macos_terminal import MacosTerminalSession
@@ -511,6 +512,14 @@ _SCHEMAS: dict[str, tuple[type[object], tuple[str, ...]]] = {
         ("hostname", "observed_at", "bindings", "native_last_fd"),
     ),
     "posix-process-exit-v1": (PosixProcessExit, ("exit_code", "signal", "core_dumped")),
+    "macos-policy-target-v1": (
+        MacosPolicyRefusalTarget,
+        ("hostname", "object_id", "pid", "image", "refused_at", "allocation_position"),
+    ),
+    "macos-policy-receipt-v1": (
+        MacosPolicyRefusalReceipt,
+        ("target", "kernel_thread_id", "initiator_object_id"),
+    ),
     "running-thread": (RunningThread, _RUNNING_THREAD_FIELDS),
     "rdp-logical-session-identity": (
         RdpLogicalSessionIdentity,

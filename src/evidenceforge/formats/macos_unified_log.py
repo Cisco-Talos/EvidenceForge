@@ -14,7 +14,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from evidenceforge.events.macos_logging import MacosUnifiedLogObservation
+from evidenceforge.events.macos_logging import MacosKernelLogObservation, MacosUnifiedLogObservation
 
 type NativeUInt64 = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
 type NativeUInt32 = Annotated[int, Field(ge=0, le=(1 << 32) - 1)]
@@ -82,7 +82,8 @@ class UnifiedLogRecord(_NativeRecord):
         alias="senderImageUUID", description="Sender Mach-O image UUID"
     )
     sender_program_counter: NativeUInt64 = Field(
-        alias="senderProgramCounter", description="Sender image-relative program counter"
+        alias="senderProgramCounter",
+        description="Sender program counter in its tracepoint PC style",
     )
     activity_identifier: NativeUInt64 = Field(
         alias="activityIdentifier", description="Native activity identity"
@@ -226,5 +227,41 @@ def project_unified_log_observation(
         subsystem=callsite.subsystem,
         category=callsite.category,
         formatString=callsite.format_string,
+        eventMessage=observation.message,
+    )
+
+
+def project_kernel_log_observation(
+    observation: MacosKernelLogObservation, *, wall_time: datetime, timezone_name: str
+) -> UnifiedLogRecord:
+    """Render boot-owned kernel and separate sender facts at the planned source time."""
+    if type(observation) is not MacosKernelLogObservation:
+        raise ValueError("Kernel projection requires exact immutable observation facts")
+    if type(wall_time) is not datetime or wall_time.utcoffset() is None:
+        raise ValueError("Kernel projection requires an aware source wall time")
+    kernel = observation.kernel_binary.mach_o_image
+    sender = observation.sender_binary.mach_o_image
+    assert kernel is not None and sender is not None
+    return UnifiedLogRecord(
+        eventType="logEvent",
+        messageType="Default",
+        timezoneName=timezone_name,
+        timestamp=wall_time.strftime("%Y-%m-%d %H:%M:%S.%f%z"),
+        machTimestamp=observation.mach_timestamp,
+        bootUUID=observation.boot_uuid,
+        processID=0,
+        userID=0,
+        threadID=observation.thread_id,
+        processImagePath=observation.kernel_path,
+        processImageUUID=kernel.build_uuid,
+        senderImagePath=observation.sender_path,
+        senderImageUUID=sender.build_uuid,
+        senderProgramCounter=observation.callsite.program_counter,
+        activityIdentifier=0,
+        parentActivityIdentifier=0,
+        traceID=observation.callsite.trace_id,
+        subsystem="",
+        category="",
+        formatString=observation.callsite.format_string,
         eventMessage=observation.message,
     )

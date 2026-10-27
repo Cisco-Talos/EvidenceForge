@@ -1,18 +1,73 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
 # SPDX-License-Identifier: MIT
 
-"""Canonical terminal pre-spawn denial; no policy-native evidence is fabricated."""
+"""Explicit pre-child, returning-exec and bounded app-policy refusal outcomes."""
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
+from evidenceforge.events.base import OccurrenceBuilder
 from evidenceforge.events.identity import (
+    EventIdentityPlan,
     ProcessIdentity,
     validate_process_arguments,
     validate_process_environment,
 )
+from evidenceforge.events.lifecycle import ActionLifecycleContext
+from evidenceforge.events.macos_logging import MacosPolicyRefusal
+from evidenceforge.generation.macos_logging import (
+    prepare_policy_refusal,
+    workspace_request_profile_available,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.activity.generator import ActivityGenerator
+    from evidenceforge.models.scenario import System
+
+
+def generate_policy_refusal(
+    runtime: "ActivityGenerator",
+    *,
+    system: "System",
+    actor: ProcessIdentity,
+    attempted_at: datetime,
+    image: str,
+) -> MacosPolicyRefusal:
+    """Publish an explicit bounded refusal through canonical source observation.
+
+    No successful process bundle, image effects or native fork/exec/exit is
+    requested. The existing actor is an initiator, not an asserted target parent.
+    """
+    if not workspace_request_profile_available(system.os):
+        raise StateError("App-policy refusal requires the qualified macOS 27 profile")
+    state = runtime.state_manager
+    cohort = state.begin_action_cohort_materialization()
+    allocation = cohort.plan_macos_policy_refusal(actor, image=image, refused_at=attempted_at)
+    result = prepare_policy_refusal(
+        state,
+        runtime.dispatcher.deployment_registry,
+        initiator=actor,
+        allocation=allocation,
+        os_name=system.os,
+    )
+    event = OccurrenceBuilder(
+        timestamp=attempted_at,
+        event_type="macos_policy_refusal",
+        src_host=runtime._build_host_context(system),
+        macos_policy_refusal=result,
+        identity_plan=EventIdentityPlan(
+            subject=result.target.entity, actor=result.native.writer if result.native else None
+        ),
+        lifecycle=ActionLifecycleContext(
+            group_id=result.target.object_id, canonical_start=attempted_at, phase="dependent"
+        ),
+    )
+    state.materialize_action_cohort(cohort.seal())
+    runtime.dispatcher.dispatch_builder(event)
+    return result
 
 
 @dataclass(frozen=True, slots=True)

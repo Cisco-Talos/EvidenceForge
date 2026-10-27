@@ -14,10 +14,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from evidenceforge.events.content_identity import BinaryReleaseIdentity
-from evidenceforge.events.identity import ProcessIdentity, SessionIdentity, ThreadIdentity
+from evidenceforge.events.identity import (
+    EntityIdentity,
+    ProcessIdentity,
+    SessionIdentity,
+    ThreadIdentity,
+)
+from evidenceforge.events.macos_policy import MacosPolicyRefusalTarget
 
 type UnifiedLogLevel = Literal["Default", "Info", "Debug", "Error", "Fault"]
 
@@ -192,3 +198,150 @@ class MacosWorkspaceRequest:
             or self.unavailable_reason != ""
         ):
             raise ValueError("Native workspace observation must match the exact request and writer")
+
+
+@dataclass(frozen=True, slots=True)
+class KernelLogCallsite:
+    """Explicit modeled kernel callsite using the reviewed absolute PC style.
+
+    Offsets are synthetic build-profile facts, never sampled native addresses.
+    Activities, private/oversize/context payloads and non-log namespaces are excluded.
+    """
+
+    format_string: str
+    format_string_offset: int
+    program_counter: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.format_string) is not str
+            or not self.format_string
+            or "\0" in self.format_string
+        ):
+            raise ValueError("Kernel callsite requires a static NUL-free format")
+        _unsigned(self.format_string_offset, 31, "Kernel static format offset", positive=True)
+        _unsigned(self.program_counter, 64, "Kernel sender program counter", positive=True)
+        if self.program_counter % 4:
+            raise ValueError("Kernel sender program counter requires arm64 alignment")
+
+    @property
+    def trace_id(self) -> int:
+        """Encode Default/log namespace with only the absolute-PC style bits."""
+        return (self.format_string_offset << 32) | (0x0008 << 16) | 0x04
+
+
+@dataclass(frozen=True, slots=True)
+class MacosKernelLogObservation:
+    """Boot-owned kernel writer and independent sender image at one observation.
+
+    A kernel logging TID is reserved in the host namespace without inventing an
+    ordinary process or a thread-creation event. Its lifetime is unspecified.
+    """
+
+    canonical_time: datetime
+    writer: EntityIdentity
+    boot_time: datetime
+    boot_uuid: str
+    kernel_path: str
+    kernel_binary: BinaryReleaseIdentity
+    sender_path: str
+    sender_binary: BinaryReleaseIdentity
+    thread_id: int
+    mach_timestamp: int
+    callsite: KernelLogCallsite
+    message: str
+
+    def __post_init__(self) -> None:
+        _aware(self.canonical_time, "Kernel log observation")
+        _aware(self.boot_time, "Kernel writer boot")
+        if self.canonical_time < self.boot_time:
+            raise ValueError("Kernel observation cannot precede its boot")
+        if type(self.writer) is not EntityIdentity or self.writer.kind != "kernel_writer":
+            raise ValueError("Kernel observation requires a boot-owned kernel resource")
+        if not self.writer.hostname:
+            raise ValueError("Kernel writer requires its host")
+        for path, binary in (
+            (self.kernel_path, self.kernel_binary),
+            (self.sender_path, self.sender_binary),
+        ):
+            if (
+                type(path) is not str
+                or any(char in path for char in ("\0", "\n", "\r"))
+                or type(binary) is not BinaryReleaseIdentity
+                or binary.mach_o_image is None
+                or binary.key.platform != "macos"
+                or binary.key.architecture != "arm64"
+                or not PurePosixPath(path).is_absolute()
+                or ".." in PurePosixPath(path).parts
+                or PurePosixPath(path).name != binary.key.artifact_name
+            ):
+                raise ValueError("Kernel writer and sender require exact deployed native artifacts")
+        if self.kernel_path == self.sender_path or self.kernel_binary == self.sender_binary:
+            raise ValueError("Kernel writer and policy sender must retain distinct artifacts")
+        if type(self.callsite) is not KernelLogCallsite:
+            raise ValueError("Kernel log requires its exact absolute-style callsite")
+        _unsigned(self.thread_id, 64, "Kernel logging TID", positive=True)
+        _unsigned(self.mach_timestamp, 64, "Kernel Mach timestamp")
+        try:
+            boot = UUID(self.boot_uuid)
+        except (ValueError, TypeError, AttributeError) as error:
+            raise ValueError("Kernel log requires a canonical nonnil boot UUID") from error
+        if not boot.int or str(boot) != self.boot_uuid.lower():
+            raise ValueError("Kernel log requires a canonical nonnil boot UUID")
+        object.__setattr__(self, "boot_uuid", str(boot).upper())
+        if self.writer != kernel_writer_identity(
+            self.writer.hostname, self.boot_uuid, self.kernel_path
+        ):
+            raise ValueError("Kernel writer must belong to the exact host boot and kernel image")
+        if type(self.message) is not str or "\0" in self.message:
+            raise ValueError("Kernel log requires a NUL-free message")
+
+
+@dataclass(frozen=True, slots=True)
+class MacosPolicyRefusal:
+    """A bounded app-policy refusal with no claimed cause or execution stage."""
+
+    target: MacosPolicyRefusalTarget
+    initiator: ProcessIdentity
+    native: MacosKernelLogObservation | None
+    unavailable_reason: Literal["", "profile_unavailable", "native_image_unavailable"] = ""
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.target) is not MacosPolicyRefusalTarget
+            or type(self.initiator) is not ProcessIdentity
+        ):
+            raise ValueError("Policy refusal requires its exact attempt and initiating process")
+        if (
+            self.initiator.hostname != self.target.hostname
+            or self.initiator.execution_started_at > self.target.refused_at
+            or self.initiator.pid == self.target.pid
+        ):
+            raise ValueError("Policy refusal target must be distinct from its existing initiator")
+        if self.native is None:
+            if self.unavailable_reason not in {"profile_unavailable", "native_image_unavailable"}:
+                raise ValueError("Unavailable native policy refusal requires its reason")
+        elif (
+            type(self.native) is not MacosKernelLogObservation
+            or self.native.writer.hostname != self.target.hostname
+            or self.native.canonical_time != self.target.refused_at
+            or self.unavailable_reason
+        ):
+            raise ValueError("Policy refusal observation must preserve its exact host and time")
+        if self.native is not None and (
+            self.native.callsite.format_string
+            != "ASP: Security policy would not allow process: %d, %s\n"
+            or self.native.message
+            != self.native.callsite.format_string % (self.target.pid, self.target.image)
+        ):
+            raise ValueError("Policy refusal must retain the bounded template and exact target")
+
+
+def kernel_writer_identity(hostname: str, boot_uuid: str, kernel_path: str) -> EntityIdentity:
+    """Name a boot-owned kernel resource independently of process PID identities."""
+    return EntityIdentity(
+        str(uuid5(NAMESPACE_URL, f"kernel-writer:{hostname}:{boot_uuid.upper()}")),
+        "kernel_writer",
+        hostname,
+        kernel_path,
+    )

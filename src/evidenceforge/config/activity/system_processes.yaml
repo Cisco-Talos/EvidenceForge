@@ -638,6 +638,30 @@ process_loaded_modules:
 # with a system_binaries section containing your additions.
 
 system_binaries:
+  macos:
+    # Installed native artifacts, not ordinary launched application processes.
+    - exe: kernel
+      path: /System/Library/Kernels/kernel
+      release_policy: host_build
+      executable_format: mach_o
+      native_release:
+        product_id: apple-macos
+        variant: kernel
+        description: Modeled macOS kernel image
+        product: macOS
+        company: Apple Inc.
+        original_filename: kernel
+    - exe: AppleSystemPolicy
+      path: /System/Library/Extensions/AppleSystemPolicy.kext/Contents/MacOS/AppleSystemPolicy
+      release_policy: host_build
+      executable_format: mach_o
+      native_release:
+        product_id: apple-macos
+        variant: kernel-policy-sender
+        description: Modeled AppleSystemPolicy image
+        product: macOS
+        company: Apple Inc.
+        original_filename: AppleSystemPolicy
   windows:
     # --- Core OS boot / session processes ---
     - exe: "smss.exe"

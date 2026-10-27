@@ -7,20 +7,19 @@ The [profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md
 human qualification and producer revisions 333–336. Historical macOS 26 gates/milestones below
 do not require a new 26 capture and do not override the current target allowlist.
 
-Gatekeeper denial remains gated. The user authorized preparing a human-only experiment on their
-existing Mac, including a temporary loopback server because none is installed. The separate
-[Gatekeeper procedure](gatekeeper-reference/PRIVATE-RUN.md) supplies the complete code-only kit,
-exact-item live filtering, bounded collector guard and fixed report. Live collection remains
-human-only. The human separately authorized agent execution of the fixed offline checker;
-private rows are processed locally with only fixed diagnostic labels exposed. The approved
-six persona metadata field shapes now decode successfully without exporting their values or
-changing generated records. The fixed refusal review now supports the exact AppleSystemPolicy
-kernel template for the controlled downloaded app, with a successful local control and human
-block attestation. Specific cause and allocation/exec stage remain unclassified. This is a usable
-bounded reference; native integration still needs a failed-launch target PID and a kernel writer
-with a separate sender image. The existing pre-child denial cannot be reinterpreted as that
-observation, and native output remains disabled. The
-[Gatekeeper worklog](../../worklog/2026-10-26-macos-gatekeeper-reference.md) records handoff and limits.
+The bounded app-policy refusal reference is integrated through `process.outcome: policy_refused`.
+The privately reviewed controlled download and successful same-content local control support the
+AppleSystemPolicy kernel refusal template, Default/log absolute-PC representation and separate
+kernel/sender images. Only technical constants and fixed checker labels were exposed. No native
+records or values are fixtures. The normal canonical/collection/timing/output path owns export;
+the target PID is a State-authenticated attempt identity with no asserted process lifetime.
+Existing `denied` and `exec_failed` remain separate. GK-R1 is satisfied only for this bounded
+refusal observation, not its unique cause, target allocation/exec stage, GUI parentage, all signing
+or notarization failures, overrides, prompts, or other native message families. Those claims stay
+unqualified and are not prerequisites for this projection. No additional collection is authorized
+or needed for the bounded implementation. The
+[Gatekeeper worklog](../../worklog/2026-10-26-macos-gatekeeper-reference.md) records the limits,
+privacy boundary and acceptance checks. Historical gates below do not override current admission.
 
 ## Historical assessment and acquisition context
 

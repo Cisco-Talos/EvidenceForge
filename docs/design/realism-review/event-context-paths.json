@@ -13712,6 +13712,51 @@
         "tests/unit/test_posix_job_control_projection.py",
         "tests/unit/test_posix_job_control_checkpoint.py"
       ]
+    },
+    {
+      "authored_spec": null,
+      "constructors": [
+        {
+          "call": "OccurrenceBuilder",
+          "contexts_attached_at_construction": [
+            "identity_plan",
+            "lifecycle",
+            "macos_policy_refusal",
+            "src_host"
+          ],
+          "event_type_expression": "'macos_policy_refusal'",
+          "event_type_literals": [
+            "macos_policy_refusal"
+          ],
+          "file": "src/evidenceforge/generation/actions/process_policy.py",
+          "line": 56,
+          "scope": "generate_policy_refusal"
+        }
+      ],
+      "contexts_attached_at_literal_constructors": [
+        "identity_plan",
+        "lifecycle",
+        "macos_policy_refusal",
+        "src_host"
+      ],
+      "emitter_consumers": [
+        "macos_unified_log"
+      ],
+      "event_type": "macos_policy_refusal",
+      "kind": "internal_occurrence",
+      "path_classification": "single_canonical_path",
+      "path_review": {
+        "assessment": "The explicit policy-refused process outcome uses a State-owned attempt allocation and independent kernel observation. No target process execution or terminal phase is inferred.",
+        "classification": "single_canonical_path",
+        "owner": "process-policy action bundle"
+      },
+      "review_status": "path_review_complete",
+      "static_references": [],
+      "storyline_dispatch": null,
+      "test_files": [
+        "tests/unit/test_macos_policy_refusal.py",
+        "tests/integration/test_macos_policy_refusal.py"
+      ]
     }
   ],
   "formats": [
@@ -16660,6 +16705,7 @@
       "image_load",
       "kerberos",
       "lifecycle",
+      "macos_policy_refusal",
       "macos_workspace",
       "nat",
       "network",

@@ -17438,6 +17438,7 @@ class EventDispatcher:
             "create_remote_thread",
             "bash_command",
             "zsh_command",
+            "macos_policy_refusal",
         }:
             required |= CollectionCapability.PROCESS
         if event_type in {

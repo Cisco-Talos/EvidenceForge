@@ -110,6 +110,10 @@ class GroundTruthAttributesBase(BaseModel):
 class ProcessAttributes(GroundTruthAttributesBase):
     """Process event attributes."""
 
+    refused_target_pid: int | None = Field(default=None, gt=0, lt=100000)
+    refusal_cause: Literal["unclassified"] | None = None
+    execution_stage: Literal["unclassified"] | None = None
+
 
 class LogonAttributes(GroundTruthAttributesBase):
     """Logon event attributes."""

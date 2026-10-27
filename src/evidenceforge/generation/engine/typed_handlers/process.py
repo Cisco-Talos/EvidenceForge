@@ -1198,12 +1198,17 @@ def _handle_unsuccessful_process(
 ) -> dict[str, Any]:
     """Record an explicit no-new-execution outcome on its exact existing caller."""
     from evidenceforge.generation.actions.process_policy import (
+        generate_policy_refusal,
         record_denied_process_launch,
         record_failed_process_exec,
     )
     from evidenceforge.models.exceptions import StateError
 
-    label = "Denied launch" if spec.outcome == "denied" else "Returning exec failure"
+    label = {
+        "denied": "Denied launch",
+        "exec_failed": "Returning exec failure",
+        "policy_refused": "App-policy refusal",
+    }[spec.outcome]
     if _get_os_category(context.system.os) != "macos":
         raise StateError(f"{label} currently requires a Mac workstation")
     reference = getattr(runtime, "_storyline_process_refs", {}).get(
@@ -1216,6 +1221,24 @@ def _handle_unsuccessful_process(
     parent = state.get_process_identity(context.system.hostname, pid)
     if parent is None or parent.object_id != object_id or parent.image != image:
         raise StateError(f"{label} parent_ref no longer names its original live process")
+    if spec.outcome == "policy_refused":
+        refusal = generate_policy_refusal(
+            runtime.activity_generator,
+            system=context.system,
+            actor=parent,
+            attempted_at=context.time,
+            image=spec.process_name,
+        )
+        context.malicious_event.update(
+            process_name=refusal.target.image,
+            command_line=spec.command_line or spec.process_name,
+            outcome=spec.outcome,
+            refused_target_pid=refusal.target.pid,
+            refusal_cause="unclassified",
+            execution_stage="unclassified",
+            expected_sources=["macos_unified_log"] if refusal.native else [],
+        )
+        return context.malicious_event
     recorder = (
         record_denied_process_launch if spec.outcome == "denied" else record_failed_process_exec
     )

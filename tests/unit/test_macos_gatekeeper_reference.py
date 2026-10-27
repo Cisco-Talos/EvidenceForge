@@ -1360,6 +1360,28 @@ def test_repo_copy_cannot_review_native_denial() -> None:
     assert result.error == "LOCATION"
 
 
+@pytest.mark.parametrize("known", [False, True])
+def test_denial_path_checks_only_compare_fixed_public_candidates(
+    denial_capture: Path, known: bool
+) -> None:
+    path = denial_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    row["processImagePath"] = "/kernel" if known else "/" + _CANARY + "/kernel"
+    row["senderImagePath"] = (
+        "/System/Library/Extensions/AppleSystemPolicy.kext/Contents/MacOS/AppleSystemPolicy"
+        if known
+        else "/" + _CANARY + "/AppleSystemPolicy"
+    )
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_denial(denial_capture, "BLOCK_ALERT")
+    assert (
+        result.kernel_export_pseudopath
+        == result.policy_sender_system_path
+        == ("PASS" if known else "FAIL")
+    )
+    assert _CANARY not in result.model_dump_json()
+
+
 @pytest.mark.parametrize(
     "style,label",
     [

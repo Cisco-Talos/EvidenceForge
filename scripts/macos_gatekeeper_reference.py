@@ -370,6 +370,8 @@ class DenialReviewReport(BaseModel, extra="forbid", frozen=True, strict=True):
     no_activity: Check = "INCONCLUSIVE"
     kernel_uid_zero: Check = "INCONCLUSIVE"
     simple_tracepoint_flags: Check = "INCONCLUSIVE"
+    kernel_export_pseudopath: Check = "INCONCLUSIVE"
+    policy_sender_system_path: Check = "INCONCLUSIVE"
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     server: Literal["NOT_STARTED"] = "NOT_STARTED"
     test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
@@ -1294,6 +1296,16 @@ def review_denial(existing: Path, outcome: Outcome) -> DenialReviewReport:
                 ]
             ),
             kernel_uid_zero=_shape([record.user_id == 0 for record in refusals]),
+            kernel_export_pseudopath=_shape(
+                [record.process_image_path == "/kernel" for record in refusals]
+            ),
+            policy_sender_system_path=_shape(
+                [
+                    record.sender_image_path
+                    == "/System/Library/Extensions/AppleSystemPolicy.kext/Contents/MacOS/AppleSystemPolicy"
+                    for record in refusals
+                ]
+            ),
             simple_tracepoint_flags=_shape(
                 [((record.trace_id >> 16) & 0xFFFF) & ~0xE == 0 for record in refusals]
             ),

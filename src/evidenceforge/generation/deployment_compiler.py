@@ -143,7 +143,13 @@ def _release_for_descriptor(
             company=descriptor.company,
             original_filename=descriptor.original_filename,
         )
-    return BinaryReleaseIdentity(key=key, pe_version_info=pe_version_info)
+    return BinaryReleaseIdentity(
+        key=key,
+        pe_version_info=pe_version_info,
+        mach_o_image=MachOImageIdentity.derive(key)
+        if descriptor.executable_format == "mach_o"
+        else None,
+    )
 
 
 def _native_descriptor_applies_to_system(

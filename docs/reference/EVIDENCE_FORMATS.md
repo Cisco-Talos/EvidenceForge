@@ -658,7 +658,7 @@ The experimental Mac SSH receiver projects canonical login/logout, flow and help
 
 ### Experimental macOS Unified Log NDJSON
 
-`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders only `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]`. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
+`macos_unified_log` writes `<host>/macos_unified_log.ndjson` in UTC. The modeled macOS 27 arm64 profile renders `logEvent` records for loginwindow entering `-[Login1 launchWorkspace]` and explicit app-policy refusals. A successful local interactive login requests this separate canonical stage; service sessions, failed authentication and SSH do not. Method entry is not proof of completed desktop startup. The writer is the modeled loginwindow process with its own effective UID, thread, deployed main-image UUID and boot uptime. Source collection and wall-clock adjustments use the existing observation/timing owners; absent collection does not undo the action.
 
 The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Optional source/backtrace fields stay absent; no completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
 
@@ -670,7 +670,10 @@ and unknown extra fields fail the bounded profile. Omitted metadata stays omitte
 are not normalized to `userID`, audit identities or each other, and generation does not invent
 them. Apple's [kernel persona definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/persona.h)
 provide type context, not proof of the export fields' identity relationships. Structural decoding
-does not establish Gatekeeper denial meaning; that native generation gate remains open.
+does not by itself establish Gatekeeper denial meaning. Separately reviewed refusal evidence supports the bounded app-policy family below.
+
+
+`process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image exported as `/kernel` (separate from its installed artifact path), a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
 
 ### Experimental macOS Endpoint Security NDJSON
 
@@ -711,7 +714,7 @@ Source policy owns windows, missingness and export delay. Atomic publication ret
 identity, lifecycle, artifact leases, counters and frozen native bytes; sink recovery reuses
 those bytes without executing another process or allocating counters again. Historical v6/v9/v10
 decoding does not enable retired generation targets. Nonnull entitlement dictionaries, full-hash
-extensions, other native ES families, Gatekeeper denial and external SIEM ingestion remain outside
+extensions, other native ES families, specific Gatekeeper refusal causes and external SIEM ingestion remain outside
 this qualified scope. The human-reviewed macOS 27 controlled process evidence qualifies this
 bounded shape; broader native fidelity remains unclaimed. See the
 [profile worklog](../worklog/2026-10-24-macos27-native-process-profile.md).

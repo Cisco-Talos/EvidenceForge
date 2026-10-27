@@ -13,6 +13,7 @@ from evidenceforge.events.evidence_requirements import (
     AUTHORED_EVENT_EVIDENCE_CONTRACTS,
     MACOS_HISTORY_SPILLAGE_EVIDENCE,
     MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS,
+    MACOS_POLICY_REFUSAL_EVIDENCE,
     PERSISTENT_WINDOWS_SMB_EVIDENCE,
     BehaviorEvidenceContract,
     EvidenceProjectionAlternative,
@@ -143,12 +144,15 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
                 continue
             for spec_index, spec in enumerate(event.events):
                 if spec.type == "process" and getattr(spec, "outcome", "success") != "success":
-                    continue  # No-new-execution outcomes have no admitted native source.
+                    if spec.outcome != "policy_refused":
+                        continue  # Other no-new-execution outcomes have no native source.
                 contract = (
                     MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.get(spec.operation)
                     if spec.type == "macos_launch_item"
                     else AUTHORED_EVENT_EVIDENCE_CONTRACTS.get(spec.type)
                 )
+                if spec.type == "process" and spec.outcome == "policy_refused":
+                    contract = MACOS_POLICY_REFUSAL_EVIDENCE
                 if (
                     spec.type == "spillage"
                     and spec.surface == "shell_history"
@@ -170,6 +174,7 @@ def _authored_event_activations(scenario: Scenario) -> tuple[_BehaviorActivation
             *AUTHORED_EVENT_EVIDENCE_CONTRACTS.values(),
             *MACOS_LAUNCH_ITEM_EVIDENCE_CONTRACTS.values(),
             MACOS_HISTORY_SPILLAGE_EVIDENCE,
+            MACOS_POLICY_REFUSAL_EVIDENCE,
         )
     }
     for (behavior_id, hostname), occurrences in sorted(grouped.items()):

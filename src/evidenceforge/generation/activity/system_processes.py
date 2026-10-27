@@ -10,7 +10,7 @@ scheduled tasks and system service processes by host role.
 import random
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
@@ -78,9 +78,16 @@ class NativeSystemBinaryDescriptor:
     product: str = ""
     company: str = ""
     original_filename: str = ""
+    executable_format: Literal["mach_o"] | None = None
 
     def __post_init__(self) -> None:
         """Normalize exact native placement and reject incomplete identity metadata."""
+        if self.executable_format is not None and (
+            self.executable_format != "mach_o"
+            or self.platform != "macos"
+            or self.release_policy != "host_build"
+        ):
+            raise ValueError("Mach-O system artifact requires explicit macOS host-build ownership")
 
         for field_name in ("exe", "path", "product_id", "variant", "release_policy"):
             value = str(getattr(self, field_name)).strip()
@@ -243,6 +250,7 @@ def get_native_system_binary_descriptors(
             product=str(release.get("product") or ""),
             company=str(release.get("company") or ""),
             original_filename=str(release.get("original_filename") or ""),
+            executable_format=entry.get("executable_format"),
         )
         native_path = canonical_native_path(descriptor.path, platform)
         if native_path in seen_paths:

@@ -387,7 +387,9 @@ DEFAULT_SOURCE_CATALOG = SourceCatalog(
         _host(
             "macos_unified_log",
             "macos_unified_log",
-            CollectionCapability.SESSION | CollectionCapability.COHERENT_ACTOR,
+            CollectionCapability.SESSION
+            | CollectionCapability.PROCESS
+            | CollectionCapability.COHERENT_ACTOR,
             frozenset({"macos"}),
         ),
         _host(

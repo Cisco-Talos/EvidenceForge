@@ -18,3 +18,12 @@ workspace_request:
   format_string_offset: 131072
   program_counter: 65536
   has_rules: true
+policy_refusal:
+  profile: macos27-asp-refusal-v1
+  kernel_path: /System/Library/Kernels/kernel
+  kernel_export_path: /kernel
+  sender_path: /System/Library/Extensions/AppleSystemPolicy.kext/Contents/MacOS/AppleSystemPolicy
+  format_string: "ASP: Security policy would not allow process: %d, %s\n"
+  # Independently modeled offsets, never private kernel addresses or captured values.
+  format_string_offset: 262144
+  program_counter: 98304

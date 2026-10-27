@@ -526,6 +526,8 @@ class GroundTruthGenerator:
 
     def _format_event_details(self, event: dict) -> str:
         event_type = event["type"]
+        if event_type == "process" and event.get("outcome") == "policy_refused":
+            return f"App-policy refusal: {event.get('process_name', 'N/A')} (reported target PID {event.get('refused_target_pid', 'N/A')}); cause and execution stage unclassified"
         if event_type == "process" and event.get("outcome") == "denied":
             return f"Denied before child allocation: {event.get('process_name', 'N/A')}; native policy evidence unavailable"
         if event_type == "process" and event.get("outcome") == "exec_failed":
