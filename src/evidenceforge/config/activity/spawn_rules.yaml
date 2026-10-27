@@ -474,7 +474,11 @@ macos:
     lifetime: short
     children: []
   ps:
-    command_templates: [/bin/ps aux, /bin/ps -ef]
+    command_templates: [/bin/ps aux, /bin/ps -ef, "/bin/ps -axo pid,ppid,command"]
+    lifetime: short
+    children: []
+  uname:
+    command_templates: [/usr/bin/uname, /usr/bin/uname -a, /usr/bin/uname -sr, /usr/bin/uname -m]
     lifetime: short
     children: []
   dscl:

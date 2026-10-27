@@ -25,6 +25,20 @@ def test_nested_native_command_cli_preserves_source_filtering_and_known_exit(
     )
     scenario["time_window"]["duration"] = "25m"
     scenario["output"]["logs"].append({"format": "macos_endpoint_security"})
+    scenario["storyline"].append(
+        dict(
+            id="remote-query-before-nesting",
+            time="+11m",
+            actor="test_user",
+            system="SSH-TEST",
+            activity="A one-shot query releases the parent shell before nesting",
+            events=[
+                dict(
+                    type="process", process_name="/usr/bin/uname", command_line="/usr/bin/uname -a"
+                )
+            ],
+        )
+    )
     for name, when, image, extra in (
         ("nested-shell", "+12m", "/bin/zsh", {"process_ref": "nested"}),
         ("nested-query", "+13m", "/usr/bin/id", {"parent_ref": "nested"}),

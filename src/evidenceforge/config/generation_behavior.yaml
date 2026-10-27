@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 342
+current_revision: 343
 history_start_revision: 1
-behavior_surface_sha256: 48e3ba2199e16c7bb46347afcbf0ed0832ab94e0d6a6883b7b85631ea5e98548
+behavior_surface_sha256: 81153750d91e55a9995782a161b4e291add309a0a28b45ebe9f553656259ef2d
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3254,3 +3254,14 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Keeps known-result process phases with unknown loaded executable versions as explicit unsupported coverage observations instead of failing mixed-workload generation or inventing native image metadata.
+  - revision: 343
+    id: macos-query-command-cohort-admission
+    impact: localized
+    domains:
+      - command-lifetime-policy
+      - foreground-session-scheduling
+      - exact-runtime-content-retention
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Releases explicit one-shot Mac queries and binds a first exec target's prepared content to its exact fork admission, preserving native facts and metadata gates.

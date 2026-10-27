@@ -50,6 +50,8 @@ def _setup(
     collected: bool = True,
     filtered: bool = False,
     output: MacosEndpointSecurityEmitter | None = None,
+    retain_target: bool = False,
+    retention_offset: timedelta = timedelta(0),
 ) -> tuple:
     fixture = _fixture(born_loaded=True)
     owner = fixture.owner
@@ -206,8 +208,8 @@ def _setup(
             )
         )
     token = fixture.artifacts.prepare_version_retention(
-        parent.executable_version.artifact_version_id,
-        observed_at=at,
+        (original if retain_target else parent).executable_version.artifact_version_id,
+        observed_at=at + retention_offset,
         retained_until=end + timedelta(days=10),
         lease_owner="invented-ordered-chain",
     )
@@ -378,3 +380,27 @@ print(json.dumps({str(path.relative_to(root)): hashlib.sha256(path.read_bytes())
         )
         results.append(json.loads(result.stdout))
     assert results[0] == results[1] and len(results[0]) == 2
+
+
+@pytest.mark.parametrize("collected", [False, True])
+def test_first_exec_target_retention_binds_to_its_exact_fork_admission(
+    tmp_path: Path, collected: bool
+) -> None:
+    owner, dispatcher, emitter, sink, batch, _, frozen, after, _ = _setup(
+        tmp_path,
+        collected=collected,
+        retain_target=True,
+    )
+    dispatcher.publish_prepared_action_cohort_batch(batch)
+    dispatcher.assert_exact_projection_recoveries_drained()
+    assert owner.state.get_process(after.hostname, after.pid) is None
+    emitter.close()
+    sink.close()
+    assert (tmp_path / "native.ndjson").read_text() == "".join(frozen)
+
+
+def test_retained_exec_image_cannot_use_an_arbitrary_between_phase_time(tmp_path: Path) -> None:
+    from evidenceforge.models.exceptions import EventContractError
+
+    with pytest.raises(EventContractError, match="retained execution content"):
+        _setup(tmp_path, retain_target=True, retention_offset=timedelta(milliseconds=500))

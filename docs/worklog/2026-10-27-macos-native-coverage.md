@@ -117,4 +117,62 @@ with `executable_version_unknown`, preserving canonical behavior and sequence ga
 inventing a loaded-image identity or failing the whole generation. This is a source-admission fix,
 not a widened native fidelity gate. A sibling fork with an unknown loaded version has a focused
 no-placeholder regression. Behavior revision 342 records the correction. The full mixed benchmark
-now completes with all 26 authored steps; it is still pending quantitative and blind assessment.
+now finishes processing 26 authored steps; runtime skip outcomes still require separate coverage review.
+
+## User-requested pause and exact next step
+
+The user asked to pause at a good stopping place before the new blind panel was started.
+Implementation milestones and the independent Schema 3 draft are committed/pushed. The current
+synthetic captured bundle is `scenarios/macos27-native-assessment/output/run-2` (ignored), with
+quantitative JSON at the adjacent `output/eval-run2.json`. All applicable hard gates pass for
+9,232 records, overall 89.8292; parseability 100, plausibility 90.7742, causality 96.6885,
+timing 64.8176. The tracked assessment summary has only derived metrics and skip reasons.
+
+Do not claim the representative command-chain acceptance is complete: it emits only three native
+forks and three Unified Log records. `remote-nested-shell` is explicitly skipped with
+`foreground_shell_unavailable`; its four child commands have `no_live_parent_ref`. The earlier
+isolated CLI case passes real canonical fork/exec/known-exit generation. Next, investigate the
+canonical session/foreground owner with this seed-327 mixed input; coexistence of local GUI and
+SSH contexts is a hypothesis to test. Require the representative authored query steps to execute
+and show their expected native phases before running the fresh blind panel. This gap requires
+engineering, not additional private capture or user requirements. No blind subagents were spawned.
+
+The user-dependent limits remain GUI app launch responsibility/relationship references (Finder,
+Dock and Spotlight), full helper/PTY descriptor scope, nonnull entitlements/full-hash wire shapes,
+and broader native file/auth/Unified Log/policy families. Existing kernel refusal evidence does
+not identify a specific Gatekeeper refusal cause or target fork/exec stage. Do not collect anything
+or inspect private captures merely because work is resumed; retain explicit permission boundaries.
+
+## Continuation after the requested pause
+
+The user explicitly revoked the pause after the interruption and requested continued work.
+The provisional round-1 pause summary is retained as historical diagnosis, not final acceptance.
+The full routine run reached 15,831 passes before its five-failure stop: two skill layout
+contracts (now corrected and all 71 focused skill tests pass), two unchanged legacy expiry-table
+fixtures (not yet diagnosed), and an actual process-census check under sandbox restrictions.
+Six isolated Studio helper/ownership integrations pass outside the sandbox. No full clean routine
+result has yet been claimed.
+
+### Query foreground family contract
+
+Owner: data-driven Mac command/lifetime policy consumed by the process foreground bundle.
+Invariant: admitted one-shot query invocations have a finite modeled close and release their
+parent shell; unknown/long-running invocations keep explicit lifecycle ownership. Entry paths:
+authored local/SSH queries, baseline command pools and nested command parents. Consumers: canonical
+process close, later foreground admission, history timing, eCAR and qualified native phases.
+Sibling risks: query variants must match exact templates; no generic shell/daemon may inherit a
+finite result or gain native metadata. The rendered trace proves that the missing `uname -a`
+profile held the shell through SSH closure; GUI/SSH coexistence was a hypothesis, not the cause.
+Add explicit uname query variants and the selected ps format-query variant to the existing
+short-profile data, without adding any nominal exit result or signature/entitlement fact.
+
+The first representative rerun exposed a second owner mismatch: runtime executable content was
+prepared at the child's fork/admission instant, but the exact cohort validator accepted its target
+image only at the later exec instant. The validator now admits that earlier anchor only when the
+exec's exact before identity is the child of the matching fork in this cohort and the retained
+record matches its execution content. Later replacements and arbitrary between-phase times stay
+rejected. This preserves the original frozen token and canonical times; it does not clamp or
+recreate source facts. Sibling retained-target and invalid-anchor regressions cover the contract.
+The legacy checkpoint failures were stale test fixtures including a v10-only policy expiry table
+inside fabricated v6 heads; those fixtures now omit it and expect v10 writes. The reader's strict
+schema rejection is unchanged. The isolated runtime census regression passes outside the sandbox.

@@ -4,6 +4,10 @@ description: "Experimental modeled macOS workstation coverage and evidence bound
 
 # macOS workstation evidence
 
+**Contents:** Platform and collection limits · shell history · native process metadata ·
+[system launch-item stages](#explicit-system-launch-item-stages) · app-policy refusal ·
+native process coverage
+
 This branch is implementing macOS 27 arm64 workstation evidence. Running EvidenceForge or Studio on a Mac is a separate capability. The foundation and bounded history profile are experimental; complete Mac-native investigation coverage is not yet available.
 
 Use existing `environment.systems` values: `os: macOS 27`, explicit `os_build`, `architecture: arm64`, `type: workstation`, user placement, roles/services and software deployment. Use existing source deployment, collection, observation/timing and application overlay semantics. There is no parallel Mac configuration block. Preserve older scenarios and published packs; add new pack versions for changed defaults.

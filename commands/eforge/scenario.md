@@ -1,10 +1,7 @@
 ---
 name: eforge-scenario
 description: >
-  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0/3.0 YAML and attack-free
-  ENVIRONMENT.md briefings. Use when the user wants a threat-hunting exercise, attack simulation,
-  synthetic security dataset, or security training scenario. Do not run generation or edit
-  generated artifacts, reusable packs, or project configuration.
+  Create, revise, or repair authored EvidenceForge Scenario 1.0/2.0/3.0 YAML and attack-free ENVIRONMENT.md briefings. Use when the user wants a threat-hunting exercise, attack simulation, synthetic security dataset, or security training scenario. Do not run generation or edit generated artifacts, reusable packs, or project configuration.
 ---
 
 # EvidenceForge Scenario Author
@@ -163,5 +160,3 @@ If the user wants logs, hand off to `/eforge generate`. If they want a focused v
 explanation, hand off to `/eforge validate`. Do not silently generate logs as part of authoring.
 
 Read `/eforge:references:record-validation` for validation policy; `process_exec` is internal-only.
-
-For macOS process outcomes, consult the endpoint reference: `policy_refused` is the explicit bounded native app-policy refusal; `denied` remains pre-child and `exec_failed` preserves the current caller image. Do not infer these outcomes from an ordinary command or author the internal `macos_policy_refusal` kind.

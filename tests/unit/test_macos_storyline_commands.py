@@ -47,6 +47,8 @@ def test_mac_discovery_sequence_executes_every_command_and_submits_history(tmp_p
     commands = [
         "/usr/bin/id",
         "/usr/bin/sw_vers",
+        "/usr/bin/uname -a",
+        "/bin/ps -axo pid,ppid,command",
         "/sbin/ifconfig -a",
         "/bin/ps aux",
         "/usr/bin/dscl . -list /Users",

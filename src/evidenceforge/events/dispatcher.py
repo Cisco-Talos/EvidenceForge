@@ -9117,19 +9117,38 @@ class EventDispatcher:
                     "Exact Mac process cohort requires bounded retained artifacts"
                 )
             for token in publications:
-                if not registry.authenticates_prepared_retention(token) or not any(
-                    token.observed_at == projection.occurrence.timestamp
-                    and any(
-                        self._process_owns_runtime_exec_content(identity, token.record)
-                        for identity in (
-                            process_fork_identities(projection.occurrence)
-                            if projection.occurrence.event_type is EventKind.PROCESS_FORK
-                            else process_exec_identities(projection.occurrence)
-                            if projection.occurrence.event_type is EventKind.PROCESS_EXEC
-                            else ()
+
+                def owns_retention(
+                    projection: _PreparedProjection, retained: LocalArtifactPublishToken = token
+                ) -> bool:
+                    occurrence = projection.occurrence
+                    if occurrence.event_type is EventKind.PROCESS_FORK:
+                        identities = process_fork_identities(occurrence)
+                        anchors = (occurrence.timestamp,)
+                    elif occurrence.event_type is EventKind.PROCESS_EXEC:
+                        identities = process_exec_identities(occurrence)
+                        # The exact target image may be retained when its child
+                        # is admitted, before that child's first exec. Bind this
+                        # earlier anchor to the identical fork identity, never
+                        # to an unrelated cohort member or a later replacement.
+                        anchors = (
+                            occurrence.timestamp,
+                            *(
+                                member.occurrence.timestamp
+                                for member in record.trusted_projections
+                                if member.occurrence.event_type is EventKind.PROCESS_FORK
+                                and process_fork_identities(member.occurrence)[1] == identities[0]
+                            ),
                         )
+                    else:
+                        return False
+                    return retained.observed_at in anchors and any(
+                        self._process_owns_runtime_exec_content(identity, retained.record)
+                        for identity in identities
                     )
-                    for projection in record.trusted_projections
+
+                if not registry.authenticates_prepared_retention(token) or not any(
+                    owns_retention(projection) for projection in record.trusted_projections
                 ):
                     raise EventContractError(
                         "Exact Mac process cohort changed retained execution content"
