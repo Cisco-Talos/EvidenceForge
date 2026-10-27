@@ -1,5 +1,21 @@
 # macOS native evidence: metadata map and remaining gates
 
+## Current admission, 2026-10-26
+
+The active target is macOS 27 arm64, with qualified bounded v11 fork/exec/known-exit generation.
+The [profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md) records private
+human qualification and producer revisions 333–336. Historical macOS 26 gates/milestones below
+do not require a new 26 capture and do not override the current target allowlist.
+
+Gatekeeper denial remains gated. The user authorized preparing a human-only experiment on their
+existing Mac, including a temporary loopback server because none is installed. The separate
+[Gatekeeper procedure](gatekeeper-reference/PRIVATE-RUN.md) supplies the complete code-only kit,
+exact-item live filtering, bounded collector guard and fixed report. Agents may prepare or run
+invented tests only, never setup, serve, collect or inspect private evidence. The
+[Gatekeeper worklog](../../worklog/2026-10-26-macos-gatekeeper-reference.md) records handoff and limits.
+
+## Historical assessment and acquisition context
+
 Updated 2026-10-24. Target: modeled macOS 26 arm64 workstations. Revision 328 supplies supported SSH native metadata and admits nonempty fork/v10 output through the ordinary CLI. Parser, manifest, filtering, fresh-process and exact checkpoint-resume gates pass. Two frozen benchmark revisions and three blind panels are recorded in the assessment worklog. Revision 330 completes the agreed bounded implementation and assessment sequence; deterministic acceptance passes, while the final blind mean is 66.75 (all Synthetic). Broader quality findings are recorded separately and no general authenticity pass is claimed. Native exec/exit (ES-R1) and Gatekeeper denial (GK-R1) remain gated. On October 24 the user authorized preparation of a private eslogger filter/checker kit and chose to run collection themselves. No agent-run collection or native-record inspection is authorized. Only human-reviewed fixed check reports may be shared; no captures may enter the repo, including ignored directories. Earlier public source material remains ignored under `sample_data/macos/`; tests and examples are independently authored. See the [private procedure](native-reference-capture/PRIVATE-RUN.md).
 
 ## Public evidence search outcome

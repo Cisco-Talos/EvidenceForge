@@ -563,8 +563,10 @@ further per-loop or per-PR details in worklogs or PR descriptions.
   limit ordinary native command coverage; expanding those canonical producers is follow-up
   work, not an implicit claim of complete native ES coverage. See the
   [current profile worklog](docs/worklog/2026-10-24-macos27-native-process-profile.md).
-- [ ] **Deferred by user:** qualify native Gatekeeper denial (GK-R1) before enabling that
-  export. Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and
+- [ ] Qualify native Gatekeeper denial (GK-R1) before enabling that export. The user authorized
+  a private human-run experiment; the [kit handoff](docs/worklog/2026-10-26-macos-gatekeeper-reference.md)
+  supplies a temporary loopback server and bounded filtering. Native denial output remains gated.
+  Filesystem artifacts, binary containers, Intel/Rosetta, sleep/wake, roaming and
   Mac SMB serving remain outside the bounded scope. See the
   [capability matrix](docs/design/macos-workstation-feasibility/capability-matrix.md).
 

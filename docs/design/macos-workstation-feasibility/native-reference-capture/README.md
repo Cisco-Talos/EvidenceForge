@@ -1,12 +1,14 @@
 # Private native reference testing
 
-**Status, 2026-10-24: the user reports a successful bounded v11 capture through
-the version-3 fixed report. Full v11 layout qualification remains pending.
-No agent-run capture or native-record inspection is authorized.**
-Native exec/exit (ES-R1) and Gatekeeper denial (GK-R1) remain gated. This kit
-supplies no reference evidence by itself. The Mac fork/v10 benchmark runs
-independently. The user's overriding requirements are that no potentially
-sensitive information is seen by the agent and no captured logs enter the repo.
+**Current status, 2026-10-26:** human-reviewed private results now qualify the bounded macOS 27
+v11 fork/exec/known-exit profile; macOS 26 generation is retired. See the
+[current profile worklog](../../../worklog/2026-10-24-macos27-native-process-profile.md).
+Gatekeeper denial remains gated. A separate
+[human-only Gatekeeper kit with a loopback server](../gatekeeper-reference/PRIVATE-RUN.md)
+is now prepared. This older process kit does not collect Gatekeeper evidence.
+No agent-run capture or native-record inspection is authorized. No potentially sensitive
+information may be seen by the agent, and no captures may enter Git, including ignored folders.
+Historical acquisition notes below describe the earlier qualification steps, not current blockers.
 
 Read [PRIVATE-RUN.md](PRIVATE-RUN.md) for the human procedure and privacy limits.
 The helper is [scripts/macos_reference_capture.py](../../../../scripts/macos_reference_capture.py).
@@ -106,7 +108,11 @@ host inventory, network service or automatic permission changes are involved.
 Do not require that a failed exec produce an exec notification. Record the actual
 result. Kernel delivery, export filtering and observed absence remain distinct.
 
-## GK-R1: future, separately reviewed human-run protocol
+## GK-R1: original proposal, superseded by the separate kit
+
+The current executable human procedure is
+[gatekeeper-reference/PRIVATE-RUN.md](../gatekeeper-reference/PRIVATE-RUN.md).
+The numbered outline below is historical design context; do not use it as a command procedure.
 
 The following describes the evidence needed, **not commands authorized for agent
 execution or a procedure ready to run on a daily-use Mac**. A private collector,
