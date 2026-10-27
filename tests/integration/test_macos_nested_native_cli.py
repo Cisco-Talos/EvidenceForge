@@ -110,3 +110,69 @@ def test_nested_native_command_cli_preserves_source_filtering_and_known_exit(
     ]
     assert len(executions) == len(exits) == 1
     assert exits[0]["event"]["exit"]["stat"] == 0
+
+
+@pytest.mark.slow
+def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_lifecycles(
+    tmp_path: Path,
+) -> None:
+    scenario = Path("scenarios/macos27-native-assessment/source/scenario.yaml")
+    output = tmp_path / "mixed-native"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "evidenceforge",
+            "generate",
+            str(scenario),
+            "--output",
+            str(output),
+            "--checkpoint-hours",
+            "0",
+            "--project-root",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    truth = json.loads((output / "GROUND_TRUTH.json").read_text())
+    commands = {
+        event["storyline_id"]: event
+        for event in truth["events"]
+        if (event.get("storyline_id") or "").startswith("remote-nested-")
+    }
+    assert len(commands) == 5
+    assert all(
+        event["emitted"] and event["attributes"]["native_process_model"] == "fork_exec"
+        for event in commands.values()
+    )
+    records = [
+        json.loads(line)
+        for path in (output / "data").rglob("macos_endpoint_security.ndjson")
+        for line in path.read_text().splitlines()
+    ]
+    assert records and all(record["version"] == 11 for record in records)
+    for name in ("remote-nested-id", "remote-nested-version"):
+        pid = commands[name]["attributes"]["pid"]
+        births = [
+            row
+            for row in records
+            if row["event_type"] == 11
+            and row["event"]["fork"]["child"]["audit_token"]["pid"] == pid
+        ]
+        execs = [
+            row
+            for row in records
+            if row["event_type"] == 9
+            and row["event"]["exec"]["target"]["audit_token"]["pid"] == pid
+        ]
+        exits = [
+            row
+            for row in records
+            if row["event_type"] == 15 and row["process"]["audit_token"]["pid"] == pid
+        ]
+        assert len(births) == len(execs) == len(exits) == 1
+        assert exits[0]["event"]["exit"]["stat"] == 0
+    assert not (output / "data" / ".eforge-es-ingress").exists()
