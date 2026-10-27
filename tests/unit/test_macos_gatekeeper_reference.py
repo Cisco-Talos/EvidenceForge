@@ -25,6 +25,39 @@ _TOKEN = "b" * 32
 _HASH = "a" * 40
 
 
+def _shape_row() -> dict[str, object]:
+    row = _log_record()
+    row["processImagePath"] = "/usr/libexec/syspolicyd"
+    row["eventMessage"] = f"{_CANARY} {_config().app_name}"
+    return row
+
+
+@pytest.fixture
+def shape_capture(synthetic: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    summary = kit.Report(
+        provenance="PASS",
+        target_platform="PASS",
+        bounded_collection="PASS",
+        collector_cleanup="PASS",
+        test_item_policy_records="OBSERVED",
+        unified_log_shapes="FAIL",
+    ).model_dump()
+    summary["kit_version"] = 1
+    kit._write(synthetic / "private/capture.json", json.dumps(summary).encode())
+    row = _shape_row()
+    row["eventMessage"] = f"{_CANARY} {kit._config(synthetic).app_name}"
+    kit._write(synthetic / "private/test-ul.jsonl", json.dumps(row).encode() + b"\n")
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Offline review attempted a native operation")
+
+    monkeypatch.setattr(kit, "_command", forbidden)
+    monkeypatch.setattr(kit, "_preflight", forbidden)
+    monkeypatch.setattr(kit, "_platform_info", forbidden)
+    monkeypatch.setattr(kit.subprocess, "run", forbidden)
+    return synthetic
+
+
 def _config() -> kit.Config:
     return kit.Config(token=_TOKEN, cdhash=_HASH, os_release="27.0", os_build="26A123", digests={})
 
@@ -799,3 +832,186 @@ def test_hidden_root_prompt_never_falls_back_to_echo(monkeypatch: pytest.MonkeyP
 def test_source_copy_cannot_diagnose_a_private_kit() -> None:
     result = kit.diagnose(Path("/invented-private-location-never-opened"))
     assert result.step == "INPUT" and result.error == "LOCATION"
+
+
+def test_offline_shape_review_is_bounded_read_only_and_accepts_v1(
+    shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    capsys.readouterr()
+    before = {path: path.read_bytes() for path in shape_capture.rglob("*") if path.is_file()}
+    read = kit._read
+
+    def restricted(path: Path, *args: object, **kwargs: object) -> bytes:
+        assert path.name not in {"test-es.jsonl", "control.json", "marker", "control-marker"}
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(kit, "_read", restricted)
+    assert kit.main(["review-shapes", "--private-run", "--existing-kit", str(shape_capture)]) == 0
+    output = capsys.readouterr()
+    result = kit.ShapeReport.model_validate_json(output.out)
+    assert not output.err and _CANARY not in output.out
+    assert result.review_complete == result.provenance == result.retained_scope == "PASS"
+    assert result.unified_log_shapes == "PASS"
+    assert result.fields["source"].presence == "ABSENT_ALL"
+    assert result.fields["source"].validation == "INCONCLUSIVE"
+    assert result.gate_status == "NOT_EVALUATED" and result.message_meaning == "NOT_REVIEWED"
+    assert before == {
+        path: path.read_bytes() for path in shape_capture.rglob("*") if path.is_file()
+    }
+
+
+def test_shape_diagnostic_field_names_match_the_closed_native_schema() -> None:
+    assert set(kit.UL_FIELDS) == {
+        field.alias or name for name, field in kit.UnifiedLogRecord.model_fields.items()
+    }
+
+
+@pytest.mark.parametrize("field", tuple(kit.ShapeReport.model_fields))
+def test_shape_report_rejects_unbounded_leaves(field: str) -> None:
+    with pytest.raises(ValidationError):
+        kit.ShapeReport.model_validate({field: _CANARY})
+
+
+def test_shape_report_rejects_discovered_field_names() -> None:
+    with pytest.raises(ValidationError):
+        kit.ShapeReport(fields={_CANARY: kit.ULFieldShape()})
+
+
+@pytest.mark.parametrize(
+    "field,value,kind",
+    [
+        ("processID", True, "TYPE"),
+        ("userID", "501", "TYPE"),
+        ("traceID", -1, "VALUE"),
+        ("eventType", _CANARY, "UNSUPPORTED"),
+        ("messageType", _CANARY, "UNSUPPORTED"),
+        ("timestamp", "2026-02-30 14:00:00.123456+0000", "VALUE"),
+        ("timestamp", _CANARY, "VALUE"),
+        ("senderImageUUID", None, "TYPE"),
+        ("source", {_CANARY: _CANARY}, "TYPE"),
+        ("backtrace", {"frames": [{"imageOffset": -1, "imageUUID": ""}]}, "VALUE"),
+        ("backtrace", {"frames": [], _CANARY: _CANARY}, "UNSUPPORTED"),
+    ],
+)
+def test_offline_shape_failures_are_fixed_field_classifications(
+    field: str, value: object, kind: str
+) -> None:
+    row = _shape_row()
+    row[field] = value
+    result = kit._ul_shape_report([json.dumps(row).encode()])
+    assert result.unified_log_shapes == "FAIL"
+    assert result.fields[field].failure_kind == kind
+    assert result.fields[field].validation == "FAIL"
+    assert _CANARY not in result.model_dump_json()
+
+
+def test_shape_diagnostic_distinguishes_missing_mixed_and_additional_fields() -> None:
+    row, other = _shape_row(), _shape_row()
+    del row["timezoneName"]
+    other["userID"] = "501"
+    row[_CANARY] = {_CANARY: _CANARY}
+    result = kit._ul_shape_report([json.dumps(item).encode() for item in (row, other)])
+    assert result.fields["timezoneName"].presence == "MIXED"
+    assert result.fields["timezoneName"].failure_kind == "MISSING"
+    assert result.fields["userID"].value_type == "MIXED"
+    assert result.additional_fields == "MIXED"
+    assert result.additional_value_types == "OBJECT"
+    assert _CANARY not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "uncorrelated",
+        "wrong_writer",
+        "non_object",
+        "duplicate_key",
+        "invalid_json",
+        "overlong_line",
+        "unterminated",
+        "too_many",
+        "too_large",
+        "too_deep",
+        "symlink",
+        "hardlink",
+        "permissions",
+        "fifo",
+        "missing",
+        "changed_source",
+        "bad_summary",
+        "bool_version",
+    ],
+)
+def test_offline_review_refuses_unsafe_or_unqualified_inputs(
+    shape_capture: Path, fault: str
+) -> None:
+    path = shape_capture / "private/test-ul.jsonl"
+    row = _shape_row()
+    row["eventMessage"] = f"{_CANARY} {kit._config(shape_capture).app_name}"
+    if fault == "uncorrelated":
+        row["eventMessage"] = _CANARY
+    elif fault == "wrong_writer":
+        row["processImagePath"] = f"/invented/{_CANARY}"
+    elif fault == "non_object":
+        path.write_bytes(b"[]\n")
+    elif fault == "duplicate_key":
+        path.write_bytes(b'{"eventType": "logEvent", "eventType": "logEvent"}\n')
+    elif fault == "invalid_json":
+        path.write_bytes(b'{"invented": NaN}\n')
+    elif fault == "overlong_line":
+        path.write_bytes(b" " * (kit.MAX_LINE + 1) + b"\n")
+    elif fault == "unterminated":
+        path.write_bytes(json.dumps(row).encode())
+    elif fault == "too_many":
+        path.write_bytes((json.dumps(row).encode() + b"\n") * (kit.MAX_RETAINED + 1))
+    elif fault == "too_large":
+        path.write_bytes(b" " * (kit.MAX_RETAINED_BYTES + 1))
+    elif fault == "too_deep":
+        nested: object = None
+        for _ in range(40):
+            nested = [nested]
+        row[_CANARY] = nested
+    elif fault in {"symlink", "hardlink", "fifo", "missing"}:
+        path.unlink()
+        if fault == "symlink":
+            path.symlink_to(shape_capture / "private/capture.json")
+        elif fault == "hardlink":
+            os.link(shape_capture / "private/capture.json", path)
+        elif fault == "fifo":
+            os.mkfifo(path, 0o600)
+    elif fault == "permissions":
+        path.chmod(0o644)
+    elif fault == "changed_source":
+        (shape_capture / "private_gatekeeper.py").write_text(_CANARY)
+    elif fault in {"bad_summary", "bool_version"}:
+        summary_path = shape_capture / "private/capture.json"
+        summary = json.loads(summary_path.read_bytes())
+        summary["collector_cleanup" if fault == "bad_summary" else "kit_version"] = (
+            "FAIL" if fault == "bad_summary" else True
+        )
+        summary_path.write_text(json.dumps(summary))
+    if fault in {"uncorrelated", "wrong_writer", "too_deep"}:
+        path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_shapes(shape_capture)
+    assert result.error != "NONE" and result.review_complete == "INCONCLUSIVE"
+    assert not result.fields and _CANARY not in result.model_dump_json()
+
+
+def test_offline_review_never_leaks_native_exception_text(
+    shape_capture: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read = kit._read
+
+    def denied(path: Path, *args: object, **kwargs: object) -> bytes:
+        if path.name == "test-ul.jsonl":
+            raise PermissionError(_CANARY)
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(kit, "_read", denied)
+    result = kit.review_shapes(shape_capture)
+    assert result.error == "FILE_ACCESS" and _CANARY not in result.model_dump_json()
+
+
+def test_repo_copy_cannot_review_retained_records() -> None:
+    result = kit.review_shapes(Path("/invented-private-location-never-opened"))
+    assert result.error == "LOCATION" and not result.fields

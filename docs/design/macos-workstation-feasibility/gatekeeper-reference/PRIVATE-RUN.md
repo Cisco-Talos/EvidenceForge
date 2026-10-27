@@ -1,5 +1,34 @@
 # Private Gatekeeper reference — human only
 
+## Offline diagnosis of `unified_log_shapes: FAIL`
+
+Keep the existing capture. Do not repeat setup, download or capture, or replace files in the
+original kit. A separately prepared code-only copy now supplies `review-shapes`:
+
+```sh
+"$PY" -I -B "$NEW_KIT/private_gatekeeper.py" review-shapes --private-run
+```
+
+Enter the original kit folder at the hidden prompt. As with the earlier diagnostic, the path
+must not echo. Normally run this privately with agents closed. If you explicitly authorize an
+agent to run this audited offline checker, it may supply the already known original folder with
+`--existing-kit`; that permission covers local processing and only the fixed JSON output. It does
+not authorize opening record contents in an agent tool or displaying any native error text.
+
+The checker runs no native commands, collectors, server, app or network requests. It writes no
+files. It verifies the original kit's recorded code/binary provenance and successful bounded
+capture summary, then reads only `private/test-ul.jsonl`, with the original byte/line/record
+limits and an additional nesting limit. Every row must still match the exact test name or
+CDHash and the permitted policy writer. It does not open ES records, control summaries or
+execution markers. A failed prerequisite returns an empty field diagnostic.
+
+The output contains only predefined schema field names, presence/type labels and failure
+classes (`MISSING`, `TYPE`, `VALUE`, `UNSUPPORTED`, `MULTIPLE`). Unknown field names, message
+content, paths, timestamps, identifiers, counts, exception details and hashes never appear.
+`additional_fields` reports presence only, and `additional_value_types` reports JSON types only.
+These are structural checks; no message is interpreted as allow/deny. Even a complete shape
+diagnostic retains `message_meaning: NOT_REVIEWED` and `gate_status: NOT_EVALUATED`.
+
 ## Version 2: diagnosing a version-1 verification error
 
 If the earlier kit stopped at `PRIVATE_STEP_VERIFYING_DOWNLOAD` with `INTERNAL`, do not
@@ -30,7 +59,8 @@ instructions to repeat an interrupted experiment.
 
 Close Codex and every other agent before **setup, serve, capture, control, report or diagnose**.
 Agents may copy this code-only kit, syntax-check sources without execution and run invented-input
-tests. They must never open the handed-off kit after you start using it. No captures, redacted
+tests. Any agent execution of a private operation requires your explicit authorization; the
+offline exception above permits only the fixed diagnostic output. No captures, redacted
 copies, screenshots, alert text, paths, hashes or native records may be shared with an agent or
 copied into Git, including ignored directories. Share only the final fixed JSON after privately
 checking it. The gate stays `NOT_EVALUATED` until that evidence is reviewed.

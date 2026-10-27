@@ -140,3 +140,42 @@ signature, source, provenance or security setting was changed. Acquisition has s
 so the human can proceed with the original first capture after closing all agents. No rebuild,
 redownload or running server is required. This authorization does not extend to native records,
 private configuration or other handed-off kits.
+
+## Acquisition outcome and offline shape diagnostic
+
+The human's fixed acquisition report passed platform/provenance, browser quarantine, both
+collector readiness checks, bounded collection and cleanup. Matching policy rows were observed;
+the downloaded app's marker and matching ES exec/exit were absent. Its open helper returned
+success, which is not execution proof. At least one retained Unified Log row failed the existing
+closed native schema. No retained record or private value was exposed.
+
+The human explicitly authorized agent execution of the existing control/report commands because
+they export fixed labels. Control returned DUPLICATE without launching again; the fixed report
+confirmed an already successful local control with its marker present. The human then described
+the downloaded attempt's Move to Trash/Done security dialog. The fixed report was regenerated
+with BLOCK_ALERT. Denial remains NOT_ESTABLISHED because native structure and decision meaning
+are still unqualified. These explicit permissions override the default human-only instructions
+for those commands; they do not authorize direct log inspection or another collection.
+
+Added `review-shapes` to a separate code-only copy. It starts no native command, app, collector,
+server or network operation and writes nothing. It verifies the original kit's recorded
+provenance and v1/v2 bounded-capture summary, then reads only the expected test UL file. Original
+byte/line/record limits, a nesting limit and exact test-item/writer correlation apply before any
+shape results are returned. Unsafe, malformed, unrelated or unqualified input returns fixed
+errors with an empty field diagnostic. ES rows, control summaries and markers are not opened.
+
+Only predeclared native schema field aliases appear in the output, with fixed presence/type and
+missing/type/value/unsupported failure classes. Extra names and values, nested keys, validation
+messages, counts, paths and all native identifiers remain private. Missing optional fields stay
+distinct from invalid required fields. Shape success never reviews message meaning or opens GK-R1.
+
+All 555 private-kit tests pass, including 53 new offline cases for read-only v1 replay, strict
+schema classification, unknown-key/value canaries, file/JSON/bounds safety, correlation, version
+tags and non-disclosing failure output. Full Ruff check/format (1,344 files) and whitespace pass.
+No generation or gate policy changed. Prepared code-only copy:
+`/private/tmp/eforge-gatekeeper-shape-review-v1-4e76ab92`.
+
+The checker has not been run against native records. Separate permission to process the retained
+UL file was requested under the human's standing no-local-log-inspection rule; otherwise the
+human can run it privately with agents closed. Do not replace the original acquisition code or
+repeat the test. After structural diagnosis, native decision meaning still needs private review.

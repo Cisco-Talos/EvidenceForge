@@ -3,8 +3,9 @@
 
 """Prepare a HUMAN-ONLY Gatekeeper kit. Agents may prepare and test invented inputs only.
 
-Never run setup, serve, capture, control, report or diagnose in an agent session. No live
-record, native value or private file may be shown to agents or copied into Git.
+Private operations require human execution or explicit human authorization. Agents may
+never see native values or records. Offline shape review needs separate permission to read
+retained records locally; it exports fixed labels only and never qualifies native meaning.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from pathlib import Path
 from socketserver import TCPServer
 from typing import BinaryIO, Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from evidenceforge.formats.macos_endpoint_security import decode_endpoint_security_record
 from evidenceforge.formats.macos_unified_log import UnifiedLogRecord
@@ -166,6 +167,109 @@ class VerificationReport(BaseModel, extra="forbid", frozen=True, strict=True):
     server: Literal["NOT_STARTED"] = "NOT_STARTED"
     test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
     native_record_files: Literal["NOT_OPENED"] = "NOT_OPENED"
+
+
+type KnownULField = Literal[
+    "eventType",
+    "messageType",
+    "timezoneName",
+    "timestamp",
+    "machTimestamp",
+    "bootUUID",
+    "processID",
+    "userID",
+    "threadID",
+    "processImagePath",
+    "processImageUUID",
+    "senderImagePath",
+    "senderImageUUID",
+    "senderProgramCounter",
+    "activityIdentifier",
+    "parentActivityIdentifier",
+    "traceID",
+    "subsystem",
+    "category",
+    "formatString",
+    "eventMessage",
+    "source",
+    "backtrace",
+]
+UL_FIELDS: tuple[KnownULField, ...] = (
+    "eventType",
+    "messageType",
+    "timezoneName",
+    "timestamp",
+    "machTimestamp",
+    "bootUUID",
+    "processID",
+    "userID",
+    "threadID",
+    "processImagePath",
+    "processImageUUID",
+    "senderImagePath",
+    "senderImageUUID",
+    "senderProgramCounter",
+    "activityIdentifier",
+    "parentActivityIdentifier",
+    "traceID",
+    "subsystem",
+    "category",
+    "formatString",
+    "eventMessage",
+    "source",
+    "backtrace",
+)
+type FieldPresence = Literal["PRESENT_ALL", "ABSENT_ALL", "MIXED", "NOT_OBSERVED"]
+type ValueType = Literal[
+    "NULL", "BOOLEAN", "INTEGER", "NUMBER", "STRING", "ARRAY", "OBJECT", "MIXED", "NOT_OBSERVED"
+]
+type FailureKind = Literal["NONE", "MISSING", "TYPE", "VALUE", "UNSUPPORTED", "MULTIPLE"]
+
+
+class ULFieldShape(BaseModel, extra="forbid", frozen=True, strict=True):
+    """Only types, presence and fixed failure classes for a predeclared field."""
+
+    presence: FieldPresence = "NOT_OBSERVED"
+    value_type: ValueType = "NOT_OBSERVED"
+    validation: Check = "INCONCLUSIVE"
+    failure_kind: FailureKind = "NONE"
+
+
+class ShapeReport(BaseModel, extra="forbid", frozen=True, strict=True):
+    """Offline shape diagnostics never export discovered keys or native values."""
+
+    review_version: Literal[1] = 1
+    purpose: Literal["GATEKEEPER_UL_SHAPE_DIAGNOSTIC"] = "GATEKEEPER_UL_SHAPE_DIAGNOSTIC"
+    mode: Literal["OFFLINE_READ_ONLY"] = "OFFLINE_READ_ONLY"
+    reference_review: Literal["REQUIRED"] = "REQUIRED"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    message_meaning: Literal["NOT_REVIEWED"] = "NOT_REVIEWED"
+    error: Code = "NONE"
+    review_complete: Check = "INCONCLUSIVE"
+    provenance: Check = "INCONCLUSIVE"
+    capture_summary: Check = "INCONCLUSIVE"
+    retained_scope: Check = "INCONCLUSIVE"
+    unified_log_shapes: Check = "INCONCLUSIVE"
+    additional_fields: FieldPresence = "NOT_OBSERVED"
+    additional_value_types: ValueType = "NOT_OBSERVED"
+    fields: dict[KnownULField, ULFieldShape] = Field(default_factory=dict)
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    server: Literal["NOT_STARTED"] = "NOT_STARTED"
+    test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
+
+
+class StoredCapture(Report):
+    """Read the fixed v1/v2 acquisition summary without retagging the original."""
+
+    kit_version: Literal[1, 2] = 2
+
+    @field_validator("kit_version", mode="before")
+    @classmethod
+    def integer_version(cls, value: object) -> object:
+        """Keep booleans distinct from integer kit tags."""
+        if type(value) is not int:
+            raise ValueError("DATA")
+        return value
 
 
 class Config(BaseModel, extra="forbid", frozen=True, strict=True):
@@ -702,6 +806,148 @@ def diagnose(existing: Path) -> VerificationReport:
     return VerificationReport(step=current, error=code, verification="FAIL")
 
 
+def _presence(values: list[bool]) -> FieldPresence:
+    if not values:
+        return "NOT_OBSERVED"
+    return "PRESENT_ALL" if all(values) else "ABSENT_ALL" if not any(values) else "MIXED"
+
+
+def _value_type(value: object) -> ValueType:
+    if value is None:
+        return "NULL"
+    return {
+        bool: "BOOLEAN",
+        int: "INTEGER",
+        float: "NUMBER",
+        str: "STRING",
+        list: "ARRAY",
+        dict: "OBJECT",
+    }[type(value)]
+
+
+def _value_types(values: list[object]) -> ValueType:
+    kinds = {_value_type(value) for value in values}
+    return "NOT_OBSERVED" if not kinds else next(iter(kinds)) if len(kinds) == 1 else "MIXED"
+
+
+def _failure_kind(kind: str) -> FailureKind:
+    if kind == "missing":
+        return "MISSING"
+    if kind in {"extra_forbidden", "literal_error"}:
+        return "UNSUPPORTED"
+    return "TYPE" if kind.endswith("_type") or kind == "none_required" else "VALUE"
+
+
+def _ul_shape_report(records: list[bytes]) -> ShapeReport:
+    """Classify known fields without copying validation text, keys or input values."""
+    rows = [_decode(raw) for raw in records]
+    failures: dict[KnownULField, list[FailureKind]] = {name: [] for name in UL_FIELDS}
+    valid: list[bool] = []
+    for raw in records:
+        try:
+            UnifiedLogRecord.model_validate_json(raw)
+            valid.append(True)
+        except ValidationError as error:
+            valid.append(False)
+            # Error locations may contain private extra-field names. They never leave
+            # this loop: only a match against the predeclared top-level aliases does.
+            for item in error.errors(include_input=False, include_context=False, include_url=False):
+                location = item["loc"]
+                for name in UL_FIELDS:
+                    if location and location[0] == name:
+                        failures[name].append(_failure_kind(item["type"]))
+                        break
+    fields: dict[KnownULField, ULFieldShape] = {}
+    for name in UL_FIELDS:
+        kinds = set(failures[name])
+        present = [name in row for row in rows]
+        fields[name] = ULFieldShape(
+            presence=_presence(present),
+            value_type=_value_types([row[name] for row in rows if name in row]),
+            validation="FAIL" if kinds else "PASS" if any(present) else "INCONCLUSIVE",
+            failure_kind="NONE"
+            if not kinds
+            else next(iter(kinds))
+            if len(kinds) == 1
+            else "MULTIPLE",
+        )
+    extras = [{name: value for name, value in row.items() if name not in UL_FIELDS} for row in rows]
+    return ShapeReport(
+        review_complete="PASS",
+        provenance="PASS",
+        capture_summary="PASS",
+        retained_scope="PASS",
+        unified_log_shapes=_shape(valid),
+        additional_fields=_presence([bool(extra) for extra in extras]),
+        additional_value_types=_value_types(
+            [value for extra in extras for value in extra.values()]
+        ),
+        fields=fields,
+    )
+
+
+def review_shapes(existing: Path) -> ShapeReport:
+    """OFFLINE: read only bounded test rows; explicit permission is needed for agent use.
+
+    No subprocess, network access, app launch, capture mutation, message interpretation,
+    error text or native value output is used. Original kit provenance is checked locally.
+    """
+    try:
+        _root()
+        if os.getuid() == 0 or os.getuid() != os.geteuid():
+            raise PrivateError("ROOT_USER")
+        _directory(existing)
+        target = existing.resolve(strict=True)
+        _outside_git(target)
+        config = _config(target)
+        stored = StoredCapture.model_validate_json(_read(target / "private/capture.json"))
+        if (
+            stored.error != "NONE"
+            or stored.provenance != "PASS"
+            or stored.target_platform != "PASS"
+            or stored.bounded_collection != "PASS"
+            or stored.collector_cleanup != "PASS"
+            or stored.test_item_policy_records != "OBSERVED"
+        ):
+            raise PrivateError("CONTROL")
+        data = _read(target / "private/test-ul.jsonl", MAX_RETAINED_BYTES)
+        records = data.splitlines()
+        if not records or len(records) > MAX_RETAINED or not data.endswith(b"\n"):
+            raise PrivateError("DATA")
+        for raw in records:
+            try:
+                row = _decode(raw)
+            except (ValueError, UnicodeError, RecursionError):
+                raise PrivateError("DATA") from None
+            pending: list[tuple[object, int]] = [(row, 1)]
+            while pending:
+                value, depth = pending.pop()
+                if depth > 32:
+                    raise PrivateError("DATA")
+                if type(value) is dict:
+                    pending.extend((item, depth + 1) for item in value.values())
+                elif type(value) is list:
+                    pending.extend((item, depth + 1) for item in value)
+            writer, message = row.get("processImagePath"), row.get("eventMessage")
+            if (
+                type(writer) is not str
+                or writer.rsplit("/", 1)[-1] not in WRITERS
+                or type(message) is not str
+                or not (config.app_name in message or config.cdhash in message)
+            ):
+                raise PrivateError("DATA")
+        return _ul_shape_report(records)
+    except PrivateError as error:
+        code = error.code
+    except OSError as error:
+        code = _filesystem_code(error)
+    except (ValidationError, UnicodeError, RecursionError):
+        code = "DATA"
+    except (ValueError, TypeError, KeyError):
+        code = "INTERNAL"
+    return ShapeReport(error=code)
+
+
 def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, value in pairs:
@@ -1167,9 +1413,11 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True, parser_class=QuietParser)
     stage = commands.add_parser("prepare")
     stage.add_argument("--destination", type=Path)
-    for name in ("setup", "serve", "capture", "control", "report", "diagnose"):
+    for name in ("setup", "serve", "capture", "control", "report", "diagnose", "review-shapes"):
         child = commands.add_parser(name)
         child.add_argument("--private-run", action="store_true", required=True)
+        if name == "review-shapes":
+            child.add_argument("--existing-kit", type=Path)
         if name == "capture":
             child.add_argument("--browser-download", action="store_true", required=True)
         if name == "report":
@@ -1199,6 +1447,10 @@ def main(argv: list[str] | None = None) -> int:
             verification = diagnose(_hidden_existing_root())
             print(verification.model_dump_json(indent=2))
             return 0 if verification.error == "NONE" else 2
+        elif args.command == "review-shapes":
+            shapes = review_shapes(args.existing_kit or _hidden_existing_root())
+            print(shapes.model_dump_json(indent=2))
+            return 0 if shapes.error == "NONE" else 2
         else:
             result = (
                 capture(browser_download=args.browser_download)
