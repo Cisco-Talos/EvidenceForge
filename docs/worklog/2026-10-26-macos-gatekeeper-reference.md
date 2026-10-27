@@ -94,3 +94,31 @@ Prepared code-only kit: `/private/tmp/eforge-gatekeeper-kit-1789241v`.
 was run there by the agent. The human's next action is to read the linked instructions, close
 all agents, then run setup and the included server privately. Only the final fixed report may
 return to this chat; any missing/redacted evidence leaves Gatekeeper output gated.
+
+## Version-2 verification diagnostic
+
+The human reported only `INTERNAL` after `PRIVATE_STEP_VERIFYING_DOWNLOAD`, then attested that
+both the ZIP and extracted app appear directly in the printed save folder. No private path,
+directory, file or log was inspected by the agent. That does not identify the failing check:
+version 1 converted unclassified filesystem errors into a generic INTERNAL report.
+
+Version 2 adds `diagnose --private-run` to a separately prepared code copy. The human enters
+the existing kit folder at a hidden TTY-only prompt; echo fallback is prohibited. It replays
+the same provenance, platform, delivery-marker, archive, bundle, signing and quarantine checks,
+reporting an exact fixed step and error category. It uses the old kit's already verified metadata
+helper; it does not modify/rebuild the old kit, search directories, start a server/collector,
+launch the test app or open captured-record/summary files. Signature/quarantine verification is
+read-only, not a new capture. The original handed-off kit remains off limits to agents.
+
+Missing/access/type/I/O failures now have fixed codes; absent helper output is also explicit.
+Future captures print fixed verification-step markers. Private config compatibility is retained
+for v1 kits. The 25 new invented tests cover read-only replay of an old source hash, record-file
+nonaccess, missing individual inputs, native-verifier errors, canary redaction and hidden-input
+failure. These diagnose possible causes without claiming the human's cause is already known.
+
+All 502 private-kit tests pass, including 124 Gatekeeper cases. Full Ruff check/format and the
+unchanged revision-336 behavior digest pass. Prepared diagnostic-only handoff:
+`/private/tmp/eforge-gatekeeper-diagnostic-v2-a9c47f23`. This contains code/instructions only;
+do not inspect it after handoff. The human runs `diagnose --private-run` there and supplies the
+original kit folder at the hidden prompt. No setup, server, capture, test-app launch or private
+verification was run by the agent, and the original kit was neither opened nor modified.

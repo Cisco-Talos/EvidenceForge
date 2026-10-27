@@ -3,13 +3,14 @@
 
 """Prepare a HUMAN-ONLY Gatekeeper kit. Agents may prepare and test invented inputs only.
 
-Never run setup, serve, capture, control or report in an agent session. No live
+Never run setup, serve, capture, control, report or diagnose in an agent session. No live
 record, native value or private file may be shown to agents or copied into Git.
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import logging
@@ -26,6 +27,8 @@ import sys
 import tempfile
 import time
 import uuid
+import warnings
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import TCPServer
@@ -76,7 +79,29 @@ type Code = Literal[
     "UL_READINESS",
     "CONTROL",
     "INTERRUPTED",
+    "FILE_MISSING",
+    "FILE_ACCESS",
+    "FILE_TYPE",
+    "FILE_IO",
+    "HELPER_OUTPUT",
     "INTERNAL",
+]
+type VerifyStep = Literal[
+    "INPUT",
+    "PROVENANCE",
+    "PLATFORM",
+    "DOWNLOAD_FOLDER",
+    "DELIVERY_MARKER",
+    "ARCHIVE_CONTENT",
+    "APP_BUNDLE",
+    "APP_BINARY",
+    "APP_METADATA",
+    "BINARY_CONTENT",
+    "BUNDLE_CONTENT",
+    "SIGNATURE",
+    "ARCHIVE_QUARANTINE",
+    "APP_QUARANTINE",
+    "COMPLETE",
 ]
 type Outcome = Literal[
     "NOT_REVIEWED", "BLOCK_ALERT", "CONSENT_PROMPT", "RAN", "CANCELLED", "CRASH_OR_ERROR", "OTHER"
@@ -95,7 +120,7 @@ class PrivateError(ValueError):
 class Report(BaseModel, extra="forbid", frozen=True, strict=True):
     """The only shareable object; every leaf has a fixed vocabulary."""
 
-    kit_version: Literal[1] = 1
+    kit_version: Literal[2] = 2
     purpose: Literal["GATEKEEPER_REFERENCE_DIAGNOSTIC"] = "GATEKEEPER_REFERENCE_DIAGNOSTIC"
     collection: Literal["LIVE_TEST_ITEM_ONLY"] = "LIVE_TEST_ITEM_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -124,6 +149,23 @@ class Report(BaseModel, extra="forbid", frozen=True, strict=True):
     es_shapes: Check = "INCONCLUSIVE"
     human_outcome: Outcome = "NOT_REVIEWED"
     denial_conclusion: Literal["NOT_ESTABLISHED", "PRIVATE_REVIEW_CANDIDATE"] = "NOT_ESTABLISHED"
+
+
+class VerificationReport(BaseModel, extra="forbid", frozen=True, strict=True):
+    """Fixed diagnostics for an existing kit, with no record-file access or app launch."""
+
+    kit_version: Literal[2] = 2
+    purpose: Literal["GATEKEEPER_DOWNLOAD_VERIFICATION"] = "GATEKEEPER_DOWNLOAD_VERIFICATION"
+    operation: Literal["READ_ONLY_VERIFICATION"] = "READ_ONLY_VERIFICATION"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    reference_review: Literal["REQUIRED"] = "REQUIRED"
+    step: VerifyStep = "INPUT"
+    error: Code = "NONE"
+    verification: Check = "INCONCLUSIVE"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    server: Literal["NOT_STARTED"] = "NOT_STARTED"
+    test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
+    native_record_files: Literal["NOT_OPENED"] = "NOT_OPENED"
 
 
 class Config(BaseModel, extra="forbid", frozen=True, strict=True):
@@ -241,6 +283,8 @@ def _command(args: list[str], root: Path, *, stderr_output: bool = False) -> byt
     except (subprocess.SubprocessError, OSError) as error:
         raise PrivateError("BUILD") from error
     data = result.stderr if stderr_output else result.stdout
+    if type(data) is not bytes:
+        raise PrivateError("HELPER_OUTPUT")
     if len(data) > MAX_LINE:
         raise PrivateError("DATA")
     return data
@@ -527,13 +571,18 @@ def serve() -> None:
             server.handle_request()
 
 
-def _app_files(root: Path, app: Path) -> tuple[Path, Path]:
+def _app_files(
+    root: Path, app: Path, *, on_step: Callable[[VerifyStep], None] = lambda _step: None
+) -> tuple[Path, Path]:
+    on_step("APP_BUNDLE")
     if not app.is_relative_to(root / "private"):
         raise PrivateError("LOCATION")
     for path in (app.parent, app, app / "Contents", app / "Contents/MacOS"):
         _directory(path, private=False)
     binary, info = app / "Contents/MacOS/Probe", app / "Contents/Info.plist"
+    on_step("APP_BINARY")
     _read(binary, MAX_ARCHIVE, private=False)
+    on_step("APP_METADATA")
     _read(info, private=False)
     return binary, info
 
@@ -545,25 +594,39 @@ def _quarantine(root: Path, path: Path) -> Presence:
     return "PRESENT" if result == b"PRESENT" else "ABSENT"
 
 
-def _download(root: Path, config: Config) -> tuple[Path, Report]:
+def _download(
+    root: Path, config: Config, *, on_step: Callable[[VerifyStep], None] = lambda _step: None
+) -> tuple[Path, Report]:
     work = root / "private"
+    on_step("DOWNLOAD_FOLDER")
     _directory(work / "downloads")
+    on_step("DELIVERY_MARKER")
     if _read(work / "delivered", 64) != b"ARCHIVE_SERVED\n":
         raise PrivateError("DELIVERY")
     archive = work / "downloads/probe.zip"
+    on_step("ARCHIVE_CONTENT")
     if _digest(archive, private=False) != config.digests["private/probe.zip"]:
         raise PrivateError("DELIVERY")
     app = work / "downloads" / config.app_name
-    binary, info = _app_files(root, app)
+    binary, info = _app_files(root, app, on_step=on_step)
     original = work / "original" / config.app_name
-    if _digest(binary, private=False) != _digest(original / "Contents/MacOS/Probe") or _digest(
-        info, private=False
-    ) != _digest(original / "Contents/Info.plist"):
+    on_step("BINARY_CONTENT")
+    if _digest(binary, private=False) != _digest(original / "Contents/MacOS/Probe"):
         raise PrivateError("DELIVERY")
+    on_step("BUNDLE_CONTENT")
+    if _digest(info, private=False) != _digest(original / "Contents/Info.plist"):
+        raise PrivateError("DELIVERY")
+    on_step("SIGNATURE")
     _command(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(app)], root)
-    zip_quarantine, app_quarantine = _quarantine(root, archive), _quarantine(root, app)
-    if zip_quarantine != "PRESENT" or app_quarantine != "PRESENT":
+    on_step("ARCHIVE_QUARANTINE")
+    zip_quarantine = _quarantine(root, archive)
+    if zip_quarantine != "PRESENT":
         raise PrivateError("QUARANTINE")
+    on_step("APP_QUARANTINE")
+    app_quarantine = _quarantine(root, app)
+    if app_quarantine != "PRESENT":
+        raise PrivateError("QUARANTINE")
+    on_step("COMPLETE")
     return app, Report(
         target_platform="PASS",
         provenance="PASS",
@@ -573,6 +636,70 @@ def _download(root: Path, config: Config) -> tuple[Path, Report]:
         archive_quarantine=zip_quarantine,
         app_quarantine=app_quarantine,
     )
+
+
+def _filesystem_code(error: OSError) -> Code:
+    """Classify by exception type alone; never interpolate paths or system error text."""
+    if isinstance(error, FileNotFoundError):
+        return "FILE_MISSING"
+    if isinstance(error, PermissionError):
+        return "FILE_ACCESS"
+    if isinstance(error, (NotADirectoryError, IsADirectoryError)):
+        return "FILE_TYPE"
+    return "FILE_IO"
+
+
+def _hidden_existing_root() -> Path:
+    if not sys.stdin.isatty():
+        raise PrivateError("INPUT")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            value = getpass.getpass(
+                "Existing private kit folder (hidden; not its private subfolder): "
+            )
+    except (getpass.GetPassWarning, EOFError) as error:
+        raise PrivateError("INPUT") from error
+    path = Path(value)
+    if not value or len(value) > 4096 or not path.is_absolute():
+        raise PrivateError("INPUT")
+    return path
+
+
+def diagnose(existing: Path) -> VerificationReport:
+    """HUMAN ONLY: replay read-only checks against an existing kit; write nothing.
+
+    Only signature verification and the provenance-verified quarantine helper can
+    run. No server, collector, test app, build, log reader or directory search runs.
+    """
+    current: VerifyStep = "INPUT"
+
+    def step(value: VerifyStep) -> None:
+        nonlocal current
+        current = value
+
+    try:
+        _root()  # The diagnostic itself must be a prepared code copy outside Git.
+        _preflight()
+        _directory(existing)
+        target = existing.resolve(strict=True)
+        _outside_git(target)
+        step("PROVENANCE")
+        config = _config(target)
+        step("PLATFORM")
+        if _platform_info(target) != (config.os_release, config.os_build):
+            raise PrivateError("PLATFORM")
+        _download(target, config, on_step=step)
+        return VerificationReport(step="COMPLETE", verification="PASS")
+    except PrivateError as error:
+        code = error.code
+    except OSError as error:
+        code = _filesystem_code(error)
+    except (ValidationError, UnicodeError, RecursionError, KeyError):
+        code = "DATA"
+    except (TypeError, ValueError, subprocess.SubprocessError):
+        code = "INTERNAL"
+    return VerificationReport(step=current, error=code, verification="FAIL")
 
 
 def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -924,7 +1051,9 @@ def capture(*, browser_download: bool) -> Report:
         for name in ("capture-started", "capture.json", "test-ul.jsonl", "test-es.jsonl", "marker")
     ):
         raise PrivateError("DUPLICATE")
-    app, report = _download(root, config)
+    app, report = _download(
+        root, config, on_step=lambda step: print(f"PRIVATE_VERIFY_{step}", flush=True)
+    )
     _write(root / "private/capture-started", b"CAPTURE_STARTED\n")
     print("PRIVATE_STEP_STARTING_COLLECTORS; readiness is bounded to 12 seconds", flush=True)
     result = _collect(root, app, config, report)
@@ -1038,7 +1167,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True, parser_class=QuietParser)
     stage = commands.add_parser("prepare")
     stage.add_argument("--destination", type=Path)
-    for name in ("setup", "serve", "capture", "control", "report"):
+    for name in ("setup", "serve", "capture", "control", "report", "diagnose"):
         child = commands.add_parser(name)
         child.add_argument("--private-run", action="store_true", required=True)
         if name == "capture":
@@ -1065,6 +1194,11 @@ def main(argv: list[str] | None = None) -> int:
             print("PRIVATE_SETUP_READY; use serve next; do not launch the app yet")
         elif args.command == "serve":
             serve()
+        elif args.command == "diagnose":
+            _root()
+            verification = diagnose(_hidden_existing_root())
+            print(verification.model_dump_json(indent=2))
+            return 0 if verification.error == "NONE" else 2
         else:
             result = (
                 capture(browser_download=args.browser_download)
@@ -1086,7 +1220,9 @@ def main(argv: list[str] | None = None) -> int:
         result = Report(error="INTERRUPTED")
     except (ValidationError, UnicodeError, RecursionError):
         result = Report(error="DATA")
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+    except OSError as error:
+        result = Report(error=_filesystem_code(error))
+    except (ValueError, TypeError, KeyError, subprocess.SubprocessError):
         result = Report(error="INTERNAL")
     print(result.model_dump_json(indent=2))
     return 2

@@ -664,3 +664,138 @@ def test_matched_record_byte_budget_is_enforced(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(kit, "MAX_RETAINED_BYTES", 8)
     with pytest.raises(kit.PrivateError, match="DATA"):
         tracker.accept("ul", json.dumps(_ul(_config())).encode())
+
+
+@pytest.mark.parametrize("field", tuple(kit.VerificationReport.model_fields))
+def test_verification_report_cannot_expose_native_values(field: str) -> None:
+    with pytest.raises(ValidationError):
+        kit.VerificationReport.model_validate({field: _CANARY})
+
+
+def test_read_only_diagnosis_accepts_existing_kit_without_reading_records_or_writing(
+    synthetic: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    config = _delivery(synthetic, monkeypatch)
+    # The private config format is unchanged from v1; old code hashes remain valid.
+    old_source = synthetic / "private_gatekeeper.py"
+    old_source.write_bytes(b"INVENTED_VERSION_ONE_SOURCE")
+    updated = config.model_copy(update={"digests": kit._provenance(synthetic, config.app_name)})
+    (synthetic / "private/config.json").write_bytes(updated.model_dump_json().encode())
+    for name in ("test-ul.jsonl", "test-es.jsonl", "capture.json", "control.json"):
+        kit._write(synthetic / "private" / name, _CANARY.encode())
+    before = {
+        str(p.relative_to(synthetic)): p.read_bytes() for p in synthetic.rglob("*") if p.is_file()
+    }
+    original_read = kit._read
+
+    def read(path: Path, *args: object, **kwargs: object) -> bytes:
+        assert path.name not in {"test-ul.jsonl", "test-es.jsonl", "capture.json", "control.json"}
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(kit, "_read", read)
+    monkeypatch.setattr(kit, "_hidden_existing_root", lambda: synthetic)
+    capsys.readouterr()
+    assert kit.main(["diagnose", "--private-run"]) == 0
+    output = capsys.readouterr().out
+    report = kit.VerificationReport.model_validate_json(output)
+    assert report.step == "COMPLETE" and report.verification == "PASS"
+    assert report.native_record_files == "NOT_OPENED"
+    assert _CANARY not in output and config.token not in output and config.os_build not in output
+    assert before == {
+        str(p.relative_to(synthetic)): p.read_bytes() for p in synthetic.rglob("*") if p.is_file()
+    }
+
+
+@pytest.mark.parametrize(
+    "missing,step",
+    [
+        ("delivered", "DELIVERY_MARKER"),
+        ("archive", "ARCHIVE_CONTENT"),
+        ("app", "APP_BUNDLE"),
+        ("binary", "APP_BINARY"),
+        ("metadata", "APP_METADATA"),
+    ],
+)
+def test_missing_download_inputs_report_exact_step_without_leaking_names(
+    synthetic: Path, monkeypatch: pytest.MonkeyPatch, missing: str, step: str
+) -> None:
+    config = _delivery(synthetic, monkeypatch)
+    app = synthetic / "private/downloads" / config.app_name
+    target = {
+        "delivered": synthetic / "private/delivered",
+        "archive": synthetic / "private/downloads/probe.zip",
+        "app": app,
+        "binary": app / "Contents/MacOS/Probe",
+        "metadata": app / "Contents/Info.plist",
+    }[missing]
+    shutil.rmtree(target) if missing == "app" else target.unlink()
+    result = kit.diagnose(synthetic)
+    assert result.step == step and result.error == "FILE_MISSING"
+    assert config.token not in result.model_dump_json()
+    assert not (synthetic / "private/capture-started").exists()
+
+
+@pytest.mark.parametrize(
+    "fault,step,code",
+    [
+        ("permission", "ARCHIVE_CONTENT", "FILE_ACCESS"),
+        ("signature", "SIGNATURE", "BUILD"),
+        ("archive_quarantine", "ARCHIVE_QUARANTINE", "QUARANTINE"),
+        ("app_quarantine", "APP_QUARANTINE", "QUARANTINE"),
+        ("native_type_error", "ARCHIVE_QUARANTINE", "INTERNAL"),
+    ],
+)
+def test_native_verification_faults_are_classified_without_error_text(
+    synthetic: Path, monkeypatch: pytest.MonkeyPatch, fault: str, step: str, code: str
+) -> None:
+    _delivery(synthetic, monkeypatch)
+    if fault == "permission":
+        original = kit._read
+
+        def read(path: Path, *args: object, **kwargs: object) -> bytes:
+            if path.name == "probe.zip" and path.parent.name == "downloads":
+                raise PermissionError(_CANARY)
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(kit, "_read", read)
+    elif fault == "signature":
+
+        def command(*_args: object, **_kwargs: object) -> bytes:
+            raise kit.PrivateError("BUILD") from OSError(_CANARY)
+
+        monkeypatch.setattr(kit, "_command", command)
+    else:
+
+        def quarantine(_root: Path, path: Path) -> str:
+            if fault == "native_type_error":
+                raise TypeError(_CANARY)
+            return (
+                "ABSENT"
+                if (path.name == "probe.zip") == (fault == "archive_quarantine")
+                else "PRESENT"
+            )
+
+        monkeypatch.setattr(kit, "_quarantine", quarantine)
+    result = kit.diagnose(synthetic)
+    assert (result.step, result.error) == (step, code)
+    assert _CANARY not in result.model_dump_json()
+
+
+def test_hidden_root_prompt_never_falls_back_to_echo(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(kit.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+
+    def prompt(_message: str) -> str:
+        kit.warnings.warn(_CANARY, kit.getpass.GetPassWarning)
+        pytest.fail("Echo fallback must not reach input reading")
+
+    monkeypatch.setattr(kit.getpass, "getpass", prompt)
+    with pytest.raises(kit.PrivateError, match="INPUT"):
+        kit._hidden_existing_root()
+    monkeypatch.setattr(kit.sys, "stdin", SimpleNamespace(isatty=lambda: False))
+    with pytest.raises(kit.PrivateError, match="INPUT"):
+        kit._hidden_existing_root()
+
+
+def test_source_copy_cannot_diagnose_a_private_kit() -> None:
+    result = kit.diagnose(Path("/invented-private-location-never-opened"))
+    assert result.step == "INPUT" and result.error == "LOCATION"

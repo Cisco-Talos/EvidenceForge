@@ -1,6 +1,34 @@
 # Private Gatekeeper reference — human only
 
-Close Codex and every other agent before **setup, serve, capture, control or report**.
+## Version 2: diagnosing a version-1 verification error
+
+If the earlier kit stopped at `PRIVATE_STEP_VERIFYING_DOWNLOAD` with `INTERNAL`, do not
+rebuild, redownload or repeat capture yet. Version 1 obscured filesystem failures behind that
+generic code. A version-2 code-only kit can replay verification against your existing kit.
+
+1. Stop the old server with Ctrl+C. Read this section, then close Codex and all other agents.
+2. Run the **new** prepared helper with your normal-user Python:
+
+   ```sh
+   "$PY" -I -B "$NEW_KIT/private_gatekeeper.py" diagnose --private-run
+   ```
+
+3. At the hidden prompt, enter the **old kit folder**, not its `private` or `downloads`
+   subfolder. The input must not echo. Do not paste that path into this chat.
+4. Privately inspect and share only the resulting fixed JSON. `step` identifies the check;
+   `error` distinguishes a missing file, access failure, type mismatch or verification failure.
+
+This does not write/change your old kit, start a server/collector, rebuild or launch the test
+app, or open any retained record file. It verifies the existing private provenance and exact
+expected files, then runs only read-only code-signature and quarantine checks using the
+already verified metadata helper. Exact names, hashes, OS build and native error text remain
+private. No directory search or listing is performed. Even a successful diagnostic does not
+run capture or establish denial evidence; wait for the result to determine the next step.
+
+The original kit remains untouched. All operations below are for a fresh acquisition, not
+instructions to repeat an interrupted experiment.
+
+Close Codex and every other agent before **setup, serve, capture, control, report or diagnose**.
 Agents may copy this code-only kit, syntax-check sources without execution and run invented-input
 tests. They must never open the handed-off kit after you start using it. No captures, redacted
 copies, screenshots, alert text, paths, hashes or native records may be shared with an agent or
