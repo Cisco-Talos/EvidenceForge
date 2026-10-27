@@ -98,3 +98,9 @@ result, descriptors or entitlements) are separate from filtered/dropped/out-of-w
 Aggregate diagnostics consume no ES counters. Unannotated background aggregate births and other
 compatibility paths are not a complete inventory. Eval includes this account beside observed
 host source volumes; selecting a format or passing its parser does not establish native coverage.
+
+Plain nested `/bin/zsh` and `/bin/bash` invocations may own later direct external commands through
+`nested_command_shells` in the internal execution metadata profile. Exact vectors and all existing
+metadata gates are required. This adds no authoring field and does not qualify `-c` strings,
+scripts, PTYs, GUI responsibility or effect-bearing commands. A nested qualified query can retain
+the same declared nominal result as a direct query; successful exec alone still supplies no result.

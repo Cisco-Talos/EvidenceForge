@@ -1147,7 +1147,13 @@ class ProcessExecutionService:
             parent is None
             or provider is None
             or parent.image not in {"/bin/zsh", "/bin/bash"}
-            or parent.command_line not in {"-zsh", "-bash"}
+            or not (
+                parent.command_line in {"-zsh", "-bash"}
+                or any(
+                    parent.image == rule.image and parent.arguments == rule.arguments
+                    for rule in provider.profile.nested_command_shells
+                )
+            )
             or parent.principal != launch.actor.username
             or parent.logon_id != launch.actor.logon_id
             or parent.credentials is None

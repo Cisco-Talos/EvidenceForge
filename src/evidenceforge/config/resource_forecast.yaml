@@ -1,5 +1,5 @@
-version: 5
-calibration_label: "Historical bounded-registry and cross-platform emitter working-set calibration"
+version: 6
+calibration_label: "Bounded registries, cross-platform emitters and Mac native ingress budgets"
 
 memory:
   base_mib: 90
@@ -16,6 +16,7 @@ memory:
   smb_catalog_bytes_per_file: 900
   smb_retained_bytes_per_mutation: 700
   external_sort_mib_per_zeek_format: 0.0
+  macos_es_ingress_mib_per_host: 1.5
   smb_bytes_per_operation_by_format:
     windows_event_security: 22500
     ecar: 4500
@@ -172,6 +173,10 @@ disk:
   upper_multiplier: 1.50
   peak_lower_multiplier: 0.10
   external_sort_transient_multiplier: 1.05
+  # Budget for internal immutable snapshots plus merge overlap, independently
+  # of exported formats. Conservative engineering allowances, not native rates.
+  macos_es_ingress_bytes_per_host_second: 256.0
+  macos_es_ingress_bytes_per_authored_occurrence: 24000
   # Incremental-checkpoint calibration. The workspace keeps one
   # content-addressed copy of sealed output/state segments, two bounded live
   # heads/manifests, one pending delta, resolved input, and metadata. The segment

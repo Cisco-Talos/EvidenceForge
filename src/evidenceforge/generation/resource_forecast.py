@@ -331,6 +331,7 @@ class _MemoryCalibration(BaseModel):
     smb_catalog_bytes_per_file: int = Field(ge=0)
     smb_retained_bytes_per_mutation: int = Field(ge=0)
     external_sort_mib_per_zeek_format: float = Field(ge=0)
+    macos_es_ingress_mib_per_host: float = Field(default=0.0, ge=0)
     smb_bytes_per_operation_by_format: dict[str, int] = Field(default_factory=dict)
     lower_multiplier: float = Field(gt=0)
     upper_multiplier: float = Field(gt=0)
@@ -450,6 +451,8 @@ class _DiskCalibration(BaseModel):
     upper_multiplier: float = Field(gt=0)
     peak_lower_multiplier: float = Field(gt=0)
     external_sort_transient_multiplier: float = Field(ge=0)
+    macos_es_ingress_bytes_per_host_second: float = Field(default=0.0, ge=0)
+    macos_es_ingress_bytes_per_authored_occurrence: int = Field(default=0, ge=0)
     checkpoint_workspace_base_mib: float = Field(ge=0)
     checkpoint_segment_multiplier: float = Field(ge=1)
     checkpoint_head_memory_fraction: float = Field(ge=0, le=1)
@@ -950,6 +953,12 @@ def build_resource_forecast(
         * 1024
         * 1024
     )
+    external_sort_memory += int(
+        _system_count_for_scope(scenario, "macos")
+        * memory_config.macos_es_ingress_mib_per_host
+        * 1024
+        * 1024
+    )
     storage_emitter_memory = estimate.smb_batch_operations * sum(
         memory_config.smb_bytes_per_operation_by_format.get(name, 0) for name in formats
     )
@@ -999,6 +1008,14 @@ def build_resource_forecast(
     )
 
     disk_config = effective_calibration.disk
+    macos_hosts = _system_count_for_scope(scenario, "macos")
+    ingress_bytes = int(
+        (estimate.primary_duration_seconds + estimate.warmup_seconds)
+        * macos_hosts
+        * disk_config.macos_es_ingress_bytes_per_host_second
+        + (estimate.explicit_occurrences if macos_hosts else 0)
+        * disk_config.macos_es_ingress_bytes_per_authored_occurrence
+    )
     format_output_bytes: dict[str, int] = {}
     for format_name in formats:
         format_config = disk_config.formats.get(format_name)
@@ -1033,7 +1050,7 @@ def build_resource_forecast(
         if format_name.startswith("zeek_")
     )
     external_sort_transient = int(
-        expected_zeek_output * disk_config.external_sort_transient_multiplier
+        expected_zeek_output * disk_config.external_sort_transient_multiplier + ingress_bytes * 2
     )
     final_output = ForecastRange(
         lower_bytes=int(expected_final_output * disk_config.lower_multiplier),
@@ -1049,16 +1066,25 @@ def build_resource_forecast(
         checkpoint_workspace = ForecastRange(
             lower_bytes=(
                 checkpoint_base
-                + int(final_output.lower_bytes * disk_config.checkpoint_segment_multiplier)
+                + int(
+                    (final_output.lower_bytes + ingress_bytes)
+                    * disk_config.checkpoint_segment_multiplier
+                )
             ),
             expected_bytes=(
                 checkpoint_base
-                + int(expected_final_output * disk_config.checkpoint_segment_multiplier)
+                + int(
+                    (expected_final_output + ingress_bytes)
+                    * disk_config.checkpoint_segment_multiplier
+                )
                 + int(expected_memory * disk_config.checkpoint_head_memory_fraction)
             ),
             upper_bytes=(
                 checkpoint_base
-                + int(final_output.upper_bytes * disk_config.checkpoint_segment_multiplier)
+                + int(
+                    (final_output.upper_bytes + ingress_bytes)
+                    * disk_config.checkpoint_segment_multiplier
+                )
                 + int(memory.upper_bytes * disk_config.checkpoint_head_memory_fraction)
             ),
         )

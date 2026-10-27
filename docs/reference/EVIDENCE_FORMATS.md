@@ -716,7 +716,10 @@ their ground-truth event's `skipped_reason`.
 Unsupported individual phases retain nonexported counter observations, without placeholder
 native records. Known sibling forks remain available; later exported rows retain the resulting
 sequence gaps. Qualified external SSH commands without a PTY use three channel-owned pipe
-descriptors after exec; the shell/helper inventories remain unknown. Local GUI audit origins
+descriptors after exec; the shell/helper inventories remain unknown. Plain nested `/bin/zsh`
+and `/bin/bash` command parents are admitted by the frozen `nested_command_shells` policy
+only when their existing audit, responsibility, image, terminal and descriptor facts pass the
+same gates. Shell command strings, scripts and flags do not inherit that qualification. Local GUI audit origins
 are modeled, while GUI responsible-process relationships remain unknown. PTY command generation
 is unavailable. The controlled, fully specified v11 process
 path supports all three phases; this does not imply native coverage for every ordinary command.

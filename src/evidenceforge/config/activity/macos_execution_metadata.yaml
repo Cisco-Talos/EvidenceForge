@@ -13,6 +13,14 @@ ssh_command_descriptors: standard_pipes
 # Explicit nominal completed results for these exact invocations only. This is a
 # synthetic workload choice, not a success default, failure-rate measurement or
 # result inferred from exec admission. Only the natural completion owner uses it.
+# Literal nested shells can own subsequent direct commands when all existing
+# audit, responsibility, job-control, image and descriptor gates also pass.
+# Scripts, -c strings and other flags are deliberately absent.
+nested_command_shells:
+  - image: /bin/zsh
+    arguments: ["/bin/zsh"]
+  - image: /bin/bash
+    arguments: ["/bin/bash"]
 command_completions:
   - arguments: ["/usr/bin/id"]
     exit_code: 0

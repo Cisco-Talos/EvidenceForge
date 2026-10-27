@@ -4171,6 +4171,20 @@ class MacosCommandCompletionPolicy(BaseModel, extra="forbid", frozen=True):
         return values
 
 
+class MacosCommandShellPolicy(BaseModel, extra="forbid", frozen=True):
+    """A literal nested shell invocation admitted as a modeled command parent."""
+
+    image: Literal["/bin/zsh", "/bin/bash"]
+    arguments: tuple[str, ...] = Field(min_length=1, max_length=1)
+
+    @model_validator(mode="after")
+    def plain_interactive_shell(self) -> Self:
+        """Keep shell command strings, scripts and flags outside this bounded policy."""
+        if self.arguments != (self.image,):
+            raise ValueError("Nested Mac command shells require the exact plain executable vector")
+        return self
+
+
 class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     """Explicit deterministic launch policy for admitted Mac execution producers."""
 
@@ -4191,6 +4205,7 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
     system_responsibility: Literal["none"] | None = None
     gui_audit_origin: Literal["authenticated_local_account"] | None = None
     ssh_command_descriptors: Literal["standard_pipes"] | None = None
+    nested_command_shells: tuple[MacosCommandShellPolicy, ...] = Field(default=(), max_length=16)
     command_completions: tuple[MacosCommandCompletionPolicy, ...] = Field(
         default=(), max_length=256
     )
@@ -4203,6 +4218,9 @@ class MacosExecutionMetadataProfile(BaseModel, extra="forbid", frozen=True):
         ]
         if len(selectors) != len(set(selectors)):
             raise ValueError("Mac launch validation policies must have disjoint artifact selectors")
+        shell_invocations = [(rule.image, rule.arguments) for rule in self.nested_command_shells]
+        if len(shell_invocations) != len(set(shell_invocations)):
+            raise ValueError("Nested Mac command shell policies must have distinct invocations")
         invocations = [rule.arguments for rule in self.command_completions]
         if len(invocations) != len(set(invocations)):
             raise ValueError("Mac command completion policies must have distinct argument vectors")

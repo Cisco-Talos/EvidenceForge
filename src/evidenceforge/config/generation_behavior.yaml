@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 340
+current_revision: 341
 history_start_revision: 1
-behavior_surface_sha256: dc3c6a53e179a2c33b9e328fcf16c69dee94a40c59ef12915477e4b66a814362
+behavior_surface_sha256: 30f5762355d6b5572f6c5f72c6546a76e49773cea72f64fe3c81c4260a0eaa07
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3235,3 +3235,14 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Reports committed exact Mac process cohort coverage by host and authored action with independent source decisions and native qualification reasons; aggregate diagnostics allocate no ES sequences.
+  - revision: 341
+    id: macos-qualified-nested-shell-commands
+    impact: localized
+    domains:
+      - canonical-process-execution
+      - execution-metadata-policy
+      - native-ingress-resource-budget
+    formats:
+      - ecar
+      - macos_endpoint_security
+    summary: Admits literal nested Bash and zsh command parents through the existing metadata-complete fork/exec producer, preserving descriptor, audit, responsibility and outcome gates, with bounded ingress buffers and explicit temporary resource budgets.

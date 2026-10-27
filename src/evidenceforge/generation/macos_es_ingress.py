@@ -165,7 +165,7 @@ class MacosESIngress:
             }
         )
         self.root = root
-        self.spool = _IngressSpool(definition, root)
+        self.spool = _IngressSpool(definition, root, buffer_size=128)
         self.enabled = True
         self.finalized = False
         self.coverage: MacosNativeCoverage | None = None

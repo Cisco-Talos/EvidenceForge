@@ -88,3 +88,22 @@ Coverage verification: 67 focused report/ground-truth/ingress tests and four slo
 CLI gates passed. The native resume gate includes isolated checkpoint verification, suspended
 resume, fresh uninterrupted comparison and contiguous source sequences. Full Ruff checks pass.
 Generation behavior revision 340 records this additive diagnostic and ground-truth change.
+
+## Command producer and resource milestone
+
+The canonical process-execution bundle now permits explicitly enumerated plain nested Bash/zsh
+parents, retaining the same exact-vector, audit, responsibility, binary, cwd, environment, terminal,
+thread and descriptor gates. The profile defaults to no new nested selectors in old snapshots.
+No shell string, script, PTY or missing GUI fact is inferred. The existing natural completion
+owner supplies a known result only for its already-qualified literal query policy.
+
+A fresh CLI regression builds a nested SSH shell and `id` child, verifies exactly one native exec
+and zero-status exit, and proves eCAR byte equality when native output is filtered. Seven focused
+nested-policy tests, 26 existing completion tests and the broader 64-test metadata/forecast/ingress
+set pass. `validate-config` reports zero findings across 99 files.
+
+The ingress sorter now buffers 128 rows per host rather than 10,000. Forecast calibration v6
+budgets its host pages, temporary run/merge overlap and checkpoint snapshots even when native
+output is filtered. The byte-rate and authored-occurrence allowances are conservative engineering
+budgets, not measured native production rates. All 25 forecast tests pass, including the eCAR-only
+Mac budget case. Generation behavior revision 341 covers this milestone.
