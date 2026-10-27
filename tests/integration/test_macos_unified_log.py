@@ -110,6 +110,8 @@ def test_native_workspace_generation_is_deterministic_filtered_and_mac_local(
         if json.loads(line).get("object") == "USER_SESSION"
         and json.loads(line).get("action") == "LOGIN"
         and json.loads(line)["properties"].get("outcome") == "success"
-        and json.loads(line)["properties"].get("session_id") is not None
+        and json.loads(line)["properties"].get("logon_id") is not None
     ]
     assert len(records) == len(logins)
+    # Mac GUI audit attribution is independent of a Windows-style session ID.
+    assert all("session_id" not in login["properties"] for login in logins)

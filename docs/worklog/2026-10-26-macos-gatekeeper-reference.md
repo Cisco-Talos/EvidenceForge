@@ -390,5 +390,32 @@ archive of committed predecessor c73bf2a6, with an invented baseline/caller and 
 the same error without any refusal event. Low-noise refusal acceptance passes. This pre-existing
 ordinary-generation bug is now a durable P1 in TODO; it does not change refusal semantics.
 The older workspace CLI test generates deterministic/filter-identical native output, then fails
-its eCAR-login assertion because it expects a now-absent explicit `properties.outcome=success`.
+its eCAR-login assertion because it requires a Windows-style nonzero `properties.session_id`
+on the Mac GUI login. The current GUI model deliberately uses a separate audit origin and
+omits that session identifier; the correct durable correlation is `logon_id`.
 These failures are retained explicitly rather than described as passing regressions.
+
+
+## Additional synthetic regression diagnosis
+
+The workspace integration assertion now follows the existing Mac GUI contract: it checks a
+successful USER_SESSION/LOGIN with `logon_id` and requires Windows-style `session_id` to stay
+absent. Its five fresh-process full/filter/target runs now pass. This changes no emitted data.
+
+The adjacent ES timing defect is wider than a duplicate foreground-close request. A local
+experiment retaining the existing close plan removed the first warm-up inversion but reproduced
+another inversion at finalization: an authored close was published before older pending background
+closes. That experiment was removed completely; no partial scheduler change or relaxed collector
+check is shipped. A correct repair needs the canonical close/publication owners to establish a
+chronological delivery order across background and authored work, including watermark/finalization
+and recovery. It needs no new native collection. The durable P1 remains explicit in TODO.
+All diagnostics used invented repository scenarios and instrumented synthetic execution in private
+temporary directories; no native host logs or private capture values were inspected. The bounded
+refusal CLI acceptance remains passing independently of this pre-existing scheduler defect.
+
+Final feature validation: 356 focused refusal/private-checker/config/checkpoint/behavior tests pass,
+351 additional deployment/ground-truth/skill tests passed before the final manifest refresh, and
+the main regression batch passed 3,313 tests with both subsequently corrected failures. Studio
+TypeScript, full Ruff check/format, whitespace and behavior revision 338 validation pass. The
+feature was committed and pushed as e928bf5d. No release version, live collection or native data
+artifact was added. The follow-up assertion correction carries no generation behavior change.
