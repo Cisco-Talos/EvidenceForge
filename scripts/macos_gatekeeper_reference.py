@@ -224,6 +224,52 @@ type ValueType = Literal[
     "NULL", "BOOLEAN", "INTEGER", "NUMBER", "STRING", "ARRAY", "OBJECT", "MIXED", "NOT_OBSERVED"
 ]
 type FailureKind = Literal["NONE", "MISSING", "TYPE", "VALUE", "UNSUPPORTED", "MULTIPLE"]
+type CandidateULField = Literal[
+    "processUniqueID",
+    "processUniqueIdentifier",
+    "processIdentifier",
+    "process",
+    "sender",
+    "logType",
+    "size",
+    "timeToLive",
+    "TTL",
+    "creatorActivityIdentifier",
+    "creatorProcessUniqueIdentifier",
+    "transitionActivityIdentifier",
+    "machContinuousTimestamp",
+    "continuousNanosecondsSinceBoot",
+    "processStartTimestamp",
+    "messageFlags",
+    "signpostID",
+    "signpostName",
+    "signpostScope",
+    "signpostType",
+]
+# Predeclared structural probes, not an assertion that these API/export names are
+# present or equivalent. No name discovered in a private row is ever exported.
+UL_CANDIDATES: tuple[CandidateULField, ...] = (
+    "processUniqueID",
+    "processUniqueIdentifier",
+    "processIdentifier",
+    "process",
+    "sender",
+    "logType",
+    "size",
+    "timeToLive",
+    "TTL",
+    "creatorActivityIdentifier",
+    "creatorProcessUniqueIdentifier",
+    "transitionActivityIdentifier",
+    "machContinuousTimestamp",
+    "continuousNanosecondsSinceBoot",
+    "processStartTimestamp",
+    "messageFlags",
+    "signpostID",
+    "signpostName",
+    "signpostScope",
+    "signpostType",
+)
 
 
 class ULFieldShape(BaseModel, extra="forbid", frozen=True, strict=True):
@@ -238,7 +284,7 @@ class ULFieldShape(BaseModel, extra="forbid", frozen=True, strict=True):
 class ShapeReport(BaseModel, extra="forbid", frozen=True, strict=True):
     """Offline shape diagnostics never export discovered keys or native values."""
 
-    review_version: Literal[1] = 1
+    review_version: Literal[2] = 2
     purpose: Literal["GATEKEEPER_UL_SHAPE_DIAGNOSTIC"] = "GATEKEEPER_UL_SHAPE_DIAGNOSTIC"
     mode: Literal["OFFLINE_READ_ONLY"] = "OFFLINE_READ_ONLY"
     reference_review: Literal["REQUIRED"] = "REQUIRED"
@@ -253,6 +299,8 @@ class ShapeReport(BaseModel, extra="forbid", frozen=True, strict=True):
     additional_fields: FieldPresence = "NOT_OBSERVED"
     additional_value_types: ValueType = "NOT_OBSERVED"
     fields: dict[KnownULField, ULFieldShape] = Field(default_factory=dict)
+    candidate_fields: dict[CandidateULField, ULFieldShape] = Field(default_factory=dict)
+    unrecognized_fields: FieldPresence = "NOT_OBSERVED"
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     server: Literal["NOT_STARTED"] = "NOT_STARTED"
     test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
@@ -872,6 +920,13 @@ def _ul_shape_report(records: list[bytes]) -> ShapeReport:
             else "MULTIPLE",
         )
     extras = [{name: value for name, value in row.items() if name not in UL_FIELDS} for row in rows]
+    candidates = {
+        name: ULFieldShape(
+            presence=_presence([name in row for row in rows]),
+            value_type=_value_types([row[name] for row in rows if name in row]),
+        )
+        for name in UL_CANDIDATES
+    }
     return ShapeReport(
         review_complete="PASS",
         provenance="PASS",
@@ -883,7 +938,77 @@ def _ul_shape_report(records: list[bytes]) -> ShapeReport:
             [value for extra in extras for value in extra.values()]
         ),
         fields=fields,
+        candidate_fields=candidates,
+        unrecognized_fields=_presence(
+            [any(name not in UL_CANDIDATES for name in extra) for extra in extras]
+        ),
     )
+
+
+def _shape_inputs(existing: Path) -> list[bytes]:
+    """Verify private provenance, bounds and test-item correlation before any review."""
+    _root()
+    if os.getuid() == 0 or os.getuid() != os.geteuid():
+        raise PrivateError("ROOT_USER")
+    _directory(existing)
+    target = existing.resolve(strict=True)
+    _outside_git(target)
+    config = _config(target)
+    stored = StoredCapture.model_validate_json(_read(target / "private/capture.json"))
+    if (
+        stored.error != "NONE"
+        or stored.provenance != "PASS"
+        or stored.target_platform != "PASS"
+        or stored.bounded_collection != "PASS"
+        or stored.collector_cleanup != "PASS"
+        or stored.test_item_policy_records != "OBSERVED"
+    ):
+        raise PrivateError("CONTROL")
+    data = _read(target / "private/test-ul.jsonl", MAX_RETAINED_BYTES)
+    records = data.splitlines()
+    if not records or len(records) > MAX_RETAINED or not data.endswith(b"\n"):
+        raise PrivateError("DATA")
+    for raw in records:
+        try:
+            row = _decode(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            raise PrivateError("DATA") from None
+        pending: list[tuple[object, int]] = [(row, 1)]
+        while pending:
+            value, depth = pending.pop()
+            if depth > 32:
+                raise PrivateError("DATA")
+            if type(value) is dict:
+                pending.extend((item, depth + 1) for item in value.values())
+            elif type(value) is list:
+                pending.extend((item, depth + 1) for item in value)
+        writer, message = row.get("processImagePath"), row.get("eventMessage")
+        if (
+            type(writer) is not str
+            or writer.rsplit("/", 1)[-1] not in WRITERS
+            or type(message) is not str
+            or not (config.app_name in message or config.cdhash in message)
+        ):
+            raise PrivateError("DATA")
+    return records
+
+
+def inspect_field_names(existing: Path) -> None:
+    """HUMAN ONLY: show bounded extra schema names on a private terminal, never values.
+
+    This deliberately differs from the agent-safe fixed report. The human must review
+    these names for sensitive content before choosing whether to share any of them.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise PrivateError("INPUT")
+    records = _shape_inputs(existing)
+    names = sorted({name for raw in records for name in _decode(raw) if name not in UL_FIELDS})
+    if len(names) > 32 or any(
+        not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name) for name in names
+    ):
+        raise PrivateError("DATA")
+    print("PRIVATE_FIELD_NAMES_ONLY; inspect privately before sharing any technical schema names")
+    print(json.dumps(names, ensure_ascii=True))
 
 
 def review_shapes(existing: Path) -> ShapeReport:
@@ -893,50 +1018,7 @@ def review_shapes(existing: Path) -> ShapeReport:
     error text or native value output is used. Original kit provenance is checked locally.
     """
     try:
-        _root()
-        if os.getuid() == 0 or os.getuid() != os.geteuid():
-            raise PrivateError("ROOT_USER")
-        _directory(existing)
-        target = existing.resolve(strict=True)
-        _outside_git(target)
-        config = _config(target)
-        stored = StoredCapture.model_validate_json(_read(target / "private/capture.json"))
-        if (
-            stored.error != "NONE"
-            or stored.provenance != "PASS"
-            or stored.target_platform != "PASS"
-            or stored.bounded_collection != "PASS"
-            or stored.collector_cleanup != "PASS"
-            or stored.test_item_policy_records != "OBSERVED"
-        ):
-            raise PrivateError("CONTROL")
-        data = _read(target / "private/test-ul.jsonl", MAX_RETAINED_BYTES)
-        records = data.splitlines()
-        if not records or len(records) > MAX_RETAINED or not data.endswith(b"\n"):
-            raise PrivateError("DATA")
-        for raw in records:
-            try:
-                row = _decode(raw)
-            except (ValueError, UnicodeError, RecursionError):
-                raise PrivateError("DATA") from None
-            pending: list[tuple[object, int]] = [(row, 1)]
-            while pending:
-                value, depth = pending.pop()
-                if depth > 32:
-                    raise PrivateError("DATA")
-                if type(value) is dict:
-                    pending.extend((item, depth + 1) for item in value.values())
-                elif type(value) is list:
-                    pending.extend((item, depth + 1) for item in value)
-            writer, message = row.get("processImagePath"), row.get("eventMessage")
-            if (
-                type(writer) is not str
-                or writer.rsplit("/", 1)[-1] not in WRITERS
-                or type(message) is not str
-                or not (config.app_name in message or config.cdhash in message)
-            ):
-                raise PrivateError("DATA")
-        return _ul_shape_report(records)
+        return _ul_shape_report(_shape_inputs(existing))
     except PrivateError as error:
         code = error.code
     except OSError as error:
@@ -1413,10 +1495,19 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True, parser_class=QuietParser)
     stage = commands.add_parser("prepare")
     stage.add_argument("--destination", type=Path)
-    for name in ("setup", "serve", "capture", "control", "report", "diagnose", "review-shapes"):
+    for name in (
+        "setup",
+        "serve",
+        "capture",
+        "control",
+        "report",
+        "diagnose",
+        "review-shapes",
+        "inspect-field-names",
+    ):
         child = commands.add_parser(name)
         child.add_argument("--private-run", action="store_true", required=True)
-        if name == "review-shapes":
+        if name in {"review-shapes", "inspect-field-names"}:
             child.add_argument("--existing-kit", type=Path)
         if name == "capture":
             child.add_argument("--browser-download", action="store_true", required=True)
@@ -1451,6 +1542,8 @@ def main(argv: list[str] | None = None) -> int:
             shapes = review_shapes(args.existing_kit or _hidden_existing_root())
             print(shapes.model_dump_json(indent=2))
             return 0 if shapes.error == "NONE" else 2
+        elif args.command == "inspect-field-names":
+            inspect_field_names(args.existing_kit or _hidden_existing_root())
         else:
             result = (
                 capture(browser_download=args.browser_download)

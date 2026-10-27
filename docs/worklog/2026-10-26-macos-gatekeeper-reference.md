@@ -175,7 +175,36 @@ tags and non-disclosing failure output. Full Ruff check/format (1,344 files) and
 No generation or gate policy changed. Prepared code-only copy:
 `/private/tmp/eforge-gatekeeper-shape-review-v1-4e76ab92`.
 
-The checker has not been run against native records. Separate permission to process the retained
-UL file was requested under the human's standing no-local-log-inspection rule; otherwise the
-human can run it privately with agents closed. Do not replace the original acquisition code or
+The first code-only handoff awaited separate permission to process the retained UL file under
+the human's standing no-local-log-inspection rule. Do not replace original acquisition code or
 repeat the test. After structural diagnosis, native decision meaning still needs private review.
+
+## Approved fixed-output review and remaining human boundary
+
+The human explicitly selected “Run the fixed-output checker.” The agent ran only the prepared
+offline command with native stderr suppressed. Provenance, capture summary and retained scope
+passed; every known field passed its structural checks. Additional top-level fields account for
+the native schema rejection. No discovered names, native values, record text or error details
+were returned. The bounded private records were processed locally only under that permission.
+
+Version-2 diagnostics add a closed list of candidate API/export names, with presence and JSON
+types only. Candidate validation stays INCONCLUSIVE and the native codec remains unchanged.
+Public collector/API names are hypotheses, not equivalent aliases. The same permitted offline
+review against the same bounded input found those candidates absent and unrecognized fields
+remaining. Further guessing or exposing discovered names is not an admission path.
+
+Added `inspect-field-names` for human-only private terminal use. It shares the same verified
+input path, requires TTY input/output before reading, and displays only bounded additional
+top-level names after all inputs pass. Non-identifier/control characters, excessive lengths and
+name counts are refused before anything is printed. No field value, message or nested key is
+displayed. The agent must never run this name-discovery command: the human must first inspect
+any names privately and decide which contain no identifying information before sharing them.
+Sensitive-looking names stay private. No permission to show unknown names was inferred from
+the fixed-report authorization.
+
+All 567 private-kit tests pass, with full Ruff check/format (1,344 files) and whitespace clean.
+The 12 additional tests cover candidate nonadmission, closed output keys, TTY refusal before
+reads and safe name-only private display from invented records. No native app, collector,
+server, capture mutation, codec or generation gate changed. The final code-only handoff is
+`/private/tmp/eforge-gatekeeper-field-review-v2-c6b08d91`; only the human runs its
+`inspect-field-names --private-run` command. Preserve the original capture and share no values.

@@ -26,8 +26,32 @@ The output contains only predefined schema field names, presence/type labels and
 classes (`MISSING`, `TYPE`, `VALUE`, `UNSUPPORTED`, `MULTIPLE`). Unknown field names, message
 content, paths, timestamps, identifiers, counts, exception details and hashes never appear.
 `additional_fields` reports presence only, and `additional_value_types` reports JSON types only.
+Version 2 also probes a fixed list of candidate API/export names without printing any discovered
+name or value. Candidate validation stays INCONCLUSIVE: presence does not establish field meaning,
+equivalence or native codec admission. `unrecognized_fields` reports whether anything remains
+outside both predefined lists. Candidate spellings include the directly documented NXLog
+[TTL/export fields](https://docs.nxlog.co/agent/v6.5/im/maculs.html) and separate Apple API-style
+names; they are hypotheses to distinguish, not aliases to normalize automatically.
 These are structural checks; no message is interpreted as allow/deny. Even a complete shape
 diagnostic retains `message_meaning: NOT_REVIEWED` and `gate_status: NOT_EVALUATED`.
+
+### If additional names remain unrecognized
+
+Only the human may run this next command, in a standalone private terminal with agents closed:
+
+```sh
+"$PY" -I -B "$NEW_KIT/private_gatekeeper.py" inspect-field-names --private-run
+```
+
+Enter the original kit folder at the hidden prompt. This uses the same read-only provenance,
+summary, bounds and exact-item checks, then displays only additional top-level field names.
+No values, nested keys or messages are displayed. It refuses non-TTY input/output, redirects,
+more than 32 additional names, long names and names containing non-identifier/control characters.
+It starts nothing and writes nothing. Never run it through an agent's terminal tool or share a
+screenshot/full terminal transcript. Privately check whether each name is purely a technical
+schema field. You may share only names you have checked contain no identifying information.
+If a name appears sensitive, do not share it; report that fact instead. The fixed-output checker
+never automatically promotes these names into public output or accepts them into the codec.
 
 ## Version 2: diagnosing a version-1 verification error
 

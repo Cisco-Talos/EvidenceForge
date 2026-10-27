@@ -875,6 +875,22 @@ def test_shape_report_rejects_unbounded_leaves(field: str) -> None:
 def test_shape_report_rejects_discovered_field_names() -> None:
     with pytest.raises(ValidationError):
         kit.ShapeReport(fields={_CANARY: kit.ULFieldShape()})
+    with pytest.raises(ValidationError):
+        kit.ShapeReport(candidate_fields={_CANARY: kit.ULFieldShape()})
+
+
+def test_candidate_probes_classify_only_predeclared_names_without_admitting_them() -> None:
+    row = _shape_row()
+    row.update({"processUniqueID": 1234, "timeToLive": 0, "process": _CANARY})
+    result = kit._ul_shape_report([json.dumps(row).encode()])
+    assert result.additional_fields == "PRESENT_ALL"
+    assert result.unrecognized_fields == "ABSENT_ALL"
+    assert result.candidate_fields["processUniqueID"].value_type == "INTEGER"
+    assert result.candidate_fields["process"].value_type == "STRING"
+    assert result.candidate_fields["processUniqueID"].validation == "INCONCLUSIVE"
+    assert result.candidate_fields["sender"].presence == "ABSENT_ALL"
+    assert result.unified_log_shapes == "FAIL" and result.gate_status == "NOT_EVALUATED"
+    assert _CANARY not in result.model_dump_json()
 
 
 @pytest.mark.parametrize(
@@ -1015,3 +1031,59 @@ def test_offline_review_never_leaks_native_exception_text(
 def test_repo_copy_cannot_review_retained_records() -> None:
     result = kit.review_shapes(Path("/invented-private-location-never-opened"))
     assert result.error == "LOCATION" and not result.fields
+
+
+@pytest.mark.parametrize("input_tty,output_tty", [(False, False), (True, False), (False, True)])
+def test_private_name_inspection_refuses_agent_or_redirected_output_before_reading(
+    input_tty: bool, output_tty: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: input_tty)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: output_tty)
+
+    def forbidden(_path: Path) -> list[bytes]:
+        pytest.fail("Non-TTY name inspection must not open any private input")
+
+    monkeypatch.setattr(kit, "_shape_inputs", forbidden)
+    with pytest.raises(kit.PrivateError, match="INPUT"):
+        kit.inspect_field_names(Path("/invented-never-opened"))
+
+
+def test_private_terminal_inspection_shows_names_only_from_verified_rows(
+    shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    capsys.readouterr()
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    path = shape_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    row["inventedTechnicalField"] = _CANARY
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    kit.inspect_field_names(shape_capture)
+    output = capsys.readouterr()
+    assert json.loads(output.out.splitlines()[-1]) == ["inventedTechnicalField"]
+    assert _CANARY not in output.out and not output.err
+
+
+@pytest.mark.parametrize("fault", ["control", "escape", "long", "count", "uncorrelated"])
+def test_private_name_inspection_refuses_unbounded_or_uncorrelated_names_before_printing(
+    shape_capture: Path,
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    capsys.readouterr()
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    path = shape_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    if fault == "count":
+        row.update({f"invented{index}": _CANARY for index in range(33)})
+    elif fault == "uncorrelated":
+        row["eventMessage"] = _CANARY
+    else:
+        row[{"control": "bad\nname", "escape": "bad\x1bname", "long": "a" * 65}[fault]] = _CANARY
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    with pytest.raises(kit.PrivateError, match="DATA"):
+        kit.inspect_field_names(shape_capture)
+    output = capsys.readouterr()
+    assert not output.out and not output.err
