@@ -662,6 +662,16 @@ The experimental Mac SSH receiver projects canonical login/logout, flow and help
 
 The profile has independently authored static callsite offsets and a modeled awake Mach timebase, not measured Apple binary offsets or calibrated delays. Missing exact native image metadata or an unsupported OS version leaves native output unavailable. Optional source/backtrace fields stay absent; no completion object or other event kind is generated. The internal reader distinguishes completion objects from events when importing exports. Native archives, full GUI lifecycle and external SIEM normalization are not supported by this profile.
 
+The import decoder also preserves optional macOS 27 `personaID`, `personaName`, `personaType`,
+`launchPersonaID`, `launchPersonaName` and `launchPersonaType` metadata. Private fixed-output
+shape review confirmed these spellings and primitive types: IDs use unsigned 32-bit integers,
+types use signed 32-bit integers and names use strings. Present null values, coercions, overflow
+and unknown extra fields fail the bounded profile. Omitted metadata stays omitted. These fields
+are not normalized to `userID`, audit identities or each other, and generation does not invent
+them. Apple's [kernel persona definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/persona.h)
+provide type context, not proof of the export fields' identity relationships. Structural decoding
+does not establish Gatekeeper denial meaning; that native generation gate remains open.
+
 ### Experimental macOS Endpoint Security NDJSON
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact

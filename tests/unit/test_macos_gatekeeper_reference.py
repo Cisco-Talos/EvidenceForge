@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from scripts import macos_gatekeeper_reference as kit
 
 from tests.unit.test_macos_endpoint_security_contracts import _record
-from tests.unit.test_macos_native_contracts import _log_record
+from tests.unit.test_macos_native_contracts import _log_record, _persona_metadata
 
 _CANARY = "INVENTED_PRIVATE_CANARY_never_export"
 _TOKEN = "b" * 32
@@ -866,6 +866,32 @@ def test_shape_diagnostic_field_names_match_the_closed_native_schema() -> None:
     }
 
 
+def test_fixed_shape_review_accepts_human_approved_persona_fields_without_values(
+    shape_capture: Path,
+) -> None:
+    path = shape_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes()) | _persona_metadata()
+    row["personaName"] = row["launchPersonaName"] = _CANARY
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_shapes(shape_capture)
+    assert result.review_complete == result.unified_log_shapes == "PASS"
+    assert result.additional_fields == result.unrecognized_fields == "ABSENT_ALL"
+    assert all(result.fields[name].validation == "PASS" for name in _persona_metadata())
+    assert _CANARY not in result.model_dump_json()
+    assert result.gate_status == "NOT_EVALUATED" and result.message_meaning == "NOT_REVIEWED"
+
+
+@pytest.mark.parametrize("value,unsigned,signed", [(1 << 31, "PASS", "FAIL"), (-1, "FAIL", "PASS")])
+def test_candidate_range_checks_report_bounds_without_values(
+    value: int, unsigned: str, signed: str
+) -> None:
+    row = _shape_row() | {"processUniqueID": value}
+    result = kit._ul_shape_report([json.dumps(row).encode()])
+    candidate = result.candidate_fields["processUniqueID"]
+    assert (candidate.unsigned_32, candidate.signed_32) == (unsigned, signed)
+    assert candidate.validation == "INCONCLUSIVE"
+
+
 @pytest.mark.parametrize("field", tuple(kit.ShapeReport.model_fields))
 def test_shape_report_rejects_unbounded_leaves(field: str) -> None:
     with pytest.raises(ValidationError):
@@ -1085,5 +1111,72 @@ def test_private_name_inspection_refuses_unbounded_or_uncorrelated_names_before_
     path.write_bytes(json.dumps(row).encode() + b"\n")
     with pytest.raises(kit.PrivateError, match="DATA"):
         kit.inspect_field_names(shape_capture)
+    output = capsys.readouterr()
+    assert not output.out and not output.err
+
+
+def test_private_policy_layouts_refuse_non_tty_before_any_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: False)
+
+    def forbidden(_path: Path) -> list[bytes]:
+        pytest.fail("Non-TTY policy layout inspection must not open private input")
+
+    monkeypatch.setattr(kit, "_shape_inputs", forbidden)
+    with pytest.raises(kit.PrivateError, match="INPUT"):
+        kit.inspect_policy_layouts(Path("/invented-never-opened"))
+
+
+def test_private_policy_layouts_deduplicate_templates_and_omit_messages_paths_and_identities(
+    shape_capture: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    capsys.readouterr()
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    path = shape_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    path.write_bytes((json.dumps(row).encode() + b"\n") * 2)
+    kit.inspect_policy_layouts(shape_capture)
+    output = capsys.readouterr()
+    layouts = json.loads(output.out.split("\n", 1)[1])
+    assert layouts == [
+        {
+            "writer": "syspolicyd",
+            "subsystem": row["subsystem"],
+            "category": row["category"],
+            "formatString": row["formatString"],
+        }
+    ]
+    assert _CANARY not in output.out and str(shape_capture) not in output.out and not output.err
+
+
+@pytest.mark.parametrize("fault", ["overlong", "invalid", "many", "uncorrelated"])
+def test_private_policy_layouts_validate_all_inputs_before_any_output(
+    shape_capture: Path,
+    fault: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    capsys.readouterr()
+    monkeypatch.setattr(kit.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(kit.sys.stdout, "isatty", lambda: True)
+    path = shape_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    damaged = dict(row)
+    if fault == "overlong":
+        damaged["formatString"] = "x" * 2049
+    elif fault == "invalid":
+        damaged["processID"] = True
+    elif fault == "uncorrelated":
+        damaged["eventMessage"] = _CANARY
+    rows = (
+        [dict(row, formatString=f"invented-{index}") for index in range(33)]
+        if fault == "many"
+        else [row, damaged]
+    )
+    path.write_bytes(b"\n".join(json.dumps(item).encode() for item in rows) + b"\n")
+    with pytest.raises((kit.PrivateError, ValidationError)):
+        kit.inspect_policy_layouts(shape_capture)
     output = capsys.readouterr()
     assert not output.out and not output.err

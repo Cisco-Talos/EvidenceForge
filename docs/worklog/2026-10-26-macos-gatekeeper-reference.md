@@ -208,3 +208,46 @@ reads and safe name-only private display from invented records. No native app, c
 server, capture mutation, codec or generation gate changed. The final code-only handoff is
 `/private/tmp/eforge-gatekeeper-field-review-v2-c6b08d91`; only the human runs its
 `inspect-field-names --private-run` command. Preserve the original capture and share no values.
+
+## macOS 27 persona export metadata and passing shape review
+
+The human privately checked and supplied only six technical names: launchPersonaID,
+launchPersonaName, launchPersonaType, personaID, personaName and personaType. Those names were
+added to the fixed diagnostic vocabulary. Under the existing explicit fixed-checker permission,
+local bounded processing confirmed integer IDs within unsigned 32-bit bounds, integer types
+within signed 32-bit bounds and string names. No actual value was exported. These six names
+accounted for every extra top-level field; no unrecognized name remained.
+
+The Unified Log import codec now preserves these optional fields with strict ID/type/string
+contracts. It retains individual absence and rejects present null, coercions and overflow.
+Unknown fields remain forbidden. Persona identities are not aliased to userID, audit origins,
+each other or EvidenceForge's modeled behavioral personas. Kernel persona declarations provide
+type context, not a verified mapping of launch/current export semantics. No canonical persona
+producer, native emitted metadata or Gatekeeper template was invented.
+
+The same approved offline checker against the untouched original capture now reports
+unified_log_shapes PASS, additional_fields ABSENT_ALL and unrecognized_fields ABSENT_ALL.
+Provenance, capture summary and scope still pass. The acquisition-time summary remains unchanged
+with its historical shape failure. No native record, raw message, persona value or private
+exception was seen by the agent. GK-R1 still requires terminal decision/template meaning review.
+
+Behavior revision 337 records an impact-none codec change because the covered source digest
+changed. Existing generated records retain omitted persona metadata; native projection and
+ingestion regressions verify this boundary. All 742 selected tests pass (one slow case excluded),
+covering the five private kits plus native contracts, ingestion, projection, profiles and output
+lifecycle. Full Ruff check/format (1,344 files), whitespace and behavior validation against the
+predecessor pass. No product version or native generation gate changed.
+
+Prepared the next human-only `inspect-policy-layouts` step. In a private TTY it verifies all
+inputs and schemas before showing bounded unique writer/subsystem/category/format-template
+combinations. It omits rendered messages, paths, timestamps, PIDs, hashes, persona values and raw
+records. The literals themselves can contain private text, so they are never agent output:
+only the human can inspect them and decide which technical constants contain no identifying
+information before sharing. TTY refusal, invalid later rows, limits, omission and deduplication
+are tested using invented records. This command is not a denial classifier or new capture.
+
+Code-only handoff: `/private/tmp/eforge-gatekeeper-policy-review-v2-73dc019b`. The agent has not
+run its human-only policy-layout command. The human's next step is to close agents and inspect
+these layouts privately, sharing only verified nonsensitive technical literals. If a literal is
+sensitive or ambiguous, keep it private and leave the gate open; do not redact a full record,
+collect more data or weaken privacy. No additional data acquisition is needed for shape repair.

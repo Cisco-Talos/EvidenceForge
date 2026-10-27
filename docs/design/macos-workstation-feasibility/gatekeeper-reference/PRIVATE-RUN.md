@@ -35,6 +35,15 @@ names; they are hypotheses to distinguish, not aliases to normalize automaticall
 These are structural checks; no message is interpreted as allow/deny. Even a complete shape
 diagnostic retains `message_meaning: NOT_REVIEWED` and `gate_status: NOT_EVALUATED`.
 
+The human-approved macOS 27 persona field names are now part of the known closed schema:
+`personaID`, `personaName`, `personaType`, `launchPersonaID`, `launchPersonaName` and
+`launchPersonaType`. The fixed review checks their primitive types without exposing values;
+numeric candidate diagnostics additionally distinguish unsigned/signed 32-bit bounds. The codec
+preserves absence and rejects explicit null for these fields. It does not infer persona meaning,
+bind them to a user/audit identity or add them to generated events. An old capture summary may
+still say FAIL because it records the acquisition-time decoder; the new read-only shape report
+can pass without rewriting that historical summary or changing native evidence.
+
 ### If additional names remain unrecognized
 
 Only the human may run this next command, in a standalone private terminal with agents closed:
@@ -52,6 +61,30 @@ screenshot/full terminal transcript. Privately check whether each name is purely
 schema field. You may share only names you have checked contain no identifying information.
 If a name appears sensitive, do not share it; report that fact instead. The fixed-output checker
 never automatically promotes these names into public output or accepts them into the codec.
+
+### After shape review passes: private policy layout review
+
+Keep the same capture. A separate human-only command lists unique writer/subsystem/category/
+format-template combinations after the same provenance, scope and full-schema checks:
+
+```sh
+"$PY" -I -B "$NEW_KIT/private_gatekeeper.py" inspect-policy-layouts --private-run
+```
+
+Run in a standalone private terminal with agents closed. The original kit is entered at the
+hidden prompt, or via `--existing-kit` using the already known kit folder. No new collection,
+launch, native command or file write occurs. TTY input/output is required. No rendered message,
+process path, PID, timestamp, hash, persona value or raw record is displayed. Layout counts and
+literal lengths are bounded, and JSON escaping prevents terminal control characters.
+
+These literals are not automatically safe: a program can embed private text in a format string,
+subsystem or category. Privately inspect every component before sharing any of it. Share only
+technical layout literals you verify contain no account/host names, paths, identifiers, secrets
+or other sensitive information. Do not share screenshots or full terminal output. If uncertain,
+say that the layout contains private text instead. No redacted message or record is needed.
+The layout identifies potential templates; it does not prove which verdict was rendered or open
+GK-R1. Private decision review must still distinguish a terminal denial from assessment, allow,
+cache activity or an evaluator failure before native generation can use any template.
 
 ## Version 2: diagnosing a version-1 verification error
 

@@ -10,8 +10,11 @@ do not require a new 26 capture and do not override the current target allowlist
 Gatekeeper denial remains gated. The user authorized preparing a human-only experiment on their
 existing Mac, including a temporary loopback server because none is installed. The separate
 [Gatekeeper procedure](gatekeeper-reference/PRIVATE-RUN.md) supplies the complete code-only kit,
-exact-item live filtering, bounded collector guard and fixed report. Agents may prepare or run
-invented tests only, never setup, serve, collect or inspect private evidence. The
+exact-item live filtering, bounded collector guard and fixed report. Live collection remains
+human-only. The human separately authorized agent execution of the fixed offline checker;
+private rows are processed locally with only fixed diagnostic labels exposed. The approved
+six persona metadata field shapes now decode successfully without exporting their values or
+changing generated records. Private policy decision meaning remains unreviewed. The
 [Gatekeeper worklog](../../worklog/2026-10-26-macos-gatekeeper-reference.md) records handoff and limits.
 
 ## Historical assessment and acquisition context

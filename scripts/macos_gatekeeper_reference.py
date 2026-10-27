@@ -170,6 +170,12 @@ class VerificationReport(BaseModel, extra="forbid", frozen=True, strict=True):
 
 
 type KnownULField = Literal[
+    "launchPersonaID",
+    "launchPersonaName",
+    "launchPersonaType",
+    "personaID",
+    "personaName",
+    "personaType",
     "eventType",
     "messageType",
     "timezoneName",
@@ -195,6 +201,12 @@ type KnownULField = Literal[
     "backtrace",
 ]
 UL_FIELDS: tuple[KnownULField, ...] = (
+    "launchPersonaID",
+    "launchPersonaName",
+    "launchPersonaType",
+    "personaID",
+    "personaName",
+    "personaType",
     "eventType",
     "messageType",
     "timezoneName",
@@ -279,6 +291,8 @@ class ULFieldShape(BaseModel, extra="forbid", frozen=True, strict=True):
     value_type: ValueType = "NOT_OBSERVED"
     validation: Check = "INCONCLUSIVE"
     failure_kind: FailureKind = "NONE"
+    unsigned_32: Check = "INCONCLUSIVE"
+    signed_32: Check = "INCONCLUSIVE"
 
 
 class ShapeReport(BaseModel, extra="forbid", frozen=True, strict=True):
@@ -924,6 +938,12 @@ def _ul_shape_report(records: list[bytes]) -> ShapeReport:
         name: ULFieldShape(
             presence=_presence([name in row for row in rows]),
             value_type=_value_types([row[name] for row in rows if name in row]),
+            unsigned_32=_shape(
+                [0 <= row[name] < 2**32 for row in rows if type(row.get(name)) is int]
+            ),
+            signed_32=_shape(
+                [-(2**31) <= row[name] < 2**31 for row in rows if type(row.get(name)) is int]
+            ),
         )
         for name in UL_CANDIDATES
     }
@@ -1009,6 +1029,46 @@ def inspect_field_names(existing: Path) -> None:
         raise PrivateError("DATA")
     print("PRIVATE_FIELD_NAMES_ONLY; inspect privately before sharing any technical schema names")
     print(json.dumps(names, ensure_ascii=True))
+
+
+def inspect_policy_layouts(existing: Path) -> None:
+    """HUMAN ONLY: privately review source layout literals, never rendered messages.
+
+    Literal format/subsystem/category strings may themselves contain private text.
+    The human must inspect them before deciding whether any are safe to share.
+    """
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise PrivateError("INPUT")
+    layouts: set[tuple[str, str, str, str]] = set()
+    for raw in _shape_inputs(existing):
+        record = UnifiedLogRecord.model_validate_json(raw)
+        layout = (
+            record.process_image_path.rsplit("/", 1)[-1],
+            record.subsystem,
+            record.category,
+            record.format_string,
+        )
+        if any(len(value) > 2048 for value in layout):
+            raise PrivateError("DATA")
+        layouts.add(layout)
+    if len(layouts) > 32:
+        raise PrivateError("DATA")
+    print("PRIVATE_POLICY_LAYOUTS_ONLY; inspect every literal before sharing any technical content")
+    print(
+        json.dumps(
+            [
+                {
+                    "writer": writer,
+                    "subsystem": subsystem,
+                    "category": category,
+                    "formatString": text,
+                }
+                for writer, subsystem, category, text in sorted(layouts)
+            ],
+            indent=2,
+            ensure_ascii=True,
+        )
+    )
 
 
 def review_shapes(existing: Path) -> ShapeReport:
@@ -1504,10 +1564,11 @@ def main(argv: list[str] | None = None) -> int:
         "diagnose",
         "review-shapes",
         "inspect-field-names",
+        "inspect-policy-layouts",
     ):
         child = commands.add_parser(name)
         child.add_argument("--private-run", action="store_true", required=True)
-        if name in {"review-shapes", "inspect-field-names"}:
+        if name in {"review-shapes", "inspect-field-names", "inspect-policy-layouts"}:
             child.add_argument("--existing-kit", type=Path)
         if name == "capture":
             child.add_argument("--browser-download", action="store_true", required=True)
@@ -1544,6 +1605,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if shapes.error == "NONE" else 2
         elif args.command == "inspect-field-names":
             inspect_field_names(args.existing_kit or _hidden_existing_root())
+        elif args.command == "inspect-policy-layouts":
+            inspect_policy_layouts(args.existing_kit or _hidden_existing_root())
         else:
             result = (
                 capture(browser_download=args.browser_download)

@@ -19,7 +19,7 @@ from evidenceforge.evaluation.validation_routes import (
 )
 from evidenceforge.models.exceptions import EvaluationLimitError
 from tests.unit.test_macos_endpoint_security_contracts import _record
-from tests.unit.test_macos_native_contracts import _log_record
+from tests.unit.test_macos_native_contracts import _log_record, _persona_metadata
 
 
 def _write(tmp_path: Path, source: str, rows: list[object]) -> Path:
@@ -49,6 +49,18 @@ def test_unified_log_completion_is_not_an_event_and_optional_fields_remain_nativ
         list(get_parser(source).parse_file(_write(tmp_path, source, [{"count": 0, "finished": 1}])))
         == []
     )
+
+
+def test_unified_log_ingestion_accepts_persona_metadata_without_normalizing_to_user_id(
+    tmp_path: Path,
+) -> None:
+    source = "macos_unified_log"
+    fields = _log_record() | _persona_metadata()
+    record = next(get_parser(source).parse_file(_write(tmp_path, source, [fields])))
+    assert record.fields == fields and not record.parse_errors
+    assert record.fields["userID"] != record.fields["personaID"]
+    schema, constraints = ParseabilityScorer()._score_both({source: [record]})
+    assert schema.score == constraints.score == 100
 
 
 @pytest.mark.parametrize("version,family", [(6, "exec"), (9, "exit"), (10, "fork")])

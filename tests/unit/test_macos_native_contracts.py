@@ -45,6 +45,73 @@ def _log_record() -> dict[str, object]:
     }
 
 
+def _persona_metadata() -> dict[str, object]:
+    """Invented independent values, including the public uint32 sentinel boundary."""
+    return {
+        "launchPersonaID": (1 << 32) - 1,
+        "launchPersonaName": "invented-launch-persona",
+        "launchPersonaType": 0,
+        "personaID": 1234,
+        "personaName": "invented-current-persona",
+        "personaType": 1,
+    }
+
+
+def test_unified_log_persona_metadata_roundtrips_without_replacing_writer_identity() -> None:
+    fields = _log_record() | _persona_metadata()
+    record = decode_unified_log_record(json.dumps(fields))
+    assert isinstance(record, UnifiedLogRecord)
+    assert json.loads(record.to_ndjson()) == fields
+    assert record.user_id == fields["userID"] == 501
+    assert record.persona_id != record.user_id
+    assert record.launch_persona_id != record.persona_id
+    original = decode_unified_log_record(json.dumps(_log_record()))
+    assert json.loads(original.to_ndjson()) == _log_record()
+
+
+@pytest.mark.parametrize("field", tuple(_persona_metadata()))
+def test_unified_log_persona_fields_preserve_individual_absence_and_reject_explicit_null(
+    field: str,
+) -> None:
+    fields = _log_record() | {field: _persona_metadata()[field]}
+    record = decode_unified_log_record(json.dumps(fields))
+    assert json.loads(record.to_ndjson()) == fields
+    fields[field] = None
+    with pytest.raises(ValidationError):
+        decode_unified_log_record(json.dumps(fields))
+
+
+@pytest.mark.parametrize(
+    "field", ["personaID", "launchPersonaID", "personaType", "launchPersonaType"]
+)
+@pytest.mark.parametrize("value", [True, "1", 1.5, [], {}])
+def test_unified_log_persona_numbers_remain_strict_native_integers(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        decode_unified_log_record(json.dumps(_log_record() | {field: value}))
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("personaID", -1),
+        ("launchPersonaID", 1 << 32),
+        ("personaType", -(1 << 31) - 1),
+        ("launchPersonaType", 1 << 31),
+        ("personaName", False),
+        ("launchPersonaName", 0),
+        ("personaName", {}),
+        ("launchPersonaName", []),
+    ],
+)
+def test_unified_log_persona_metadata_rejects_out_of_range_or_wrong_primitives(
+    field: str, value: object
+) -> None:
+    with pytest.raises(ValidationError):
+        decode_unified_log_record(json.dumps(_log_record() | {field: value}))
+
+
 @pytest.mark.parametrize("explicit_null", [False, True])
 def test_unified_log_roundtrip_preserves_native_types_redaction_and_optional_presence(
     explicit_null: bool,

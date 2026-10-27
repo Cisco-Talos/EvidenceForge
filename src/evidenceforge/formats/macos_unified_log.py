@@ -3,10 +3,10 @@
 
 """Bounded native Unified Log NDJSON contracts, independent of event generation.
 
-This is the public-reference logEvent export profile. It deliberately does not
-accept signposts, activity creation, timesync records, native archives or future
-fields. Serialization preserves missing versus explicit null fields. These wire
-contracts establish structure, not the fidelity of a generated native message.
+This is the public-reference logEvent export profile with privately reviewed
+macOS 27 persona metadata shapes. It deliberately rejects other event kinds,
+native archives and unknown fields. Serialization preserves optional presence.
+These wire contracts establish structure, not message or identity semantics.
 """
 
 from datetime import datetime
@@ -18,6 +18,7 @@ from evidenceforge.events.macos_logging import MacosUnifiedLogObservation
 
 type NativeUInt64 = Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
 type NativeUInt32 = Annotated[int, Field(ge=0, le=(1 << 32) - 1)]
+type NativeInt32 = Annotated[int, Field(ge=-(1 << 31), le=(1 << 31) - 1)]
 type NativeImageUUID = Annotated[
     str,
     Field(pattern=r"^(?:[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12})?$"),
@@ -102,6 +103,42 @@ class UnifiedLogRecord(_NativeRecord):
     backtrace: UnifiedLogBacktrace | None = Field(
         default=None, description="Optional native backtrace; explicit null remains distinct"
     )
+    persona_id: NativeUInt32 | None = Field(
+        default=None,
+        alias="personaID",
+        description="Optional native persona ID; not a userID alias",
+    )
+    persona_name: str | None = Field(
+        default=None, alias="personaName", description="Optional native persona name"
+    )
+    persona_type: NativeInt32 | None = Field(
+        default=None, alias="personaType", description="Optional native persona type integer"
+    )
+    launch_persona_id: NativeUInt32 | None = Field(
+        default=None, alias="launchPersonaID", description="Optional launch persona ID"
+    )
+    launch_persona_name: str | None = Field(
+        default=None, alias="launchPersonaName", description="Optional launch persona name"
+    )
+    launch_persona_type: NativeInt32 | None = Field(
+        default=None, alias="launchPersonaType", description="Optional launch persona type integer"
+    )
+
+    @field_validator(
+        "persona_id",
+        "persona_name",
+        "persona_type",
+        "launch_persona_id",
+        "launch_persona_name",
+        "launch_persona_type",
+        mode="before",
+    )
+    @classmethod
+    def present_persona_value(cls, value: object) -> object:
+        """Allow absence while requiring the observed primitive type when present."""
+        if value is None:
+            raise ValueError("Present persona metadata must use its native primitive type")
+        return value
 
     @field_validator("timestamp")
     @classmethod

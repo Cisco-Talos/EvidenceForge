@@ -91,6 +91,14 @@ def test_projection_uses_writer_identity_and_keeps_uptime_when_export_clock_chan
     assert record.timestamp.endswith("-0400")
     raw = record.to_ndjson()
     assert "backtrace" not in json.loads(raw) and "source" not in json.loads(raw)
+    assert not {
+        "personaID",
+        "personaName",
+        "personaType",
+        "launchPersonaID",
+        "launchPersonaName",
+        "launchPersonaType",
+    }.intersection(json.loads(raw))
     assert decode_unified_log_record(raw) == record
 
 

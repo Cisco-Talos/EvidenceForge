@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 336
+current_revision: 337
 history_start_revision: 1
-behavior_surface_sha256: a150d841c97489ccad5ece060d70fd04f154fe9ee4e17e31491c9a1f3d4bd549
+behavior_surface_sha256: ff76510641024dd58c0509fc26ac6b5b745814fb3ca4b47373f5c06548918610
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3199,3 +3199,11 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Preserves explicit normal/signal results, selects nominal outcomes for exact natural query completions, and separates birth/current execution checks during foreground closure.
+  - revision: 337
+    id: macos-unified-log-persona-metadata-decoding
+    impact: none
+    domains:
+      - native-codec-ingestion
+    formats:
+      - macos_unified_log
+    summary: Accepts six optional strictly typed macOS 27 persona export fields without inventing metadata, changing generated records or admitting Gatekeeper decision semantics.
