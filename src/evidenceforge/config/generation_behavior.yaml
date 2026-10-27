@@ -3245,4 +3245,4 @@ changes:
     formats:
       - ecar
       - macos_endpoint_security
-    summary: Admits literal nested Bash and zsh command parents through the existing metadata-complete fork/exec producer, preserving descriptor, audit, responsibility and outcome gates, with bounded ingress buffers and explicit temporary resource budgets.
+    summary: Admits qualified plain nested shell command parents without widening metadata gates; bounds source ingress buffers and budgets temporary source storage independently of selected formats.
