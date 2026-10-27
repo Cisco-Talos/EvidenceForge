@@ -219,3 +219,127 @@ proxy_connect_status_messages:
     - "Gateway Timeout"
     - "Upstream Timeout"
     - "Connection Timed Out"
+
+# Passive Zeek vocabulary. Counts do not repeat once-only history markers.
+# No decrypted Finished or post-detection application content is inferred.
+transport_histories:
+  tcp:
+  - state: SF
+    weight: 21
+    history: ShADadfF
+  - state: SF
+    weight: 11
+    history: ShADadfF
+  - state: SF
+    weight: 6
+    history: ShADadTtFf
+  - state: SF
+    weight: 5
+    history: ShADadfF
+  - state: SF
+    weight: 5
+    history: ShADadfF
+  - state: SF
+    weight: 4
+    history: ShADadFf
+  - state: SF
+    weight: 4
+    history: ShADadfF
+  - state: SF
+    weight: 3
+    history: ShADadTFf
+  - state: SF
+    weight: 2
+    history: ShADadFf
+  - state: SF
+    weight: 1
+    history: ShADaTtdfF
+  - state: S0
+    weight: 9
+    history: S
+  - state: S0
+    weight: 5
+    history: S
+  - state: S1
+    weight: 2
+    history: Sh
+  - state: S1
+    weight: 1
+    history: Sh
+  - state: REJ
+    weight: 3
+    history: Sr
+  - state: REJ
+    weight: 2
+    history: Srr
+  - state: RSTO
+    weight: 4
+    history: ShADaR
+  - state: RSTO
+    weight: 2
+    history: ShADadTR
+  - state: RSTO
+    weight: 2
+    history: ShAR
+  - state: RSTR
+    weight: 3
+    history: ShADadr
+  - state: RSTR
+    weight: 2
+    history: ShAdr
+  - state: S2
+    weight: 1
+    history: ShADadF
+  - state: S3
+    weight: 1
+    history: ShADadf
+  - state: OTH
+    weight: 1
+    history: DAd
+  udp:
+  - state: SF
+    weight: 55
+    history: Dd
+  - state: SF
+    weight: 8
+    history: Dd
+  - state: SF
+    weight: 5
+    history: Dd
+  - state: SF
+    weight: 4
+    history: Dd
+  - state: S0
+    weight: 12
+    history: D
+  - state: S0
+    weight: 6
+    history: D
+  - state: OTH
+    weight: 6
+    history: Dd
+  - state: OTH
+    weight: 4
+    history: Dd
+ssl_histories:
+  tls12_full:
+  - history: CsxknGIi
+    weight: 80
+  - history: CsxknGIti
+    weight: 20
+  tls12_resumed:
+  - history: CsiI
+    weight: 100
+  tls13_full:
+  - history: Cs
+    weight: 100
+  tls13_resumed:
+  - history: Cs
+    weight: 100
+  failure:
+  - history: C
+    weight: 45
+  - history: Cs
+    weight: 30
+  - history: Cs
+    weight: 25

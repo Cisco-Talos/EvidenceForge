@@ -464,49 +464,60 @@ macos:
   id:
     command_templates: [/usr/bin/id, /usr/bin/id -u, /usr/bin/id -un, /usr/bin/id -a]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   sw_vers:
     command_templates: [/usr/bin/sw_vers, /usr/bin/sw_vers -productVersion]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   ifconfig:
     command_templates: [/sbin/ifconfig -a, /sbin/ifconfig en0]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   ps:
     command_templates: [/bin/ps aux, /bin/ps -ef, "/bin/ps -axo pid,ppid,command"]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   uname:
     command_templates: [/usr/bin/uname, /usr/bin/uname -a, /usr/bin/uname -sr, /usr/bin/uname -m]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   dscl:
     command_templates: [/usr/bin/dscl . -list /Users]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   pwd:
     command_templates: [/bin/pwd]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   ls:
     command_templates:
       - /bin/ls -la /Users/{username}/Documents
       - /bin/ls -la /Users/{username}/Library/LaunchAgents
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   du:
     command_templates: ["/usr/bin/du -sh /Users/{username}/Documents"]
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.65, maximum: 30, sigma: 0.9}
     children: []
   df:
     command_templates: [/bin/df -h]
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
   find:
     command_templates:
       - /usr/bin/find /Users/{username}/Documents -maxdepth 2 -type f -name "*.pdf"
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.65, maximum: 30, sigma: 0.9}
     children: []
   Google Chrome:
     command_templates: ['"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"']
@@ -569,6 +580,7 @@ macos:
       - /bin/zsh -c 'id; groups'
       - /bin/zsh -c 'ls -la ~/Library/LaunchAgents'
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children:
       - bash
       - zsh
@@ -625,6 +637,7 @@ macos:
     command_templates:
     - /opt/homebrew/bin/7zz i
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
 
   dotnet:
@@ -634,6 +647,7 @@ macos:
     - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -version
     - /opt/homebrew/opt/dotnet/libexec/dotnet msbuild -help
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.45, maximum: 8, sigma: 0.8}
     children: []
 
   node:
@@ -643,6 +657,7 @@ macos:
     - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js --version
     - /opt/homebrew/bin/node /opt/homebrew/lib/node_modules/npm/bin/npm-cli.js config get prefix
     lifetime: short
+    short_timing: {minimum: 0.015, median: 0.22, maximum: 8, sigma: 0.85}
     children: []
 
   git:
@@ -650,6 +665,7 @@ macos:
     - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} status
     - /opt/homebrew/bin/git -C /Users/{username}/Projects/{project} log --oneline -5
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.35, maximum: 10, sigma: 0.9}
     children: []
 
   docker:
@@ -657,6 +673,7 @@ macos:
     - '"/Applications/Docker.app/Contents/Resources/bin/docker" ps'
     - '"/Applications/Docker.app/Contents/Resources/bin/docker" images'
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.35, maximum: 10, sigma: 0.9}
     children: []
 
   kubectl:
@@ -664,18 +681,21 @@ macos:
     - /opt/homebrew/bin/kubectl get pods
     - /opt/homebrew/bin/kubectl get deployments
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   ssh:
     command_templates:
     - /opt/homebrew/bin/ssh -V
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
 
   curl:
     command_templates:
     - /opt/homebrew/opt/curl/bin/curl --head {internal_url}
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   vim:
@@ -700,24 +720,28 @@ macos:
     command_templates:
     - /opt/homebrew/bin/gmake -C /Users/{username}/Projects/{project} test
     lifetime: short
+    short_timing: {minimum: 0.2, median: 12, maximum: 180, sigma: 0.85}
     children: []
 
   gcc-16:
     command_templates:
     - /opt/homebrew/bin/gcc-16 --version
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
 
   cargo:
     command_templates:
     - /opt/homebrew/bin/cargo check --manifest-path /Users/{username}/Projects/{project}/Cargo.toml
     lifetime: short
+    short_timing: {minimum: 0.2, median: 12, maximum: 180, sigma: 0.85}
     children: []
 
   sqlcmd:
     command_templates:
     - /opt/homebrew/bin/sqlcmd -S {db_server} -Q "SELECT 1"
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   mysql:
@@ -725,18 +749,21 @@ macos:
     - /opt/homebrew/opt/mysql-client/bin/mysql --host={db_server} --execute="SELECT
       1"
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   psql:
     command_templates:
     - /opt/homebrew/opt/libpq/bin/psql -h {db_server} -c "SELECT 1"
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   redis-cli:
     command_templates:
     - /opt/homebrew/bin/redis-cli -h {db_server} PING
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   ldapsearch:
@@ -744,6 +771,7 @@ macos:
     - /opt/homebrew/opt/openldap/bin/ldapsearch -x -H ldap://{dc_server} -b "{base_dn}"
       "(objectClass=person)"
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.8, maximum: 20, sigma: 0.9}
     children: []
 
   Microsoft Word:
@@ -843,12 +871,14 @@ macos:
     command_templates:
     - /bin/launchctl list
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
 
   plutil:
     command_templates:
     - /usr/bin/plutil -help
     lifetime: short
+    short_timing: {minimum: 0.008, median: 0.12, maximum: 2.5, sigma: 0.85}
     children: []
 
   Python:
@@ -858,6 +888,7 @@ macos:
     - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip --version
     - /opt/homebrew/opt/python@3.14/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python -m pip list --format=columns
     lifetime: short
+    short_timing: {minimum: 0.03, median: 0.45, maximum: 8, sigma: 0.8}
     children: []
 
   pwsh:
@@ -865,4 +896,5 @@ macos:
     - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Date -Format o"
     - /usr/local/microsoft/powershell/7/pwsh -NoProfile -NonInteractive -Command "Get-Process | Select-Object -First 8 Id,ProcessName"
     lifetime: short
+    short_timing: {minimum: 0.04, median: 0.7, maximum: 12, sigma: 0.85}
     children: []

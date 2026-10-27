@@ -659,9 +659,19 @@ def _process_provisional_termination_timing_request(
         relationship_key = "activity.process.windows_foreground_lifetime"
         sample_key = f"provisional_close:{actor.stable_id}:{lifetime_plan.mode.value}"
     elif os_category in {"linux", "macos"}:
+        sigma = 0.78
+        if os_category == "macos":
+            from evidenceforge.config.schemas import ShortCommandTiming
+            from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+            profile = get_parent_config("macos", actor.image.rsplit("/", 1)[-1])
+            if profile.get("short_timing") is not None:
+                timing = ShortCommandTiming.model_validate(profile["short_timing"])
+                mode_seconds = min(maximum_seconds, max(minimum_seconds, timing.median))
+                sigma = timing.sigma
         distribution = TruncatedLognormalDistribution(
             median=mode_seconds * 1_000_000,
-            sigma=0.78,
+            sigma=sigma,
             minimum=minimum_seconds * 1_000_000,
             maximum=maximum_seconds * 1_000_000,
         )

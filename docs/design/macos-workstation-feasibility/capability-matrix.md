@@ -1,11 +1,19 @@
 # macOS capability and evidence gates
 
-## Current generation admission (2026-10-26)
+## Current generation admission (2026-10-27)
 
 The only active generation target is an explicit **macOS 27 arm64 workstation**. Set `os_build` when modeling an exact
 build; otherwise the declared OS label supplies the modeled release key. macOS 26 and other unqualified Mac targets fail scenario validation regardless of
 output selection. The catalog can hold multiple profiles; historical wire decoders remain
 available independently of generation admission.
+
+The [current coverage worklog](../../worklog/2026-10-27-macos-native-coverage.md) records the
+chronological ES ingress repair, exact checkpoint/filter acceptance and per-host/per-authored-action
+coverage diagnostics. A qualified plain nested Bash/zsh parent can now produce the bounded native
+command chain. The independent [macOS 27 benchmark](../../../scenarios/macos27-native-assessment/README.md)
+executes every authored nested command; its first current-profile panel confirms coherent native
+identities while rejecting shared network histories and query timing texture. This is engineering
+and bounded native-source acceptance, with broader realism work recorded in that benchmark.
 
 The bounded v11 fork/exec/known-exit projection is now implemented through exact canonical
 publication. Local GUI audit origins now belong to the canonical login and survive explicit
@@ -25,6 +33,11 @@ across its tested windows/tabs and fork/exec, distinct from POSIX sessions, and 
 human-attested same-boot GUI relogin while the audit user stays constant. The generator models
 those bounded relationships through existing login, process and recovery owners. This does
 not validate Apple Terminal startup behavior, native GUI log layouts or responsible ownership.
+
+GUI login/workspace entry and GUI application launch are separate coverage claims. An eCAR app
+birth may be modeled, but native fork/exec for Finder, Dock or Spotlight needs the corresponding
+qualified responsibility and launch relationship. Existing login audit identity alone does not
+supply those facts. See the [next experiment proposal](gui-launch-reference-plan.md).
 
 The historical milestones below targeted modeled macOS 26 arm64 workstations; the active target
 is now 27. “Implemented” means a canonical path exists; “experimental” means it is usable with

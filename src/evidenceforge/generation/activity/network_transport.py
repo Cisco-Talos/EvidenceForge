@@ -22,51 +22,36 @@ from evidenceforge.models.exceptions import StateError
 
 logger = logging.getLogger(__name__)
 
-TCP_CONN_STATE_DISTRIBUTION = [
-    # Normal completions (SF) — ~62% total (real: 55-75%)
-    ("SF", 21, "ShADadfF"),  # Standard: SYN→SYN-ACK→data→FIN
-    ("SF", 11, "ShADaDadfF"),  # Multiple data exchanges before FIN
-    ("SF", 6, "ShADadTtFf"),  # Normal with retransmissions (T=orig retx, t=resp retx)
-    ("SF", 5, "ShADadfFa"),  # FIN-ACK with trailing ACK
-    ("SF", 5, "ShADaDaDadfF"),  # Bulk transfer (many data rounds)
-    ("SF", 4, "ShADadFf"),  # Originator FIN first (client closes)
-    ("SF", 4, "ShADaDadfFa"),  # Multi-exchange with trailing ACK
-    ("SF", 3, "ShADadTFf"),  # Retransmit then FIN
-    ("SF", 2, "ShADaDadFf"),  # Multi data then client closes
-    ("SF", 1, "ShADaDaTtdfF"),  # Multi data with retransmissions
-    # Connection attempts (S0) — ~14% (timeouts, unreachable hosts, scanning)
-    ("S0", 9, "S"),  # Single SYN, no reply
-    ("S0", 5, "S"),  # SYN retransmit (Zeek deduplicates to single 'S')
-    # Partial handshakes (S1) — ~3%
-    ("S1", 2, "Sh"),  # SYN-ACK seen, no termination observed
-    ("S1", 1, "Sh"),  # SYN-ACK seen, no further data
-    # Rejected connections (REJ) — ~5% (refused ports, firewall rejects)
-    ("REJ", 3, "Sr"),  # RST from responder immediately
-    ("REJ", 2, "Srr"),  # Multiple RSTs from responder
-    # Reset by originator (RSTO) — ~8% (client aborts, load balancer health checks)
-    ("RSTO", 4, "ShADaR"),  # Data exchange then originator RST
-    ("RSTO", 2, "ShADadTR"),  # Data + retransmit then RST
-    ("RSTO", 2, "ShAR"),  # Quick RST after handshake
-    # Reset by responder (RSTR) — ~5% (server resets, IDS/WAF termination)
-    ("RSTR", 3, "ShADadr"),  # Data exchange then responder RST
-    ("RSTR", 2, "ShAdr"),  # Partial data then responder RST
-    # Half-closed states — ~2% (one side closed, other didn't respond)
-    ("S2", 1, "ShADadF"),  # Orig sent FIN, responder never replied
-    ("S3", 1, "ShADadf"),  # Resp sent FIN, originator never replied
-    # Midstream (OTH) — ~1% (partial captures, asymmetric routing, NAT state loss)
-    ("OTH", 1, "DAd"),  # Midstream bidirectional data/ACK (handshake not observed)
-]
 
-UDP_CONN_STATE_DISTRIBUTION = [
-    ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
-    ("SF", 8, "DdDd"),  # Multi-packet exchange
-    ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 4, "DDd"),  # Retransmitted query before response
-    ("S0", 12, "D"),  # Originator only, no response (timeout)
-    ("S0", 6, "DD"),  # Retransmitted datagram, no response
-    ("OTH", 6, "Dd"),  # Midstream UDP exchange
-    ("OTH", 4, "DdDd"),  # Midstream multi-packet exchange
-]
+def connection_state_distribution(protocol: str) -> list[tuple[str, int, str]]:
+    """Read validated transport histories from the active configuration scope."""
+    from evidenceforge.config.schemas import TransportHistoryEntry
+    from evidenceforge.generation.activity.network_params import load_network_params
+
+    rows = load_network_params()["transport_histories"][protocol]
+    return [
+        (entry.state, entry.weight, entry.history)
+        for row in rows
+        for entry in (TransportHistoryEntry.model_validate(row),)
+    ]
+
+
+def native_connection_history(history: str) -> str:
+    """Encode each once-only directional class at its first observation."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for marker in history:
+        if marker in "aAdDiIqQ":
+            if marker in seen:
+                continue
+            seen.add(marker)
+        result.append(marker)
+    return "".join(result)
+
+
+# Compatibility exports; production selection reads the active configuration.
+TCP_CONN_STATE_DISTRIBUTION = connection_state_distribution("tcp")
+UDP_CONN_STATE_DISTRIBUTION = connection_state_distribution("udp")
 
 _TCP_CONN_ENTRIES = TCP_CONN_STATE_DISTRIBUTION
 
@@ -85,9 +70,14 @@ _UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
 
 def _tcp_success_history(rng: random.Random) -> str:
     """Choose a plausible Zeek history string for a completed TCP connection."""
+    entries = [
+        (history, weight)
+        for state, weight, history in connection_state_distribution("tcp")
+        if state == "SF"
+    ]
     return rng.choices(
-        [history for history, _weight in _TCP_SUCCESS_HISTORY_ENTRIES],
-        weights=_TCP_SUCCESS_HISTORY_WEIGHTS,
+        [history for history, _weight in entries],
+        weights=[weight for _history, weight in entries],
         k=1,
     )[0]
 

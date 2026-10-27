@@ -76,15 +76,21 @@ without turning `TODO.md` back into a high-conflict work journal.
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
   checkpoint/resume now pass; see the [coverage worklog](docs/worklog/2026-10-27-macos-native-coverage.md).
 
+- [x] **P1** Add current-profile Mac command coverage diagnostics, qualified plain nested-shell
+  producers and mixed-workload acceptance. Shared passive Zeek histories and bounded Mac query
+  timing were repaired after the first panel. This is bounded engineering acceptance, with no
+  renewed authenticity claim. See the same coverage worklog and the
+  [next GUI launch reference proposal](docs/design/macos-workstation-feasibility/gui-launch-reference-plan.md).
+
 - [ ] **P0** Coordinate shared TCP capture-loss packet counts with observed history classes.
   The Mac benchmark independently confirms two contradictions; 16 rows are reported.
   The loss method is unchanged from the branch base. Repair the network observation owner,
   covering HTTP/TLS/SMB and partial/closed flows; see the
   [final assessment](scenarios/macos-assessment/blind-test/loop-3/REPORT.md).
-- [ ] **P1** Investigate the repeated Windows process-birth readiness floor, then bounded
-  Mac utility duration texture through their activity and timing owners. The final panel
-  identifies 14 Windows births in two milliseconds and recurring 13–42 second query
-  lifetimes; retain startup, network-I/O and collection alternatives. See the same assessment.
+- [ ] **P1** Investigate the repeated Windows process-birth readiness floor through its activity
+  and timing owners. The historical panel identifies 14 Windows births in two milliseconds;
+  retain startup and collection alternatives. The separate bounded Mac query timing repair
+  is recorded in the current coverage worklog above. See the same assessment.
 - [ ] **P1/P2** Correct native SMB service-type and NTP reference-ID semantics through the
   protocol facts/projection owners after qualifying the exporter contract. Keep broader
   HTTP owner and remote-auth visibility findings as qualified leads, not assumed defects.

@@ -2208,6 +2208,29 @@ class OuiEntry(BaseModel, extra="forbid"):
     weight: int
 
 
+class TransportHistoryEntry(BaseModel, extra="forbid", frozen=True):
+    """One weighted native transport observation history."""
+
+    state: Literal["SF", "S0", "S1", "REJ", "RSTO", "RSTR", "S2", "S3", "OTH"]
+    weight: int = Field(strict=True, gt=0)
+    history: str = Field(min_length=1, max_length=100, pattern=r"^[ShADadTtFfRrIiQqCcGgWw^]+$")
+
+    @field_validator("history")
+    @classmethod
+    def once_only_markers(cls, value: str) -> str:
+        """Reject duplicate once-only markers independently in each direction."""
+        if any(value.count(marker) > 1 for marker in "aAdDiIqQ"):
+            raise ValueError("native history repeats a once-only directional marker")
+        return value
+
+
+class SslHistoryEntry(BaseModel, extra="forbid", frozen=True):
+    """Weighted passive TLS history without decrypted or post-detection content."""
+
+    weight: int = Field(strict=True, gt=0)
+    history: str = Field(min_length=1, max_length=100, pattern=r"^[CsxknGtIiIl]+$")
+
+
 class PublicNtpServerEntry(BaseModel, extra="forbid"):
     """A public NTP server profile in network_params.yaml."""
 
@@ -3949,11 +3972,28 @@ class ConnectionEntry(BaseModel, extra="forbid"):
 # --- Spawn Rules ---
 
 
+class ShortCommandTiming(BaseModel, extra="forbid", frozen=True):
+    """Modeled command runtime in seconds, independently of native result qualification."""
+
+    minimum: float = Field(gt=0, allow_inf_nan=False)
+    median: float = Field(gt=0, allow_inf_nan=False)
+    maximum: float = Field(gt=0, allow_inf_nan=False)
+    sigma: float = Field(gt=0, le=3, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def ordered(self) -> ShortCommandTiming:
+        """Require a median inside finite command bounds."""
+        if not self.minimum <= self.median <= self.maximum:
+            raise ValueError("short command timing requires minimum <= median <= maximum")
+        return self
+
+
 class SpawnRuleEntry(BaseModel, extra="forbid"):
     """A single parent process entry within spawn_rules.yaml."""
 
     command_templates: list[str]
     lifetime: Literal["long", "short"]
+    short_timing: ShortCommandTiming | None = Field(default=None)
     children: list[str]
     spawn_delay: list[float] | None = None
     max_children: int | None = None

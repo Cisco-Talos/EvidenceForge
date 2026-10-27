@@ -596,8 +596,9 @@ def handle_process(
                 and process_ref is None
                 and not self._process_has_following_same_host_connection(system, future_specs)
             )
-            if terminate_immediately:
+            if canonical_close is not None:
                 term_time = ensure_utc(canonical_close)
+                shell_release_time = term_time
         if terminate_immediately:
             self.activity_generator.generate_process_termination(
                 user=process_actor,

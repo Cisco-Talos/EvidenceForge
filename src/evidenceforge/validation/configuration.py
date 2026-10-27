@@ -4027,6 +4027,8 @@ def _collect_network_parameter_schema_checks(
         OuiEntry,
         PublicDnsResolverEntry,
         PublicNtpServerEntry,
+        SslHistoryEntry,
+        TransportHistoryEntry,
         validate_entry,
     )
 
@@ -4035,6 +4037,27 @@ def _collect_network_parameter_schema_checks(
 
     net_params = load_network_params()
     if net_params:
+        for family, names, model in (
+            ("transport_histories", ("tcp", "udp"), TransportHistoryEntry),
+            (
+                "ssl_histories",
+                ("tls12_full", "tls12_resumed", "tls13_full", "tls13_resumed", "failure"),
+                SslHistoryEntry,
+            ),
+        ):
+            profiles = net_params.get(family, {})
+            for name in names:
+                rows = profiles.get(name) if isinstance(profiles, dict) else None
+                if not isinstance(rows, list) or not rows:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            f"network_params.yaml ({family}.{name})",
+                            "expected a nonempty weighted history list",
+                        )
+                    )
+                else:
+                    schema_checks.append((rows, model, f"network_params.yaml ({family}.{name})"))
         err = validate_entry(
             net_params.get("http_transport_floor_slack", {}),
             HttpTransportFloorSlackConfig,

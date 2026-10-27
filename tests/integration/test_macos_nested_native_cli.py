@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from statistics import median
 
 import pytest
 import yaml
@@ -176,3 +177,23 @@ def test_current_profile_mixed_benchmark_executes_queries_and_exports_known_life
         assert len(births) == len(execs) == len(exits) == 1
         assert exits[0]["event"]["exit"]["stat"] == 0
     assert not (output / "data" / ".eforge-es-ingress").exists()
+    shell_query_spans: list[float] = []
+    for path in (output / "data").rglob("ecar.json"):
+        starts: dict[str, dict] = {}
+        for line in path.read_text().splitlines():
+            row = json.loads(line)
+            if row.get("object") != "PROCESS":
+                continue
+            identity = row["objectID"]
+            if row.get("action") == "CREATE":
+                starts[identity] = row
+            elif row.get("action") == "TERMINATE" and identity in starts:
+                start = starts[identity]
+                command = start.get("properties", {}).get("command_line", "")
+                if command in {
+                    "/bin/zsh -c 'id; groups'",
+                    "/bin/zsh -c 'ls -la ~/Library/LaunchAgents'",
+                }:
+                    shell_query_spans.append((row["timestamp_ms"] - start["timestamp_ms"]) / 1000)
+    assert len(shell_query_spans) >= 2
+    assert 0 < median(shell_query_spans) < 0.5

@@ -46,6 +46,8 @@ shape with inbound/outbound branches or the supported list shape—match the sur
 external-client compatibility exclusions, Linux SMB connection owners, DNS-tunnel timing/answers,
 scanner port mixes, proxy status messages and `http_transport_floor_slack` (median/sigma/minimum/maximum ms, deep merged). The latter freezes short-HTTP close variation and its admission maximum; absent old profiles preserve legacy parameters. Public DNS/NTP identities belong to the canonical
 public identity registry. Do not use this file for scenario-defined internal infrastructure.
+`transport_histories`/`ssl_histories` replace selected profile lists: positive integer weights, native history strings, plus transport state.
+Once-only conn classes occur once/direction regardless of packet counts. Passive TLS uses client uppercase/server lowercase; encrypted/post-detection content stays unknown.
 
 ### `public_dns_profiles.yaml`
 

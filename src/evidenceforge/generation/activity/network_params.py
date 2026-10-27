@@ -89,6 +89,9 @@ _DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     """Merge overlay network params into defaults."""
     result = dict(default)
+    for family in ("transport_histories", "ssl_histories"):
+        if isinstance(overlay.get(family), dict):
+            result[family] = {**default.get(family, {}), **overlay[family]}
     if isinstance(overlay.get("http_transport_floor_slack"), dict):
         result["http_transport_floor_slack"] = {
             **default.get("http_transport_floor_slack", {}),

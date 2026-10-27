@@ -1761,32 +1761,28 @@ _TLS13_CIPHER_DIST = (
 _TLS13_CIPHER_VALUES = tuple(c[0] for c in _TLS13_CIPHER_DIST)
 _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 
-# SSL history patterns (weighted).  Zeek's ssl_history values are handshake
-# message-type codes, not conn.log-style originator/responder direction flags;
-# established TLS rows should include "S" for the ServerHello.
-_SSL_HISTORY_TLS12_FULL_HANDSHAKE = (
-    ("CSXKNGIFIFD", 52),  # all modeled full TLS 1.2 ciphers use ECDHE
-    ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
-    ("CSXKNGIFIFL", 10),  # established then alert/close
+
+def _ssl_history_entries(profile: str) -> tuple[tuple[str, int], ...]:
+    """Read passive TLS histories without inventing decrypted messages."""
+    from evidenceforge.config.schemas import SslHistoryEntry
+    from evidenceforge.generation.activity.network_params import load_network_params
+
+    return tuple(
+        (entry.history, entry.weight)
+        for row in load_network_params()["ssl_histories"][profile]
+        for entry in (SslHistoryEntry.model_validate(row),)
+    )
+
+
+# Compatibility exports for callers inspecting the built-in vocabulary.
+_SSL_HISTORY_SUCCESS = tuple(
+    entry
+    for name in ("tls12_full", "tls12_resumed", "tls13_full", "tls13_resumed")
+    for entry in _ssl_history_entries(name)
 )
-_SSL_HISTORY_TLS12_RESUMED = (("CSIFIFD", 20),)  # abbreviated session, no cert/key exchange
-_SSL_HISTORY_TLS13_FULL_HANDSHAKE = (
-    ("CSD", 36),  # ClientHello, ServerHello, then encrypted records
-    ("CSDD", 26),  # multiple encrypted application-data records
-    ("CSDDD", 12),  # longer post-handshake encrypted exchange
-)
-_SSL_HISTORY_TLS13_RESUMED = (("CSD", 26),)  # PSK identity is visible; later messages are encrypted
-_SSL_HISTORY_TLS12_SUCCESS = _SSL_HISTORY_TLS12_FULL_HANDSHAKE + _SSL_HISTORY_TLS12_RESUMED
-_SSL_HISTORY_TLS13_SUCCESS = _SSL_HISTORY_TLS13_FULL_HANDSHAKE + _SSL_HISTORY_TLS13_RESUMED
-_SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
 _SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
 _SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
-
-_SSL_HISTORY_FAILURE = (
-    ("C", 45),  # client hello only, no visible server response
-    ("CS", 30),  # server hello seen, handshake did not complete
-    ("CSL", 25),  # server alert during handshake
-)
+_SSL_HISTORY_FAILURE = _ssl_history_entries("failure")
 _SSL_HIST_FAILURE_VALUES = tuple(h[0] for h in _SSL_HISTORY_FAILURE)
 _SSL_HIST_FAILURE_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_FAILURE)
 
@@ -1817,28 +1813,15 @@ def _choose_ssl_history_from_roll(
     resumed: bool,
 ) -> str:
     """Map a pre-drawn random roll onto a Zeek ssl_history value."""
-    if not established:
-        return _weighted_choice_from_roll(
-            _SSL_HIST_FAILURE_VALUES,
-            _SSL_HIST_FAILURE_WEIGHTS,
-            roll,
-        )
-
-    if tls_version == "TLSv13":
-        if resumed:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_RESUMED)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_RESUMED)
-        else:
-            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
-            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_FULL_HANDSHAKE)
-    elif resumed:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_RESUMED)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_RESUMED)
-    else:
-        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
-        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_FULL_HANDSHAKE)
-
-    return _weighted_choice_from_roll(values, weights, roll)
+    profile = (
+        ("tls13_" if tls_version == "TLSv13" else "tls12_") + ("resumed" if resumed else "full")
+        if established
+        else "failure"
+    )
+    entries = _ssl_history_entries(profile)
+    return _weighted_choice_from_roll(
+        tuple(history for history, _ in entries), tuple(weight for _, weight in entries), roll
+    )
 
 
 def _weighted_choice_from_roll(
@@ -5692,6 +5675,47 @@ class ActivityGenerator:
                 f"manager={census.manager_pending}"
             )
 
+    def _bounded_process_duration(
+        self,
+        *,
+        system: System,
+        start_time: datetime,
+        pid: int,
+        process_name: str,
+        lifetime: tuple[float, float],
+        rng: random.Random,
+    ) -> timedelta:
+        """Sample one canonical bounded runtime across terminal and teardown paths."""
+        if _get_os_category(system.os) == "macos":
+            from evidenceforge.config.schemas import ShortCommandTiming
+            from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+            profile = get_parent_config("macos", process_name.rsplit("/", 1)[-1])
+            timing_data = profile.get("short_timing")
+        else:
+            timing_data = None
+        if timing_data is not None:
+            timing = ShortCommandTiming.model_validate(timing_data)
+            duration = self.timing_runtime.sampler.sample_timedelta(
+                TruncatedLognormalDistribution(
+                    minimum=lifetime[0] * 1_000_000,
+                    median=min(lifetime[1], max(lifetime[0], timing.median)) * 1_000_000,
+                    maximum=lifetime[1] * 1_000_000,
+                    sigma=timing.sigma,
+                ),
+                relationship_key="activity.process.macos_foreground_lifetime",
+                scope=TimingScope(
+                    stable_id=f"foreground:{system.hostname}:{pid}:{start_time.isoformat()}",
+                    host=system.hostname,
+                    source="endpoint_process",
+                    lifecycle_id=f"{system.hostname}:{pid}:{start_time.isoformat()}",
+                ),
+                sample_key="terminal_command_close",
+            )
+        else:
+            duration = timedelta(seconds=rng.uniform(*lifetime))
+        return duration
+
     def _generate_bounded_foreground_process_termination(
         self,
         *,
@@ -5705,7 +5729,14 @@ class ActivityGenerator:
         rng: random.Random,
     ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
-        termination_time = start_time + timedelta(seconds=rng.uniform(*lifetime))
+        termination_time = start_time + self._bounded_process_duration(
+            system=system,
+            start_time=start_time,
+            pid=pid,
+            process_name=process_name,
+            lifetime=lifetime,
+            rng=rng,
+        )
         session_end_plan = self.state_manager.get_session_end_plan(logon_id)
         session = self.state_manager.get_session(logon_id)
         lifecycle_deadlines = [
@@ -8127,7 +8158,14 @@ class ActivityGenerator:
             ensure_utc(time),
             ensure_utc(running.start_time) if running is not None else ensure_utc(time),
         )
-        termination_time = process_anchor + timedelta(seconds=rng.uniform(*lifetime))
+        termination_time = process_anchor + self._bounded_process_duration(
+            system=source_system,
+            start_time=process_anchor,
+            pid=pid,
+            process_name=image,
+            lifetime=lifetime,
+            rng=rng,
+        )
         self._remember_foreground_process_finalizer(
             system=source_system,
             user=User(username=username, full_name=username, email=f"{username}@example.local"),
@@ -8568,7 +8606,15 @@ class ActivityGenerator:
                     pid=actor_pid,
                     process_name=actor_image,
                     logon_id=(running.logon_id if running is not None else ""),
-                    termination_time=time + timedelta(seconds=lifetime_rng.uniform(*lifetime)),
+                    termination_time=time
+                    + self._bounded_process_duration(
+                        system=client_system,
+                        start_time=time,
+                        pid=actor_pid,
+                        process_name=actor_image,
+                        lifetime=lifetime,
+                        rng=lifetime_rng,
+                    ),
                 )
 
         transport_pid = actor_pid if profile.transport_attribution == "process" else -1
@@ -11378,8 +11424,8 @@ class ActivityGenerator:
         )
 
         event.ssl = SslContext(
-            version=tls_version,
-            cipher=cipher if ssl_established else "",
+            version=tls_version if "s" in ssl_hist else "",
+            cipher=cipher if "s" in ssl_hist else "",
             server_name=server_name,
             resumed=resumed,
             established=ssl_established,
@@ -11387,7 +11433,7 @@ class ActivityGenerator:
         )
         if not ssl_established:
             orig_bytes = rng.randint(90, 260)
-            resp_bytes = rng.randint(40, 180) if "S" in ssl_hist else 0
+            resp_bytes = rng.randint(40, 180) if any(c.islower() for c in ssl_hist) else 0
             history = "ShADd" if resp_bytes else "ShAD"
             orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
                 orig_bytes,
@@ -15676,8 +15722,13 @@ class ActivityGenerator:
                         f"{identity.command_line}"
                     )
                 )
-                bounded_termination_time = identity.started_at + timedelta(
-                    seconds=lifetime_rng.uniform(*process_lifetime)
+                bounded_termination_time = identity.started_at + self._bounded_process_duration(
+                    system=system,
+                    start_time=identity.started_at,
+                    pid=identity.pid,
+                    process_name=identity.image,
+                    lifetime=process_lifetime,
+                    rng=lifetime_rng,
                 )
                 connection_hold = self._process_connection_hold_until.get(
                     self._process_instance_key(
@@ -29025,6 +29076,27 @@ class ActivityGenerator:
                                 concurrency_group_id=process_group_id,
                             )
 
+                    elif os_category == "macos":
+                        lifetime = _posix_foreground_lifetime(
+                            "macos", effect_process_name, effect_command_line
+                        )
+                        if lifetime is not None:
+                            running_proc = self.state_manager.get_process(system.hostname, pid)
+                            self._generate_bounded_foreground_process_termination(
+                                user=user,
+                                system=system,
+                                start_time=(
+                                    running_proc.start_time
+                                    if running_proc is not None
+                                    else process_time
+                                ),
+                                pid=pid,
+                                process_name=effect_process_name,
+                                logon_id=logon_id,
+                                lifetime=lifetime,
+                                rng=rng,
+                            )
+
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
             elif activity_type == "process_system":
                 if os_category == "windows" and activity_type in PROCESS_TEMPLATES:
@@ -32664,7 +32736,7 @@ class ActivityGenerator:
             conn_id="",
             duration=dhcp_duration,
             conn_state="SF",
-            history="DdDd" if "DISCOVER" in msg_types else "Dd",
+            history="Dd",
             traffic=NetworkTrafficLedger(
                 orig=DirectionalTrafficLedger(orig_bytes, orig_pkts, orig_ip_bytes),
                 resp=DirectionalTrafficLedger(resp_bytes, resp_pkts, resp_ip_bytes),

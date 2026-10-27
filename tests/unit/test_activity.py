@@ -17310,7 +17310,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
     assert "D" in event.network.history
     if event.network.resp_bytes:
         assert "d" in event.network.history
-    assert ("S" in event.protocol.ssl.ssl_history) == (event.network.resp_bytes > 0)
+    assert ("s" in event.protocol.ssl.ssl_history) == (event.network.resp_bytes > 0)
     assert 0 < event.network.orig_bytes < 1200
     assert 0 <= event.network.resp_bytes < 55000
     assert event.network.orig_pkts >= 1

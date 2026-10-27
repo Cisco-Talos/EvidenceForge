@@ -180,6 +180,8 @@ OVERLAY_FILE_SCHEMAS: dict[str, dict] = {
             "dns_tunnel_rcode_weights",
             "nmap_command_probe",
             "proxy_connect_status_messages",
+            "transport_histories",
+            "ssl_histories",
         },
         "string_list_fields": {
             "dns_tunnel_response_templates",

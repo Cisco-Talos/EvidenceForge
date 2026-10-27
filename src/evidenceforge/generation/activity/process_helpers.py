@@ -238,6 +238,12 @@ def _macos_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
             re.fullmatch(re.sub(r"\\\{[a-zA-Z_]+\\\}", ".+", re.escape(pattern)), value)
             for pattern, value in zip(expected, command, strict=True)
         ):
+            timing = profile.get("short_timing")
+            if timing is not None:
+                from evidenceforge.config.schemas import ShortCommandTiming
+
+                bounds = ShortCommandTiming.model_validate(timing)
+                return (bounds.minimum, bounds.maximum)
             return (0.05, 45.0)
     return None
 

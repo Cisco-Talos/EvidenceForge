@@ -176,3 +176,101 @@ recreate source facts. Sibling retained-target and invalid-anchor regressions co
 The legacy checkpoint failures were stale test fixtures including a v10-only policy expiry table
 inside fabricated v6 heads; those fixtures now omit it and expect v10 writes. The reader's strict
 schema rejection is unchanged. The isolated runtime census regression passes outside the sandbox.
+
+## Current mixed-workload acceptance and first blind review
+
+Revision 343 completes all five authored nested commands in the representative mixed workload.
+The fresh `review-1` synthetic bundle has 9,494 records, including eight native forks, four execs
+and two known exits, plus three bounded Unified Log entries. All hard gates pass; automated overall
+score is 90.0882. Four isolated reviewers score synthetic confidence 64/92/90/56 (mean 75.5).
+Host review confirms coherent Mac native identities, sessions and source sequence ordering.
+
+### Shared protocol-history family contract (before implementation)
+
+Owner: network transaction planning and the configured source-history vocabulary. Invariant:
+each directional conn-history ACK/data/inconsistent/multiflag marker appears at most once;
+TLS client messages are uppercase and server messages lowercase, with no claimed decrypted
+handshake content on a passive encrypted connection. ClientHello alone supplies no negotiated
+version/cipher. Entry paths: baseline/storyline network contracts, protocol repair/adoption,
+DNS/UDP, TCP success and partial states, implicit TLS and SMTP STARTTLS. Consumers: immutable
+network/protocol context, all Zeek sensors, cross-source flow accounting and evaluation.
+Correct canonical history facts before rendering; preserve packet counts as independent
+transport observations. Raw explicitly supplied source rows remain escape hatches. Sibling
+risks include capture-loss packet reconciliation, which needs its separate observation contract.
+Primary qualification: Zeek conn/SSL documentation and its upstream SSL event handlers.
+
+### Mac bounded-query timing family contract (before implementation)
+
+Owner: data-driven admitted command profiles and canonical process lifetime planning. Invariant:
+trivial queries have strongly subsecond modeled lifetimes, with distinct bounds for directory,
+runtime and I/O commands; all source views retain the same canonical close. Entry paths:
+baseline terminal children, authored local/SSH commands and nested qualified shells. Consumers:
+foreground release, native ES exit, normalized endpoint rows and shell-history timing.
+Keep admission exact, unknown commands unbounded, and native completion/result qualification
+unchanged. These are engineering timing models, not measured performance claims. Shell script
+wrappers and network queries must not inherit a bare binary's trivial-query result policy.
+
+## Protocol and timing implementation verification
+
+The active source vocabulary now belongs to validated YAML transport/TLS profiles. Canonical
+network finalization encodes once-only directional classes while retaining independent packet
+counts. DHCP's direct transaction adapter uses the same native representation; UDP Kerberos
+tests retain multi-packet accounting without repeating history characters. The SMTP STARTTLS
+sibling uses the shared TLS chooser. Passive TLS no longer invents encrypted Finished/data
+messages, and client-only failed attempts omit negotiated version/cipher. Scoped configuration
+accessors avoid freezing production history selection to an import-time project overlay.
+
+Mac admitted-command profiles now own finite lognormal timing parameters, with separate trivial,
+directory, runtime, build and network-query models. The authored adapter consumes the canonical
+close even when later reference release owns final publication. Unknown invocations and explicit
+native result gates are unchanged. Both current nested/native CLI regressions pass; the focused
+97-test Mac/protocol set, additional 105 UDP/config-semantic contracts and 20 command/history
+contracts pass. Config validation has zero findings across 99 files. The full pre-fix routine gate
+passed 17,205 tests. The new full gate is being rerun after the final sibling-path correction;
+an artifact-lineage failure from its interrupted first attempt does not reproduce either alone
+or in all 16 tests from its file. Preserve that fact if a later full gate fails again.
+
+## Assessment exit rule, clarified with the user
+
+The user challenged the expanding assessment loop and asked when development would resume.
+The agent acknowledged that no clear enough stopping rule had been set. The current commitment
+is to complete the two already-selected implementation families, finish deterministic regression
+verification, commit/push, and exit the fix/review cycle. **Do not launch another blind panel or
+automatically chase remaining reviewer findings.** No numeric realism score is a development
+exit gate. The loop-1 scores remain the only current blind scores; deterministic probes after
+revision 344 must not be presented as a fresh independent authenticity result.
+
+The first current-profile panel and mixed-workload regression are pushed as `0421b362`.
+Initial post-fix synthetic contract output has 1,771 connections with zero repeated once-only TCP/UDP
+history classes. All 689 TLS histories use the corrected passive vocabulary, with no uppercase
+ServerHello or client-only negotiated version. The same 14 native process records remain;
+known native exec-to-exit durations are 0.167016 and 0.027278 seconds. Nine of 13 selected simple
+query lifetimes are now subsecond (median 0.49 seconds), compared with none and median 15.789
+seconds in loop 1. These are deterministic engineering checks, not measured Mac performance.
+
+The next native development dependency is the GUI launch relationship reference described in
+`docs/design/macos-workstation-feasibility/gui-launch-reference-plan.md`. Existing bounded login,
+terminal, SSH, exec/exit and kernel-policy references remain in force; do not ask to repeat them.
+Finder/Dock/Spotlight responsibility, helper/PTY inventories, populated entitlements/full-hash
+shapes and broader native file/auth/Unified Log families still need separate qualification.
+
+## Final regression accounting for revision 344
+
+The complete routine run finished with **17,210 passed, 50 skipped and four failures**. The
+documentation-size check was corrected and all 98 skill contracts pass. The TLS retention test
+still monkeypatched removed import-time sampling tables; it now targets the scoped distribution
+accessor. Two AST/source-inspection checks observed shifted source positions because final
+baseline edits overlapped that run; all 14 tests from their modules pass in a fresh process.
+Do not report this as a fresh zero-failure full-suite result. Avoid changing source beneath
+future complete runs. The final changed-owner selections separately pass 510 activity/command/
+protocol contracts, 202 baseline contracts, all 12 Mac command contracts and the corrected fixture
+modules. Native nonempty SSH checkpoint verify/suspend/resume/equality passes on the final source.
+
+The timing invariant now also reaches the baseline engine's direct foreground scheduler and
+fallback teardown/connection-owner paths through one scoped canonical duration helper. The
+earlier helper-only change did not cover the baseline engine adapter; the mixed-workload test
+caught that gap. Its bounded shell-query cohort now verifies subsecond median without imposing
+a fixed activity count. Both native CLI contracts pass (the mixed case was rerun after its
+count assertion was corrected). Unknown commands and all native metadata/result gates remain.
+Full Ruff, format, whitespace, 99-file config validation and behavior revision/digest checks pass.
+The next saved bundle is deterministic verification only; no further blind panel is planned.

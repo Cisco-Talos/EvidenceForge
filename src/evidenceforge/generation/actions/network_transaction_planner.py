@@ -118,12 +118,8 @@ from evidenceforge.generation.activity.network_proxy import (
 )
 from evidenceforge.generation.activity.network_transport import (
     _AUTO_WEIRD_ENABLED,
-    _TCP_CONN_ENTRIES,
-    _TCP_CONN_WEIGHTS,
     _TCP_OVERHEAD_VALUES,
     _TCP_OVERHEAD_WEIGHTS,
-    _UDP_CONN_ENTRIES,
-    _UDP_CONN_WEIGHTS,
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
     _align_tcp_network_payload_with_history,
@@ -135,6 +131,8 @@ from evidenceforge.generation.activity.network_transport import (
     _tcp_packet_counts_from_payload_and_history,
     _tcp_payload_bytes_consistent_with_history,
     _tcp_success_history,
+    connection_state_distribution,
+    native_connection_history,
 )
 from evidenceforge.generation.http_channels import HttpChannelAffinity
 from evidenceforge.generation.lifecycle_authority import (
@@ -3796,11 +3794,8 @@ class NetworkTransactionPlanner:
         elif service == "ntp" and resp_bytes and resp_bytes > 0:
             conn_state, history = "SF", "Dd"
         else:
-            entry = rng.choices(
-                _UDP_CONN_ENTRIES,
-                weights=_UDP_CONN_WEIGHTS,
-                k=1,
-            )[0]
+            entries = connection_state_distribution("udp")
+            entry = rng.choices(entries, weights=[row[1] for row in entries], k=1)[0]
             conn_state, _, history = entry
         if conn_state == "S0":
             duration = None
@@ -3819,12 +3814,12 @@ class NetworkTransactionPlanner:
     ) -> tuple[str, str, float | None, int | None, int | None]:
         """Choose an observation state and reconcile its payload and finite attempt interval."""
         if duration is not None:
-            tcp_entries = _TCP_CONN_ENTRIES
-            tcp_weights = _TCP_CONN_WEIGHTS
+            tcp_entries = connection_state_distribution("tcp")
+            tcp_weights = [row[1] for row in tcp_entries]
             if caller_provided_payload:
                 candidates = [
                     entry
-                    for entry in _TCP_CONN_ENTRIES
+                    for entry in tcp_entries
                     if entry[0] not in {"S0", "S1", "SH", "SHR", "REJ"}
                 ]
                 if candidates:
@@ -5771,7 +5766,9 @@ class NetworkTransactionPlanner:
                 network_point_expires_at=boundary.network_runtime.window_end,
             )
 
+        event.network.history = native_connection_history(event.network.history or "")
         _align_tcp_network_payload_with_history(event.network, rng)
+        event.network.history = native_connection_history(event.network.history or "")
         if facts.preserve_explicit_payload:
             _preserve_explicit_tcp_payload_overrides(
                 event.network,

@@ -1741,7 +1741,7 @@ def test_smtp_starttls_resumed_history_uses_abbreviated_handshake(tmp_path: Path
             hop_index=index,
             event_time=datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
         )
-        assert ssl_ctx.ssl_history == "CSIFIFD"
+        assert ssl_ctx.ssl_history == "CsiI"
         assert cert_chain == []
         checked = True
         break

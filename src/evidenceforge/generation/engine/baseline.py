@@ -3360,10 +3360,22 @@ class BaselineMixin:
         if lifetime is None:
             return
         canonical_start = max(ensure_utc(start_time), ensure_utc(running.start_time))
+        duration = (
+            self.activity_generator._bounded_process_duration(
+                system=system,
+                start_time=canonical_start,
+                pid=pid,
+                process_name=running.image,
+                lifetime=lifetime,
+                rng=rng,
+            )
+            if _get_os_category(system.os) == "macos"
+            else timedelta(seconds=rng.uniform(*lifetime))
+        )
         self.activity_generator.generate_process_termination(
             user=user,
             system=system,
-            time=canonical_start + timedelta(seconds=rng.uniform(*lifetime)),
+            time=canonical_start + duration,
             pid=pid,
             process_name=running.image,
             logon_id=running.logon_id or logon_id,

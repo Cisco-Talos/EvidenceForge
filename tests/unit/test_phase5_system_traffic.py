@@ -2263,7 +2263,7 @@ class TestInfrastructureDetection:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.orig_pkts >= 3
         assert event.network.resp_pkts >= 3
-        assert event.network.history == "DdDdDd"
+        assert event.network.history == "Dd"
 
     def test_kerberos_primary_dispatch_rejection_cancels_both_runtime_points_and_tgt_cache(
         self,
@@ -2668,7 +2668,7 @@ class TestInfrastructureDetection:
         assert len(audit_events) == 2
         assert event.network.orig_pkts >= len(audit_events)
         assert event.network.resp_pkts >= len(audit_events)
-        assert event.network.history == "DdDd"
+        assert event.network.history == "Dd"
 
     def test_tcp_kerberos_audit_companions_force_successful_packet_shape(
         self,

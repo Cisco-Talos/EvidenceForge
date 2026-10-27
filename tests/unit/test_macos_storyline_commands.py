@@ -4,8 +4,10 @@
 """Authored Mac shell commands keep execution, completion and history together."""
 
 import json
+import random
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from unittest.mock import patch
 
 import pytest
@@ -89,7 +91,36 @@ def test_mac_discovery_sequence_executes_every_command_and_submits_history(tmp_p
     for result in results:
         pid = result["pid"]
         assert pid in creates and pid in closes
-        assert 0 < closes[pid]["timestamp_ms"] - creates[pid]["timestamp_ms"] < 50000
+        assert 0 < closes[pid]["timestamp_ms"] - creates[pid]["timestamp_ms"] < 3000
+
+
+def test_mac_terminal_and_teardown_share_scoped_query_runtime(tmp_path: Path) -> None:
+    engine = _engine(tmp_path)
+    try:
+
+        def duration(pid: int, seed: int, name: str) -> float:
+            from evidenceforge.generation.activity.process_helpers import _macos_foreground_lifetime
+
+            command = name if name.endswith("/id") else f"{name} -sh /Users/maya/Documents"
+            bounds = _macos_foreground_lifetime(name, command)
+            assert bounds is not None
+            return engine.activity_generator._bounded_process_duration(
+                system=_system(),
+                start_time=_TIME,
+                pid=pid,
+                process_name=name,
+                lifetime=bounds,
+                rng=random.Random(seed),
+            ).total_seconds()
+
+        # A later teardown must not redraw a different runtime for the same process.
+        assert duration(40000, 1, "/usr/bin/id") == duration(40000, 99, "/usr/bin/id")
+        queries = [duration(40000 + i, i, "/usr/bin/id") for i in range(80)]
+        directories = [duration(41000 + i, i, "/usr/bin/du") for i in range(80)]
+        assert 0 < median(queries) < 0.3
+        assert median(directories) > median(queries)
+    finally:
+        engine._close_emitters()
 
 
 @pytest.mark.parametrize("returned_pid", [0, -1])

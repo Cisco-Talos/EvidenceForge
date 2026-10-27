@@ -1,11 +1,18 @@
 # macOS native evidence: metadata map and remaining gates
 
-## Current admission, 2026-10-26
+## Current admission, 2026-10-27
 
 The active target is macOS 27 arm64, with qualified bounded v11 fork/exec/known-exit generation.
 The [profile worklog](../../worklog/2026-10-24-macos27-native-process-profile.md) records private
 human qualification and producer revisions 333–336. Historical macOS 26 gates/milestones below
 do not require a new 26 capture and do not override the current target allowlist.
+
+The later [coverage continuation](../../worklog/2026-10-27-macos-native-coverage.md) repairs
+out-of-order ES publication without changing canonical times, adds exact per-action qualification
+diagnostics and admits bounded plain nested command parents. Ordinary local GUI application
+launches remain limited by unknown responsibility/launch relationships. The
+[GUI reference proposal](gui-launch-reference-plan.md) specifies the next human-assisted scope;
+it is not collection authorization. Historical blocker rows below retain their original dates.
 
 The bounded app-policy refusal reference is integrated through `process.outcome: policy_refused`.
 The privately reviewed controlled download and successful same-content local control support the

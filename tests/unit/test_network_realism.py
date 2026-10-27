@@ -224,12 +224,12 @@ class TestSslRealism:
 
     def test_established_ssl_histories_include_server_hello(self):
         """Zeek ssl.log established handshakes should include ServerHello."""
-        allowed_codes = set("^HCSVTXKRNYGFWUAZIBDEOPMJLQ")
+        allowed_codes = set("CsxknGtIi")
 
-        assert all("S" in history for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all("s" in history for history in _SSL_HIST_SUCCESS_VALUES)
         assert all(set(history) <= allowed_codes for history in _SSL_HIST_SUCCESS_VALUES)
         assert all(
-            "S"
+            "s"
             in _choose_ssl_history(
                 random.Random(seed),
                 tls_version="TLSv13" if seed % 2 else "TLSv12",
@@ -287,11 +287,11 @@ class TestSslRealism:
             for seed in range(100)
         }
 
-        assert tls12_resumed == {"CSIFIFD"}
-        assert all("X" in history for history in tls12_full)
-        assert all("K" in history for history in tls12_full)
-        assert tls13_resumed == {"CSD"}
-        assert tls13_full == {"CSD", "CSDD", "CSDDD"}
+        assert tls12_resumed == {"CsiI"}
+        assert all("x" in history for history in tls12_full)
+        assert all("k" in history for history in tls12_full)
+        assert tls13_resumed == {"Cs"}
+        assert tls13_full == {"Cs"}
         assert all(not set(history) & {"O", "X", "Y", "F", "T"} for history in tls13_full)
 
     def test_tls12_cipher_aes128_dominates(self):

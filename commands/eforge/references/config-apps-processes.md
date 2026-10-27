@@ -123,10 +123,10 @@ and runtime signing flags remain separate. Old catalog entries need no changes.
 
 ### `spawn_rules.yaml`
 
-Deep-merges `windows`, `linux` and `macos` parent mappings: command templates, lifetime, spawn delay,
-max children and child executable names. Optional Mac `launch_kind: shell|gui` owns parent/foreground
-placement; absence preserves path classification. Python.app module commands explicitly use a shell.
-Names must resolve through catalogs. Adding an application does not imply a parent; use the user's intent.
+Deep-merges OS parent mappings: command templates, lifetime, spawn delay, max children and child names. Mac `launch_kind: shell|gui` owns placement; absent preserves path classification. Python.app uses a shell.
+Names resolve through catalogs; adding an application does not imply a parent. Mac `short_timing` models
+exact-template runtime using positive finite `minimum`, `median`, `maximum` seconds and `sigma`
+(minimum ≤ median ≤ maximum). Query/build/I/O profiles differ; native metadata and result gates remain.
 
 ### `process_network_map.yaml`
 

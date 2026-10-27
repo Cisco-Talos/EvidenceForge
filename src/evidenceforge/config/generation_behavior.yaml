@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 343
+current_revision: 344
 history_start_revision: 1
-behavior_surface_sha256: 81153750d91e55a9995782a161b4e291add309a0a28b45ebe9f553656259ef2d
+behavior_surface_sha256: 1108f0e7e7498b84c8f39f02c577896ba28a85c158b9e1b643c5f6fa3f89b84a
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3265,3 +3265,12 @@ changes:
       - ecar
       - macos_endpoint_security
     summary: Releases explicit one-shot Mac queries and binds a first exec target's prepared content to its exact fork admission, preserving native facts and metadata gates.
+  - revision: 344
+    id: passive-protocol-histories-and-mac-query-runtimes
+    impact: material
+    domains:
+      - network-protocol-evidence
+      - process-lifecycle
+    formats:
+      - all
+    summary: Corrects directional passive transport/TLS histories and negotiated metadata; models bounded Mac query runtimes through canonical lifetime profiles.

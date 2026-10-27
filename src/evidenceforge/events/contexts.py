@@ -606,7 +606,7 @@ class SslContext:
     server_name: str = ""  # SNI hostname
     resumed: bool = False
     established: bool = True
-    ssl_history: str = ""  # e.g., TLS 1.2 "CSXKNGIFIFD" or passive TLS 1.3 "CSD"
+    ssl_history: str = ""  # e.g., passive TLS 1.2 "CsxknGIi" or TLS 1.3 "Cs"
     cert_chain_fuids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
