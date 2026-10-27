@@ -126,3 +126,13 @@ requirements.txt
 
 # Sample data (reference only, not tracked)
 sample_data/
+
+# Current-profile synthetic acceptance source and derived review reports.
+!scenarios/macos27-native-assessment/
+scenarios/macos27-native-assessment/*
+!scenarios/macos27-native-assessment/draft.json
+!scenarios/macos27-native-assessment/README.md
+!scenarios/macos27-native-assessment/source/
+!scenarios/macos27-native-assessment/blind-test/
+scenarios/macos27-native-assessment/output/
+scenarios/macos27-native-assessment/data/
