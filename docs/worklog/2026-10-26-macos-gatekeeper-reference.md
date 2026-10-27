@@ -122,3 +122,21 @@ unchanged revision-336 behavior digest pass. Prepared diagnostic-only handoff:
 do not inspect it after handoff. The human runs `diagnose --private-run` there and supplies the
 original kit folder at the hidden prompt. No setup, server, capture, test-app launch or private
 verification was run by the agent, and the original kit was neither opened nor modified.
+
+## Scoped input-file repair authorized by the human
+
+The human's v2 report identified `ARCHIVE_CONTENT` / `FILE_MISSING`. They then explicitly asked
+the agent to inspect safe kit contents directly. Under that narrower authorization, the agent
+checked only directory/file metadata and compared the known generated test archive, executable
+and bundle metadata using non-disclosing equality checks. No private configuration, captured
+record or summary was opened; no native tool, verifier, collector or test app was executed.
+No names, content, hashes, identifiers or native values were returned from those checks.
+
+The exact `private/downloads` folder was empty. Both downloaded test items were instead at the
+kit's top level. The capture-start marker and expected native capture files were absent. After
+verifying the items matched the kit's original test artifacts, the agent moved just the ZIP and
+app into `private/downloads`. Same-filesystem object identity was preserved; no quarantine,
+signature, source, provenance or security setting was changed. Acquisition has still not begun,
+so the human can proceed with the original first capture after closing all agents. No rebuild,
+redownload or running server is required. This authorization does not extend to native records,
+private configuration or other handed-off kits.
