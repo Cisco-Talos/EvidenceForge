@@ -1358,3 +1358,53 @@ def test_denial_review_retains_multiple_target_pids_as_unqualified_lifecycle_ext
 def test_repo_copy_cannot_review_native_denial() -> None:
     result = kit.review_denial(Path("/invented-private-location-never-opened"), "BLOCK_ALERT")
     assert result.error == "LOCATION"
+
+
+@pytest.mark.parametrize(
+    "style,label",
+    [
+        (0, "NONE"),
+        (2, "MAIN_IMAGE"),
+        (4, "SHARED_CACHE"),
+        (6, "MAIN_PLUGIN"),
+        (8, "ABSOLUTE"),
+        (10, "UUID_RELATIVE"),
+        (12, "LARGE_SHARED_CACHE"),
+        (14, "OTHER"),
+    ],
+)
+def test_denial_metadata_classifies_public_tracepoint_styles_without_ids(
+    denial_capture: Path, style: int, label: str
+) -> None:
+    path = denial_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes())
+    row["traceID"] = (0x40000 << 32) | (style << 16) | 4
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_denial(denial_capture, "BLOCK_ALERT")
+    assert result.tracepoint_pc_style == label
+    assert result.tracepoint_log_namespace == result.tracepoint_level_agreement == "PASS"
+    assert result.static_format == result.simple_tracepoint_flags == result.no_activity == "PASS"
+    assert result.native_level == "Default" and result.kernel_uid_zero == "PASS"
+    assert str(row["traceID"]) not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "field,value,check",
+    [
+        ("traceID", (0x80040000 << 32) | (8 << 16) | 4, "static_format"),
+        ("traceID", (0x40000 << 32) | (0x108 << 16) | 4, "simple_tracepoint_flags"),
+        ("traceID", (0x40000 << 32) | (8 << 16) | 0x104, "tracepoint_level_agreement"),
+        ("traceID", (0x40000 << 32) | (8 << 16) | 3, "tracepoint_log_namespace"),
+        ("activityIdentifier", 5, "no_activity"),
+        ("userID", 501, "kernel_uid_zero"),
+    ],
+)
+def test_denial_metadata_does_not_promote_unsupported_encoding_to_a_projection_contract(
+    denial_capture: Path, field: str, value: object, check: str
+) -> None:
+    path = denial_capture / "private/test-ul.jsonl"
+    row = json.loads(path.read_bytes()) | {field: value}
+    path.write_bytes(json.dumps(row).encode() + b"\n")
+    result = kit.review_denial(denial_capture, "BLOCK_ALERT")
+    assert getattr(result, check) == "FAIL"
+    assert result.gate_status == "NOT_EVALUATED"

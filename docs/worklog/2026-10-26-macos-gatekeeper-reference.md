@@ -314,3 +314,22 @@ preservation. Full Ruff check/format (1,344 files), whitespace and unchanged beh
 validation against the predecessor pass. The code-only review copy is
 `/private/tmp/eforge-gatekeeper-denial-review-v1-462cb09a`; no native operation was run there.
 The durable roadmap now identifies the remaining integration work and the bounded evidence limit.
+
+## Native integration authorized; no further collection
+
+The human explicitly requested continuing everything possible without further collection.
+The approved fixed-output review of the same retained evidence additionally classified the ASP
+record as Default/log namespace, ABSOLUTE PC style, static format, no activity, kernel UID zero
+and no flags beyond the PC-style bits. No trace ID, flag value, offset, address, UID or other
+native value was exposed. These categories use Apple's frozen public XNU discriminants.
+
+Implementation will add a separate authored policy-refused outcome, preserving denied and
+exec_failed. A cohort-owned allocation will reserve the reported target PID and a logging TID
+in the shared host namespaces without creating a RunningProcess/RunningThread, successful exec,
+or termination. The observation owns only an instant reservation, not a measured process lifetime.
+Kernel logging will use a boot-owned resource with a distinct deployment-owned AppleSystemPolicy
+sender and absolute-style callsite; it must not masquerade as an ordinary PID-zero process.
+The normal canonical event, source observation/timing, sorting and checkpoint paths own export.
+Synthetic offsets and build identities remain explicit model values, never copied from evidence.
+The rejection cause, process allocation stage, GUI parentage and additional native families stay
+unqualified. No new collector, launch, control, private native-value view or service is authorized.

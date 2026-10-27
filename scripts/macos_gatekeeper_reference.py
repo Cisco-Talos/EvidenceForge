@@ -349,6 +349,27 @@ class DenialReviewReport(BaseModel, extra="forbid", frozen=True, strict=True):
     policy_cause: Literal["NOT_CLASSIFIED"] = "NOT_CLASSIFIED"
     allocation_exec_stage: Literal["NOT_ESTABLISHED"] = "NOT_ESTABLISHED"
     fork_evidence: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+    native_level: Literal["Default", "Info", "Debug", "Error", "Fault", "MIXED", "NOT_OBSERVED"] = (
+        "NOT_OBSERVED"
+    )
+    tracepoint_pc_style: Literal[
+        "NONE",
+        "MAIN_IMAGE",
+        "SHARED_CACHE",
+        "MAIN_PLUGIN",
+        "ABSOLUTE",
+        "UUID_RELATIVE",
+        "LARGE_SHARED_CACHE",
+        "OTHER",
+        "MIXED",
+        "NOT_OBSERVED",
+    ] = "NOT_OBSERVED"
+    tracepoint_log_namespace: Check = "INCONCLUSIVE"
+    tracepoint_level_agreement: Check = "INCONCLUSIVE"
+    static_format: Check = "INCONCLUSIVE"
+    no_activity: Check = "INCONCLUSIVE"
+    kernel_uid_zero: Check = "INCONCLUSIVE"
+    simple_tracepoint_flags: Check = "INCONCLUSIVE"
     collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
     server: Literal["NOT_STARTED"] = "NOT_STARTED"
     test_app: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
@@ -1192,6 +1213,21 @@ def review_denial(existing: Path, outcome: Outcome) -> DenialReviewReport:
             record.sender_image_path.rsplit("/", 1)[-1] == "AppleSystemPolicy"
             for record in refusals
         ]
+        # Public XNU 12377.1.9 protocol discriminants; never output native IDs,
+        # addresses, flags or offsets. OTHER retains an unsupported representation.
+        styles = {
+            {
+                0: "NONE",
+                2: "MAIN_IMAGE",
+                4: "SHARED_CACHE",
+                6: "MAIN_PLUGIN",
+                8: "ABSOLUTE",
+                10: "UUID_RELATIVE",
+                12: "LARGE_SHARED_CACHE",
+            }.get((record.trace_id >> 16) & 0xE, "OTHER")
+            for record in refusals
+        }
+        levels = {record.message_type for record in refusals}
         supported = (
             acquisition
             and local_control
@@ -1228,6 +1264,39 @@ def review_denial(existing: Path, outcome: Outcome) -> DenialReviewReport:
             es_exec_records=capture.es_exec_records,
             es_exit_records=capture.es_exit_records,
             human_outcome=outcome,
+            native_level="NOT_OBSERVED"
+            if not levels
+            else next(iter(levels))
+            if len(levels) == 1
+            else "MIXED",
+            tracepoint_pc_style="NOT_OBSERVED"
+            if not styles
+            else next(iter(styles))
+            if len(styles) == 1
+            else "MIXED",
+            tracepoint_log_namespace=_shape([record.trace_id & 255 == 4 for record in refusals]),
+            tracepoint_level_agreement=_shape(
+                [
+                    (record.trace_id >> 8) & 255
+                    == {"Default": 0, "Info": 1, "Debug": 2, "Error": 16, "Fault": 17}[
+                        record.message_type
+                    ]
+                    for record in refusals
+                ]
+            ),
+            static_format=_shape(
+                [not ((record.trace_id >> 32) & 0x80000000) for record in refusals]
+            ),
+            no_activity=_shape(
+                [
+                    record.activity_identifier == record.parent_activity_identifier == 0
+                    for record in refusals
+                ]
+            ),
+            kernel_uid_zero=_shape([record.user_id == 0 for record in refusals]),
+            simple_tracepoint_flags=_shape(
+                [((record.trace_id >> 16) & 0xFFFF) & ~0xE == 0 for record in refusals]
+            ),
         )
     except PrivateError as error:
         code = error.code
