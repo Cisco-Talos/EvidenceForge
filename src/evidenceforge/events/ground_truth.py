@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from evidenceforge.events.macos_native_coverage import MacosNativeCoverage
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
@@ -110,6 +111,7 @@ class GroundTruthAttributesBase(BaseModel):
 class ProcessAttributes(GroundTruthAttributesBase):
     """Process event attributes."""
 
+    native_process_model: Literal["aggregate_birth", "fork_exec"] | None = None
     refused_target_pid: int | None = Field(default=None, gt=0, lt=100000)
     refusal_cause: Literal["unclassified"] | None = None
     execution_stage: Literal["unclassified"] | None = None
@@ -938,6 +940,7 @@ class GroundTruthDocument(BaseModel):
     observation_profile: str
     collection_window: dict[str, str | None]
     source_evidence_status: dict[str, dict[str, dict[str, int]]] = Field(default_factory=dict)
+    macos_native_coverage: MacosNativeCoverage | None = None
     ids_evaluation: IdsEvaluationSummary | None = None
     storyline_steps: list[GroundTruthStep] = Field(default_factory=list)
     red_herring_steps: list[GroundTruthStep] = Field(default_factory=list)

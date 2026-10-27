@@ -65,3 +65,26 @@ Validation at the ordering milestone: 3,704 relevant routine unit tests passed; 
 refusal slow CLI gates and two nonempty-native filtering/checkpoint gates passed; the ordinary
 Mac checkpoint gate also passed. Full Ruff lint/format and behavior-manifest checks passed.
 Generation behavior revision 339 records the changed source delivery semantics.
+
+## Native coverage reporting
+
+Native phase snapshots now retain their first qualification blocker and authored cluster. Final
+replay derives bounded host/cluster summaries, so retries and checkpoints cannot double-count.
+The canonical authored process producer separately records whether it created an aggregate birth
+or an actual fork/exec chain. Ground truth folds only explicit aggregate annotations into the
+coverage report; missing native rows never become proof of aggregate semantics. Background
+aggregate births without this annotation remain outside the diagnostic scope.
+
+`GROUND_TRUTH.json.macos_native_coverage` is the typed account; Markdown renders host totals and
+points to per-action counts. Eval exposes the same report beside the observed host log profile.
+Source filtered/drop/window status and qualification reason are separate. Aggregate diagnostics
+consume no native sequences. No-child denied/returning-exec/refusal intents retain their explicit
+ground-truth outcome. Coverage scope is exact process cohorts plus authored aggregate births,
+not every compatibility path, file/auth family or GUI launch-service detail. Legacy queued rows
+without a reason stay `not_recorded`. The checkpoint inventory and isolated verification runtime
+also explicitly recognize the public delivery mode and verify restored source row counts.
+
+Coverage verification: 67 focused report/ground-truth/ingress tests and four slow denial/native
+CLI gates passed. The native resume gate includes isolated checkpoint verification, suspended
+resume, fresh uninterrupted comparison and contiguous source sequences. Full Ruff checks pass.
+Generation behavior revision 340 records this additive diagnostic and ground-truth change.

@@ -112,3 +112,9 @@ def test_authored_denial_preserves_precursors_suppresses_child_effects_and_is_de
     assert denied["skipped_reason"] == (
         "execution_denied_before_spawn" if outcome == "denied" else "exec_failed_caller_preserved"
     )
+
+    coverage = ground_truth["macos_native_coverage"]
+    assert coverage["scope"] == "exact_process_cohorts_and_authored_births"
+    host = next(host for host in coverage["hosts"] if host["hostname"] == "MAC-01")
+    assert any(item["reason"] == "aggregate_birth_only" for item in host["observations"])
+    assert not (outputs[0] / "data" / ".eforge-es-ingress").exists()

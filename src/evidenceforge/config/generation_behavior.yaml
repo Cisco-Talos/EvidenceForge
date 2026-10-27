@@ -1,7 +1,7 @@
 schema_version: "1.0"
-current_revision: 339
+current_revision: 340
 history_start_revision: 1
-behavior_surface_sha256: 8a269ac09e07c09254d9f8e03d10082d4bcb797cbe25b0f9d78441c858b46a27
+behavior_surface_sha256: dc3c6a53e179a2c33b9e328fcf16c69dee94a40c59ef12915477e4b66a814362
 changes:
   - revision: 1
     id: initial-generation-behavior-contract
@@ -3226,3 +3226,12 @@ changes:
     formats:
       - macos_endpoint_security
     summary: Sequences immutable canonical process observations in occurrence order after producer completion, preserving modeled times, exact source admission and incremental recovery.
+  - revision: 340
+    id: macos-native-process-coverage-diagnostics
+    impact: localized
+    domains:
+      - native-source-diagnostics
+      - ground-truth-coverage
+    formats:
+      - macos_endpoint_security
+    summary: Reports committed exact Mac process cohort coverage by host and authored action with independent source decisions and native qualification reasons; aggregate diagnostics allocate no ES sequences.

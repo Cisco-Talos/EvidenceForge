@@ -89,3 +89,12 @@ Authored history exposures use existing `spillage` / `surface: shell_history` se
 
 
 `process.outcome: policy_refused` is a separate macOS 27 arm64 app-policy observation. Supply an absolute `.app/Contents/MacOS/<executable>` path and `parent_ref` naming an earlier live same-host/actor initiator. Here that reference identifies the initiator, not proven target parentage. `process_ref` is forbidden. The canonical attempt reserves the reported target PID in the shared host namespace without creating a running process, successful image replacement, fork, exit, command effects or history. Optional `command_line` documents intent only. Select `macos_unified_log` on that host to observe the bounded AppleSystemPolicy kernel refusal. The record has kernel PID/UID zero, a boot-owned kernel image, a distinct policy sender, an absolute-style callsite and a separately allocated logging TID. Target PID/path come from the attempt; the native message does not include the supplied command arguments. Build UUIDs and offsets are independently modeled, not captured values. The specific cause and target allocation/exec stage stay unclassified. `denied` and `exec_failed` keep their existing meanings. Missing native metadata or source collection never becomes a fabricated record.
+
+
+Public generation also writes typed `GROUND_TRUTH.json.macos_native_coverage` and a Markdown
+summary. It reports native phases for committed exact cohorts and explicitly annotated authored
+aggregate births by host and authored cluster. Qualification blockers (for example unknown exit
+result, descriptors or entitlements) are separate from filtered/dropped/out-of-window decisions.
+Aggregate diagnostics consume no ES counters. Unannotated background aggregate births and other
+compatibility paths are not a complete inventory. Eval includes this account beside observed
+host source volumes; selecting a format or passing its parser does not establish native coverage.

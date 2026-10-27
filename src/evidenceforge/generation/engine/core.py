@@ -608,6 +608,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                     if progress is not None:
                         progress("initialization", {})
                     initialization_started = True
+                    self._chronological_es_delivery = True
                     self._initialize()
                     controller.restore_participants(
                         recovery=recovery,
@@ -621,6 +622,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                             )
                         ),
                     )
+                    ingress = self.dispatcher.macos_es_ingress
+                    if ingress is not None:
+                        ingress.assert_restored_count()
                     lifecycle = next(
                         (
                             participant
@@ -2071,6 +2075,11 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             ids_evaluation_summary=getattr(self, "_ids_evaluation_summary", None),
             authored_intent_ledger=self.authored_intent_ledger,
             intent_execution_snapshot=self.intent_execution_ledger.snapshot(),
+            macos_native_coverage=(
+                self.dispatcher.macos_es_ingress.coverage
+                if self.dispatcher.macos_es_ingress is not None
+                else None
+            ),
         )
 
         document = generator.build_document()

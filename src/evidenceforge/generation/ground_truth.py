@@ -38,6 +38,11 @@ from evidenceforge.events.ground_truth import (
     GroundTruthEvent,
     write_ground_truth_document,
 )
+from evidenceforge.events.macos_native_coverage import (
+    MacosNativeActionCoverage,
+    MacosNativeCoverage,
+    MacosNativeCoverageCount,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
@@ -104,7 +109,9 @@ class GroundTruthGenerator:
         authored_intent_ledger: AuthoredIntentLedger | None = None,
         intent_execution_snapshot: tuple[IntentExecutionSnapshot, ...] = (),
         execution_effect_audit_snapshot: ExecutionEffectAuditSnapshot | None = None,
+        macos_native_coverage: MacosNativeCoverage | None = None,
     ):
+        self.macos_native_coverage = macos_native_coverage
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
@@ -130,6 +137,7 @@ class GroundTruthGenerator:
                 "observation_profile": self.scenario.observation_profile,
                 "collection_window": self._collection_window(),
                 "source_evidence_status": self._sorted_source_evidence_status(),
+                "macos_native_coverage": self.macos_native_coverage,
                 "ids_evaluation": self._build_ids_evaluation(),
                 "storyline_steps": self._build_storyline_steps(),
                 "red_herring_steps": self._build_red_herring_steps(),
@@ -142,6 +150,61 @@ class GroundTruthGenerator:
                 "events": self._build_event_records(),
             }
         )
+        if self.macos_native_coverage is not None:
+            hosts = []
+            for host in self.macos_native_coverage.hosts:
+                births = [
+                    event
+                    for event in document.events
+                    if event.kind == "process"
+                    and event.emitted
+                    and event.system == host.hostname
+                    and event.attributes.native_process_model == "aggregate_birth"
+                ]
+                if not births:
+                    hosts.append(host)
+                    continue
+                actions = {action.storyline_cluster_id: action for action in host.authored_actions}
+                grouped: dict[str, int] = {}
+                for event in births:
+                    if event.storyline_id:
+                        grouped[event.storyline_id] = grouped.get(event.storyline_id, 0) + 1
+                for cluster, count in grouped.items():
+                    prior = actions.get(cluster)
+                    observations = prior.observations if prior is not None else ()
+                    actions[cluster] = MacosNativeActionCoverage(
+                        storyline_cluster_id=cluster,
+                        observations=(
+                            *observations,
+                            MacosNativeCoverageCount(
+                                phase="aggregate_birth",
+                                reason="aggregate_birth_only",
+                                status="filtered",
+                                count=count,
+                            ),
+                        ),
+                    )
+                hosts.append(
+                    host.model_copy(
+                        update={
+                            "observations": (
+                                *host.observations,
+                                MacosNativeCoverageCount(
+                                    phase="aggregate_birth",
+                                    reason="aggregate_birth_only",
+                                    status="filtered",
+                                    count=len(births),
+                                ),
+                            ),
+                            "authored_actions": tuple(actions[key] for key in sorted(actions)),
+                        }
+                    )
+                )
+            document = document.model_copy(
+                update={
+                    "macos_native_coverage": MacosNativeCoverage(hosts=tuple(hosts)),
+                }
+            )
         return document
 
     def _build_intent_reconciliation(self) -> dict | None:
@@ -253,6 +316,24 @@ class GroundTruthGenerator:
         if self._include_source_evidence_status(doc):
             content.append("\n## Source Evidence Status\n")
             content.append(self._create_source_evidence_status_section(doc))
+
+        if doc.macos_native_coverage is not None:
+            content.append("\n## macOS Native Process Coverage\n")
+            content.append(
+                "Exact process cohorts and authored aggregate births only. Qualification reasons are separate from "
+                "source filtering/drop decisions. Aggregate births allocate no ES counters. "
+                "This report does not qualify new native reference families.\n"
+            )
+            content.append("| Host | Phase | Qualification | Source decision | Count |")
+            content.append("| --- | --- | --- | --- | ---: |")
+            for host in doc.macos_native_coverage.hosts:
+                for item in host.observations:
+                    content.append(
+                        f"| {host.hostname} | {item.phase} | {item.reason} | {item.status} | {item.count} |"
+                    )
+            content.append(
+                "\nPer-action counts are in GROUND_TRUTH.json → macos_native_coverage.hosts[].authored_actions.\n"
+            )
 
         if doc.ids_evaluation is not None:
             content.append("\n## IDS Evaluation Summary\n")

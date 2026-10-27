@@ -702,6 +702,17 @@ invocations `/usr/bin/id`, `/usr/bin/sw_vers`, and `/usr/bin/sw_vers -productVer
 selected modeled behavior, not measured reliability or a successful-exec inference. Extra
 arguments, unlisted commands, session teardown and timing-truncated closes retain unknown results.
 
+`GROUND_TRUTH.json` includes `macos_native_coverage` for public generation: per-host phase
+counts, source decisions, the first blocking qualification reason and per-authored-cluster
+counts for exact process cohorts and explicit authored aggregate births. The Markdown ground truth shows the host summary.
+`aggregate_birth_only` is diagnostic and consumes no ES sequence; `entitlements_unknown`,
+`entitlements_present`, `descriptors_unknown`, `thread_replacement_unknown` and
+`exit_outcome_unknown` explain unavailable phases. Deliberate filtering, loss and collection
+windows remain separate source decisions. Older queued snapshots may report `not_recorded`.
+This is a workload coverage account, not a new native reference qualification or an inventory
+of unannotated background aggregate births or every compatibility path. Authored no-child outcomes remain explained by
+their ground-truth event's `skipped_reason`.
+
 Unsupported individual phases retain nonexported counter observations, without placeholder
 native records. Known sibling forks remain available; later exported rows retain the resulting
 sequence gaps. Qualified external SSH commands without a PTY use three channel-owned pipe

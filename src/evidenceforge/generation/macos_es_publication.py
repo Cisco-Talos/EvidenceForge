@@ -213,7 +213,7 @@ def prepared_macos_es_process_publication(
 
     # Unsupported individual phases retain counter observations, with no native
     # bytes. A known fork remains available when later exec metadata is unknown.
-    def phase_supported(event: CanonicalOccurrence) -> bool:
+    def phase_reason(event: CanonicalOccurrence) -> str:
         if event.event_type == "process_exec":
             execution = next(
                 item
@@ -221,18 +221,25 @@ def prepared_macos_es_process_publication(
                 if item.after == event.identity_plan.subject
             )
             binary = dispatcher.resolve_loaded_process_binary_identity(execution.after)
-            return (
-                binary.code_signature is not None
-                and binary.code_signature.entitlements == "absent"
-                and execution.descriptors_after is not None
-                and execution.target.primary_thread in execution.retired_threads
-            )
+            if binary.code_signature is None or binary.code_signature.entitlements == "unknown":
+                return "entitlements_unknown"
+            if binary.code_signature.entitlements != "absent":
+                return "entitlements_present"
+            if execution.descriptors_after is None:
+                return "descriptors_unknown"
+            if execution.target.primary_thread not in execution.retired_threads:
+                return "thread_replacement_unknown"
+            return "supported"
         if event.event_type == "process_terminate":
-            return any(
-                item.identity == event.identity_plan.subject and item.exit_outcome is not None
-                for item in cohort.process_terminations
+            return (
+                "supported"
+                if any(
+                    item.identity == event.identity_plan.subject and item.exit_outcome is not None
+                    for item in cohort.process_terminations
+                )
+                else "exit_outcome_unknown"
             )
-        return True
+        return "supported"
 
     action = ESAction.model_validate(
         {
@@ -247,7 +254,9 @@ def prepared_macos_es_process_publication(
     filesystem = dispatcher.macos_installed_filesystem
     records: list[MacosForkRecordInput | MacosExecRecordInput | MacosExitRecordInput | None] = []
     decisions = tuple(
-        _decision(dispatcher, event) if phase_supported(event) else ObservationDecision("filtered")
+        _decision(dispatcher, event)
+        if phase_reason(event) == "supported"
+        else ObservationDecision("filtered")
         for event in events
     )
     try:
@@ -407,6 +416,8 @@ def prepared_macos_es_process_publication(
                     initial=connection,
                     occurrence_id=occurrence,
                     event_type=family,
+                    reason=phase_reason(event),
+                    storyline_cluster_id=event.storyline_cluster_id,
                     observed_at=event.timestamp,
                     status=decision.status,
                     delay=decision.delay,

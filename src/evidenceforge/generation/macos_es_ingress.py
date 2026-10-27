@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,6 +23,13 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.events.es_collector import ESCollectorRegistry, ESCollectorState
+from evidenceforge.events.macos_native_coverage import (
+    MacosNativeActionCoverage,
+    MacosNativeCoverage,
+    MacosNativeCoverageCount,
+    MacosNativeHostCoverage,
+    NativeReason,
+)
 from evidenceforge.events.observation import ObservationDecision
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.formats.macos_endpoint_security import EndpointSecurityRecord
@@ -35,6 +43,7 @@ if TYPE_CHECKING:
 
 _MAX_INGRESS_BYTES = 2 * 1024 * 1024
 _PHASE_ORDER = {11: 0, 9: 1, 15: 2}
+_PHASE_NAMES = {11: "fork", 9: "exec", 15: "exit"}
 
 
 class ESProcessIngressRow(BaseModel):
@@ -46,6 +55,8 @@ class ESProcessIngressRow(BaseModel):
     initial: ESCollectorState
     occurrence_id: str = Field(min_length=1, max_length=256)
     event_type: Literal[9, 11, 15]
+    reason: NativeReason = "not_recorded"
+    storyline_cluster_id: str | None = Field(default=None, max_length=512)
     observed_at: AwareDatetime
     status: Literal["visible", "delayed", "dropped", "filtered", "out_of_window"]
     delay: timedelta
@@ -157,6 +168,7 @@ class MacosESIngress:
         self.spool = _IngressSpool(definition, root)
         self.enabled = True
         self.finalized = False
+        self.coverage: MacosNativeCoverage | None = None
         self._seal = object()
         self._authority = ExactPublicationAuthority()
         self._pending: ExactPublicationBatch | None = None
@@ -229,6 +241,9 @@ class MacosESIngress:
         output = dispatcher.emitters.get("macos_endpoint_security")
         count = 0
         last_key: tuple[str, int, str] | None = None
+        totals: dict[str, Counter] = {}
+        authored: dict[str, dict[str, Counter]] = {}
+        profiles: dict[str, str] = {}
         for route in sorted(self.spool._writers.values(), key=lambda item: str(item.output_path)):
             with route.output_path.open(encoding="utf-8") as stream:
                 for line in iter(lambda: stream.readline(_MAX_INGRESS_BYTES + 1), ""):
@@ -258,6 +273,13 @@ class MacosESIngress:
                         observed_at=row.observed_at,
                         decision=ObservationDecision(row.status, row.delay),
                     )
+                    profiles[row.host.hostname] = row.initial.source_profile.profile_id
+                    fact = (_PHASE_NAMES[row.event_type], row.reason, row.status)
+                    totals.setdefault(row.host.hostname, Counter())[fact] += 1
+                    if row.storyline_cluster_id:
+                        authored.setdefault(row.host.hostname, {}).setdefault(
+                            row.storyline_cluster_id, Counter()
+                        )[fact] += 1
                     if count >= self._cursor:
                         if self._pending is None:
                             batch = self._authority.issue_batch()
@@ -307,4 +329,32 @@ class MacosESIngress:
         completed = ESCollectorRegistry()
         completed.restore(tuple(states.values()), membership)
         dispatcher.es_collectors = completed
+
+        for state in states.values():
+            if state.source_profile is not None:
+                profiles.setdefault(state.hostname, state.source_profile.profile_id)
+                totals.setdefault(state.hostname, Counter())
+
+        def observations(counter: Counter) -> tuple[MacosNativeCoverageCount, ...]:
+            return tuple(
+                MacosNativeCoverageCount(phase=phase, reason=reason, status=status, count=amount)
+                for (phase, reason, status), amount in sorted(counter.items())
+            )
+
+        self.coverage = MacosNativeCoverage(
+            hosts=tuple(
+                MacosNativeHostCoverage(
+                    hostname=host,
+                    source_profile=profiles[host],
+                    observations=observations(counter),
+                    authored_actions=tuple(
+                        MacosNativeActionCoverage(
+                            storyline_cluster_id=cluster, observations=observations(counts)
+                        )
+                        for cluster, counts in sorted(authored.get(host, {}).items())
+                    ),
+                )
+                for host, counter in sorted(totals.items())
+            )
+        )
         self.finalized = True

@@ -1043,6 +1043,7 @@ GENERATION_ENGINE_CHECKPOINT_FIELDS = _fields(
         "_identity_directory",
         "_infra_ips",
         "_initialization_complete",
+        "_chronological_es_delivery",
         "_kernel_boot_uptimes",
         "_linux_journald_housekeeping_emitted",
         "_linux_journald_housekeeping_schedules",

@@ -387,6 +387,10 @@ def handle_process(
         time = max(ensure_utc(time), ensure_utc(running_process.start_time))
         malicious_event["time"] = time
     if os_category == "macos":
+        if running_process is not None:
+            malicious_event["native_process_model"] = (
+                "fork_exec" if running_process.execution_ordinal > 0 else "aggregate_birth"
+            )
         submission_time = (
             ensure_utc(running_process.start_time)
             if running_process is not None and running_process.execution_ordinal > 0

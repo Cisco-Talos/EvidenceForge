@@ -262,13 +262,21 @@ class CausalityScorer(DimensionScorer):
 
         host_log_profile = _build_host_log_profile(records, vis, scenario)
 
+        supplementary = {"host_log_profile": host_log_profile}
+        if (
+            context.ground_truth is not None
+            and context.ground_truth.macos_native_coverage is not None
+        ):
+            supplementary["macos_native_coverage"] = (
+                context.ground_truth.macos_native_coverage.model_dump(mode="json")
+            )
         return PillarScore(
             number=self.number,
             name=self.name,
             weight=self.weight,
             score=dim_score,
             sub_scores=sub_scores,
-            supplementary={"host_log_profile": host_log_profile},
+            supplementary=supplementary,
         )
 
     @staticmethod
