@@ -71,3 +71,41 @@ it, agents must not inspect that directory or run its human commands without new
 authorization. The detailed procedure is `gui-launch-reference/PRIVATE-RUN.md`; setup builds
 without launching, capture runs a direct control then waits for manual Finder launch, and report
 reopens the latest private run without asking for a path. Only its fixed report should be shared.
+
+## Human-reported Finder result and offline follow-up
+
+On October 28 the human shared the fixed version-1 diagnostic only. Collection, sequence,
+provenance, cleanup, native v11 shapes, app identity/image, before/after exec identity transition,
+audit identity, argv, descriptor inventory, known completion/exit, parent and POSIX comparisons
+pass for both launches. The Finder app's parent role is LAUNCHD, original parent equals current
+parent, and responsibility is SELF. Standard streams are VNODE/no tty; main-entry access is
+READ / READ_WRITE / READ_WRITE. The control has OTHER parent/responsibility and all three
+standard descriptors READ_WRITE. The Finder fork check is inconclusive; the control fork passes.
+Both exact environment comparisons fail. No ULF or other launch method was collected.
+
+The [bounded relationship contract](../design/macos-workstation-feasibility/gui-launch-reference/finder-relationship-contract.md)
+separates those observations from unknown backing vnodes, exec-versus-main environment state,
+spawn/fork admission, other signing classes and additional launch methods. A missing retained
+fork does not establish its absence or a specific collector failure. No native facts were read
+by agents and no generation scope was promoted.
+
+Added human-only `review-existing --private-run` to a new prepared copy. It asks for the original
+outer kit at a hidden interactive prompt (no echo fallback), validates its unchanged code/app/
+guard/plist/codec/provenance, and reads only that run's bounded controlled rows and own snapshots.
+It runs no subprocess/preflight/role query, writes nothing and needs no repeat collection.
+Fixed supplemental labels distinguish reordering, additions/removals and common-value changes,
+including duplicate-assignment structure. Only the known technical CF text-encoding variable
+gets a dedicated presence/change label, with no value output. The native control vector is
+checked against the declared clean input; main-entry state is never silently substituted.
+Failed original collection controls leave comparisons inconclusive. Neither report admits a
+generation gate automatically.
+
+The new checks use invented inputs only and prevent native execution. All **134 GUI reference
+tests** and the full adjacent **782 private-reference tests** pass. Full Ruff, formatting,
+whitespace and unchanged revision-344 behavior checks pass. Existing original kit
+`/private/tmp/eforge-gui-launch-kit-kzex70ik` is now private and was not opened or modified.
+New code-only reviewer: `/private/tmp/eforge-gui-launch-kit-6ak0i0c1`. Its isolated `-I -B --help`
+entry point passes; no human command was run by an agent. The exact human command is provided
+in the chat handoff. The next human action is this offline supplemental review, not setup/capture
+or another experiment. Once used privately, this new directory inherits the same no-inspection
+boundary as the original kit.

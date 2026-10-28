@@ -1,7 +1,8 @@
 # Human-only private Finder launch reference
 
 Agents may prepare this kit, compile its sources without executing, and test invented inputs.
-**Only you run `setup`, `capture` and `report`, privately after closing Codex and other agents.**
+**Only you run `setup`, `capture`, `report` and `review-existing`, privately after closing
+Codex and other agents.**
 Do not attach this directory, native records, own-process snapshots, terminal transcripts or
 screenshots. Share only the fixed final JSON report after reviewing it yourself.
 
@@ -125,3 +126,36 @@ Privacy-preserving human review may establish a bounded launch contract after we
 fixed results. It does not generalize Finder evidence to other launch methods or enable broader
 ES/Unified Log families. Private retention/deletion is your decision; agents will not inspect
 or remove the evidence.
+
+## Offline follow-up for an existing capture
+
+Use a **new prepared code-only reviewer** for this step. Leave the original kit, its helper,
+compiled app, manifest and run files unchanged. Do not run setup or capture again. This
+follow-up starts no collector, app, preflight command or live parent/responsible lookup, and
+changes no files. It locally reads the original provenance and bounded controlled evidence.
+
+After closing agents, run from the new reviewer's directory, as your normal user:
+
+```sh
+/Users/dabianco/projects/SURGe/EvidenceForge/.venv/bin/python -I -B private_gui_launch.py review-existing --private-run
+```
+
+At the hidden prompt, enter the **original outer kit folder** that contains `SETUP.json`,
+`ACTIVE-RUN` and `GUIProbe.app`. Do not enter an inner `run-…` folder or the new reviewer's
+folder. Your input will not echo. The checker refuses noninteractive input or an echo fallback.
+No sudo, Finder interaction or new small window is needed. The original kit's frozen codec
+and files must still match their setup manifest.
+
+The report distinguishes exact/order-only environment agreement from added/removed variable
+names and changed values on common names, preserving duplicate-assignment multiplicity. Only
+the known technical variable `__CF_USER_TEXT_ENCODING` gets a dedicated presence/change label;
+its value is never exported. No other variable names, values, counts, lengths or hashes appear.
+The direct control's native exec vector is also checked against the kit's declared clean input.
+These checks compare kernel exec evidence with a later main-entry snapshot; they do not assume
+that a difference invalidates the kernel vector or that application startup made a specific change.
+
+`RETAINED_MATCH` establishes a matching retained fork. `NOT_RETAINED` says only that the bounded
+evidence contains none; it does not prove no fork happened or distinguish launch mechanism from
+filter/buffer limitations. Failed original collection controls leave supplemental comparisons
+inconclusive. Every result retains `reference_review: REQUIRED` and `gate_status: NOT_EVALUATED`.
+Review and share only this fixed supplemental JSON; keep the original path and evidence private.

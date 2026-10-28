@@ -1,13 +1,15 @@
-# Next private GUI launch reference: proposal only
+# Private GUI launch reference and bounded admission plan
 
 The code-only kit is implemented in `scripts/macos_gui_launch_reference.py`; preparation copies
 reviewable sources outside Git without compiling, launching or collecting. See the
 [human-run procedure](gui-launch-reference/PRIVATE-RUN.md). This does not authorize an agent
 to run the human commands or read their output files.
 
-No collection, GUI launch or private-file access is authorized by this document. The current
-work used invented synthetic data only. The next human-assisted experiment targets **macOS 27
-arm64 GUI application launch**, beginning with Finder; Dock and Spotlight are distinct follow-ups.
+No collection, GUI launch or private-file access is authorized by this document. Agent testing
+uses invented inputs only. The human-assisted experiment targets **macOS 27 arm64 GUI application
+launch**, beginning with Finder; Dock and Spotlight are distinct follow-ups. The human has now
+shared fixed diagnostic labels from that Finder experiment; agents have not opened its evidence.
+See the [observed relationship contract and limits](gui-launch-reference/finder-relationship-contract.md).
 
 ## Why this reference is needed
 

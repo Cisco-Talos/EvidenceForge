@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import subprocess
+import warnings
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -330,7 +331,7 @@ def test_private_file_reader_does_not_follow_or_open_unbounded_sources(
         kit._read(source, 1 if kind == "size" else kit.MAX_LINE)
 
 
-@pytest.mark.parametrize("command", ["setup", "capture", "report"])
+@pytest.mark.parametrize("command", ["setup", "capture", "report", "review-existing"])
 def test_human_commands_require_flags_and_never_echo_inputs(
     command: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -451,3 +452,246 @@ def test_pump_writes_no_ambient_rows_and_backfills_only_proven_fork() -> None:
         pump.selector.close()
         stream.close()
         os.close(write_fd)
+
+
+@pytest.mark.parametrize(
+    ("native", "main", "comparison"),
+    [
+        ((b"A=1", b"B=2"), (b"A=1", b"B=2"), "IDENTICAL"),
+        ((b"A=1", b"B=2"), (b"B=2", b"A=1"), "ORDER_ONLY"),
+        ((b"A=1", b"A=2"), (b"A=2", b"A=1"), "ORDER_ONLY"),
+        ((b"A=1",), (b"A=1", b"B=2"), "MAIN_ADDITIONS_ONLY"),
+        ((b"A=1", b"B=2"), (b"A=1",), "MAIN_REMOVALS_ONLY"),
+        ((b"A=1",), (b"A=2",), "COMMON_VALUES_CHANGED"),
+        ((b"A=1",), (b"A=1", b"A=1"), "COMMON_VALUES_CHANGED"),
+        ((b"A=1", b"B=2"), (b"A=3", b"C=4"), "MIXED"),
+        ((), (), "IDENTICAL"),
+        ((b"A=",), (b"A=",), "IDENTICAL"),
+        ((b"A=1=2",), (b"A=1=2",), "IDENTICAL"),
+    ],
+)
+def test_private_environment_comparison_distinguishes_order_from_mutation(
+    native: tuple[bytes, ...], main: tuple[bytes, ...], comparison: str
+) -> None:
+    report = kit.compare_environment(native, main)
+    assert report.vectors_well_formed == "PASS"
+    assert report.comparison == comparison
+    assert report.controlled_initial_vector == "INCONCLUSIVE"
+
+
+@pytest.mark.parametrize("malformed", [b"NO_ASSIGNMENT", b"=value", b"A=\0", "A=value", 7])
+def test_environment_comparison_rejects_malformed_vectors(malformed: object) -> None:
+    report = kit.compare_environment((malformed,), (b"A=value",))
+    assert report.vectors_well_formed == "FAIL"
+    assert report.comparison == report.controlled_initial_vector == "INCONCLUSIVE"
+
+
+def test_fixed_known_environment_diagnostic_exports_no_arbitrary_names_or_values() -> None:
+    native = (f"{_CANARY}={_CANARY}".encode(),)
+    report = kit.compare_environment(native, (*native, b"__CF_USER_TEXT_ENCODING=PRIVATE_VALUE"))
+    assert report.cf_text_encoding == "ADDED_AT_MAIN"
+    assert report.only_cf_text_encoding_differs == "PASS"
+    assert report.duplicate_key_structure == "SAME"
+    changed = kit.compare_environment(native, (f"{_CANARY}=CHANGED".encode(),))
+    assert changed.comparison == "COMMON_VALUES_CHANGED"
+    assert changed.cf_text_encoding == "UNCHANGED"
+    assert changed.only_cf_text_encoding_differs == "FAIL"
+    for result in (report, changed):
+        serialized = result.model_dump_json()
+        for forbidden in (
+            _CANARY,
+            _CANARY.encode().hex(),
+            "PRIVATE_VALUE",
+            "__CF_USER_TEXT_ENCODING",
+        ):
+            assert forbidden not in serialized
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "label", "duplicates"),
+    [
+        ((b"x",), (), "REMOVED_AT_MAIN", "SAME"),
+        ((b"x",), (b"y",), "VALUE_CHANGED", "SAME"),
+        ((b"x", b"y"), (b"y", b"x"), "UNCHANGED", "SAME"),
+        ((b"x",), (b"x", b"x"), "VALUE_CHANGED", "DIFFERENT"),
+    ],
+)
+def test_known_environment_field_preserves_duplicate_and_order_semantics(
+    before: tuple[bytes, ...], after: tuple[bytes, ...], label: str, duplicates: str
+) -> None:
+    native = tuple(b"__CF_USER_TEXT_ENCODING=" + value for value in before)
+    main = tuple(b"__CF_USER_TEXT_ENCODING=" + value for value in after)
+    report = kit.compare_environment(native, main)
+    assert report.cf_text_encoding == label
+    assert report.duplicate_key_structure == duplicates
+
+
+def test_controlled_environment_is_checked_against_exec_time_not_main_entry() -> None:
+    controlled = tuple(f"{key}={value}".encode() for key, value in kit.SAFE_ENV.items())
+    report = kit.compare_environment(
+        tuple(reversed(controlled)), (*controlled, b"NEW=INVENTED"), controlled=True
+    )
+    assert report.controlled_initial_vector == "PASS"
+    assert report.comparison == "MAIN_ADDITIONS_ONLY"
+    assert kit.compare_environment((), (), controlled=True).controlled_initial_vector == "FAIL"
+
+
+@pytest.mark.parametrize("model", [kit.EnvironmentDifference, kit.ExistingReviewReport])
+def test_supplemental_report_schema_rejects_arbitrary_data(model: type[kit.Model]) -> None:
+    for field in model.model_fields:
+        with pytest.raises(ValidationError):
+            model.model_validate({field: _CANARY})
+
+
+@pytest.mark.parametrize("value", [True, "1", 2, None])
+def test_supplemental_version_rejects_coercion(value: object) -> None:
+    with pytest.raises(ValidationError):
+        kit.ExistingReviewReport(review_version=value)
+
+
+@pytest.fixture
+def existing_capture(prepared: Path) -> tuple[Path, Path]:
+    manifest = kit._manifest(prepared)
+    run = prepared / ("run-" + "1" * 32)
+    run.mkdir(mode=0o700)
+    kit._write(prepared / "ACTIVE-RUN", (run.name + "\n").encode())
+    kit._write(
+        run / "provenance.json",
+        json.dumps({"setup": manifest.model_dump(mode="json"), "method": "finder"}).encode(),
+    )
+    cases: dict = {}
+    for case in ("control", "finder"):
+        rows = _rows(1200 if case == "control" else 1300, manifest.image)
+        if case == "control":
+            rows[1]["event"]["exec"]["env"] = [f"{k}={v}" for k, v in kit.SAFE_ENV.items()]
+        own = _own(rows)
+        own = own.model_copy(
+            update={
+                "environment_hex": (
+                    *own.environment_hex,
+                    f"__CF_USER_TEXT_ENCODING={_CANARY}".encode().hex(),
+                )
+            }
+        )
+        if case == "finder":
+            rows = rows[1:]
+        kit._write(run / f"{case}-events.jsonl", b"\n".join(_raws(rows)) + b"\n")
+        kit._write(run / f"{case}-self.json", own.model_dump_json().encode())
+        kit._write(run / f"{case}-complete", b"RETURN_ZERO\n")
+        cases[case] = kit.analyze_case(_raws(rows), own, True, manifest.image)
+    original = kit.Report(
+        stage="COMPLETE",
+        context="HUMAN_ATTESTED_FINDER",
+        target_platform="PASS",
+        provenance="PASS",
+        collector_ready="PASS",
+        collector_cleanup="PASS",
+        bounded_collection="PASS",
+        sequence_continuity="PASS",
+        wire_profile="V11",
+        **cases,
+    )
+    kit._write(run / "SHAREABLE-REPORT.json", original.model_dump_json().encode())
+    return prepared, run
+
+
+def test_existing_reviewer_is_read_only_and_does_not_launch_or_query(
+    existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _run = existing_capture
+    files = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Offline review must not modify evidence, preflight, launch or query")
+
+    for name in ("_role", "_start", "_preflight", "_write", "_replace"):
+        monkeypatch.setattr(kit, name, forbidden)
+    report = kit.review_existing(root)
+    assert report.error == "NONE"
+    assert report.provenance == report.original_collection_controls == "PASS"
+    assert report.control_environment.controlled_initial_vector == "PASS"
+    assert report.finder_environment.controlled_initial_vector == "INCONCLUSIVE"
+    assert report.control_environment.only_cf_text_encoding_differs == "PASS"
+    assert report.finder_environment.only_cf_text_encoding_differs == "PASS"
+    assert report.control_fork == "RETAINED_MATCH"
+    assert report.finder_fork == "NOT_RETAINED"
+    assert report.fork_absence_proves_no_fork == "NO"
+    assert report.collectors == "NOT_STARTED" and report.apps == "NOT_LAUNCHED"
+    serialized = report.model_dump_json()
+    for private in (_CANARY, str(root), str(_run), _CANARY.encode().hex(), "a" * 64):
+        assert private not in serialized
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == files
+
+
+@pytest.mark.parametrize("damage", ["helper", "provenance", "own", "wire", "duplicate_exec"])
+def test_existing_reviewer_rejects_invalid_provenance_and_observations(
+    existing_capture: tuple[Path, Path], damage: str
+) -> None:
+    root, run = existing_capture
+    if damage == "helper":
+        (root / kit.CODE[0]).write_bytes(_CANARY.encode())
+    elif damage == "provenance":
+        (run / "provenance.json").write_text(json.dumps({"setup": _CANARY, "method": "finder"}))
+    elif damage == "own":
+        path = run / "finder-self.json"
+        raw = json.loads(path.read_bytes())
+        raw["token"][7] += 1
+        path.write_text(json.dumps(raw))
+    else:
+        path = run / "finder-events.jsonl"
+        rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+        if damage == "wire":
+            rows[0]["version"] = 10
+        else:
+            rows.append(deepcopy(rows[0]))
+        path.write_bytes(b"\n".join(_raws(rows)))
+    with pytest.raises(kit.PrivateError, match="^(BUILD|DATA)$"):
+        kit.review_existing(root)
+
+
+def test_failed_original_collection_controls_leave_supplemental_checks_inconclusive(
+    existing_capture: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, run = existing_capture
+    path = run / "SHAREABLE-REPORT.json"
+    raw = json.loads(path.read_bytes())
+    raw["sequence_continuity"] = "FAIL"
+    path.write_text(json.dumps(raw))
+    monkeypatch.setattr(kit, "_own", lambda *a: pytest.fail("Must stop at failed controls"))
+    report = kit.review_existing(root)
+    assert report.original_collection_controls == "FAIL"
+    assert report.control_environment.comparison == report.finder_fork == "INCONCLUSIVE"
+
+
+def test_hidden_original_location_never_allows_echo_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(kit.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(kit.sys, "stderr", SimpleNamespace(isatty=lambda: True))
+
+    def unsafe_prompt(_prompt: str) -> str:
+        warnings.warn("invented fallback", kit.getpass.GetPassWarning, stacklevel=2)
+        pytest.fail("Do not reach a fallback that could echo a path")
+
+    monkeypatch.setattr(kit.getpass, "getpass", unsafe_prompt)
+    with pytest.raises(kit.PrivateError, match="^INPUT$"):
+        kit._hidden_existing_root()
+    monkeypatch.setattr(kit.sys, "stdin", SimpleNamespace(isatty=lambda: False))
+    with pytest.raises(kit.PrivateError, match="^INPUT$"):
+        kit._hidden_existing_root()
+
+
+def test_human_existing_review_cli_returns_only_fixed_diagnostics(
+    existing_capture: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, run = existing_capture
+    monkeypatch.setattr(kit, "_hidden_existing_root", lambda: root)
+    assert kit.main(["review-existing", "--private-run"]) == 0
+    result = capsys.readouterr()
+    report = json.loads(result.out)
+    assert report["purpose"] == "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
+    assert report["finder_fork"] == "NOT_RETAINED"
+    assert _CANARY not in result.out + result.err
+    assert str(run) not in result.out + result.err

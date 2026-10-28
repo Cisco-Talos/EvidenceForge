@@ -4,13 +4,14 @@
 """Prepare a HUMAN-ONLY Finder launch reference kit.
 
 Agents may prepare/help, compile without execution, and test invented inputs.
-Never run setup/capture/report on a real kit or inspect its private output.
+Never run setup/capture/report/review-existing on a real kit or inspect its private output.
 """
 
 from __future__ import annotations
 
 import argparse
 import calendar
+import getpass
 import hashlib
 import inspect
 import json
@@ -28,7 +29,8 @@ import sys
 import tempfile
 import time
 import uuid
-from collections import deque
+import warnings
+from collections import Counter, deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, BinaryIO, Literal
@@ -190,6 +192,115 @@ class Report(Model):
     finder: CaseReport = Field(default_factory=CaseReport)
     unified_log: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
     other_launch_methods: Literal["NOT_COLLECTED"] = "NOT_COLLECTED"
+
+
+class EnvironmentDifference(Model):
+    """Relationship labels only: never names, values, counts, lengths or hashes."""
+
+    vectors_well_formed: Check = "INCONCLUSIVE"
+    comparison: Literal[
+        "IDENTICAL",
+        "ORDER_ONLY",
+        "MAIN_ADDITIONS_ONLY",
+        "MAIN_REMOVALS_ONLY",
+        "COMMON_VALUES_CHANGED",
+        "MIXED",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    duplicate_key_structure: Literal["SAME", "DIFFERENT", "INCONCLUSIVE"] = "INCONCLUSIVE"
+    cf_text_encoding: Literal[
+        "UNCHANGED",
+        "ADDED_AT_MAIN",
+        "REMOVED_AT_MAIN",
+        "VALUE_CHANGED",
+        "INCONCLUSIVE",
+    ] = "INCONCLUSIVE"
+    only_cf_text_encoding_differs: Check = "INCONCLUSIVE"
+    controlled_initial_vector: Check = "INCONCLUSIVE"
+
+
+class ExistingReviewReport(Model):
+    """Offline-only supplemental diagnostic for an unchanged original private kit."""
+
+    review_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
+    purpose: Literal["GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"] = "GUI_ENVIRONMENT_AND_FORK_DIAGNOSTIC"
+    mode: Literal["OFFLINE_ONLY"] = "OFFLINE_ONLY"
+    error: Code = "NONE"
+    reference_review: Literal["REQUIRED"] = "REQUIRED"
+    gate_status: Literal["NOT_EVALUATED"] = "NOT_EVALUATED"
+    provenance: Check = "INCONCLUSIVE"
+    original_collection_controls: Check = "INCONCLUSIVE"
+    control_environment: EnvironmentDifference = Field(default_factory=EnvironmentDifference)
+    finder_environment: EnvironmentDifference = Field(default_factory=EnvironmentDifference)
+    control_fork: Literal["RETAINED_MATCH", "NOT_RETAINED", "INCONSISTENT", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    finder_fork: Literal["RETAINED_MATCH", "NOT_RETAINED", "INCONSISTENT", "INCONCLUSIVE"] = (
+        "INCONCLUSIVE"
+    )
+    fork_absence_proves_no_fork: Literal["NO"] = "NO"
+    collectors: Literal["NOT_STARTED"] = "NOT_STARTED"
+    apps: Literal["NOT_LAUNCHED"] = "NOT_LAUNCHED"
+    live_role_queries: Literal["NOT_PERFORMED"] = "NOT_PERFORMED"
+
+
+def compare_environment(
+    native: tuple[bytes, ...], main: tuple[bytes, ...], *, controlled: bool = False
+) -> EnvironmentDifference:
+    """Compare private vectors without returning their data or arbitrary key names."""
+    maps: list[dict[bytes, list[bytes]]] = []
+    for vector in (native, main):
+        grouped: dict[bytes, list[bytes]] = {}
+        for entry in vector:
+            if type(entry) is not bytes or b"\0" in entry or b"=" not in entry:
+                return EnvironmentDifference(vectors_well_formed="FAIL")
+            key, value = entry.split(b"=", 1)
+            if not key:
+                return EnvironmentDifference(vectors_well_formed="FAIL")
+            grouped.setdefault(key, []).append(value)
+        maps.append(grouped)
+    before, after = maps
+    added, removed = after.keys() - before.keys(), before.keys() - after.keys()
+    changed = {
+        key for key in before.keys() & after.keys() if Counter(before[key]) != Counter(after[key])
+    }
+    if native == main:
+        comparison = "IDENTICAL"
+    elif Counter(native) == Counter(main):
+        comparison = "ORDER_ONLY"
+    elif added and not removed and not changed:
+        comparison = "MAIN_ADDITIONS_ONLY"
+    elif removed and not added and not changed:
+        comparison = "MAIN_REMOVALS_ONLY"
+    elif changed and not added and not removed:
+        comparison = "COMMON_VALUES_CHANGED"
+    else:
+        comparison = "MIXED"
+    key = b"__CF_USER_TEXT_ENCODING"
+    cf_change = (
+        "UNCHANGED"
+        if Counter(before.get(key, ())) == Counter(after.get(key, ()))
+        else "ADDED_AT_MAIN"
+        if key not in before
+        else "REMOVED_AT_MAIN"
+        if key not in after
+        else "VALUE_CHANGED"
+    )
+    return EnvironmentDifference(
+        vectors_well_formed="PASS",
+        comparison=comparison,
+        duplicate_key_structure="SAME"
+        if {k: len(v) for k, v in before.items() if len(v) > 1}
+        == {k: len(v) for k, v in after.items() if len(v) > 1}
+        else "DIFFERENT",
+        cf_text_encoding=cf_change,
+        only_cf_text_encoding_differs=_check(added | removed | changed == {key}),
+        controlled_initial_vector=_check(
+            Counter(native) == Counter(f"{k}={v}".encode() for k, v in SAFE_ENV.items())
+        )
+        if controlled
+        else "INCONCLUSIVE",
+    )
 
 
 def _check(value: bool) -> Check:
@@ -793,7 +904,7 @@ def _stop_collector(process: subprocess.Popen[bytes]) -> bool:
         return False
 
 
-def _emit(report: Report) -> None:
+def _emit(report: Report | ExistingReviewReport) -> None:
     print(report.model_dump_json(indent=2), flush=True)
 
 
@@ -1025,6 +1136,98 @@ def offline_report() -> Report:
     return report.model_copy(update={"stage": "OFFLINE_REPORT"})
 
 
+def review_existing(root: Path) -> ExistingReviewReport:
+    """HUMAN ONLY: diagnose unchanged private evidence; no subprocess or writes."""
+    _directory(root)
+    root = root.resolve(strict=True)
+    _outside_git(root)
+    manifest = _manifest(root)
+    run = _active(root)
+    provenance = _decode(_read(run / "provenance.json"))
+    if (
+        provenance.get("setup") != manifest.model_dump(mode="json")
+        or provenance.get("method") != "finder"
+    ):
+        raise PrivateError("BUILD")
+    raw = _read(run / "SHAREABLE-REPORT.json")
+    _decode(raw)
+    original = Report.model_validate_json(raw)
+    controls = (
+        original.error == "NONE"
+        and original.stage in {"COMPLETE", "OFFLINE_REPORT"}
+        and original.context == "HUMAN_ATTESTED_FINDER"
+        and original.wire_profile == "V11"
+        and all(
+            getattr(original, name) == "PASS"
+            for name in (
+                "target_platform",
+                "provenance",
+                "collector_ready",
+                "collector_cleanup",
+                "bounded_collection",
+                "sequence_continuity",
+            )
+        )
+    )
+    values: dict = {"provenance": "PASS", "original_collection_controls": _check(controls)}
+    if not controls:
+        return ExistingReviewReport(**values)
+    for case in ("control", "finder"):
+        raw = _read(run / f"{case}-events.jsonl", MAX_RETAINED * (MAX_LINE + 1))
+        rows = [line for line in raw.splitlines() if line]
+        if len(rows) > MAX_RETAINED:
+            raise PrivateError("LIMIT")
+        own = _own(run, case)
+        checked = analyze_case(rows, own, _complete(run, case), manifest.image)
+        required = (
+            "native_shapes",
+            "one_exec_and_exit",
+            "own_identity_agreement",
+            "image_identity_agreement",
+            "audit_identity_agreement",
+            "exec_identity_transition",
+            "test_completion",
+            "exit_status_agreement",
+        )
+        if (
+            own is None
+            or _wire_profile(rows) != "V11"
+            or any(getattr(checked, name) != "PASS" for name in required)
+        ):
+            raise PrivateError("DATA")
+        decoded = [_decode(line) for line in rows]
+        execs = [row for row in decoded if row.get("event_type") == 9]
+        environment = tuple(entry.encode("utf-8") for entry in execs[0]["event"]["exec"]["env"])
+        main = tuple(bytes.fromhex(entry) for entry in own.environment_hex)
+        values[f"{case}_environment"] = compare_environment(
+            environment, main, controlled=case == "control"
+        )
+        values[f"{case}_fork"] = (
+            "RETAINED_MATCH"
+            if checked.fork_linkage == "PASS"
+            else "NOT_RETAINED"
+            if checked.fork_linkage == "INCONCLUSIVE"
+            else "INCONSISTENT"
+        )
+    return ExistingReviewReport(**values)
+
+
+def _hidden_existing_root() -> Path:
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        raise PrivateError("INPUT")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        try:
+            path = getpass.getpass(
+                "Private ORIGINAL KIT folder (hidden; outer kit, not run folder): "
+            )
+        except (getpass.GetPassWarning, EOFError) as error:
+            raise PrivateError("INPUT") from error
+    if not path:
+        raise PrivateError("LOCATION")
+    return Path(path).expanduser()
+
+
 class QuietParser(argparse.ArgumentParser):
     def error(self, _message: str) -> None:
         raise PrivateError("INPUT")
@@ -1035,31 +1238,39 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     stage = commands.add_parser("prepare", help="Copy code only; safe for an agent")
     stage.add_argument("--destination", type=Path)
-    for name in ("setup", "capture", "report"):
+    for name in ("setup", "capture", "report", "review-existing"):
         stage = commands.add_parser(name, help="HUMAN private use only")
         stage.add_argument("--private-run", action="store_true", required=True)
         if name == "capture":
             stage.add_argument(
                 "--finder", action="store_true", required=True, help="Attest a manual Finder launch"
             )
+    reviewing = False
     try:
         args = parser.parse_args(argv)
         if args.command == "prepare":
             print(prepare(args.destination))
             return 0
-        report = (
-            setup()
-            if args.command == "setup"
-            else capture()
-            if args.command == "capture"
-            else offline_report()
-        )
+        reviewing = args.command == "review-existing"
+        if reviewing:
+            _root()  # The reviewer itself must also be a prepared outside-Git copy.
+            report = review_existing(_hidden_existing_root())
+        else:
+            report = (
+                setup()
+                if args.command == "setup"
+                else capture()
+                if args.command == "capture"
+                else offline_report()
+            )
     except PrivateError as error:
-        report = Report(error=error.code)
+        report = ExistingReviewReport(error=error.code) if reviewing else Report(error=error.code)
     except KeyboardInterrupt:
-        report = Report(error="INTERRUPTED")
+        report = (
+            ExistingReviewReport(error="INTERRUPTED") if reviewing else Report(error="INTERRUPTED")
+        )
     except (OSError, ValueError, TypeError, KeyError, OverflowError, subprocess.SubprocessError):
-        report = Report(error="INTERNAL")
+        report = ExistingReviewReport(error="INTERNAL") if reviewing else Report(error="INTERNAL")
     _emit(report)
     return 0 if report.error == "NONE" else 2
 
