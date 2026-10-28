@@ -72,6 +72,16 @@ without turning `TODO.md` back into a high-conflict work journal.
 
 ### Active and Near-Term
 
+- [ ] **P0 — highest priority, user-approved:** Guarantee that every modeled successful Mac
+  exec in a supported profile, during active lossless ES collection, produces its corresponding
+  native exec record or fails generation with actionable missing requirements. Establish a
+  complete canonical execution census, migrate aggregate launch producers, complete native
+  metadata and enforce exact output reconciliation. Unsupported launch paths must reject;
+  passing diagnostics on a subset is insufficient. Preserve explicit collection exclusions and
+  avoid inventing execs for builtins, app reuse or failed launch attempts. See the
+  [implementation contract](docs/design/macos-workstation-feasibility/es-exec-completeness.md)
+  and [effort worklog](docs/worklog/2026-10-28-macos-es-exec-completeness.md).
+
 - [x] **P1** Repair Mac ES source chronology through immutable occurrence ingress, exact
   canonical admission and ordered final delivery. Seed-123 warm-up, filtered output and native
   checkpoint/resume now pass; see the [coverage worklog](docs/worklog/2026-10-27-macos-native-coverage.md).
